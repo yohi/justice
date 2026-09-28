@@ -53,6 +53,7 @@ New focused modules:
 
 - `src/core/artifact-chain.ts` — v5 Requirements/Design/Plan revision identity and chain types.
 - `src/core/conformance-contract.ts` — normative clauses, projection status, contract/result types.
+- `src/core/conformance-contract-store.ts` — immutable durable Conformance Contract persistence and reviewer-readable paths.
 - `src/core/superpowers-plan-parser.ts` — deterministic parser for the v6.4.2 plan structures Justice treats as normative.
 - `src/core/conformance-projector.ts` — Requirements/Design/Plan projection and completeness validation.
 - `src/core/execution-correlation.ts` — durable parent-session/call ↔ semantic task ↔ child-session sidecar state.
@@ -213,6 +214,28 @@ These are implementation interfaces, not cross-task architecture choices.
 **Task 3**
 
 ```ts
+type ArtifactChainSourceResolution =
+  | {
+      readonly kind: "resolved";
+      readonly planPath: string;
+      readonly designPath: string;
+      readonly requirementsPath: string;
+      readonly planSource: string;
+      readonly designSource: string;
+      readonly requirementsSource: string;
+    }
+  | {
+      readonly kind: "invalid";
+      readonly reason:
+        | "plan_unreadable"
+        | "missing_or_ambiguous_spec_reference"
+        | "design_unreadable"
+        | "missing_or_ambiguous_requirements_reference"
+        | "requirements_unreadable"
+        | "unsafe_artifact_path";
+      readonly details: readonly string[];
+    };
+
 type PriorStateClassification =
   | {
       readonly kind: "recognized_v4";
@@ -258,11 +281,27 @@ type ProjectedSources = {
   readonly design: readonly NormativeClause[];
   readonly plan: readonly NormativeClause[];
 };
+
+type ConformanceContractPersistenceResult =
+  | { readonly kind: "saved" | "already_present"; readonly contractId: string; readonly relativePath: string; readonly digest: string }
+  | { readonly kind: "conflict" | "failed"; readonly reason: string };
 ```
 
 **Task 5**
 
 ```ts
+type BuildApprovedArtifactChainInput = {
+  readonly requirements: { readonly path: string; readonly source: string; readonly sourceRevision?: string };
+  readonly design: { readonly path: string; readonly source: string; readonly sourceRevision?: string };
+  readonly plan: {
+    readonly path: string;
+    readonly source: string;
+    readonly sourceRevision?: string;
+    readonly canonicalSnapshot: CanonicalPlanSnapshot;
+    readonly planFingerprint: PlanFingerprint;
+  };
+};
+
 type BindPendingInput = {
   readonly authorizationId: string;
   readonly artifactChainId: string;
@@ -557,7 +596,14 @@ git commit -m "refactor: separate Justice identity from OmO task routing"
 - `ApprovedPlanBinding` contains one `artifactChain: ApprovedArtifactChain`; the removed top-level plan-only fields are not duplicated as compatibility state.
 - v5 authoritative authorization file: `.justice/v5/authorizations.json`.
 - v4 `.justice/authorizations.json` remains untouched/historical.
-- Produces `classifyPriorJusticeState(raw) -> PriorStateClassification` for `justice-plan-v1`, PersistedEnvelope v1, ReviewSnapshot v1, and legacy human review resolutions.
+- Produces:
+  - `computeArtifactFingerprint(raw: string): ArtifactFingerprint` using SHA-256 after CRLF→LF normalization.
+  - `resolveArtifactChainSources(planPath: string, fileReader: FileReader): Promise<ArtifactChainSourceResolution>`.
+    - Plan must contain exactly one safe repository-relative `**Spec:** \`...\`` reference.
+    - bound Design must contain exactly one safe repository-relative `**Requirements:** \`...\`` reference.
+    - missing, ambiguous, unreadable, or unsafe references fail closed.
+  - `buildApprovedArtifactChain(input: BuildApprovedArtifactChainInput): ApprovedArtifactChain`; `chainId` is a fresh `randomUUID()`, Requirements/Design use `justice-artifact-v1`, and Plan uses existing `justice-plan-v1`.
+  - `classifyPriorJusticeState(raw): PriorStateClassification` for `justice-plan-v1`, PersistedEnvelope v1, ReviewSnapshot v1, and legacy human review resolutions.
 
 - [ ] **Step 1: Write RED artifact-chain and migration tests**
 
@@ -570,6 +616,8 @@ Exact required tests:
 - `reapproval_creates_new_artifact_chain_id`
 - `v4_plan_authorization_is_not_promoted_to_v5_authority`
 - `unknown_or_newer_authoritative_state_is_preserved_not_rewritten`
+- `resolves_requirements_design_plan_chain_from_declared_metadata`
+- `missing_or_ambiguous_artifact_reference_blocks_authorization`
 
 - [ ] **Step 2: Run RED tests**
 
@@ -636,12 +684,14 @@ git commit -m "feat: bind authorization to approved artifact chains"
 
 **Files:**
 - Create: `src/core/conformance-contract.ts`
+- Create: `src/core/conformance-contract-store.ts`
 - Create: `src/core/superpowers-plan-parser.ts`
 - Create: `src/core/conformance-projector.ts`
 - Modify: `src/core/plan-parser.ts` only to share canonical task-section helpers; do not make checkbox text the v5 semantic authority.
 - Test: `tests/core/superpowers-plan-parser.test.ts`
 - Test: `tests/core/conformance-projector.test.ts`
 - Test: `tests/core/conformance-contract.test.ts`
+- Test: `tests/core/conformance-contract-store.test.ts`
 
 **Interfaces:**
 - Owns the registry-defined `ProjectionDiagnosticCode`, `ProjectionDiagnostic`, `ProjectionResult<T>`, and `ClauseResult`.
@@ -670,18 +720,26 @@ git commit -m "feat: bind authorization to approved artifact chains"
     readonly digest: string;
   };
   ```
+- Conformance Contract persistence is immutable at `.justice/v5/conformance-contracts/<contractId>.json`.
+  - `contractId` is the lowercase SHA-256 hex of the contract's canonical JSON body (without the `sha256:` prefix).
+  - `digest` is the corresponding `sha256:<hex>` value.
+  - saving the same ID+digest is idempotent; same ID with different content is a conflict and fail-closed.
+  - reviewers receive the repository-relative path returned by this store.
 - Exact producer signatures:
   - `parseSuperpowersPlan(markdown: string): ProjectionResult<ParsedSuperpowersPlan>`
   - `projectRequirementsClauses(markdown: string, ref: ArtifactRevisionRef): ProjectionResult<readonly NormativeClause[]>`
   - `projectDesignClauses(markdown: string, ref: ArtifactRevisionRef): ProjectionResult<readonly NormativeClause[]>`
   - `projectPlanClauses(markdown: string, ref: PlanArtifactRevisionRef): ProjectionResult<readonly NormativeClause[]>`
   - `buildConformanceContract(chain: ApprovedArtifactChain, sources: ProjectedSources): ConformanceContract`
+  - `saveConformanceContract(contract: ConformanceContract): Promise<ConformanceContractPersistenceResult>`
 - Plan parser recognizes Goal, Architecture, Tech Stack, Spec, Global Constraints, Review Focus, Task Files, Interfaces/Consumes/Produces, signatures, exact values, test assertions, and Expected lines.
 
 - [ ] **Step 1: Write RED parser/projection tests**
 
 Include exact test:
 - `projection_failures_never_return_complete` — duplicate ID, missing source, ambiguous source, unsupported Plan structure, parser failure, source revision mismatch, and unmappable normative unit each produce `INCOMPLETE` or `INVALID`, never `COMPLETE`.
+- `persists_contract_immutably_at_reviewer_readable_path` — exact contract body is readable from the returned repo-relative path.
+- `same_contract_save_is_idempotent_but_digest_conflict_fails_closed`.
 
 Also assert:
 - every `JUS5-*` heading produces deterministic source identity + suffixes;
@@ -691,7 +749,7 @@ Also assert:
 
 - [ ] **Step 2: Run RED tests**
 
-Run: `bun run vitest run tests/core/superpowers-plan-parser.test.ts tests/core/conformance-projector.test.ts tests/core/conformance-contract.test.ts`
+Run: `bun run vitest run tests/core/superpowers-plan-parser.test.ts tests/core/conformance-projector.test.ts tests/core/conformance-contract.test.ts tests/core/conformance-contract-store.test.ts`
 
 Expected: FAIL because these modules do not exist.
 
@@ -710,8 +768,10 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/core/conformance-contract.ts src/core/superpowers-plan-parser.ts src/core/conformance-projector.ts src/core/plan-parser.ts \
-  tests/core/superpowers-plan-parser.test.ts tests/core/conformance-projector.test.ts tests/core/conformance-contract.test.ts
+git add src/core/conformance-contract.ts src/core/conformance-contract-store.ts src/core/superpowers-plan-parser.ts \
+  src/core/conformance-projector.ts src/core/plan-parser.ts \
+  tests/core/superpowers-plan-parser.test.ts tests/core/conformance-projector.test.ts \
+  tests/core/conformance-contract.test.ts tests/core/conformance-contract-store.test.ts
 git commit -m "feat: project versioned conformance contracts"
 ```
 
@@ -882,7 +942,7 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
 
 **Interfaces:**
 - Consumes `TaskIdentity` and `ReviewFindingV5` from Task 2.
-- Consumes `ClauseResult` and `ConformanceContract` from Task 4.
+- Consumes `ClauseResult`, `ConformanceContract`, and immutable reviewer-readable contract path/digest from Task 4.
 - Owns the registry-defined `RecognizedReviewDispatch` and `ParseReviewResult`.
 - Produces:
   ```ts
@@ -1623,7 +1683,7 @@ The executor must record these rows in the Superpowers ledger before Task 1:
 |---|---|---|
 | Task 2 | Tasks 5–12 | `TaskIdentity`, `ReviewFindingV5`, `TaskCategory`, `TaskRoutingTarget` |
 | Task 3 | Tasks 4–14 | `ArtifactFingerprint`, `ApprovedArtifactChain`, `ApprovedPlanBinding.artifactChain`, `ApprovePlanInput` |
-| Task 4 | Tasks 7–9, 13–14 | `ProjectionDiagnostic`, `ProjectionResult<T>`, `ClauseResult`, `ConformanceContract` |
+| Task 4 | Tasks 7–9, 13–14 | `ProjectionDiagnostic`, `ProjectionResult<T>`, `ClauseResult`, `ConformanceContract`, `ConformanceContractPersistenceResult` + immutable contract path/digest |
 | Task 5 | Tasks 6–9, 13 | `TaskIdentityResolution`, `CorrelationMutationResult`, `ExecutionCorrelation`, `ExecutionCorrelationKey` |
 | Task 6 | Task 7 | durable parent-call/child-session observation available to `RecognizedReviewDispatch` |
 | Task 7 | Tasks 8–9, 13 | `RecognizedReviewDispatch`, `JusticeReviewResult`, `ParseReviewResult`, reviewed range/contract digest |
