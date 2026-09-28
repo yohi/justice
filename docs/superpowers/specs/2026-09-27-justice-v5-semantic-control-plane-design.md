@@ -187,7 +187,7 @@ Other prose in this Design explains or elaborates these contracts. It is not ind
 | J5D-PROJ-02 | Projection has COMPLETE/INCOMPLETE/INVALID state; only COMPLETE may pass acceptance. |
 | J5D-PROJ-03 | Projection schema/version is bound to artifact-chain and evidence identity. |
 | J5D-REVIEW-01 | Justice observes an existing Superpowers review dispatch and never creates a duplicate review. |
-| J5D-REVIEW-02 | The existing review call is enriched with a read-only Conformance Contract through the supported pre-tool hook. |
+| J5D-REVIEW-02 | Justice observes the existing parent review call, correlates its child reviewer session, and injects the read-only Conformance Contract into that child session through the consumed `chat.message` parts surface; `tool.execute.before` is observation-only. |
 | J5D-REVIEW-03 | Trusted review evidence uses a versioned structured result bound to the same call/task/revision. |
 | J5D-REVIEW-04 | Missing, malformed, stale, wrong-scope, or untrusted review results fail closed. |
 | J5D-QUALITY-01 | Critical/Important findings block; Minor is deferred-visible; parked/Ruling is not resolution. |
@@ -899,53 +899,112 @@ If the signals are ambiguous, the execution may continue but the review is untru
 
 ### 14.2 Conformance Contract delivery — J5D-REVIEW-02
 
-When a supported review requires semantic conformance evidence, Justice enriches **that same existing review call** through the OpenCode `tool.execute.before` mutable task arguments already used by the OpenCode adapter.
+Justice does **not** use `tool.execute.before` argument mutation as the delivery mechanism.
 
-Justice appends a read-only Justice review appendix containing:
+For OpenCode v1.18.31 the exact TaskTool source establishes this constraint:
+
+```text
+const taskArgs = { prompt, description, subagent_type, command }
+
+plugin.trigger(
+  "tool.execute.before",
+  { tool: "task", sessionID, callID },
+  { args: taskArgs },
+)
+
+taskTool.execute(taskArgs, ...)
+```
+
+The hook receives the same mutable object for observation, but the runtime continues by executing the original `taskArgs` binding. Replacing or mutating the hook wrapper is therefore not a supported Justice guarantee for prompt delivery. The v1.18.31 source is byte-identical to v1.18.29 for:
+
+- `packages/opencode/src/session/prompt.ts` — blob `0f85d44f209ba792065aeb951f0bd2e12b59fae8`;
+- `packages/opencode/src/tool/task.ts` — blob `d8ca640cfba9a52d97e5180fda0ffa719910592b`;
+- `packages/plugin/src/index.ts` — blob `edfa0139dfcaf0e877ab906fabe8e0527afc3915`.
+
+The previously recorded real-runtime spike on OpenCode 1.18.29 remains valid evidence for parent `sessionID + callID`, child-session metadata, and parent/child event correlation. It is **not** evidence that a before-hook prompt mutation reaches the child.
+
+#### Supported baseline delivery contract
+
+The v5 baseline review path is:
+
+```text
+Superpowers v6.4.2 dispatches existing reviewer
+        ↓
+OpenCode task(subagent_type="general")
+        ↓
+tool.execute.before(parent sessionID, callID)
+        ↓ observation only
+Justice records PendingReviewCorrelation
+        ↓
+TaskTool creates child session
+        ↓
+session.created / session.updated exposes child.parentID
+        ↓
+Justice binds exactly one pending review call to child session
+        ↓
+TaskTool calls ops.prompt(child session, params.prompt)
+        ↓
+createUserMessage(child)
+        ↓
+chat.message(child session, output.parts)
+        ↓
+Justice appends review appendix by mutating output.parts IN PLACE
+        ↓
+OpenCode persists those same resolvedParts and runs reviewer
+        ↓
+tool.execute.after(parent sessionID, same callID)
+        ↓
+same-call result / child metadata correlated as review evidence
+```
+
+OpenCode v1.18.31 source establishes that `chat.message` is invoked after `resolvedParts` are created and before those same parts are normalized/saved:
+
+```text
+const resolvedParts = ...
+plugin.trigger("chat.message", ..., { message: info, parts: resolvedParts })
+const parts = ... resolvedParts ...
+sessions.updateMessage(info)
+for (const part of parts) sessions.updatePart(part)
+```
+
+Justice therefore appends a new synthetic/text review appendix **to the existing `output.parts` array in place**. It does not replace the wrapper object, does not replace caller routing fields, and does not alter the original Superpowers reviewer prompt.
+
+The appended review appendix contains:
 
 - review-correlation ID;
 - artifact-chain ID;
 - task identity where applicable;
 - reviewed base/head or candidate revision;
-- a workspace-relative reference to the immutable Conformance Contract;
+- a workspace-relative immutable Conformance Contract reference and digest;
 - the required structured-result schema.
 
-It does not alter model/provider/subagent/category choice and does not create a second dispatch.
+#### Parent-call → child-session binding before chat.message
 
-A host/version where the review call cannot be safely recognized and enriched is reported by doctor as review-interop unsupported; semantic review evidence remains `NOT_PROVEN` rather than falling back to a Justice-owned review.
+The child prompt arrives before the parent `tool.execute.after` event, so Justice cannot wait for after-hook metadata to inject review context.
 
-#### Verified v5 baseline compatibility evidence
+Binding therefore uses:
 
-The review-interop extension point is an **established baseline contract before implementation planning**, not an architecture-discovery task.
+1. a pending recognized-review record created at parent `tool.execute.before`, keyed by `parentSessionId + parentCallId`;
+2. the child `session.created/session.updated` event carrying `childSessionId + parentID`;
+3. the Superpowers invariant that review dispatch is sequential, not concurrent;
+4. exact uniqueness: there must be **exactly one** pending recognized review for that parent session when the child session is created.
 
-Evidence chain:
+If zero or multiple pending recognized reviews exist, or the observed child parent does not match, Justice marks review correlation ambiguous, performs **no child prompt injection**, and leaves semantic review evidence `NOT_PROVEN`.
 
-1. Justice's existing `spikes/child-session-correlation/README.md` recorded a real OpenCode **1.18.29** runtime probe showing:
-   - `tool.execute.before` exposes the parent `sessionID` and `callID`;
-   - task args are mutable through the before-hook output;
-   - `tool.execute.after` returns on the same call and exposes child-session metadata;
-   - parent/child session correlation is observable through hook metadata and session events.
-2. The OpenCode runtime/plugin files that implement this path are byte-identical between **v1.18.29** and **v1.18.31**:
-   - `packages/opencode/src/session/tools.ts` — blob `99f7aec4fdfdfc857702b50b0ca3ce7c8651af4c`;
-   - `packages/opencode/src/session/prompt.ts` — blob `0f85d44f209ba792065aeb951f0bd2e12b59fae8`;
-   - `packages/opencode/src/tool/task.ts` — blob `d8ca640cfba9a52d97e5180fda0ffa719910592b`;
-   - `packages/plugin/src/index.ts` — blob `edfa0139dfcaf0e877ab906fabe8e0527afc3915`.
-   The v1.18.31 release tag resolves to commit `014614d35b397775e5d397a490fc72368c894ec2`.
-3. Source-contract verification on v1.18.31 confirms the before-hook receives the mutable `args` object, the native task path consumes the resulting `params.prompt` through `ops.resolvePromptParts(params.prompt)`, and the after-hook is emitted for the same parent `sessionID + callID` with TaskTool child-session metadata.
-4. Superpowers v6.4.2 defines task review, scoped re-review, and final whole-branch review as `Subagent (general-purpose)` dispatches, and its OpenCode V1 mapping resolves every one of those reviewer dispatches to the same native `task` tool with `subagent_type: "general"`. The review kind changes prompt content and review-package inputs; it does not select a reviewer-specific host execution path.
-5. This is a compositional compatibility proof: the hook/task path was empirically observed on 1.18.29, that exact path is source-identical on 1.18.31, and all three Superpowers v6.4.2 reviewer kinds map to that one path. The implementation plan therefore treats three-kind runtime replay as **regression evidence**, not as the first architecture-feasibility decision.
+After `tool.execute.after`, structured child metadata is used to corroborate the already-established relation. A mismatch invalidates the review evidence.
 
-Therefore the supported v5 baseline is fixed as:
+This preserves the canonical execution key `parentSessionId + parentCallId` without overloading OmO `task_id`.
 
-```text
-Superpowers v6.4.2 review dispatch
-→ OpenCode 1.18.31 task(subagent_type="general")
-→ tool.execute.before(sessionID, callID, mutable args)
-→ same mutated args consumed by TaskTool
-→ same-call tool.execute.after/result + child-session metadata
-```
+#### Compatibility evidence and Task 1 status
 
-Implementation tests MUST preserve this as a regression contract. A future failure is treated as **upstream compatibility drift** and blocks the supported-stack claim; it does not invite a Justice-owned reviewer fallback or a new architecture decision inside the Implementation Plan.
+The architecture choice is fixed before implementation:
+
+- before-hook mutation is explicitly **not** the prompt-delivery mechanism;
+- child `chat.message` in-place part mutation is the supported delivery mechanism;
+- the source path and ordering above are established on the exact OpenCode v1.18.31 baseline;
+- the existing 1.18.29 runtime spike establishes the unchanged parent/child correlation surfaces.
+
+The Implementation Plan's first compatibility task is therefore a **regression/replay gate for this already-selected contract**, not a task allowed to choose a different architecture. If the regression gate fails on the supported runtime, implementation stops and the support claim returns to Design review as upstream/runtime drift.
 
 ### 14.3 Structured result — J5D-REVIEW-03
 
