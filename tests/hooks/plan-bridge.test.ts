@@ -949,6 +949,210 @@ describe("PlanBridge", () => {
     });
   });
 
+  describe("handleReviewGateRequest", () => {
+    it("blocks when the session has not been bootstrapped", async () => {
+      const reader = createMockFileReader({
+        "docs/specs/design.md": "# Design",
+        "docs/plans/plan.md": "# Plan",
+      });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+
+      const result = await bridge.handleReviewGateRequest("s-review-none", {
+        source: "command",
+        designPath: "docs/specs/design.md",
+        planPath: "docs/plans/plan.md",
+      });
+
+      expect(result.status).toBe("blocked");
+      expect(result.reason).toBe("workflow_not_started");
+      expect(result.guidance).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
+      expect(result.guidance).toContain("/justice-start");
+    });
+
+    it("requests the planning Review Gate only for the artifacts bound by plan_ready", async () => {
+      const reader = createMockFileReader({
+        "docs/specs/design.md": "# Design",
+        "docs/plans/plan.md": "# Plan",
+      });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+
+      await bridge.handleWorkflowStart(
+        "s-review-ready",
+        createWorkflowStartRequest({
+          designPath: "docs/specs/design.md",
+          planPath: "docs/plans/plan.md",
+        }),
+      );
+
+      const result = await bridge.handleReviewGateRequest("s-review-ready", {
+        source: "command",
+        designPath: "docs/specs/design.md",
+        planPath: "docs/plans/plan.md",
+      });
+
+      expect(result.status).toBe("requested");
+      expect(result.guidance).toContain("[JUSTICE: REVIEW GATE REQUESTED]");
+      expect(result.guidance).toContain("[JUSTICE: REQUIRED SKILLS: requesting-code-review]");
+      expect(result.guidance).toContain("docs/specs/design.md");
+      expect(result.guidance).toContain("docs/plans/plan.md");
+      expect(result.guidance).toContain("source/test/config の実装変更は開始しません");
+      expect(result.guidance).toContain("レビュー完了・人間承認・マージ・実装認可を意味しません");
+    });
+
+    it("permits exactly one bound planning-review task before implementation approval", async () => {
+      const reader = createMockFileReader({
+        "docs/specs/design.md": "# Design",
+        "docs/plans/plan.md": "# Plan",
+      });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+
+      await bridge.handleWorkflowStart(
+        "s-review-dispatch",
+        createWorkflowStartRequest({
+          designPath: "docs/specs/design.md",
+          planPath: "docs/plans/plan.md",
+        }),
+      );
+      await bridge.handleReviewGateRequest("s-review-dispatch", {
+        source: "command",
+        designPath: "docs/specs/design.md",
+        planPath: "docs/plans/plan.md",
+      });
+
+      const reviewEvent: PreToolUseEvent = {
+        type: "PreToolUse",
+        sessionId: "s-review-dispatch",
+        callId: "review-call-1",
+        payload: {
+          toolName: "task",
+          toolInput: {
+            subagent_type: "general",
+            description: "Final code review",
+            prompt: [
+              "You are a Senior Code Reviewer with expertise in software architecture.",
+              "Review planning artifacts docs/specs/design.md and docs/plans/plan.md.",
+              "## Git Range to Review",
+            ].join("\n"),
+          },
+        },
+      };
+
+      const response = await bridge.handlePreToolUse(reviewEvent);
+      expect(response.action).toBe("inject");
+      if (response.action !== "inject") throw new Error("expected inject");
+      expect(response.injectedContext).toBe("");
+      expect(response.modifiedPayload).toMatchObject({
+        args: {
+          category: "sp-final-review",
+          run_in_background: false,
+        },
+      });
+
+      const secondResponse = await bridge.handlePreToolUse({
+        ...reviewEvent,
+        callId: "review-call-2",
+      });
+      expect(secondResponse.action).toBe("inject");
+      if (secondResponse.action !== "inject") throw new Error("expected inject");
+      expect(secondResponse.injectedContext).toContain(
+        "[JUSTICE: IMPLEMENTATION UNAUTHORIZED]",
+      );
+    });
+
+    it("does not consume the planning-review permit for a reviewer prompt bound to other artifacts", async () => {
+      const reader = createMockFileReader({
+        "docs/specs/design.md": "# Design",
+        "docs/plans/plan.md": "# Plan",
+      });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+
+      await bridge.handleWorkflowStart(
+        "s-review-prompt-binding",
+        createWorkflowStartRequest({
+          designPath: "docs/specs/design.md",
+          planPath: "docs/plans/plan.md",
+        }),
+      );
+      await bridge.handleReviewGateRequest("s-review-prompt-binding", {
+        source: "command",
+        designPath: "docs/specs/design.md",
+        planPath: "docs/plans/plan.md",
+      });
+
+      const mismatched = await bridge.handlePreToolUse({
+        type: "PreToolUse",
+        sessionId: "s-review-prompt-binding",
+        callId: "review-wrong",
+        payload: {
+          toolName: "task",
+          toolInput: {
+            subagent_type: "general",
+            description: "Final review",
+            prompt: [
+              "You are a Senior Code Reviewer.",
+              "Review docs/plans/other-plan.md.",
+              "## Git Range to Review",
+            ].join("\n"),
+          },
+        },
+      });
+      expect(mismatched.action).toBe("inject");
+      if (mismatched.action !== "inject") throw new Error("expected inject");
+      expect(mismatched.injectedContext).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
+
+      const corrected = await bridge.handlePreToolUse({
+        type: "PreToolUse",
+        sessionId: "s-review-prompt-binding",
+        callId: "review-correct",
+        payload: {
+          toolName: "task",
+          toolInput: {
+            subagent_type: "general",
+            description: "Final review",
+            prompt: [
+              "You are a Senior Code Reviewer.",
+              "Review docs/specs/design.md and docs/plans/plan.md.",
+              "## Git Range to Review",
+            ].join("\n"),
+          },
+        },
+      });
+      expect(corrected.action).toBe("inject");
+      if (corrected.action !== "inject") throw new Error("expected inject");
+      expect(corrected.injectedContext).toBe("");
+      expect(corrected.modifiedPayload).toMatchObject({
+        args: { category: "sp-final-review", run_in_background: false },
+      });
+    });
+
+    it("blocks when the review artifacts differ from the current bootstrap", async () => {
+      const reader = createMockFileReader({
+        "docs/specs/design.md": "# Design",
+        "docs/plans/plan.md": "# Plan",
+        "docs/plans/other-plan.md": "# Other Plan",
+      });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+
+      await bridge.handleWorkflowStart(
+        "s-review-mismatch",
+        createWorkflowStartRequest({
+          designPath: "docs/specs/design.md",
+          planPath: "docs/plans/plan.md",
+        }),
+      );
+
+      const result = await bridge.handleReviewGateRequest("s-review-mismatch", {
+        source: "command",
+        designPath: "docs/specs/design.md",
+        planPath: "docs/plans/other-plan.md",
+      });
+
+      expect(result.status).toBe("blocked");
+      expect(result.reason).toBe("artifact_mismatch");
+      expect(result.guidance).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
+    });
+  });
+
   describe("handleWorkflowStart", () => {
     function createWorkflowStartRequest(
       overrides: Partial<WorkflowStartRequest> = {},

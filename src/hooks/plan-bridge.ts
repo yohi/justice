@@ -20,6 +20,7 @@ import type {
   WorkflowStartRequest,
 } from "../core/types";
 import { isLegacyMessagePayload } from "../core/types";
+import type { JusticeReviewGateRequest } from "../core/review-gate-command";
 import { mergePostToolUseResponses } from "../core/hook-response-merger";
 import type { LoopDetectionHandler } from "./loop-handler";
 import type { ObservationHandler } from "./observation-handler";
@@ -126,6 +127,18 @@ export interface WorkflowStartResult {
   readonly guidance: string;
 }
 
+export interface ReviewGateRequestResult {
+  readonly status: "requested" | "blocked";
+  readonly designPath: string | null;
+  readonly planPath: string;
+  readonly reason?:
+    | "workflow_not_started"
+    | "workflow_not_ready"
+    | "artifact_mismatch"
+    | "artifact_unreadable";
+  readonly guidance: string;
+}
+
 /** phase から「次に読み込むべきスキル」への写像 (plan_ready は追加スキル不要)。 */
 const NEXT_SKILL_BY_PHASE: ReadonlyMap<WorkflowBootstrapPhase, WorkflowNextSkill> = new Map<
   WorkflowBootstrapPhase,
@@ -154,6 +167,7 @@ export class PlanBridge {
   private readonly cancelledImplementationSessions = new Set<string>();
   private readonly lastUserMessages: Map<string, string> = new Map();
   private readonly workflowBootstraps: Map<string, WorkflowBootstrapState> = new Map();
+  private readonly planningReviewGateRequests = new Map<string, JusticeReviewGateRequest>();
   private readonly lastCompletionInputs: Map<
     string,
     Pick<PlanCompletionInput, "prompt" | "category" | "skillName"> & { readonly taskId?: string }
@@ -379,6 +393,7 @@ export class PlanBridge {
       this.activeAuthorizationIds.delete(sessionId);
       this.activePlanPaths.delete(sessionId);
       this.implementationArmedSessions.delete(sessionId);
+      this.planningReviewGateRequests.delete(sessionId);
       return;
     }
 
@@ -388,6 +403,7 @@ export class PlanBridge {
       if (this.getActivePlan(sessionId) !== validatedRef.planPath) {
         this.activeAuthorizationIds.delete(sessionId);
         this.implementationArmedSessions.delete(sessionId);
+        this.planningReviewGateRequests.delete(sessionId);
       }
       // Trust the validated and normalized path
       this.activePlanPaths.set(sessionId, validatedRef.planPath);
@@ -396,6 +412,7 @@ export class PlanBridge {
       this.activeAuthorizationIds.delete(sessionId);
       this.activePlanPaths.delete(sessionId);
       this.implementationArmedSessions.delete(sessionId);
+      this.planningReviewGateRequests.delete(sessionId);
     }
   }
 
@@ -416,6 +433,7 @@ export class PlanBridge {
     this.implementationArmedSessions.delete(sessionId);
     this.lastUserMessages.delete(sessionId);
     this.workflowBootstraps.delete(sessionId);
+    this.planningReviewGateRequests.delete(sessionId);
     this.clearSessionCompletionInputs(sessionId);
   }
 
@@ -446,6 +464,7 @@ export class PlanBridge {
     request: WorkflowStartRequest,
   ): Promise<WorkflowStartResult> {
     this.implementationArmedSessions.delete(sessionId);
+    this.planningReviewGateRequests.delete(sessionId);
     const phase = await this.resolveBootstrapPhase(request);
     const directiveStage = this.resolveBootstrapDirectiveStage(phase);
     this.workflowBootstraps.set(sessionId, { phase, request });
@@ -477,6 +496,112 @@ export class PlanBridge {
       nextSkill: NEXT_SKILL_BY_PHASE.get(phase) ?? null,
       activePlanPath,
       guidance: this.formatWorkflowGuidance(request, phase, activePlanPath),
+    };
+  }
+
+  async handleReviewGateRequest(
+    sessionId: string,
+    request: JusticeReviewGateRequest,
+  ): Promise<ReviewGateRequestResult> {
+    // Every invocation replaces any prior one-shot planning-review permit.
+    // A rejected request must never leave an older permit armed.
+    this.planningReviewGateRequests.delete(sessionId);
+
+    const bootstrap = this.getWorkflowBootstrap(sessionId);
+    if (bootstrap === null) {
+      return this.reviewGateBlocked(
+        request,
+        "workflow_not_started",
+        "No Justice workflow bootstrap exists for this session. Run /justice-start with the same Design/Plan first.",
+      );
+    }
+
+    if (bootstrap.phase !== "plan_ready") {
+      return this.reviewGateBlocked(
+        request,
+        "workflow_not_ready",
+        "The current Justice workflow is not in plan_ready. Re-run /justice-start before requesting the Review Gate.",
+      );
+    }
+
+    if (
+      bootstrap.request.designPath !== request.designPath ||
+      bootstrap.request.planPath !== request.planPath
+    ) {
+      return this.reviewGateBlocked(
+        request,
+        "artifact_mismatch",
+        "The requested Design/Plan do not match the artifacts bound by /justice-start. Re-run /justice-start with the intended artifacts.",
+      );
+    }
+
+    if (this.getActivePlan(sessionId) !== request.planPath) {
+      return this.reviewGateBlocked(
+        request,
+        "workflow_not_ready",
+        "The active Justice Plan no longer matches the bootstrap. Re-run /justice-start before requesting the Review Gate.",
+      );
+    }
+
+    if (
+      (request.designPath !== null && !(await this.isArtifactReadable(request.designPath))) ||
+      !(await this.isArtifactReadable(request.planPath))
+    ) {
+      return this.reviewGateBlocked(
+        request,
+        "artifact_unreadable",
+        "The requested Review Gate artifacts are no longer readable. Restore them and re-run /justice-start.",
+      );
+    }
+
+    const planningArtifacts = [
+      `**Design**: ${request.designPath ?? "(not requested)"}`,
+      `**Plan**: ${request.planPath}`,
+    ].join("\n");
+
+    this.planningReviewGateRequests.set(sessionId, request);
+
+    return {
+      status: "requested",
+      designPath: request.designPath,
+      planPath: request.planPath,
+      guidance: [
+        "---",
+        "[JUSTICE: REVIEW GATE REQUESTED]",
+        "",
+        planningArtifacts,
+        "",
+        "[JUSTICE: REQUIRED SKILLS: requesting-code-review]",
+        "Superpowers の `superpowers:requesting-code-review` skill を今すぐ実行し、上記 Design / Implementation Plan を1つの planning Review Gate としてレビューしてください。",
+        "reviewer prompt の PLAN_OR_REQUIREMENTS には上記 Design / Plan のリテラル path を両方含め、両ファイルを working tree から直接読んで整合性・実現可能性・テスト計画・欠落条件を確認するよう明示してください。",
+        "レビュー対象は設計・計画と、その妥当性確認に必要なリポジトリ文脈です。source/test/config の実装変更は開始しません。",
+        "指摘が1件でも残る場合は REVIEW REMEDIATION とし、修正後に同じ `/justice-review-gate` を再実行してください。",
+        "reviewer task が指摘なしと返しただけでは REVIEW CLEAR を主張しません。信頼済みの完全な zero-finding review snapshot が観測された場合のみ REVIEW CLEAR に進みます。",
+        "このコマンドは Review Gate の開始要求であり、レビュー完了・人間承認・マージ・実装認可を意味しません。",
+        "---",
+      ].join("\n"),
+    };
+  }
+
+  private reviewGateBlocked(
+    request: JusticeReviewGateRequest,
+    reason: NonNullable<ReviewGateRequestResult["reason"]>,
+    message: string,
+  ): ReviewGateRequestResult {
+    return {
+      status: "blocked",
+      designPath: request.designPath,
+      planPath: request.planPath,
+      reason,
+      guidance: [
+        "---",
+        "[JUSTICE: REVIEW GATE BLOCKED]",
+        "",
+        message,
+        "",
+        "Review Gate was not started. Do not claim review completion or proceed to implementation.",
+        "---",
+      ].join("\n"),
     };
   }
 
@@ -584,6 +709,7 @@ export class PlanBridge {
           readonly approved: boolean;
         },
   ): Promise<ImplementationArmResult> {
+    this.planningReviewGateRequests.delete(sessionId);
     if ("action" in request && request.action === "cancel") {
       return this.handleImplementationCancellation(sessionId);
     }
@@ -926,12 +1052,23 @@ export class PlanBridge {
     // Only intercept task() tool calls
     if (event.type !== "PreToolUse" || event.payload.toolName !== "task") return PROCEED;
 
+    // A planning Review Gate is intentionally before human implementation approval
+    // and independent from a previous implementation cancellation. Its one-shot permit
+    // must therefore be checked before all implementation authorization/cancellation
+    // boundaries, but only for a semantically classified reviewer task whose prompt is
+    // bound to the exact Design/Plan requested by /justice-review-gate.
+    const activePlanPath = this.getActivePlan(event.sessionId);
+    const planningReviewResponse = this.handlePlanningReviewGatePreToolUse(
+      event,
+      activePlanPath,
+    );
+    if (planningReviewResponse !== null) return planningReviewResponse;
+
     if (this.cancelledImplementationSessions.has(event.sessionId)) {
       return this.unauthorizedTaskResponse(event.sessionId, event.callId);
     }
 
-    // Need an active plan to provide context for this session
-    const activePlanPath = this.getActivePlan(event.sessionId);
+    // Need an active plan to provide implementation context for this session.
     if (!activePlanPath) return PROCEED;
 
     const dependencies = this.authorizationDependencies;
@@ -1622,6 +1759,70 @@ export class PlanBridge {
 
   private resolveDelegationPersona(sessionId: string): AgentId {
     return this.completionDetector.lastInvokedPersona(sessionId) ?? "hephaestus";
+  }
+
+  private handlePlanningReviewGatePreToolUse(
+    event: Extract<HookEvent, { readonly type: "PreToolUse" }>,
+    activePlanPath: string | null,
+  ): HookResponse | null {
+    const request = this.planningReviewGateRequests.get(event.sessionId);
+    if (request === undefined) return null;
+
+    const semanticReviewCategory = resolveSuperpowersSddCategory(
+      event.payload.toolInput,
+      "sp-implementation",
+    );
+    if (
+      semanticReviewCategory !== "sp-review" &&
+      semanticReviewCategory !== "sp-final-review"
+    ) {
+      return null;
+    }
+
+    const prompt =
+      typeof event.payload.toolInput.prompt === "string"
+        ? event.payload.toolInput.prompt
+        : "";
+    const promptBoundToArtifacts =
+      activePlanPath === request.planPath &&
+      prompt.includes(request.planPath) &&
+      (request.designPath === null || prompt.includes(request.designPath));
+
+    if (!promptBoundToArtifacts) {
+      return {
+        action: "inject",
+        injectedContext: [
+          "[JUSTICE: REVIEW GATE BLOCKED]",
+          "The reviewer task does not reference the exact Design/Plan bound by /justice-review-gate.",
+          `Expected Plan: ${request.planPath}`,
+          `Expected Design: ${request.designPath ?? "(not requested)"}`,
+          "Do not treat this reviewer run as the planning Review Gate. Correct the reviewer prompt and retry.",
+        ].join("\n"),
+      };
+    }
+
+    // Consume exactly once. Re-review requires an explicit /justice-review-gate rerun.
+    this.planningReviewGateRequests.delete(event.sessionId);
+    this.completionDetector.recordPreToolUseInvocation(
+      event.sessionId,
+      event.callId,
+      event.payload.toolName,
+      event.payload.toolInput,
+    );
+
+    const normalizedArgs = normalizeTaskToolInputWithCategory(
+      event.payload.toolInput,
+      semanticReviewCategory,
+    );
+    delete normalizedArgs.task_id;
+    const continuationTaskId = resolveOmoContinuationTaskId(event.payload.toolInput);
+    if (continuationTaskId !== undefined) normalizedArgs.task_id = continuationTaskId;
+
+    return {
+      action: "inject",
+      injectedContext: "",
+      modifiedPayload: { args: normalizedArgs },
+    };
   }
 
   private unauthorizedTaskResponse(sessionId: string, callId: string | undefined): HookResponse {

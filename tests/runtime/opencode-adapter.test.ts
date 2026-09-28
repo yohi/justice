@@ -840,6 +840,60 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     expect((output.parts[0] as { text: string }).text).toContain("[JUSTICE: Workflow Bootstrap]");
   });
 
+  it("routes /justice-review-gate to the planning Review Gate controller", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const handleReviewGateRequest = vi
+      .spyOn(justice.getPlanBridge(), "handleReviewGateRequest")
+      .mockResolvedValue({
+        status: "requested",
+        designPath: "docs/specs/design.md",
+        planPath: "docs/plans/plan.md",
+        guidance: "[JUSTICE: REVIEW GATE REQUESTED]",
+      });
+    const output: CommandExecuteBeforeOutput = { parts: [] };
+
+    await adapter.onCommandExecuteBefore(
+      {
+        command: "/justice-review-gate",
+        sessionID: "sess-review-gate",
+        arguments: "--design @docs/specs/design.md --plan @docs/plans/plan.md",
+      },
+      output,
+    );
+
+    expect(handleReviewGateRequest).toHaveBeenCalledWith("sess-review-gate", {
+      source: "command",
+      designPath: "docs/specs/design.md",
+      planPath: "docs/plans/plan.md",
+    });
+    expect(output.parts).toHaveLength(1);
+    expect((output.parts[0] as { text: string }).text).toContain(
+      "[JUSTICE: REVIEW GATE REQUESTED]",
+    );
+  });
+
+  it("rejects malformed /justice-review-gate arguments explicitly", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    const output: CommandExecuteBeforeOutput = { parts: [] };
+
+    await adapter.onCommandExecuteBefore(
+      {
+        command: "justice-review-gate",
+        sessionID: "sess-review-bad",
+        arguments: "--design @docs/specs/design.md",
+      },
+      output,
+    );
+
+    expect(output.parts).toHaveLength(1);
+    expect((output.parts[0] as { text: string }).text).toContain(
+      "[JUSTICE: COMMAND REJECTED]",
+    );
+    expect(adapter.getJustice()).toBeNull();
+  });
+
   it("does not emit workflow observations from the adapter; PlanBridge owns them", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();

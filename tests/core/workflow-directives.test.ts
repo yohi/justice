@@ -72,6 +72,29 @@ describe("formatWorkflowDirective", () => {
     expect(directive).toContain(`[JUSTICE: REQUIRED SKILLS: ${requiredSkill}]`);
   });
 
+  it("emits the explicit review-gate command when planning artifacts are known", () => {
+    const directive = formatWorkflowDirective({
+      stage: "plan_review_required",
+      designPath: "docs/specs/feature-design.md",
+      planPath: "docs/plans/feature-plan.md",
+    });
+
+    expect(directive).toContain(
+      "[JUSTICE: NEXT COMMAND: /justice-review-gate --design @docs/specs/feature-design.md --plan @docs/plans/feature-plan.md]",
+    );
+  });
+
+  it("emits a plan-only review-gate command when no design artifact is bound", () => {
+    const directive = formatWorkflowDirective({
+      stage: "plan_review_required",
+      planPath: "docs/plans/feature-plan.md",
+    });
+
+    expect(directive).toContain(
+      "[JUSTICE: NEXT COMMAND: /justice-review-gate --plan @docs/plans/feature-plan.md]",
+    );
+  });
+
   it("states that Justice cannot verify external approval or merge status for implementation", () => {
     // When
     const directive = formatWorkflowDirective({ stage: "implementation" });

@@ -64,6 +64,10 @@ describe("OpenCodePlugin (integration)", () => {
       template: "$ARGUMENTS",
       description: "Start a Justice-managed development workflow",
     });
+    expect(config.command["justice-review-gate"]).toEqual({
+      template: "$ARGUMENTS",
+      description: "Run the Justice planning Review Gate for the current Design and Plan",
+    });
     expect(config.command["justice-implement"]).toEqual({
       template: "$ARGUMENTS",
       description: "Arm the next Justice-managed implementation delegation",
@@ -154,6 +158,7 @@ describe("OpenCodePlugin (integration)", () => {
 
     expect(output.system).toHaveLength(2);
     expect(output.system[1]).toContain("- /justice-start");
+    expect(output.system[1]).toContain("- /justice-review-gate");
     expect(output.system[1]).toContain("- /justice-implement");
     expect(output.system[1]).toContain("- /justice-implement-writing-plans");
     expect(output.system[1]).not.toContain("other");

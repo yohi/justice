@@ -48,7 +48,7 @@ const GUIDANCE = {
   plan_required:
     "`writing-plans` を使い、設計を検証可能なタスク、依存関係、完了条件に分解してください。\n計画が承認されるまで実装コードを変更しません。",
   plan_review_required:
-    "設計・計画だけを含むPRを利用可能な連携で準備し、AIレビューを依頼してください。\n指摘は修正して同じレビューを再実行し、人間による明示的な承認とマージを待ってください。\nJusticeはPR作成、承認、マージを観測できません。確認されるまで task() を呼びません。",
+    "設計・計画だけを含むPRを利用可能な連携で準備してください。\n次に `/justice-review-gate` で Design / Plan の Review Gate を明示的に開始し、指摘は修正して同じ Gate を再実行してください。\nレビューが clear になった後も、人間による明示的な承認とマージを待ってください。\nJusticeはPR作成、承認、マージを観測できません。確認されるまで task() を呼びません。",
   review_remediation:
     "未解決のレビュー指摘を修正し、同じレビューを再実行してください。\n`justice_review` の解決記録は、人間が承認した項目だけに使用してください。",
   review_clear:
@@ -83,15 +83,21 @@ export function resolveWorkflowDirective(input: WorkflowDirectiveInput): Workflo
         authority: "artifact_ready",
         guidance: GUIDANCE.plan_required,
       };
-    case "plan_review_required":
+    case "plan_review_required": {
+      const commandParts = ["/justice-review-gate"];
+      if (input.designPath) commandParts.push("--design", `@${input.designPath}`);
+      if (input.planPath) commandParts.push("--plan", `@${input.planPath}`);
+      const nextCommand =
+        input.planPath ? `\n[JUSTICE: NEXT COMMAND: ${commandParts.join(" ")}]` : "";
       return {
         stage: input.stage,
         marker: "[JUSTICE: PLAN REVIEW REQUIRED]",
         requiredSkills: ["requesting-code-review"],
         nextAction: "request_review",
         authority: "artifact_ready",
-        guidance: GUIDANCE.plan_review_required,
+        guidance: `${GUIDANCE.plan_review_required}${nextCommand}`,
       };
+    }
     case "review_remediation":
       return {
         stage: input.stage,

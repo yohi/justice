@@ -8,7 +8,7 @@ import {
 } from "../../src/runtime/command-registration";
 
 describe("registerJusticeCommands", () => {
-  it("registers justice-start and justice-implement on an empty config.command", async () => {
+  it("registers justice-start, justice-review-gate, and justice-implement on an empty config.command", async () => {
     const config: CommandRegistrationTarget = {};
     const log = vi.fn(async () => {});
 
@@ -16,11 +16,15 @@ describe("registerJusticeCommands", () => {
 
     expect(config.command).toBeDefined();
     expect(Object.keys(config.command ?? {})).toEqual(
-      expect.arrayContaining(["justice-start", "justice-implement"]),
+      expect.arrayContaining(["justice-start", "justice-review-gate", "justice-implement"]),
     );
     expect(config.command?.["justice-start"]).toEqual({
       template: "$ARGUMENTS",
       description: "Start a Justice-managed development workflow",
+    });
+    expect(config.command?.["justice-review-gate"]).toEqual({
+      template: "$ARGUMENTS",
+      description: "Run the Justice planning Review Gate for the current Design and Plan",
     });
     expect(config.command?.["justice-implement"]).toEqual({
       template: "$ARGUMENTS",
@@ -69,12 +73,14 @@ describe("registerJusticeCommands", () => {
 
     expect(config.command).toBeDefined();
     expect(config.command?.["justice-start"]).toBeDefined();
+    expect(config.command?.["justice-review-gate"]).toBeDefined();
     expect(config.command?.["justice-implement"]).toBeDefined();
   });
 
   it("isolates registered commands from canonical definitions", async () => {
     expect(Object.keys(JUSTICE_COMMAND_DEFINITIONS)).toEqual([
       "justice-start",
+      "justice-review-gate",
       "justice-implement",
     ]);
     expect(JUSTICE_COMMAND_DEFINITIONS["justice-start"].template).toBe(

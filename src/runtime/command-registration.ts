@@ -20,6 +20,10 @@ const justiceCommandDefinitions = {
     template: "$ARGUMENTS",
     description: "Start a Justice-managed development workflow",
   }),
+  "justice-review-gate": Object.freeze({
+    template: "$ARGUMENTS",
+    description: "Run the Justice planning Review Gate for the current Design and Plan",
+  }),
   "justice-implement": Object.freeze({
     template: "$ARGUMENTS",
     description: "Arm the next Justice-managed implementation delegation",

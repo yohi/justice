@@ -11,6 +11,10 @@ import {
   isJusticeStartCommand,
   parseWorkflowStartCommandArguments,
 } from "../core/trigger-detector";
+import {
+  isJusticeReviewGateCommand,
+  parseJusticeReviewGateCommandArguments,
+} from "../core/review-gate-command";
 import { parseReviewResolutionArtifact } from "../core/review-resolution-artifact";
 import { parseReviewSnapshotArtifact } from "../core/review-snapshot-artifact";
 import {
@@ -997,6 +1001,11 @@ export class OpenCodeAdapter {
         return;
       }
 
+      if (isJusticeReviewGateCommand(input.command)) {
+        await this.#handleReviewGate(input, output);
+        return;
+      }
+
       if (isJusticeImplementCommand(input.command)) {
         await this.#handleImplementationArm(input, output);
         return;
@@ -1041,6 +1050,36 @@ export class OpenCodeAdapter {
     // to avoid double-writing the same workflow lifecycle events (workflow_started +
     // plan_activated/design_requested/plan_requested) into the observation log.
 
+    if (result.guidance.length === 0) return;
+    output.parts.push(this.#buildWorkflowDirectivePart(input.sessionID, result.guidance));
+  }
+
+  async #handleReviewGate(
+    input: CommandExecuteBeforeInput,
+    output: CommandExecuteBeforeOutput,
+  ): Promise<void> {
+    const request = parseJusticeReviewGateCommandArguments(input.arguments);
+    if (request === null) {
+      await this.log("warn", "[Justice] /justice-review-gate arguments rejected by parser");
+      output.parts.push(
+        this.#buildWorkflowDirectivePart(
+          input.sessionID,
+          [
+            "[JUSTICE: COMMAND REJECTED]",
+            "`/justice-review-gate` was invoked, but Justice rejected its arguments.",
+            "Do not treat the raw command arguments as an ordinary user request.",
+            "Expected: /justice-review-gate [--design <path>] --plan <path>.",
+          ].join("\n"),
+        ),
+      );
+      return;
+    }
+
+    await this.ensureInitialized();
+    const justice = this.#justice;
+    if (!justice) return;
+
+    const result = await justice.getPlanBridge().handleReviewGateRequest(input.sessionID, request);
     if (result.guidance.length === 0) return;
     output.parts.push(this.#buildWorkflowDirectivePart(input.sessionID, result.guidance));
   }

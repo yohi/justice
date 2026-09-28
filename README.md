@@ -197,7 +197,7 @@ import { PlanParser, TaskPackager } from "@yohi/justice/core";
 
 ## 開発フロー
 
-Justice を使った開発は、**設計・計画 → 人間承認 → 実装委譲 → 人間承認** という2段階承認モデルで進みます。各コマンド・機能の詳細は後続セクションを参照してください。
+Justice を使った開発は、**設計・計画 → planning Review Gate → 人間承認 → 実装委譲 → 人間承認** という2段階承認モデルで進みます。各コマンド・機能の詳細は後続セクションを参照してください。
 
 ```text
    [ 人間 / 開発者 ]                  [ Justice ]                    [ AI エージェント ]
@@ -211,15 +211,17 @@ Justice を使った開発は、**設計・計画 → 人間承認 → 実装委
          │                                │                         設計・計画を作成
          │                                │<──────── (再実行) ─────────────┤
          │                                │                               │
-         │                          準備完了 ────────────────────────────>│
-         │                                │                         PR作成 + AIレビュー依頼
+         │                          準備完了                            │
          │                                │                               │
+  (2) /justice-review-gate ──────────────>│──────────────────────────────>│
+         │                          Design / Plan binding確認         Review Gate実行
+         │                                │<──── finding / clear ─────────┤
          │                                │                               │
-  (2) PR を確認・承認・マージ <──────────────────────────────────────────────┤
+  (3) PR を確認・承認・マージ <──────────────────────────────────────────────┤
          ⚠️ Justice はこの承認・マージを検証できない                          │
          │                                │                               │
          │                                │                               │
-  (3) /justice-implement --approved ─────>│                               │
+  (4) /justice-implement --approved ─────>│                               │
          │                          承認済み Plan に含まれる task() を      │
          │                          継続して許可                           │
          │                                │─────────────────────────────>│
@@ -234,7 +236,7 @@ Justice を使った開発は、**設計・計画 → 人間承認 → 実装委
          │                          Gate 評価                              │
          │                          (test / build / review)               │
          │                                │                               │
-  (4) 実装 PR を確認・承認・マージ <────────────────────────────────────────────┤
+  (5) 実装 PR を確認・承認・マージ <────────────────────────────────────────────┤
          │                                │                               │
          └─ plan.md 完了 → 同じ承認で次タスクへ / 全完了なら終了 ────────────┘
 ```
@@ -242,20 +244,21 @@ Justice を使った開発は、**設計・計画 → 人間承認 → 実装委
 | # | フェーズ | 主体 | 詳細 |
 |---|---------|------|------|
 | (1) | 設計・計画の準備 | 人間 + エージェント | 「`/justice-start` コマンド」セクション参照 |
-| (2) | 設計・計画の承認 | **人間のみ** | Justice は PR 作成・承認・マージを検証できない |
-| (3) | 実装委譲とフィードバック | エージェント + Justice | 「`/justice-implement` コマンド」セクション参照 |
-| (4) | 実装の承認 | **人間のみ** | 「Quality Control Plane (v2.0)」セクションの `justice_review` ツール参照 |
+| (2) | 設計・計画 Review Gate | 人間 + Justice + エージェント | 「`/justice-review-gate` コマンド」セクション参照 |
+| (3) | 設計・計画の承認 | **人間のみ** | Justice は PR 作成・承認・マージを検証できない |
+| (4) | 実装委譲とフィードバック | エージェント + Justice | 「`/justice-implement` コマンド」セクション参照 |
+| (5) | 実装の承認 | **人間のみ** | 「Quality Control Plane (v2.0)」セクションの `justice_review` ツール参照 |
 
 > [!NOTE]
-> Justice は PR の作成・承認・マージのいずれも代行しません。(2)(4) は既存の権限内で利用可能な機能を使い、常に人間が最終判断します。
+> Justice は PR の作成・承認・マージのいずれも代行しません。(3)(5) は既存の権限内で利用可能な機能を使い、常に人間が最終判断します。
 
 ## `/justice-start` コマンド
 
-ワークフロー・ブートストラップを明示的に開始するコマンドです。設計・計画ファイルの状態を検査し、設計・計画の準備、設計・計画 PR の自動レビュー、人間による承認・マージ、実装タスクの委譲という段階別の synthetic 指示を自動注入します。利用者が入力するのは目標と成果物パスだけで、PR 作成やレビュー依頼の定型プロンプトをコピーしたり入力したりする必要はありません。
+ワークフロー・ブートストラップを明示的に開始するコマンドです。設計・計画ファイルの状態を検査し、設計・計画の準備、planning Review Gate への明示遷移、人間による承認・マージ、実装タスクの委譲という段階別の synthetic 指示を注入します。利用者が入力するのは目標と成果物パスだけで、PR 作成やレビュー依頼の定型プロンプトをコピーしたり入力したりする必要はありません。
 
 ### 有効化（OpenCode側の設定）
 
-`/justice-start` と `/justice-implement` は、Justice プラグインの OpenCode v1 `config` hook により自動登録されます。同名の利用者定義がある場合は内容を変更せず優先します。
+`/justice-start`、`/justice-review-gate`、`/justice-implement` は、Justice プラグインの OpenCode v1 `config` hook により自動登録されます。同名の利用者定義がある場合は内容を変更せず優先します。
 
 この衝突優先の保証は、`config.command` に含まれる利用者定義を対象とします。`.opencode/commands/*.md` で定義したコマンドは OpenCode が別経路で読み込む可能性があり、`config` hook からその定義を確認できません。Markdown 定義との優先順位はサポート対象ホストでの opt-in E2E による確認が必要です。
 
@@ -304,7 +307,7 @@ justice-start add retry logic --plan plan.md
 |------|------|----------------|------|
 | `design_required` | `--design` で指定されたファイルが読めない | `brainstorming` スキルで設計を作成 | 計画ファイルが読める場合でも、設計が優先される |
 | `plan_required` | 設計は OK だが、計画ファイルが読めない | `writing-plans` スキルで計画を作成 | 計画ファイルが指定されていない場合も含む |
-| `plan_ready` | 計画ファイルが読める | 設計・計画だけの PR を準備して自動レビューを依頼し、人間による明示的な承認・マージを待つ | `activePlanPath` は後続の `task()` 用コンテキストを準備するだけで、実装の認可を意味しない |
+| `plan_ready` | 計画ファイルが読める | 設計・計画だけの PR を準備し、表示された `/justice-review-gate` を実行する | `activePlanPath` は Review Gate / 後続 `task()` 用コンテキストを準備するだけで、レビュー完了や実装認可を意味しない |
 
 ### Directive と委譲の接続
 
@@ -365,7 +368,7 @@ Justice: start workflow ship the feature --plan docs/plans/feature.md
 
 - **`design_required`**: `brainstorming` を使って要件、境界、テスト方針、未確定事項を設計するよう自動指示する。
 - **`plan_required`**: `writing-plans` を使って設計を検証可能なタスク、依存関係、完了条件へ分解するよう自動指示する。
-- **`plan_ready`**: 設計・計画だけの PR を利用可能な連携で準備して AI レビューを依頼し、指摘の修正と同じレビューの再実行を経て、人間による明示的な承認・マージを待つよう自動指示する。確認されるまで `task()` は呼び出さない。
+- **`plan_ready`**: 設計・計画だけの PR を準備し、`/justice-review-gate` を明示的に実行するよう指示する。Review Gate の指摘は修正して同じコマンドを再実行し、`review_clear` 後も人間による明示的な承認・マージを待つ。確認されるまで `task()` は呼び出さない。
 
 これらの指示はレビュー製品やベンダーを指定しません。エージェントは既存の権限の範囲で利用可能な PR・レビュー機能を実行します。Justice 自身は PR を作成せず、レビューを承認せず、PR をマージせず、PR の作成・承認・マージ状態を推測しません。承認とマージの判断は人間が保持します。
 
@@ -380,6 +383,27 @@ Justice: start workflow ship the feature --plan docs/plans/feature.md
 ワークフロー開始後、作業が進むにつれて `justice_review` ツールでレビュー要約を確認できます。詳細は「Quality Control Plane (v2.0)」セクションの「`justice_review` ツール」を参照してください。
 
 典型的なフローの全体像は「開発フロー」セクションの図を参照してください。`justice_review` 自体は実装委譲サイクルの間や実装 PR 作成後など、任意のタイミングで呼び出せます。人間が承認した指摘だけを、必要に応じて `resolve` パラメータで解決済みにしてください。
+
+
+## `/justice-review-gate` コマンド
+
+`/justice-start` が `plan_ready` に到達したあと、同じ Design / Implementation Plan を planning Review Gate に掛けるための明示的な入口です。
+
+```bash
+/justice-review-gate [--design <path>] --plan <path>
+```
+
+例:
+
+```bash
+/justice-review-gate \
+  --design @docs/superpowers/specs/feature-design.md \
+  --plan @docs/superpowers/plans/feature-plan.md
+```
+
+このコマンドは同一セッションの `/justice-start` bootstrap と成果物パスを照合し、`plan_ready` かつ同一成果物の場合だけ `[JUSTICE: REVIEW GATE REQUESTED]` を注入します。その直後に許可される planning reviewer `task()` は1回だけで、`sp-review` / `sp-final-review` として意味分類され、reviewer prompt が同じ Design / Plan path を参照する場合に限り、実装承認前の review dispatch として扱われます。Superpowers の `superpowers:requesting-code-review` skill が Design / Plan を1つの planning Review Gate としてレビューし、既存の review observation 経路が finding 有りを `review_remediation` に接続します。`task()` reviewer の「指摘なし」だけから `review_clear` は導出せず、従来どおり信頼済み complete zero-finding snapshot が観測された場合だけ `review_clear` に進みます。
+
+`/justice-review-gate` の実行自体はレビュー完了、人間承認、マージ、実装認可を意味しません。bootstrap がない、`plan_ready` でない、成果物が異なる、または読めない場合は `[JUSTICE: REVIEW GATE BLOCKED]` となり、Review Gate は開始されません。
 
 ## `/justice-implement` コマンド
 

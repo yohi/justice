@@ -256,12 +256,12 @@ Event:loop-*     → LoopDetectionHandler
 Event:session.error → ObservationHandler.handleSessionError()  (all session.error: session_error record + ReflectionEvent seam)
                     → LoopDetectionHandler  (conditional fan-out only when message matches LOOP_ERROR_PATTERNS)
 
-config                              → registerJusticeCommands(config)  (registration only; adds `justice-start` / `justice-implement` to `Config.command`)
+config                              → registerJusticeCommands(config)  (registration only; adds `justice-start` / `justice-review-gate` / `justice-implement` to `Config.command`)
 experimental.chat.system.transform  → safe `justice-*` command names only  (LLM visibility only; no tool capability or execution authority)
-command.execute.before              → PlanBridge.handleWorkflowStart() / handleImplementationArm()  (execution only; `justice-start` / `justice-implement`。handleEvent() 非経由の直接ディスパッチ。詳細は §4.1a)
+command.execute.before              → PlanBridge.handleWorkflowStart() / handleReviewGateRequest() / handleImplementationArm()  (execution only; 3 Justice commands。handleEvent() 非経由の直接ディスパッチ。詳細は §4.1a)
 ```
 
-> **Registration vs. visibility vs. execution.** The `config` hook is responsible for registration only: it mutates the host's `Config.command` map to add the canonical `justice-start` and `justice-implement` definitions when absent, leaving any existing definitions untouched. `experimental.chat.system.transform` exposes only syntactically safe `justice-*` command names from the resolved command map so the LLM does not confuse absence from its tool list with absence from OpenCode. Descriptions/templates are never promoted into system context, and this hook grants no execution capability. The `command.execute.before` hook is responsible for execution only: it fires after a registered command is invoked and runs the corresponding workflow bootstrap or implementation-arm logic. `/justice-implement --approved` remains an explicit user authorization boundary.
+> **Registration vs. visibility vs. execution.** The `config` hook is responsible for registration only: it mutates the host's `Config.command` map to add the canonical `justice-start`, `justice-review-gate`, and `justice-implement` definitions when absent, leaving any existing definitions untouched. `experimental.chat.system.transform` exposes only syntactically safe `justice-*` command names from the resolved command map so the LLM does not confuse absence from its tool list with absence from OpenCode. Descriptions/templates are never promoted into system context, and this hook grants no execution capability. The `command.execute.before` hook is responsible for execution only: it fires after a registered command is invoked and runs the corresponding workflow-bootstrap, planning-review-gate request, or implementation-arm logic. `/justice-implement --approved` remains an explicit user authorization boundary.
 
 ### 4.1 `plan-bridge` — タスク委譲と参謀誘導の連携
 
@@ -380,18 +380,19 @@ command.execute.before              → PlanBridge.handleWorkflowStart() / handl
 
 ---
 
-### 4.1a `command.execute.before` — `/justice-start` と `/justice-implement`
+### 4.1a `command.execute.before` — `/justice-start` / `/justice-review-gate` / `/justice-implement`
 
-`OpenCodeAdapter.onCommandExecuteBefore` は以下の 2 つのコマンドを処理する:
+`OpenCodeAdapter.onCommandExecuteBefore` は以下の 3 つのコマンドを処理する:
 
 - `justice-start`: ワークフロー・ブートストラップを開始し、design/plan/レビュー段階の guidance を注入する。
+- `justice-review-gate`: 現在セッションの `plan_ready` bootstrap と同一の Design / Plan に対して planning Review Gate の開始を要求し、`requesting-code-review` を必須化する。review result 自体は生成せず、既存の review observation が `review_remediation` / `review_clear` を決定する。
 - `justice-implement`: active plan に対する継続的な実装委譲を許可し、`[JUSTICE: IMPLEMENTATION ARMED]` guidance を注入する。
 
-どちらのコマンドも skill や `task()` を起動せず、純粋に synthetic text part を注入するのみである。
+3コマンドとも skill や `task()` を直接起動せず、synthetic text part を介して workflow controller へ次の操作を要求する。`justice-review-gate` も review 完了を自己宣言せず、`superpowers:requesting-code-review` の起動要求だけを注入する。
 
-`/justice-start` はワークフロー・ブートストラップを開始し、`/justice-implement` は承認済み Plan をアームする OpenCode コマンドフックである。
+`/justice-start` はワークフロー・ブートストラップを開始し、`/justice-review-gate` は planning Review Gate の開始を要求し、`/justice-implement` は承認済み Plan をアームする OpenCode コマンドフックである。
 
-> **Command registration.** Command registration is handled by the OpenCode v1 `config` hook, not by `command.execute.before`. The `config` hook calls `registerJusticeCommands()` in `src/runtime/command-registration.ts` to add the canonical `justice-start` and `justice-implement` definitions to the host's `Config.command` object. If a command with the same name already exists, the existing definition is preserved unchanged and a warning is logged. `command.execute.before` is responsible solely for executing the commands after they have been registered.
+> **Command registration.** Command registration is handled by the OpenCode v1 `config` hook, not by `command.execute.before`. The `config` hook calls `registerJusticeCommands()` in `src/runtime/command-registration.ts` to add the canonical `justice-start`, `justice-review-gate`, and `justice-implement` definitions to the host's `Config.command` object. If a command with the same name already exists, the existing definition is preserved unchanged and a warning is logged. `command.execute.before` is responsible solely for executing the commands after they have been registered.
 
 | プロパティ | 設定値 |
 |----------|-------|
@@ -401,7 +402,7 @@ command.execute.before              → PlanBridge.handleWorkflowStart() / handl
 
 **フロー:**
 
-1. `isJusticeStartCommand(input.command)` または `isJusticeImplementCommand(input.command)`（`src/core/trigger-detector.ts`）でコマンド名を判定。どちらでもなければ初期化も行わず即 return。
+1. `isJusticeStartCommand(input.command)`、`isJusticeReviewGateCommand(input.command)`、または `isJusticeImplementCommand(input.command)` でコマンド名を判定。いずれでもなければ初期化も行わず即 return。
 2. `justice-start` の場合は `parseWorkflowStartCommandArguments(input.arguments)`、`justice-implement` の場合は `parseJusticeImplementCommandArguments(input.arguments)` を呼び出す。slash-command 経路の artifact flag は OpenCode の `@path` file-reference 記法を受理し、先頭 `@` を1文字だけ除いてから既存の相対パス安全性検証を行う。`justice-start` は明示 goal を優先するが、`--design` / `--plan` の少なくとも一方が存在する command では goal 省略を許容し、固定の安全な workflow goal を使用する。fallback marker の goal 要件は変更しない。
 3. パーサーが `null` を返した場合もホスト実行は fail-open のままだが、`[JUSTICE: COMMAND REJECTED]` synthetic text part を `output.parts` に追加し、LLM が raw arguments を通常のユーザープロンプトとして誤解しないようにする。PlanBridge は呼び出さず、状態も変更しない。パースに成功した場合のみ `ensureInitialized()` を実行する。
 4. `justice-start` の場合は `PlanBridge.handleWorkflowStart(sessionId, request)` を呼び出す:
@@ -409,8 +410,10 @@ command.execute.before              → PlanBridge.handleWorkflowStart() / handl
    b. セッションごとの bootstrap 状態（phase・request）を保存する。`destroySession()` で削除される。
    c. `ObservationHandler` が設定されている場合のみ、`workflow_started` と `design_requested`/`plan_requested`/`plan_activated` のいずれか1件を `emitWorkflowStartedEvent()`/`emitWorkflowPhaseEvent()` 経由で `Promise.allSettled` により並行発火する（best-effort）。各レコードの `directiveStage` は注入した指示段階を後から追跡するための audit-only メタデータであり、実行権限や Gate Evidence には使用しない。`ObservationHandler` が `null` の場合はイベント発火自体を行わずスキップする。`Promise.allSettled` の個別失敗（片方または両方）は通知のみに使われて握り潰され、ガイダンス生成（後述 5.）は audit イベントの成否に関わらず常に継続する（fail-open）。
    d. workflow-start のたびにメモリ内のアーム補助状態をクリアする。同じ plan パスでの再開も例外ではないが、永続化された Plan 認可は失効させない。`phase === "plan_ready"` の場合のみ `setActivePlan()` で読み取り可能なプランを後続の task コンテキスト候補として活性化する。それ以外は `setActivePlan(null)` に加え完了入力のクリアを行う。`plan_activated` はこの選択を監査記録に残すだけで、実装の認可を意味しない。
-5. `justice-implement` の場合は `PlanBridge.handleImplementationArm(sessionId, request)` を呼び出し、承認済み Plan に対する実装 guidance を返す。
-6. `result.guidance` が空でなければ、対応する guidance を synthetic な `output.parts` テキストパートとして追記する。`justice-start` は設計・計画段階の指示、`justice-implement` は Plan 単位の実装許可を示す。
+5. `justice-review-gate` の場合は `parseJusticeReviewGateCommandArguments()` で `[--design <path>] --plan <path>` を解析し、`PlanBridge.handleReviewGateRequest()` を呼ぶ。同一セッションの bootstrap が `plan_ready` で、Design / Plan が bootstrap と完全一致し、成果物が読める場合だけ `[JUSTICE: REVIEW GATE REQUESTED]` を返す。それ以外は `[JUSTICE: REVIEW GATE BLOCKED]` とし、review 完了・承認・実装認可を一切導出しない。
+6. Review Gate requested guidance は Superpowers `superpowers:requesting-code-review` skill を即時実行し、Design / Implementation Plan を単一 planning Gate としてレビューするよう要求する。`handleReviewGateRequest()` は同一セッションに一回限りの planning-review permit を保持し、`handlePreToolUse()` は実装認可評価より先に `sp-review` / `sp-final-review` と分類された reviewer `task()` を照合する。active plan と reviewer prompt の Design / Plan path が permit と一致する場合だけ permit を消費して review dispatch を通す。通常の implementation `task()` はこの permit を利用できない。既存 review observation が open finding を `review_remediation` へ接続する。`task()` reviewer の zero-finding text は complete evidence に昇格せず、trusted complete zero-finding snapshot が観測された場合だけ `review_clear` に進む。
+7. `justice-implement` の場合は `PlanBridge.handleImplementationArm(sessionId, request)` を呼び出し、承認済み Plan に対する実装 guidance を返す。
+8. `result.guidance` が空でなければ、対応する guidance を synthetic な `output.parts` テキストパートとして追記する。`justice-start` は設計・計画段階の指示、`justice-implement` は Plan 単位の実装許可を示す。
 7. `plan_ready` の後、`/justice-implement --plan <planPath> --approved` により active Plan を承認した場合、その Plan に含まれる `task()` 委譲へ `test-driven-development` と `verification-before-completion` を既存指定とマージし、内部の `loadSkills` から OMO wire の `load_skills` に接続する。
 
 `WorkflowStartResult` は bootstrap の機械可読な結果として、artifact 状態の `phase`、
