@@ -401,6 +401,7 @@ type ResolveOmoEffectiveConfigInput = {
 **Files:**
 - Create: `tests/integration/justice-v5-review-interop-host.test.ts`
 - Create: `tests/fixtures/superpowers-v6.4.2-review-prompts.ts`
+- Modify: `.github/workflows/ci.yml` — move the CI host baseline from `opencode-ai@1.18.29` to `opencode-ai@1.18.31`; this is a regression-test baseline pin, not a product allowlist.
 - Production source: **none**
 
 **Interfaces:**
@@ -427,18 +428,28 @@ Exact tests in `tests/integration/justice-v5-review-interop-host.test.ts`:
 
 Each test asserts one existing reviewer dispatch, stable `sessionID + callID`, mutable prompt delivery to the same task execution, unchanged routing fields, and same-call result attribution.
 
-- [ ] **Step 3: Run the regression gate**
+- [ ] **Step 3: Pin and verify the CI host baseline**
+
+Change the existing CI installation line to exactly:
+
+```text
+bun install --global opencode-ai@1.18.31
+```
+
+The host regression test itself must execute `opencode --version` and fail unless the fixture run is actually using `1.18.31`. This pin is test evidence only; Task 11 still implements capability-first runtime support.
+
+- [ ] **Step 4: Run the regression gate**
 
 Run: `bun run vitest run tests/integration/justice-v5-review-interop-host.test.ts`
 
-Expected on the supported baseline: PASS.
+Expected on the supported baseline: PASS for the three review kinds, same-call mutation/result attribution, and unchanged routing fields.
 
 A failure means **upstream compatibility drift**. STOP the supported-stack implementation and report the drift; do not choose a new architecture or introduce Justice-owned review scheduling inside this Plan.
 
-- [ ] **Step 4: Commit the regression evidence**
+- [ ] **Step 5: Commit the regression evidence**
 
 ```bash
-git add tests/integration/justice-v5-review-interop-host.test.ts tests/fixtures/superpowers-v6.4.2-review-prompts.ts
+git add .github/workflows/ci.yml tests/integration/justice-v5-review-interop-host.test.ts tests/fixtures/superpowers-v6.4.2-review-prompts.ts
 git commit -m "test: lock Justice v5 review interop baseline"
 ```
 
@@ -1592,8 +1603,14 @@ This phase belongs to the Superpowers controller, not the Task 14 implementer.
    test "$(git rev-parse HEAD)" = "$CANDIDATE_HEAD"
    test -z "$(git status --porcelain)"
    ```
-3. Dispatch the Superpowers final whole-branch reviewer for exactly `MERGE_BASE..CANDIDATE_HEAD`.
-4. Run the Justice Final Conformance Gate against the same `CANDIDATE_HEAD`.
+3. Dispatch the Superpowers final whole-branch reviewer for exactly `MERGE_BASE..CANDIDATE_HEAD`. The observed structured final-review result must report `reviewedRange.head == CANDIDATE_HEAD`.
+4. After Justice has ingested that same-call final-review result, invoke `justice_review` in read/inspection mode and require all of:
+   - `artifactChain.status == "AUTHORIZED"`;
+   - `projection.status == "COMPLETE"`;
+   - `planCompletion.status == "COMPLETE"`;
+   - `planCompletion.reasons` is empty;
+   - the trusted final-review evidence is bound to `CANDIDATE_HEAD`.
+   This inspection is the controller-visible Final Conformance Gate; it does not dispatch another reviewer.
 5. After both gates pass, **do not modify or commit any tracked file** before completion/branch finishing.
 6. If the final review or Final Conformance Gate produces a finding that requires a fix:
    - make the fix through the normal Superpowers fix flow;
