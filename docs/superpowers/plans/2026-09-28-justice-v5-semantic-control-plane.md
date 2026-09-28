@@ -477,6 +477,7 @@ type ReviewFindingContextResult =
       readonly kind: "resolved";
       readonly sourceReviewCorrelationId: string;
       readonly expectedFindings: readonly ReviewFindingTarget[];
+      readonly reservedFindingIds: readonly FindingId[];
     }
   | { readonly kind: "not_found"; readonly reason: string }
   | { readonly kind: "ambiguous"; readonly reviewCorrelationIds: readonly [string, string, ...string[]] }
@@ -486,7 +487,8 @@ type ReviewFindingContextResult =
         | "unknown_requested_finding"
         | "requested_set_mismatch"
         | "requested_finding_state_mismatch"
-        | "duplicate_requested_finding";
+        | "duplicate_requested_finding"
+        | "historical_finding_id_collision";
       readonly details: readonly string[];
     };
 
@@ -566,11 +568,13 @@ type PendingReviewCorrelation =
       readonly reviewKind: "task-review" | "final-review";
       readonly requestedFindingIds?: never;
       readonly expectedFindings?: never;
+      readonly reservedFindingIds?: never;
     })
   | (PendingReviewCorrelationBase & {
       readonly reviewKind: "scoped-re-review";
       readonly requestedFindingIds: readonly FindingId[];
       readonly expectedFindings: readonly ReviewFindingTarget[];
+      readonly reservedFindingIds: readonly FindingId[];
     });
 
 type PreparePendingReviewResult =
@@ -610,7 +614,7 @@ Marker syntax is exactly `[[justice-finding:<findingId>]]`, with runtime `findin
 
 For scoped re-review, marker extraction reads only the exact `## The Findings Under Verification` section up to the next exact `## The Fix` heading. The extracted `requestedFindingIds` array may be empty. Empty is a valid spec/clause-only scoped target set; it is not a context failure.
 
-For task/first-final review, `expectedFindings` MUST be absent. For scoped re-review, `expectedFindings` MUST be present and may be empty. A scoped call with invalid marker extraction or unresolved context is not eligible for Justice structured appendix injection and remains `NOT_PROVEN`.
+For task/first-final review, `expectedFindings` and `reservedFindingIds` MUST be absent. For scoped re-review, both MUST be present; `expectedFindings` may be empty, while `reservedFindingIds` contains every ID already used in the trusted same-scope lineage. Historical ID metadata conflict or unresolved context makes the scoped call ineligible for Justice structured appendix injection and leaves evidence `NOT_PROVEN`.
 
 ### Task 9 owns final-review evidence closure
 
@@ -1512,6 +1516,7 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
     readonly reviewedRange: { readonly base: string; readonly head: string };
     readonly requiredClauseIds: readonly string[];
     readonly expectedFindings?: readonly ReviewFindingTarget[];
+    readonly reservedFindingIds?: readonly FindingId[];
   };
 
   type JusticeReviewResult = {
@@ -1559,8 +1564,9 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
   - exact artifact chain/scope/task identity;
   - `precedingReviewedHead = review.reviewedRange.base`;
   - exact `requestedFindingIds = review.requestedFindingIds` extracted from the current scoped dispatch;
-- `resolved(expectedFindings=[])` is valid and produces `kind: "ready"`;
-- missing/ambiguous/untrusted context → no trusted pending correlation / no structured appendix / `NOT_PROVEN`.
+- `resolved(expectedFindings=[], reservedFindingIds=[...])` is valid and produces `kind: "ready"`;
+- copy both `expectedFindings` and `reservedFindingIds` into the scoped `PendingReviewCorrelation`;
+- missing/ambiguous/untrusted context, including `historical_finding_id_collision`, → no trusted pending correlation / no structured appendix / `NOT_PROVEN`.
 - Task 7 ships a fail-closed unavailable provider until Task 8 wires the production store-backed provider. Tests inject deterministic fakes.
 
 **Review appendix contract:**
@@ -1569,9 +1575,10 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
   - require the corresponding human-readable finding line to contain exactly `[[justice-finding:<same id>]]`.
 - scoped re-review:
   - include the correlation's `expectedFindings` array even when empty;
+  - include `reservedFindingIds` as a collision-prevention namespace, explicitly stating that reserved non-target IDs are **not** verdict targets;
   - require exact marker/ID/severity/summary/location echo for each expected target;
   - `ADDRESSED → resolved`; `NOT ADDRESSED → open`;
-  - new breakage gets a fresh non-colliding ID + matching marker.
+  - new breakage gets a fresh ID outside both current expected IDs and all `reservedFindingIds`, plus a matching marker.
 - `human_adjudicated` is forbidden reviewer output.
 - `expectedFindings=[]` still injects the Conformance Contract and requires clause results.
 
@@ -1583,7 +1590,8 @@ git commit -m "feat: bind OpenCode calls to Justice task identity"
 - duplicate ID → `duplicate_finding_id`;
 - scoped expected ID missing → `missing_expected_finding`;
 - scoped expected metadata mismatch → `expected_finding_mismatch`;
-- new breakage may not reuse an expected/original ID;
+- new breakage may not reuse a current expected ID;
+- new breakage may not reuse any historical `reservedFindingIds` ID, including deferred Minor or prior resolved IDs;
 - no summary/location/order fuzzy matching is permitted.
 - Serialization remains exactly one final fenced `justice-review-result-v1` JSON block.
 
@@ -1626,7 +1634,10 @@ In `tests/core/review-result.test.ts`:
 - `missing_expected_original_finding_is_rejected`
 - `duplicate_original_finding_id_is_rejected`
 - `expected_finding_metadata_mismatch_is_rejected`
-- `new_breakage_cannot_reuse_original_finding_id`
+- `new_breakage_cannot_reuse_current_expected_finding_id`
+- `new_breakage_cannot_reuse_deferred_minor_finding_id`
+- `new_breakage_cannot_reuse_resolved_prior_round_finding_id`
+- `historical_reserved_id_does_not_become_current_expected_target`
 - `orphan_or_malformed_human_finding_marker_is_rejected`
 
 - [ ] **Step 2: Run RED tests**
@@ -1685,34 +1696,47 @@ git commit -m "feat: follow Superpowers open findings in review interop"
 - v5 evidence path: `.justice/v5/review-evidence.json`.
 - `ReviewEvidenceStore` implements `ReviewFindingContextProvider`.
 - The store **does not select the current open set**. `query.requestedFindingIds` from the current recognized Superpowers scoped dispatch is authoritative.
+- The store additionally owns trusted lineage reservation evidence: `reservedFindingIds` is collision-prevention data only and never expands `expectedFindings`.
 
-**Exact context resolution:**
-1. Resolve exactly one trusted preceding review using:
+**Exact context and reservation resolution:**
+1. Resolve exactly one trusted immediate preceding review using:
    - `artifactChainId`;
    - exact task/final scope;
    - exact `TaskIdentity` for task scope;
    - `reviewedRange.head === precedingReviewedHead`.
 2. Zero candidate → `not_found`; multiple → `ambiguous`; untrusted-only source → `untrusted`.
 3. Validate `requestedFindingIds` has no duplicates.
-4. Derive the quality open-set that Superpowers v6.4.2 is permitted to carry from that preceding result:
+4. Build the trusted lineage for collision prevention:
+   - task scope lineage key = `artifactChainId + exact TaskIdentity`;
+   - include the trusted initial task review and trusted scoped task re-reviews in that lineage up through the resolved immediate preceding review;
+   - final scope lineage key = `artifactChainId + current final-review lifecycle`;
+   - include the trusted full final review and trusted scoped final evidence in that lifecycle up through the resolved immediate preceding review;
+   - do not include unrelated tasks, other artifact chains, or another final-review lifecycle.
+5. Build a historical ID registry from every quality finding in that lineage, including deferred Minor, resolved, parked, and human-adjudicated findings.
+6. Repeated occurrences of the same ID are valid only when `severity + summary + location` are identical. Disposition/evidence refs may change. Conflicting immutable metadata → `untrusted("historical_finding_id_collision")`.
+7. Produce `reservedFindingIds` as the unique historical IDs in deterministic first-seen lineage order.
+8. Derive the quality open-set that Superpowers v6.4.2 is permitted to carry from the **immediate preceding result**:
    - task scope: findings with `disposition === "open"` and severity `critical | important`; Minor is excluded from the task fix loop;
    - final scope: findings with `disposition === "open"` of any severity because the final fix subagent receives the complete final-review findings list.
-5. The current dispatch remains the authority, but its requested ID **set must equal** the derived permitted open-set ID set. Set mismatch → `untrusted("requested_set_mismatch")`. This detects dropped markers without making persistence the scheduler.
-6. `requestedFindingIds = []` is valid when the permitted quality open set is also empty; return `resolved(expectedFindings=[])`.
-7. For every requested ID:
-   - it exists exactly once in the trusted preceding review;
+9. The current dispatch remains the target authority, but its requested ID **set must equal** that permitted immediate open-set ID set. Set mismatch → `untrusted("requested_set_mismatch")`.
+10. `requestedFindingIds = []` is valid when the permitted quality open set is also empty; return `resolved(expectedFindings=[], reservedFindingIds=<lineage IDs>)`.
+11. For every requested ID:
+   - it exists exactly once in the trusted immediate preceding review;
    - task scope rejects Minor/resolved/parked/human-adjudicated targets;
    - final scope rejects resolved/parked/human-adjudicated targets;
    - project immutable ID/severity/summary/location into `ReviewFindingTarget`.
-8. Return `expectedFindings` in the current dispatch's marker order.
-9. No summary/location/order similarity is used for identity.
+12. Return `expectedFindings` in the current dispatch marker order and `reservedFindingIds` in deterministic first-seen lineage order.
+13. No summary/location/order similarity is used for identity.
 
 This supports:
 - initial Important + Minor → task scoped target contains Important only;
 - round N resolved finding → absent from round N+1 requested set;
 - round N NOT ADDRESSED finding → same marker/ID remains;
 - new Critical/Important scoped breakage → marker survives when Superpowers adds it to the next open list;
-- spec-only fix round → empty requested/expected quality set while clause re-proof continues.
+- spec-only fix round → empty requested/expected quality set while clause re-proof continues;
+- deferred Minor ID remains reserved without becoming a current expected target;
+- prior resolved ID remains reserved without being reintroduced into a later round;
+- historical same-ID/different-metadata evidence is fail-closed rather than normalized.
 
 `src/core/justice-plugin.ts` replaces Task 7's unavailable provider with the store-backed provider. No review/fix scheduling is added.
 
@@ -1727,6 +1751,11 @@ In `tests/core/review-evidence-store.test.ts`:
 - `addressed_finding_is_not_reintroduced_in_next_fix_round`
 - `next_round_expected_findings_match_only_current_superpowers_open_finding_ids`
 - `new_blocking_breakage_marker_survives_into_next_scoped_round`
+- `reserved_finding_ids_cover_trusted_task_review_lineage`
+- `reserved_finding_ids_cover_trusted_final_review_lineage`
+- `deferred_minor_finding_id_is_reserved_but_not_expected`
+- `resolved_prior_round_finding_id_is_reserved_but_not_expected`
+- `historical_finding_id_collision_is_untrusted`
 - `spec_only_scoped_rereview_resolves_empty_expected_findings`
 - `unknown_requested_finding_id_is_untrusted`
 - `duplicate_requested_finding_id_is_untrusted`
@@ -1737,6 +1766,7 @@ In `tests/core/review-evidence-store.test.ts`:
 
 In `tests/runtime/opencode-adapter-review-interop.test.ts`:
 - `store_backed_provider_uses_current_scoped_marker_ids_for_expected_findings`
+- `store_backed_provider_supplies_lineage_reserved_finding_ids`
 - `empty_store_backed_expected_findings_still_inject_clause_reproof_appendix`
 
 Existing quality tests remain:
@@ -1754,7 +1784,7 @@ Expected: FAIL on current-open-set metadata resolution and marker-aware producti
 
 - [ ] **Step 3: Implement persistence and store-backed current-open-set context**
 
-Persist trusted structured review evidence. Implement `ReviewFindingContextProvider` as exact metadata resolution/validation for the dispatch-provided IDs; do not infer a replacement target set.
+Persist trusted structured review evidence. Implement `ReviewFindingContextProvider` as exact metadata resolution/validation for dispatch-provided IDs plus lineage-wide reserved-ID evidence. Do not infer a replacement target set. Historical same-ID metadata conflicts are `untrusted`, never normalized.
 
 Wire the store-backed provider through `justice-plugin.ts` into Task 7 review interop.
 
@@ -2489,8 +2519,8 @@ The executor must record these rows in the Superpowers ledger before Task 1:
 | Task 4 | Tasks 7–9, 13–14 | `ProjectionDiagnostic`, `ProjectionResult<T>`, `ClauseEvidenceScope`, `ClauseResult`, `ConformanceContract`, `ConformanceContractPersistenceResult` + immutable contract path/digest |
 | Task 5 | Tasks 6–9, 13 | `TaskIdentityResolution`, `CorrelationMutationResult`, `ExecutionCorrelation`, `ExecutionCorrelationKey` |
 | Task 6 | Task 7 | durable parent-call observation plus session-event corroboration; Task 7 performs authoritative child parent lookup inside `chat.message` |
-| Task 7 | Tasks 8–9, 13 | marker-based current scoped `requestedFindingIds`, `ReviewFindingTarget`, `ReviewFindingContextProvider`, authoritative child binding, `JusticeReviewResult`, marker↔machine ID validation |
-| Task 8 | runtime scoped-review coordination + Tasks 9, 13 | store-backed metadata resolution for current dispatch marker IDs, Superpowers task/final open-set consistency validation, trusted persisted review evidence |
+| Task 7 | Tasks 8–9, 13 | current scoped `requestedFindingIds`, `ReviewFindingTarget`, `ReviewFindingContextProvider`, scoped `reservedFindingIds` transport, authoritative child binding, `JusticeReviewResult`, marker↔machine ID and new-breakage collision validation |
+| Task 8 | runtime scoped-review coordination + Tasks 9, 13 | store-backed metadata resolution for current marker IDs, lineage-wide `reservedFindingIds`, historical-ID collision detection, Superpowers open-set consistency validation, trusted persisted review evidence |
 | Task 9 | Tasks 13–14 | `RevisionDiffProvider`, resolved/failed fix-wave evidence, trusted `FinalReviewEvidenceClosure`, `BlockedFinalReviewEvidenceAttempt`, deterministic finding merge, gate reasons |
 | Task 11 | Tasks 12–14 | `OmoEffectiveConfigResult`, configured/applied/observed doctor vocabulary |
 | Task 13 | Task 14 | `JusticeReviewV5View`, recovery diagnostics, completion projection |
