@@ -97,7 +97,17 @@ describe("DependencyAnalyzer", () => {
     it("ignores Interfaces text inside fenced code blocks", () => {
       const tasks = makeTasks().map((task) =>
         task.id === "task-2"
-          ? { ...task, rawBody: `${task.rawBody}\n\`\`\`md\n**Interfaces:**\n\`\`\`` }
+          ? { ...task, rawBody: `${task.rawBody}\n\`\`\`\n**Interfaces:**\n\`\`\`` }
+          : task,
+      );
+
+      expect(analyzer.getParallelizable(tasks).map((task) => task.id)).toEqual(["task-2", "task-3"]);
+    });
+
+    it("ignores fence-like lines with trailing text inside an unclosed code fence", () => {
+      const tasks = makeTasks().map((task) =>
+        task.id === "task-2"
+          ? { ...task, rawBody: `${task.rawBody}\n\`\`\`\n\`\`\`lang\n**Interfaces:**` }
           : task,
       );
 

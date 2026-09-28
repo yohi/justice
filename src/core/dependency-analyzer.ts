@@ -8,7 +8,7 @@ function hasInterfacesMarker(rawBody: string): boolean {
 
   for (const line of rawBody.split(/\r?\n/)) {
     const trimmedLine = line.trim();
-    const fenceMatch = trimmedLine.match(/^(`{3,}|~{3,})/);
+    const fenceMatch = trimmedLine.match(/^(`{3,}|~{3,})\s*$/);
 
     if (fenceMatch) {
       const fenceCharacter = fenceMatch[1]?.[0];
