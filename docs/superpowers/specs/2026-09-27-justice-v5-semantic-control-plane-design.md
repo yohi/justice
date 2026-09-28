@@ -1838,7 +1838,7 @@ explicit user/command selection for this implementation start
 → otherwise method_selection_required
 ```
 
-There is no pre-activation `observedSuperpowersMethod` source. A native `skill` invocation is not a selection event; it is activation evidence.
+No additional pre-activation method-observation source exists. A native `skill` invocation is not a selection event; it is activation evidence.
 
 Cross-session Justice state may recover which method was selected/used previously for the same authorization, but only as `recovered_selection`.
 
