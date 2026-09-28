@@ -379,7 +379,7 @@ The authoritative selection source order is:
 2. trusted recovered **method selection** from the same active authorization;
 3. otherwise `method_selection_required`.
 
-There is no pre-activation `observedSuperpowersMethod` source. A native `skill` invocation is activation evidence, not a separate method-selection event.
+No additional pre-activation method-observation source exists. A native `skill` invocation is activation evidence, not a separate method-selection event.
 
 An explicit inline selection maps to `executing-plans`; an explicit SDD selection maps to `subagent-driven-development`. Justice must not infer a default from task shape or capability.
 
