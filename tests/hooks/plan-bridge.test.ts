@@ -413,7 +413,7 @@ describe("PlanBridge", () => {
         .toBeLessThan(modifiedArgs?.prompt?.indexOf("**JUSTICE EXECUTION CONSTRAINTS**"));
     });
 
-    it("keeps caller-owned routing and does not inject a Justice category", async () => {
+    it("treats general routing as a Superpowers compatibility placeholder under an approved plan", async () => {
       const reader = createMockFileReader({ "docs/plans/sample-plan.md": samplePlanContent });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
       wirePlanBridgeAuthorization(bridge);
@@ -434,8 +434,8 @@ describe("PlanBridge", () => {
 
       expect(response.action).toBe("inject");
       if (response.action !== "inject") throw new Error("expected inject response");
-      expect(response.modifiedPayload?.args.subagent_type).toBe("general");
-      expect(response.modifiedPayload?.args).not.toHaveProperty("category");
+      expect(response.modifiedPayload?.args.category).toBe("sp-implementation");
+      expect(response.modifiedPayload?.args).not.toHaveProperty("subagent_type");
       expect(response.modifiedPayload?.args.prompt).toContain("**TASK CONTRACT FROM APPROVED PLAN**");
     });
 
