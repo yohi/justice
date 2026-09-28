@@ -72,18 +72,20 @@ Existing files retain their existing responsibility unless a task below explicit
 The architecture-critical extension point is established before implementation:
 
 - Justice's existing runtime spike proved the task before/after + child-session correlation path on OpenCode 1.18.29.
-- The relevant OpenCode runtime/plugin blobs are byte-identical in v1.18.29 and v1.18.31:
+- The OpenCode runtime/plugin blobs that implement the observed path are byte-identical in v1.18.29 and v1.18.31:
   - `packages/opencode/src/session/tools.ts`: `99f7aec4fdfdfc857702b50b0ca3ce7c8651af4c`
+  - `packages/opencode/src/session/prompt.ts`: `0f85d44f209ba792065aeb951f0bd2e12b59fae8`
   - `packages/opencode/src/tool/task.ts`: `d8ca640cfba9a52d97e5180fda0ffa719910592b`
   - `packages/plugin/src/index.ts`: `edfa0139dfcaf0e877ab906fabe8e0527afc3915`
+  - v1.18.31 tag commit: `014614d35b397775e5d397a490fc72368c894ec2`
 - v1.18.31 source verification confirms:
   - `tool.execute.before` receives `sessionID`, `callID`, and mutable `args`;
-  - the same `args` object is passed to the native tool executor;
-  - TaskTool consumes the mutated `params.prompt`;
+  - the native task path consumes the resulting `params.prompt`;
   - `tool.execute.after` is tied to the same parent call and TaskTool publishes child-session metadata.
-- Superpowers v6.4.2 task review, scoped re-review, and final review all use `Subagent (general-purpose)`; its OpenCode V1 mapping resolves this to native `task` with `subagent_type: "general"`.
+- Superpowers v6.4.2 task review, scoped re-review, and final review all use `Subagent (general-purpose)`; OpenCode V1 maps all three to the same native `task` path with `subagent_type: "general"`. Their prompt content differs, not the host execution mechanism.
+- Baseline establishment is therefore compositional: empirical 1.18.29 runtime evidence + source-identical 1.18.31 hook/task path + deterministic Superpowers v6.4.2 V1 dispatch mapping.
 
-Task 1 therefore locks this known contract as regression evidence. It does not decide whether the architecture is viable.
+Task 1 locks this known contract as three-kind regression evidence. It does not decide whether the architecture is viable.
 
 ## Canonical Cross-Task Interface Registry
 
