@@ -188,7 +188,7 @@ Other prose in this Design explains or elaborates these contracts. It is not ind
 | J5D-PROJ-03 | Projection schema/version is bound to artifact-chain and evidence identity. |
 | J5D-REVIEW-01 | Justice observes an existing Superpowers review dispatch and never creates a duplicate review. |
 | J5D-REVIEW-02 | Justice observes the existing parent review call; during the awaited child `chat.message` hook it resolves the child Session authoritatively with `client.session.get`, matches `parentID` to exactly one pending review, then injects one fully formed synthetic text Part. Session events are corroboration only. |
-| J5D-REVIEW-03 | Trusted review evidence uses versioned structured results; the current Superpowers scoped dispatch supplies exact marker IDs for its current open-finding target set, persisted trusted evidence resolves metadata only for those IDs, empty quality-target sets remain valid for clause-only re-proof, and final completion composes only trusted scoped/diff evidence. |
+| J5D-REVIEW-03 | Trusted review evidence uses versioned structured results; the current Superpowers scoped dispatch supplies exact marker IDs for its current target set, while persisted trusted lineage evidence separately supplies metadata and a lineage-wide reserved finding-ID set so historical identities cannot be reused by new breakage; empty target sets remain valid for clause-only re-proof. |
 | J5D-REVIEW-04 | Missing, malformed, stale, wrong-scope, untrusted, identity-inconsistent, diff-failed, or incompletely covered final-review evidence fails closed; failed final-evidence attempts never masquerade as trusted closures. |
 | J5D-QUALITY-01 | Critical/Important findings block; Minor is deferred-visible; parked/Ruling is not resolution. |
 | J5D-STORAGE-01 | Directly observed structured review results are canonical; insecure file fallback never becomes trusted evidence. |
@@ -1173,7 +1173,7 @@ Therefore:
 
 An empty marker set is a valid scoped target set and is different from extraction/context failure.
 
-##### Trusted metadata lookup
+##### Trusted metadata and lineage reservation lookup
 
 The context lookup contract is:
 
@@ -1186,32 +1186,89 @@ ReviewFindingContextQuery
 └─ requestedFindingIds[]
 ```
 
-Justice first resolves the exact trusted preceding review by artifact chain, scope, task identity where applicable, and `reviewedRange.head === precedingReviewedHead`.
+The current scoped dispatch remains the sole authority for `requestedFindingIds`.
 
-It then looks up **only** the IDs in `requestedFindingIds`.
+The evidence store has a second, independent responsibility: build the collision-prevention namespace for the same trusted review lineage.
+
+```text
+expectedFindings
+= current scoped dispatch verdict targets only
+
+reservedFindingIds
+= every finding ID already used by trusted evidence
+  in the same task/final review lineage
+```
+
+Lineage boundaries are exact.
+
+Task lineage:
+
+```text
+artifactChainId + exact TaskIdentity
+```
+
+It contains the trusted initial task review plus trusted scoped re-reviews for that same task identity/artifact chain.
+
+Final lineage:
+
+```text
+artifactChainId + current final-review lifecycle
+```
+
+It contains the trusted full final review and its trusted scoped final re-review when present.
+
+Finding IDs from another task, another artifact chain, or another final-review lifecycle are outside this reservation domain.
+
+The store scans the trusted lineage and constructs a historical ID registry.
+
+Repeated occurrences of the same ID are legal only when these immutable identity fields remain identical:
+
+```text
+findingId
+severity
+summary
+location
+```
+
+Disposition and evidence references may evolve across rounds.
+
+If one ID maps to conflicting immutable identity metadata in trusted history:
 
 ```text
 ReviewFindingContextResult =
-  resolved(expectedFindings[], sourceReviewCorrelationId)
+  untrusted("historical_finding_id_collision")
+```
+
+No identity is selected or normalized.
+
+The resolved result is:
+
+```text
+ReviewFindingContextResult =
+  resolved(
+    expectedFindings[],
+    reservedFindingIds[],
+    sourceReviewCorrelationId
+  )
   | not_found
   | ambiguous
   | untrusted
 ```
 
-`resolved(expectedFindings=[])` is valid when `requestedFindingIds=[]`.
+`reservedFindingIds` contains every valid historical lineage ID exactly once.
 
-For each non-empty requested ID:
+Then current-target resolution applies:
 
-- exactly one finding with that ID must exist in the trusted preceding review;
+- `requestedFindingIds=[]` is valid and yields `expectedFindings=[]` while still returning the lineage's `reservedFindingIds`;
+- each requested ID must exist exactly once in the trusted immediate preceding review;
 - its immutable metadata is projected into `ReviewFindingTarget`;
 - an explicitly `resolved`, deferred Minor, or `human_adjudicated` stored finding requested as a current open target is inconsistent and yields `untrusted`;
-- unknown/duplicate requested ID yields `untrusted`.
+- unknown or duplicate requested ID yields `untrusted`;
+- zero preceding candidate → `not_found`; multiple candidates → `ambiguous`.
 
-For task fix rounds, the preceding trusted result may be the initial task review or the immediately preceding scoped re-review. For the final one-fix-wave path, it is the trusted full final review.
+For task/first-final review there is no scoped context, so `expectedFindings` and `reservedFindingIds` are absent.
 
-Task/first-final reviews have no `expectedFindings`.
-
-Scoped re-review always has an `expectedFindings` value when context resolution succeeds; the array may be empty.
+For scoped re-review both are present. `expectedFindings` may be empty. `reservedFindingIds` may be empty only if the lineage has never emitted a trusted quality finding.
 
 Architecture ownership:
 
@@ -1220,37 +1277,42 @@ review recognition / marker extraction (Task 7)
   current scoped dispatch → requestedFindingIds
         ↓
 review evidence store (Task 8)
-  requested IDs + exact preceding trusted review
-  → expectedFindings metadata
+  exact preceding metadata → expectedFindings
+  trusted lineage history  → reservedFindingIds
         ↓
-review interop (Task 7)
-  appendix + result expectation
+review interop/parser (Task 7)
+  current-target verdict validation
+  + new-breakage collision validation
 ```
 
-The evidence store never decides the current open set. It resolves metadata only for IDs selected by the current Superpowers dispatch.
+The evidence store never chooses the current target set.
 
 ##### Scoped appendix/result validation
 
-For non-scoped review, Justice requires every machine quality finding to have a matching human marker/ID.
+For non-scoped review, Justice requires every machine quality finding to have a matching human marker/ID and uniqueness within that result.
 
 For scoped re-review:
 
 - the appendix includes exactly the resolved `expectedFindings` array, even when empty;
-- every expected finding must appear exactly once in the scoped verdicts with the same ID/severity/summary/location and marker;
+- parser expectation also carries the lineage-wide `reservedFindingIds`;
+- every expected finding appears exactly once with the same ID/severity/summary/location and marker;
 - `ADDRESSED` maps to `resolved`;
 - `NOT ADDRESSED` maps to `open`;
 - new breakage gets a fresh `jf_<16 lowercase hex>` ID and matching marker;
-- new breakage may not reuse an expected/original ID;
+- a new-breakage ID must not belong to the expected-ID set;
+- a new-breakage ID must not belong to `reservedFindingIds`;
 - reviewer output may not emit `human_adjudicated`.
 
-When `expectedFindings=[]`, the appendix is still injected and the structured result is still required to return the Conformance Contract clause results. This is the supported spec/clause-only scoped re-review path.
+When `expectedFindings=[]`, the appendix is still injected and the structured result must still return Conformance Contract clause results. Historical `reservedFindingIds` still apply to any new breakage emitted in that result.
 
 Invalid cases include:
 
 - missing/duplicate expected ID;
 - expected metadata or marker mismatch;
 - duplicate/malformed/orphan marker;
-- new-breakage ID collision;
+- new-breakage collision with current expected IDs;
+- new-breakage collision with any historical reserved ID;
+- historical ID collision while constructing the reserved set;
 - requested/context identity inconsistency.
 
 No similarity heuristic is an authority for finding identity.
