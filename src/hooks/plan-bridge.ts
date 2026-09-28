@@ -852,7 +852,7 @@ export class PlanBridge {
     const delegation =
       this.core.classifyAndBuildWorkerRequest(nextTask, {
         taskId: nextTask.id,
-        prompt: this.buildTaskPrompt(nextTask, previousLearnings),
+        prompt: this.buildTaskPrompt(nextTask, undefined, previousLearnings),
         category,
         categorySource: category === "unspecified-low" ? "compatibility_fallback" : "classifier",
       })?.request ?? initialResult.request;
@@ -1052,12 +1052,17 @@ export class PlanBridge {
     const delegation =
       this.buildWorkerDelegation(
         planContent,
-        this.appendLearnings(
-          typeof event.payload.toolInput.prompt === "string" ? event.payload.toolInput.prompt : "",
-          previousLearnings,
-        ),
+        typeof event.payload.toolInput.prompt === "string" ? event.payload.toolInput.prompt : "",
         mergedLoadSkills,
       )?.request ?? initialDelegation;
+    const task = this.parser.parse(planContent).find((candidate) => candidate.id === delegation.taskId);
+    const authoritativePrompt = task === undefined
+      ? delegation.prompt
+      : this.buildTaskPrompt(
+          task,
+          typeof event.payload.toolInput.prompt === "string" ? event.payload.toolInput.prompt : undefined,
+          previousLearnings,
+        );
 
     // Sync current task and agent to LoopDetectionHandler
     if (this.loopHandler) {
@@ -1075,6 +1080,12 @@ export class PlanBridge {
       event.payload.toolInput,
       delegation.category,
     );
+    const callerOwnedRouting = typeof event.payload.toolInput.subagent_type === "string";
+    if (callerOwnedRouting) {
+      normalizedArgs.subagent_type = event.payload.toolInput.subagent_type;
+      delete normalizedArgs.category;
+    }
+    normalizedArgs.prompt = authoritativePrompt;
     normalizedArgs.task_id =
       resolveTaskIdFromToolInput(event.payload.toolInput) ?? delegation.taskId;
     delete normalizedArgs.skills;
@@ -1086,7 +1097,10 @@ export class PlanBridge {
 
     return {
       action: "inject",
-      injectedContext: `${this.buildInjectedContext(planContent, activePlanPath, delegation)}\n\n${formatWorkflowDirective({ stage: "implementation" })}`,
+      injectedContext: `${this.buildInjectedContext(planContent, activePlanPath, {
+        ...delegation,
+        prompt: authoritativePrompt,
+      })}\n\n${formatWorkflowDirective({ stage: "implementation" })}`,
       modifiedPayload: {
         args: normalizedArgs,
       },
@@ -1430,30 +1444,21 @@ export class PlanBridge {
     }
   }
 
-  private buildTaskPrompt(task: PlanTask, previousLearnings?: string): string {
-    const incompleteSteps = task.steps.filter((step) => !step.checked);
-    const sections = [`**TASK**: ${task.title}`, "", "**STEPS**:"];
-
-    if (incompleteSteps.length === 0) {
-      sections.push("All steps are already completed.");
-    } else {
-      sections.push(...incompleteSteps.map((step) => `- ${step.description}`));
-    }
-
+  private buildTaskPrompt(
+    task: PlanTask,
+    callerPrompt?: string,
+    previousLearnings?: string,
+  ): string {
+    const sections = ["**TASK CONTRACT FROM APPROVED PLAN**", task.rawBody];
+    if (callerPrompt) sections.push("**CALLER CONTEXT**", callerPrompt);
     sections.push(
-      "",
-      `**EXPECTED OUTCOME**: All steps for "${task.title}" are completed and verified with passing tests.`,
-      "",
-      "**MUST NOT DO**:",
+      "**JUSTICE EXECUTION CONSTRAINTS**",
       "- Do not modify files outside the task scope",
       "- Do not skip tests",
+      formatWorkflowDirective({ stage: "implementation" }),
     );
-
-    if (previousLearnings) {
-      sections.push("", "**PREVIOUS LEARNINGS**:", previousLearnings);
-    }
-
-    return sections.join("\n");
+    if (previousLearnings) sections.push("**PREVIOUS LEARNINGS**", previousLearnings);
+    return sections.join("\n\n");
   }
 
   private buildWorkerDelegation(
@@ -1475,10 +1480,6 @@ export class PlanBridge {
       category,
       categorySource: category === "unspecified-low" ? "compatibility_fallback" : "classifier",
     });
-  }
-
-  private appendLearnings(prompt: string, learnings: string | undefined): string {
-    return learnings === undefined ? prompt : `${prompt}\n\n${learnings}`;
   }
 
   private buildInjectedContext(

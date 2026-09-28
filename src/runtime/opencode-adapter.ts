@@ -651,6 +651,7 @@ export class OpenCodeAdapter {
     output: { args: Record<string, unknown> },
   ): Promise<HookResponse> {
     const isTask = input.tool === "task";
+    const originalPrompt = typeof output.args.prompt === "string" ? output.args.prompt : "";
     try {
       if (isTask) {
         this.#rememberReviewCategory(input, output.args);
@@ -687,10 +688,13 @@ export class OpenCodeAdapter {
         return response;
       }
 
-      const originalPrompt = typeof output.args.prompt === "string" ? output.args.prompt : "";
-      output.args.prompt = `${response.injectedContext}\n\n${originalPrompt}`;
-
       const modified = response.modifiedPayload as { args?: Record<string, unknown> } | undefined;
+      const modifiedPrompt = modified?.args?.prompt;
+      if (isTask && typeof modifiedPrompt === "string") {
+        output.args.prompt = modifiedPrompt;
+      } else {
+        output.args.prompt = `${response.injectedContext}\n\n${originalPrompt}`;
+      }
       if (!modified?.args) {
         this.#finalizeTaskToolInput(isTask, input, output.args);
         return response;
@@ -717,7 +721,12 @@ export class OpenCodeAdapter {
     args: Record<string, unknown>,
   ): void {
     if (!isTask) return;
+    const subagentType = args.subagent_type;
     normalizeTaskToolInputForOmoWireInPlace(args);
+    if (typeof subagentType === "string") {
+      args.subagent_type = subagentType;
+      delete args.category;
+    }
     const category = args.category;
     if (category === "sp-review" || category === "sp-final-review") {
       args.run_in_background = false;

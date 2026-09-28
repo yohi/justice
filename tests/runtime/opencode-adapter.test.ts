@@ -378,6 +378,89 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
     expect(output.args).not.toHaveProperty("loadSkills");
   });
 
+  it("removes category when caller owned subagent routing is present", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    vi.spyOn(justice, "handleEvent").mockResolvedValue({
+      action: "inject",
+      injectedContext: "context",
+      modifiedPayload: { args: { category: "sp-implementation" } },
+    });
+    const output = { args: { prompt: "caller", subagent_type: "general", category: "caller-category" } };
+
+    await adapter.onToolExecuteBefore({ tool: "task", sessionID: "s", callID: "route" }, output);
+
+    expect(output.args.subagent_type).toBe("general");
+    expect(output.args).not.toHaveProperty("category");
+  });
+
+  it("keeps Justice category when subagent routing is absent", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    vi.spyOn(justice, "handleEvent").mockResolvedValue({
+      action: "inject",
+      injectedContext: "context",
+      modifiedPayload: { args: { category: "sp-implementation" } },
+    });
+    const output = { args: { prompt: "caller" } };
+
+    await adapter.onToolExecuteBefore({ tool: "task", sessionID: "s", callID: "category" }, output);
+
+    expect(output.args.category).toBe("sp-implementation");
+  });
+
+  it("removes caller category when explore subagent routing is present", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    vi.spyOn(justice, "handleEvent").mockResolvedValue({
+      action: "inject",
+      injectedContext: "context",
+      modifiedPayload: { args: { category: "caller-category" } },
+    });
+    const output = { args: { prompt: "caller", subagent_type: "explore", category: "caller-category" } };
+
+    await adapter.onToolExecuteBefore({ tool: "task", sessionID: "s", callID: "explore-route" }, output);
+
+    expect(output.args.subagent_type).toBe("explore");
+    expect(output.args).not.toHaveProperty("category");
+  });
+
+  it("uses authoritative modified task prompt without duplicating caller prompt", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const approvedPrompt = [
+      "**TASK CONTRACT FROM APPROVED PLAN**",
+      "complete plan task body",
+      "**CALLER CONTEXT**",
+      "caller prompt",
+      "**JUSTICE EXECUTION CONSTRAINTS**",
+      "**PREVIOUS LEARNINGS**",
+      "learning",
+    ].join("\n");
+    vi.spyOn(justice, "handleEvent").mockResolvedValue({
+      action: "inject",
+      injectedContext: "must not prepend",
+      modifiedPayload: { args: { prompt: approvedPrompt } },
+    });
+    const output = { args: { prompt: "caller prompt" } };
+
+    await adapter.onToolExecuteBefore({ tool: "task", sessionID: "s", callID: "prompt" }, output);
+
+    expect(output.args.prompt).toBe(approvedPrompt);
+    expect(output.args.prompt.match(/caller prompt/g)).toHaveLength(1);
+    expect(output.args.prompt).not.toContain("must not prepend");
+    expect(output.args.prompt.indexOf("**TASK CONTRACT FROM APPROVED PLAN**"))
+      .toBeLessThan(output.args.prompt.indexOf("**CALLER CONTEXT**"));
+    expect(output.args.prompt.indexOf("**CALLER CONTEXT**"))
+      .toBeLessThan(output.args.prompt.indexOf("**JUSTICE EXECUTION CONSTRAINTS**"));
+    expect(output.args.prompt.indexOf("**JUSTICE EXECUTION CONSTRAINTS**"))
+      .toBeLessThan(output.args.prompt.indexOf("**PREVIOUS LEARNINGS**"));
+  });
+
   it("removes forbidden routing fields from the final task output args", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
@@ -408,10 +491,9 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
     };
     await adapter.onToolExecuteBefore({ tool: "task", sessionID: "s", callID: "c1" }, output);
 
-    expect(output.args.category).toBe("sp-implementation");
+    expect(output.args).not.toHaveProperty("category");
     expect(output.args).not.toHaveProperty("task_id");
     for (const field of [
-      "subagent_type",
       "agent",
       "model",
       "provider",
@@ -421,6 +503,7 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
     ]) {
       expect(output.args).not.toHaveProperty(field);
     }
+    expect(output.args.subagent_type).toBe("deep");
   });
 
   it("normalizes task args in place before a non-inject early return", async () => {
@@ -452,9 +535,9 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
     expect(output.args).toBe(originalArgs);
     expect(output.args).toEqual({
       prompt: "original",
-      category: "sp-implementation",
       load_skills: ["programming"],
       run_in_background: true,
+      subagent_type: "deep",
     });
   });
 
@@ -484,6 +567,7 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
       prompt: "original",
       load_skills: ["programming"],
       run_in_background: false,
+      subagent_type: "deep",
     });
   });
 
