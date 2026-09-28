@@ -1320,7 +1320,7 @@ Expected: FAIL on exact 1.18.29 gate and single-file assumptions.
 
 - [ ] **Step 4: Implement effective config resolver + doctor capability model**
 
-Prefer an OmO effective-config API if a compatible public API is available; otherwise use the exact resolver above. Do not silently switch semantics.
+Implement the exact filesystem resolver above. Do not import or depend on `@oh-my-opencode/omo-config-core`: in the v5.0.1 baseline it is a private workspace package rather than a supported external runtime API. A future public effective-config API is upstream drift that requires a later compatibility decision, not an implementation-time choice in this Plan.
 
 - [ ] **Step 5: Run GREEN tests + build**
 
