@@ -390,7 +390,7 @@ Justice: start workflow ship the feature --plan docs/plans/feature.md
 
 ## `/justice-review-gate` コマンド
 
-Design と Implementation Plan を **明示的に Review Gate へ投入する入口**です。`/justice-start` が `plan_review_required` に到達した後の自然言語 guidance に依存せず、どの2成果物を一組としてレビューするかをコマンド境界で固定します。
+Design と Implementation Plan を **明示的に Review Gate へ投入する入口**です。Review Gate は独立した任意ファイルレビューではなく、**同一 session の `/justice-start` が `plan_ready` / `plan_review_required` として束縛した Design / Implementation Plan に対してのみ**開始できます。コマンド境界で workflow bootstrap と review 対象を一致させ、別 artifact へのすり替えを防ぎます。
 
 ```bash
 /justice-review-gate --design <designPath> --plan <planPath>
@@ -405,6 +405,7 @@ OpenCode の file-reference 記法も利用できます。
 ```
 
 - `--design` と `--plan` はともに必須。
+- 同一 session に `/justice-start` の bootstrap が存在し、phase が `plan_ready` であることが必須。`--design` / `--plan` は bootstrap が束縛した path と完全一致し、active Plan も同じ Plan でなければ `[JUSTICE: REVIEW GATE BLOCKED]` となる。
 - 両成果物が読み取り可能な場合だけ `[JUSTICE: REVIEW GATE REQUESTED]` を注入する。この時点で Justice はランダムな Gate ID、正規化済み review scope、Design/Plan の SHA-256 digest、reviewer prompt 全文を pending state として固定する。
 - `/justice-review-gate` 自体を review-controller entrypoint とし、実行後に `requesting-code-review` や別の review Skill を起動しない。
 - 実レビューは、pending Gate と完全一致する Justice marker / Gate ID / reviewer prompt を持つ **1回だけの foreground `task()`** として直ちに実行する。Justice が runtime で `category="sp-final-review"` と `run_in_background=false` を強制するため、LLM が別 category を選んでも executor routing は変わらない。

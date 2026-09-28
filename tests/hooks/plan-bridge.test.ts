@@ -11,6 +11,7 @@ import { LoopDetectionHandler } from "../../src/hooks/loop-handler";
 import { createMockFileWriter, wirePlanBridgeAuthorization } from "../helpers/mock-file-system";
 import { TaskSplitter } from "../../src/core/task-splitter";
 import { parseWorkflowStartCommandArguments } from "../../src/core/trigger-detector";
+import { REVIEW_GATE_EXECUTION_MARKER } from "../../src/core/review-gate-execution";
 import type { JusticeNotifier } from "../../src/core/justice-notifier";
 import { WisdomStore } from "../../src/core/wisdom-store";
 import { makeWisdomDraft } from "../helpers/wisdom-draft-factory";
@@ -58,6 +59,21 @@ function createWorkflowStartRequest(
     planPath: null,
     ...overrides,
   };
+}
+
+async function startPlanReadyReviewWorkflow(
+  bridge: PlanBridge,
+  sessionId: string,
+  designPath: string,
+  planPath: string,
+): Promise<void> {
+  const result = await bridge.handleWorkflowStart(
+    sessionId,
+    createWorkflowStartRequest({ designPath, planPath }),
+  );
+  expect(result.phase).toBe("plan_ready");
+  expect(result.directiveStage).toBe("plan_review_required");
+  expect(result.activePlanPath).toBe(planPath);
 }
 
 function createObservationHandler(): ObservationHandler & {
@@ -1219,6 +1235,114 @@ describe("PlanBridge", () => {
       expect(bridge.getActivePlan("s-wf-plan-required")).toBeNull();
     });
 
+    it("blocks the review gate when /justice-start has not established a workflow bootstrap", async () => {
+      const reader = createMockFileReader({
+        "docs/specs/design.md": "# Design",
+        "docs/plans/implementation-plan.md": samplePlanContent,
+      });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+
+      const result = await bridge.handleReviewGateStart("s-review-no-bootstrap", {
+        source: "command",
+        designPath: "docs/specs/design.md",
+        planPath: "docs/plans/implementation-plan.md",
+      });
+
+      expect(result.dispatched).toBe(false);
+      expect(result.guidance).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
+      expect(result.guidance).toContain("No matching Justice workflow bootstrap");
+      expect(result.guidance).not.toContain("**Gate ID**:");
+      expect(result.guidance).not.toContain(REVIEW_GATE_EXECUTION_MARKER);
+    });
+
+    it("blocks the review gate when the workflow bootstrap is not plan_ready", async () => {
+      const reader = createMockFileReader({
+        "docs/specs/design.md": "# Design",
+      });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      const bootstrap = await bridge.handleWorkflowStart(
+        "s-review-not-ready",
+        createWorkflowStartRequest({
+          designPath: "docs/specs/design.md",
+          planPath: "docs/plans/implementation-plan.md",
+        }),
+      );
+      expect(bootstrap.phase).toBe("plan_required");
+
+      const result = await bridge.handleReviewGateStart("s-review-not-ready", {
+        source: "command",
+        designPath: "docs/specs/design.md",
+        planPath: "docs/plans/implementation-plan.md",
+      });
+
+      expect(result.dispatched).toBe(false);
+      expect(result.guidance).toContain("not plan_ready");
+      expect(result.guidance).not.toContain("**Gate ID**:");
+    });
+
+    it("blocks the review gate when Design or Plan differs from the session bootstrap", async () => {
+      const reader = createMockFileReader({
+        "docs/specs/design.md": "# Design",
+        "docs/specs/other-design.md": "# Other Design",
+        "docs/plans/implementation-plan.md": samplePlanContent,
+        "docs/plans/other-plan.md": samplePlanContent,
+      });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      await startPlanReadyReviewWorkflow(
+        bridge,
+        "s-review-mismatch",
+        "docs/specs/design.md",
+        "docs/plans/implementation-plan.md",
+      );
+
+      const designMismatch = await bridge.handleReviewGateStart("s-review-mismatch", {
+        source: "command",
+        designPath: "docs/specs/other-design.md",
+        planPath: "docs/plans/implementation-plan.md",
+      });
+      expect(designMismatch.dispatched).toBe(false);
+      expect(designMismatch.guidance).toContain(
+        "do not match the artifacts bound by /justice-start",
+      );
+      expect(designMismatch.guidance).not.toContain("**Gate ID**:");
+
+      const planMismatch = await bridge.handleReviewGateStart("s-review-mismatch", {
+        source: "command",
+        designPath: "docs/specs/design.md",
+        planPath: "docs/plans/other-plan.md",
+      });
+      expect(planMismatch.dispatched).toBe(false);
+      expect(planMismatch.guidance).toContain(
+        "do not match the artifacts bound by /justice-start",
+      );
+      expect(planMismatch.guidance).not.toContain("**Gate ID**:");
+    });
+
+    it("blocks the review gate when active Plan no longer matches the plan_ready bootstrap", async () => {
+      const reader = createMockFileReader({
+        "docs/specs/design.md": "# Design",
+        "docs/plans/implementation-plan.md": samplePlanContent,
+        "docs/plans/other-plan.md": samplePlanContent,
+      });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      await startPlanReadyReviewWorkflow(
+        bridge,
+        "s-review-active-mismatch",
+        "docs/specs/design.md",
+        "docs/plans/implementation-plan.md",
+      );
+      bridge.setActivePlan("s-review-active-mismatch", "docs/plans/other-plan.md");
+
+      const result = await bridge.handleReviewGateStart("s-review-active-mismatch", {
+        source: "command",
+        designPath: "docs/specs/design.md",
+        planPath: "docs/plans/implementation-plan.md",
+      });
+
+      expect(result.dispatched).toBe(false);
+      expect(result.guidance).toContain("active Justice Plan no longer matches");
+    });
+
     it("dispatches the Design / Implementation Plan review gate when both artifacts are readable", async () => {
       const reader = createMockFileReader({
         "docs/specs/design.md": "# Design",
@@ -1227,6 +1351,12 @@ describe("PlanBridge", () => {
       const observationHandler = createObservationHandler();
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
       bridge.setObservationHandler(observationHandler);
+      await startPlanReadyReviewWorkflow(
+        bridge,
+        "s-review-gate",
+        "docs/specs/design.md",
+        "docs/plans/implementation-plan.md",
+      );
 
       const result = await bridge.handleReviewGateStart("s-review-gate", {
         source: "command",
@@ -1262,6 +1392,12 @@ describe("PlanBridge", () => {
       const observationHandler = createObservationHandler();
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
       bridge.setObservationHandler(observationHandler);
+      await startPlanReadyReviewWorkflow(
+        bridge,
+        "s-review-exec",
+        "docs/specs/design.md",
+        "docs/plans/implementation-plan.md",
+      );
 
       const started = await bridge.handleReviewGateStart("s-review-exec", {
         source: "command",
@@ -1344,6 +1480,12 @@ describe("PlanBridge", () => {
       const observationHandler = createObservationHandler();
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
       bridge.setObservationHandler(observationHandler);
+      await startPlanReadyReviewWorkflow(
+        bridge,
+        "s-review-supersede",
+        "docs/specs/design-v1.md",
+        "docs/plans/plan-v1.md",
+      );
 
       const first = await bridge.handleReviewGateStart("s-review-supersede", {
         source: "command",
@@ -1361,6 +1503,12 @@ describe("PlanBridge", () => {
         payload: { toolName: "task", toolInput: { prompt: firstPrompt } },
       });
 
+      await startPlanReadyReviewWorkflow(
+        bridge,
+        "s-review-supersede",
+        "docs/specs/design-v2.md",
+        "docs/plans/plan-v2.md",
+      );
       const second = await bridge.handleReviewGateStart("s-review-supersede", {
         source: "command",
         designPath: "docs/specs/design-v2.md",
@@ -1411,6 +1559,12 @@ describe("PlanBridge", () => {
       const observationHandler = createObservationHandler();
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
       bridge.setObservationHandler(observationHandler);
+      await startPlanReadyReviewWorkflow(
+        bridge,
+        "s-review-stale",
+        "docs/specs/design.md",
+        "docs/plans/implementation-plan.md",
+      );
 
       const started = await bridge.handleReviewGateStart("s-review-stale", {
         source: "command",
@@ -1465,6 +1619,12 @@ describe("PlanBridge", () => {
       const observationHandler = createObservationHandler();
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
       bridge.setObservationHandler(observationHandler);
+      await startPlanReadyReviewWorkflow(
+        bridge,
+        "s-review-read-error",
+        "docs/specs/design.md",
+        "docs/plans/implementation-plan.md",
+      );
 
       const started = await bridge.handleReviewGateStart("s-review-read-error", {
         source: "command",
@@ -1538,16 +1698,25 @@ describe("PlanBridge", () => {
         injectedContext: expect.stringContaining("REVIEW GATE CLAIM BLOCKED"),
       });
     });
-    it("blocks the review gate when either artifact is unreadable", async () => {
-      const reader = createMockFileReader({
+    it("blocks the review gate when a bootstrap-bound artifact becomes unreadable", async () => {
+      const files: Record<string, string> = {
         "docs/specs/design.md": "# Design",
-      });
+        "docs/plans/implementation-plan.md": samplePlanContent,
+      };
+      const reader = createMockFileReader(files);
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      await startPlanReadyReviewWorkflow(
+        bridge,
+        "s-review-gate-blocked",
+        "docs/specs/design.md",
+        "docs/plans/implementation-plan.md",
+      );
+      delete files["docs/plans/implementation-plan.md"];
 
       const result = await bridge.handleReviewGateStart("s-review-gate-blocked", {
         source: "command",
         designPath: "docs/specs/design.md",
-        planPath: "docs/plans/missing-plan.md",
+        planPath: "docs/plans/implementation-plan.md",
       });
 
       expect(result.dispatched).toBe(false);
