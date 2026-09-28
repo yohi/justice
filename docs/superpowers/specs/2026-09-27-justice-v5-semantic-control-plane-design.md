@@ -188,8 +188,8 @@ Other prose in this Design explains or elaborates these contracts. It is not ind
 | J5D-PROJ-03 | Projection schema/version is bound to artifact-chain and evidence identity. |
 | J5D-REVIEW-01 | Justice observes an existing Superpowers review dispatch and never creates a duplicate review. |
 | J5D-REVIEW-02 | Justice observes the existing parent review call; during the awaited child `chat.message` hook it resolves the child Session authoritatively with `client.session.get`, matches `parentID` to exactly one pending review, then injects one fully formed synthetic text Part. Session events are corroboration only. |
-| J5D-REVIEW-03 | Trusted review evidence uses versioned structured results; final completion may compose one full final-review result with the single Superpowers final fix-wave scoped re-review into a candidate-head evidence closure. |
-| J5D-REVIEW-04 | Missing, malformed, stale, wrong-scope, untrusted, or incompletely covered final-review evidence fails closed; older full-review evidence alone never authorizes a later candidate. |
+| J5D-REVIEW-03 | Trusted review evidence uses versioned structured results; scoped re-review receives exact original finding identities from trusted preceding evidence, and final completion may compose one full final-review result with the single Superpowers final fix-wave scoped re-review only when trusted diff evidence exists. |
+| J5D-REVIEW-04 | Missing, malformed, stale, wrong-scope, untrusted, identity-inconsistent, diff-failed, or incompletely covered final-review evidence fails closed; failed final-evidence attempts never masquerade as trusted closures. |
 | J5D-QUALITY-01 | Critical/Important findings block; Minor is deferred-visible; parked/Ruling is not resolution. |
 | J5D-STORAGE-01 | Directly observed structured review results are canonical; insecure file fallback never becomes trusted evidence. |
 | J5D-CONFIG-01 | Doctor/config verification uses OmO effective configuration precedence, not a single config file. |
@@ -1069,7 +1069,7 @@ The appendix contains review-correlation ID, artifact-chain ID, task identity wh
 
 Task 1 is a runtime regression gate for this already-selected contract, not an architecture-selection spike.
 
-### 14.3 Structured result and final evidence composition — J5D-REVIEW-03
+### 14.3 Structured result, finding continuity, and final evidence composition — J5D-REVIEW-03
 
 The reviewer result contains the normal human-readable report plus one machine-readable Justice envelope.
 
@@ -1090,6 +1090,8 @@ JusticeReviewResult
 │  └─ findings[]
 │     ├─ findingId
 │     ├─ severity
+│     ├─ summary
+│     ├─ location?
 │     ├─ disposition
 │     └─ evidenceRefs[]
 └─ clauses[]
@@ -1107,9 +1109,87 @@ ClauseEvidenceScope =
   | files(normalized repository-relative paths[])
 ```
 
+#### Scoped re-review finding identity continuity
+
+Justice never fuzzy-matches findings between separate reviewer calls.
+
+Before enriching a scoped re-review, Justice resolves the trusted immediately preceding review that the scoped review is verifying.
+
+```text
+ReviewFindingTarget
+├─ findingId
+├─ severity
+├─ summary
+└─ location?
+```
+
+The lookup contract is:
+
+```text
+ReviewFindingContextQuery
+├─ artifactChainId
+├─ scope: task | final
+├─ taskIdentity?              # required for task scope, absent for final scope
+└─ precedingReviewedHead      # scoped re-review base SHA
+```
+
+A trusted context exists only when exactly one trusted preceding result matches:
+
+- same `artifactChainId`;
+- same task identity for task scope, or final-review scope for final scope;
+- preceding result `reviewedRange.head === precedingReviewedHead`;
+- preceding result is itself trusted.
+
+For task fix rounds the preceding result may be a trusted task review or the trusted immediately preceding scoped re-review. For the final fix wave it is the trusted full final review.
+
+```text
+ReviewFindingContextResult =
+  resolved(expectedFindings, sourceReviewCorrelationId)
+  | not_found
+  | ambiguous
+  | untrusted
+```
+
+Task/first-final reviews have no `expectedFindings`.
+
+A scoped re-review requires `resolved` context. Otherwise Justice does not inject the structured scoped-review appendix and semantic review evidence remains `NOT_PROVEN`.
+
+The scoped appendix includes the exact `ReviewFindingTarget[]` and requires:
+
+- every expected finding exactly once;
+- exact `findingId`, severity, summary, and location echo;
+- `ADDRESSED` → `disposition: resolved`;
+- `NOT ADDRESSED` → `disposition: open`;
+- any new breakage uses a non-empty ID not present in the expected/original ID set;
+- reviewer output never emits `human_adjudicated`.
+
+Structured-result validation is deterministic:
+
+- missing expected ID → invalid scoped evidence; original finding remains unresolved;
+- duplicate expected ID → invalid;
+- same ID but severity/summary/location mismatch → invalid;
+- any non-expected ID is treated only as new breakage;
+- a new-breakage ID collision with an expected ID → invalid;
+- duplicate new ID → invalid.
+
+No summary/location/order similarity heuristic is an authority for identity.
+
+Architecture ownership:
+
+```text
+review-interop module (Task 7)
+  owns ReviewFindingTarget / context-provider interface
+  accepts expectedFindings as input
+        ↑
+Justice evidence coordination (Task 8)
+  resolves expectedFindings from trusted preceding persisted review evidence
+```
+
+This avoids a Task 7↔Task 8 cycle: Task 7 defines and tests the input contract with a provider seam; Task 8 supplies the production store-backed provider. Until that provider returns `resolved`, scoped semantic evidence remains fail-closed.
+
 #### Final fix diff provenance
 
-When Superpowers performs its one final fix wave A..B, Justice must obtain trusted deterministic diff evidence:
+When Superpowers performs its one final fix wave A..B, Justice obtains trusted deterministic diff evidence:
 
 ```text
 FinalFixDiffEvidence
@@ -1118,7 +1198,7 @@ FinalFixDiffEvidence
 └─ changedPaths[]
 ```
 
-The core conformance algorithm does not accept arbitrary caller-supplied `changedFiles`.
+The core conformance algorithm never accepts arbitrary caller-supplied changed paths.
 
 A runtime/provider boundary supplies:
 
@@ -1147,19 +1227,77 @@ type RevisionDiffResult =
     };
 ```
 
-The baseline provider semantics are fixed:
+Provider semantics remain:
 
 1. prove `base` is an ancestor of `head`;
-2. derive exact `base..head` changes with Git name-status semantics equivalent to:
-   ```text
-   git diff --name-status -z --find-renames --find-copies BASE..HEAD
-   ```
+2. derive exact `base..head` changes using Git name-status semantics equivalent to `git diff --name-status -z --find-renames --find-copies BASE..HEAD`;
 3. normalize repository-relative touched paths;
-4. A/M/D/T/U/B statuses add their single path;
+4. A/M/D/T/U/B statuses add the single path;
 5. R*/C* statuses add **both old and new paths**;
-6. unknown/malformed status, empty/absolute/traversal path, Git failure, or non-ancestor range returns `failed`.
+6. malformed/unsupported status, unsafe path, Git failure, or non-ancestor range returns `failed`.
 
-A failed diff result does not prove any Candidate-A clause unaffected. Any prior clause not explicitly re-proven by the scoped re-review becomes `NOT_PROVEN`.
+#### Trusted closure versus blocked attempt
+
+A trusted `FinalReviewEvidenceClosure` is a **complete/trusted evidence object only**. It is never fabricated for a failed diff or incomplete final review.
+
+```text
+ResolvedFinalFixWaveEvidence
+├─ kind: resolved
+├─ diffEvidence: FinalFixDiffEvidence
+└─ scopedReReview
+
+FailedFinalFixWaveEvidence
+├─ kind: diff_failed
+├─ base
+├─ head
+├─ diffFailure: RevisionDiffResult.failed
+└─ scopedReReview
+
+FinalReviewEvidenceClosure              # trusted only
+├─ schemaVersion
+├─ artifactChainId
+├─ candidateHead
+├─ fullFinalReview
+├─ finalFixWave?: ResolvedFinalFixWaveEvidence
+├─ carriedClauseIds
+├─ reProvenClauseIds
+├─ clauseResults
+├─ findings
+└─ diagnostics
+
+BlockedFinalReviewEvidenceAttempt       # never completion evidence
+├─ schemaVersion
+├─ artifactChainId
+├─ candidateHead
+├─ fullFinalReview
+├─ finalFixWave?: ResolvedFinalFixWaveEvidence | FailedFinalFixWaveEvidence
+├─ notProvenClauseIds
+├─ blockingFindingIds
+├─ reasons
+└─ diagnostics
+```
+
+The builder result is:
+
+```text
+complete(FinalReviewEvidenceClosure)
+|
+blocked(BlockedFinalReviewEvidenceAttempt)
+```
+
+Only the `complete` branch may populate `PlanConformanceInput.finalReviewClosure`.
+
+Invariant:
+
+```text
+RevisionDiffResult.failed
+→ no trusted FinalFixDiffEvidence
+→ no trusted FinalReviewEvidenceClosure
+→ blocked attempt preserves exact fix-wave failure provenance
+→ PlanComplete BLOCKED
+```
+
+A failed diff may still coexist with a trusted scoped re-review result, but without trusted diff provenance Candidate-A clause evidence cannot be carried forward. The build result remains `blocked`.
 
 For a resolved diff:
 
@@ -1185,54 +1323,37 @@ residual adjudication / branch finishing
 
 Justice does not request or dispatch a second full final review.
 
-For completion Justice derives:
-
-```text
-FinalReviewEvidenceClosure
-├─ schemaVersion
-├─ artifactChainId
-├─ candidateHead
-├─ fullFinalReview
-├─ finalFixWave?
-│  ├─ diffEvidence
-│  └─ scopedReReview
-├─ carriedClauseIds
-├─ reProvenClauseIds
-├─ clauseResults
-├─ findings
-└─ diagnostics
-```
-
-Range/provenance rules:
+Trusted closure range rules:
 
 1. without a final fix wave, `candidateHead === fullFinalReview.reviewedRange.head`;
-2. with a fix wave:
+2. with a resolved fix wave:
    - `diffEvidence.base === fullFinalReview.reviewedRange.head`;
-   - `diffEvidence.head === scopedReReview.reviewedRange.head`;
    - `scopedReReview.reviewedRange.base === diffEvidence.base`;
+   - `diffEvidence.head === scopedReReview.reviewedRange.head`;
    - `diffEvidence.head === candidateHead`;
-3. only a `resolved` exact-range diff can authorize carry-forward;
-4. intersecting or undecidable clauses require explicit scoped re-proof; otherwise `NOT_PROVEN`.
+3. only resolved exact-range diff evidence authorizes carry-forward;
+4. intersecting/undecidable clauses require explicit scoped re-proof; otherwise build result is blocked with those clauses `NOT_PROVEN`.
 
 #### Deterministic finding disposition merge
 
-Final quality state is merged by `findingId`; disappearance is never resolution.
+Finding merge runs only after scoped finding identity validation above.
 
-For every open/parked finding from the full review:
+For every open/parked finding from the full/preceding review:
 
-- exactly one matching scoped finding with `disposition: resolved` → original blocker is resolved;
-- matching `open` or `parked` → remains unresolved;
-- missing matching scoped finding → remains unresolved;
-- duplicate/conflicting matching finding IDs → closure invalid/fail-closed.
+- exactly one same-ID scoped result with `resolved` → original finding resolved;
+- same-ID `open` or `parked` → remains unresolved;
+- missing same-ID result → remains unresolved and scoped evidence is invalid/fail-closed;
+- duplicate/conflicting same-ID result → invalid/fail-closed.
 
-For findings introduced by the scoped re-review:
+For new scoped findings:
 
 - new Critical/Important + open/parked → unresolved blocker;
-- new Minor remains visible in closure quality state.
+- new Minor remains visible;
+- ID collision with an original/expected finding is invalid.
 
-The original finding severity remains authoritative for a matching original finding; a scoped result cannot silently downgrade severity to clear a blocker.
+Original severity/summary/location remain authoritative for an expected finding; a scoped reviewer cannot mutate those fields to clear a blocker.
 
-`human_adjudicated` is not manufactured by reviewer output. It may only be applied through the separate trusted human review-resolution path and cannot change a conformance clause status.
+`human_adjudicated` is never manufactured by reviewer output. It may only be applied through the separate trusted human review-resolution path and cannot change a conformance clause status.
 
 ### 14.4 Invalid/stale result — J5D-REVIEW-04
 
@@ -1241,25 +1362,30 @@ An individual structured review result is rejected when:
 - missing or malformed;
 - correlation ID does not match the observed call;
 - artifact-chain/task identity is wrong;
-- declared review range does not match the observed review dispatch;
+- declared review range does not match the observed dispatch;
 - provenance is not the observed reviewer call;
-- required clause IDs are absent.
+- required clause IDs are absent;
+- scoped expected-findings context is missing, ambiguous, or untrusted;
+- expected finding ID is missing/duplicated or its immutable target fields mismatch;
+- a new breakage reuses an expected/original finding ID.
 
-Missing required clause results become `NOT_PROVEN`.
+Missing required clause results become `NOT_PROVEN`. Invalid scoped finding identity never silently clears the preceding blocker.
 
-A final closure is invalid or blocked when:
+A final evidence build is blocked when:
 
 - Candidate A's full review is used alone for later Candidate B;
-- final fix range is non-contiguous or does not match the full/scoped/candidate revisions;
-- trusted diff evidence cannot be resolved;
+- final fix range is non-contiguous or mismatches full/scoped/candidate revisions;
+- `RevisionDiffResult.kind === "failed"`;
 - changed-path parsing is unsafe/ambiguous;
 - scoped re-review is untrusted;
 - affected/undecidable clause lacks scoped re-proof;
-- an original blocking finding is omitted rather than explicitly resolved;
+- original blocker is omitted rather than explicitly resolved;
 - duplicate/conflicting finding dispositions exist;
 - a new blocking scoped finding remains open/parked.
 
-Invalid/incomplete coverage yields `NOT_PROVEN` and/or unresolved blocking findings; completion remains blocked.
+A blocked build returns `BlockedFinalReviewEvidenceAttempt`; it does **not** return or fabricate a trusted `FinalReviewEvidenceClosure`.
+
+Only a trusted `complete` closure may satisfy plan-conformance completion input.
 
 ### 14.5 Quality severity and parked findings — J5D-QUALITY-01
 
