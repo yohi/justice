@@ -19,6 +19,7 @@ export interface WorkflowDirectiveInput {
 export type CanonicalWorkflowSkill =
   | "brainstorming"
   | "writing-plans"
+  | "subagent-driven-development"
   | "test-driven-development"
   | "verification-before-completion"
   | "requesting-code-review"
@@ -57,7 +58,7 @@ const GUIDANCE = {
   implementation_unauthorized:
     "この実装タスクは、まだ外部で人間による承認・マージが確認されていません。\nJusticeはPR作成、承認、マージを観測できないため、実行を物理的に停止することはできません。\nタスクを実行する前に、設計・計画PRがレビューされ、人間による明示的な承認とマージが完了していることを確認してください。\n確認が取れない場合は、この task() をキャンセルし、計画の承認・マージを先に進めてください。",
   implementation_arm:
-    "次の task() 呼び出しで、計画に基づく実装委譲を 1 回だけ許可します。\n承認済みと宣言していますが、Justice は外部の承認・マージ状態を検証できません。実行は人間による明示的な承認・マージ確認後にのみ継続してください。",
+    "承認済み計画の実装を開始するには Superpowers の `subagent-driven-development` を使ってください。\nJustice は外部の承認・マージ状態を検証できません。実行は人間による明示的な承認・マージ確認後にのみ継続してください。",
   implementation_arm_required:
     "実装委譲を開始するには `/justice-implement --plan <planPath> --approved` を実行してください。\nJustice は外部の承認・マージを観測できないため、実装タスクの task() を強化する前に明示的な開始合図を必要としています。",
 } as const satisfies Readonly<Record<WorkflowDirectiveStage, string>>;
@@ -131,8 +132,8 @@ export function resolveWorkflowDirective(input: WorkflowDirectiveInput): Workflo
       return {
         stage: input.stage,
         marker: "[JUSTICE: IMPLEMENTATION ARMED]",
-        requiredSkills: ["test-driven-development", "verification-before-completion"],
-        nextAction: "delegate_task",
+        requiredSkills: ["subagent-driven-development"],
+        nextAction: "invoke_skill",
         authority: "external_unverified",
         guidance: GUIDANCE.implementation_arm,
       };
