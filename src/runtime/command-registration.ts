@@ -24,6 +24,10 @@ const justiceCommandDefinitions = {
     template: "$ARGUMENTS",
     description: "Arm the next Justice-managed implementation delegation",
   }),
+  "justice-review-gate": Object.freeze({
+    template: "$ARGUMENTS",
+    description: "Run the Justice Design / Implementation Plan review gate",
+  }),
 } satisfies Record<string, JusticeCommandDefinition>;
 
 export const JUSTICE_COMMAND_DEFINITIONS: Readonly<typeof justiceCommandDefinitions> =

@@ -8,7 +8,7 @@ import {
 } from "../../src/runtime/command-registration";
 
 describe("registerJusticeCommands", () => {
-  it("registers justice-start and justice-implement on an empty config.command", async () => {
+  it("registers canonical Justice commands on an empty config.command", async () => {
     const config: CommandRegistrationTarget = {};
     const log = vi.fn(async () => {});
 
@@ -16,7 +16,7 @@ describe("registerJusticeCommands", () => {
 
     expect(config.command).toBeDefined();
     expect(Object.keys(config.command ?? {})).toEqual(
-      expect.arrayContaining(["justice-start", "justice-implement"]),
+      expect.arrayContaining(["justice-start", "justice-implement", "justice-review-gate"]),
     );
     expect(config.command?.["justice-start"]).toEqual({
       template: "$ARGUMENTS",
@@ -25,6 +25,10 @@ describe("registerJusticeCommands", () => {
     expect(config.command?.["justice-implement"]).toEqual({
       template: "$ARGUMENTS",
       description: "Arm the next Justice-managed implementation delegation",
+    });
+    expect(config.command?.["justice-review-gate"]).toEqual({
+      template: "$ARGUMENTS",
+      description: "Run the Justice Design / Implementation Plan review gate",
     });
     expect(log).not.toHaveBeenCalled();
   });
@@ -76,6 +80,7 @@ describe("registerJusticeCommands", () => {
     expect(Object.keys(JUSTICE_COMMAND_DEFINITIONS)).toEqual([
       "justice-start",
       "justice-implement",
+      "justice-review-gate",
     ]);
     expect(JUSTICE_COMMAND_DEFINITIONS["justice-start"].template).toBe(
       "$ARGUMENTS",
@@ -139,6 +144,10 @@ describe("Justice command LLM visibility", () => {
           template: "$ARGUMENTS",
           description: "Arm implementation",
         },
+        "justice-review-gate": {
+          template: "$ARGUMENTS",
+          description: "Run review gate",
+        },
       },
     };
 
@@ -147,10 +156,12 @@ describe("Justice command LLM visibility", () => {
     expect(context).toContain("[JUSTICE: AVAILABLE USER SLASH COMMANDS]");
     expect(context).toContain("- /justice-start");
     expect(context).toContain("- /justice-implement");
+    expect(context).toContain("- /justice-review-gate");
     expect(context).toContain("not model-callable tools");
     expect(context).toContain("explicit user authorization boundary");
     expect(context).not.toContain("IGNORE PRIOR INSTRUCTIONS");
     expect(context).not.toContain("Arm implementation");
+    expect(context).not.toContain("Run review gate");
   });
 
   it("returns undefined when no Justice commands are registered", () => {
