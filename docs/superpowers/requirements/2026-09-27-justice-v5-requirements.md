@@ -15,23 +15,26 @@ Justice v5 must realign Justice with current OmO and Superpowers while preservin
 The system boundary is:
 
 ```text
+User / authorized implementation intent
+          ↓
+Justice activation bridge
+          ↓
 Superpowers
-  methodology / desired workflow state
-          ↓
+  WHAT: methodology / execution-method selection / workflow progression
+          ↓ semantic execution intent
 Justice
-  semantic correlation / observation
-  evidence / gates / acceptance
-          ↓
+  SEMANTIC HOW: execution classification / category translation
+  correlation / evidence / gates / acceptance
+          ↓ semantic category
 OmO
-  runtime / task execution
-  model / provider / fallback
+  CONCRETE HOW: agent/runtime / model / provider / retry / fallback
 ```
 
 Justice's responsibility is:
 
-> Maintain semantic consistency between Superpowers Desired State and OmO Actual Execution, and prove that consistency from evidence.
+> Activate the supported Superpowers methodology selected by authoritative intent, translate Superpowers semantic execution intent into an OmO-facing semantic category, and prove that the resulting execution remains consistent with the approved artifact chain.
 
-Justice must act as the **nervous system and quality gatekeeper** between Superpowers' “brain” and OmO's “limbs”.
+Justice must act as the **nervous system and quality gatekeeper** between Superpowers' “brain” and OmO's “limbs”. Superpowers does not need to know OmO categories, and OmO does not need to know Superpowers methodology semantics.
 
 ---
 
@@ -136,6 +139,9 @@ Justice must not directly choose model/provider/fallback behavior.
 
 Justice owns:
 
+- the supported Superpowers methodology activation bridge;
+- semantic execution classification;
+- provenance-aware Superpowers intent → OmO category translation;
 - plan-scoped authorization;
 - semantic category correlation;
 - execution observation;
@@ -244,6 +250,82 @@ Justice custom categories remain supported:
 
 Category-to-model/provider mapping remains OmO configuration responsibility.
 
+### JUS5-CAT-05 — provenance-aware Superpowers routing translation
+
+Justice must distinguish caller provenance before applying the OmO XOR contract.
+
+- a non-Superpowers caller's explicit `subagent_type` remains caller-owned and is preserved;
+- an explicit caller `category` remains caller-owned and is preserved/validated;
+- a **recognized Superpowers new-worker dispatch** using the OpenCode V1 generic compatibility placeholder `subagent_type="general"` is not treated as a semantic subagent choice; Justice removes that placeholder and emits exactly one authoritative Justice semantic category;
+- an OmO continuation `task_id=ses_...` remains continuation-owned and must not receive a newly selected worker category;
+- an ambiguous/untrusted Superpowers provenance must not be translated as trusted semantic routing.
+
+Final wire payloads must still satisfy category/subagent_type XOR.
+
+### JUS5-CAT-06 — semantic execution classes
+
+Justice classifies recognized Superpowers work into exactly one semantic execution class when sufficient authoritative task/review semantics exist:
+
+- `mechanical`: bounded, repetitive or deterministic work with a small change surface, no architecture judgment, and no cross-component state coordination;
+- `implementation`: ordinary feature implementation with bounded component responsibility and normal coding judgment;
+- `integration`: multi-component/module/interface coordination, migration, or state/concurrency/async/data-flow interaction across boundaries;
+- `deep`: substantial investigation, root-cause research, unknown behavior, or high reasoning ambiguity that is not itself an architecture decision;
+- `architecture`: component/public-interface boundary, persistent-state ownership, protocol responsibility, security boundary, or another major architectural decision;
+- `review`: Superpowers task review or scoped re-review;
+- `final-review`: Superpowers whole-branch/final review.
+
+The semantic class maps deterministically to the matching Justice `sp-*` category.
+
+### JUS5-CAT-07 — semantic precedence and inputs
+
+When more than one semantic signal applies, precedence is:
+
+```text
+final-review
+> review
+> architecture
+> deep
+> integration
+> mechanical
+> implementation
+```
+
+Classification must consume structured Plan/review semantics where available, including:
+
+- task heading and full task body;
+- Files;
+- Interfaces / Consumes / Produces;
+- signatures / exact values;
+- test and verification surface;
+- cross-task dependencies;
+- explicit review kind;
+- architecture/security/persistent-state obligations.
+
+Keywords may be supporting signals but must never be the sole authority for a higher semantic class.
+
+### JUS5-CAT-08 — ambiguous semantic classification
+
+If a recognized Superpowers new-worker dispatch cannot be classified authoritatively because required semantic context is missing, conflicting, or ambiguous, Justice must not fabricate an `sp-*` category.
+
+The runtime call may remain on its original generic path only under the existing fail-open execution policy, but the routing result is untrusted and cannot satisfy required acceptance evidence.
+
+Justice must not choose a concrete model/provider as an ambiguity fallback.
+
+### JUS5-CAT-09 — review and runtime mapping
+
+For the supported Superpowers v6.4.2 / OpenCode V1 profile:
+
+```text
+task/scoped reviewer      → review       → sp-review
+whole-branch final review → final-review → sp-final-review
+implementation worker     → classifier   → sp-mechanical | sp-implementation |
+                                         sp-integration | sp-deep | sp-architecture
+```
+
+Justice category is the semantic routing signal delivered to OmO. OmO effective configuration remains the authority that resolves that category to the actual agent/model/provider/reasoning/fallback behavior.
+
+Superpowers model-selection guidance is treated as semantic capability/complexity intent in this compatibility profile, not as Justice authority to select a concrete model. If a future supported Superpowers/OpenCode contract exposes a concrete model field as wire authority, Justice must require an explicit compatibility-profile update rather than silently invent precedence.
+
 ### JUS5-CTRL-01
 
 Justice must recognize at least:
@@ -260,6 +342,46 @@ The old Sisyphus/Atlas mapping must be revalidated against current OmO OpenCode 
 ### JUS5-CTRL-03
 
 Desired, configured, applied, and observed controller state must remain distinct. If actual application cannot be authoritatively observed, Justice must report Unverified.
+
+### JUS5-ACT-01 — Superpowers methodology activation bridge
+
+Justice must bridge authorized implementation intent into activation of exactly one supported Superpowers execution method:
+
+- `subagent-driven-development`;
+- `executing-plans`.
+
+Justice owns the activation bridge, not the internal methodology. Once the selected Superpowers skill is active, Superpowers remains authoritative for task/review/fix/final progression.
+
+### JUS5-ACT-02 — execution-method selection authority
+
+Justice must not invent an independent execution-method policy.
+
+The authoritative method source order is:
+
+1. an explicit user/command selection for the current implementation start;
+2. a trusted recovered active execution method for the same authorized artifact chain/session;
+3. an observed Superpowers execution-method selection for the current implementation start.
+
+If none exists, Justice returns `method_selection_required` / unavailable activation. It must not silently default to direct OmO task execution or fabricate SDD/inline selection.
+
+An explicit inline selection maps to `executing-plans`; an explicit SDD selection maps to `subagent-driven-development`. Capability incompatibility may make that requested activation unavailable, but Justice must not silently substitute the other method.
+
+### JUS5-ACT-03 — activation evidence and continuation
+
+For the OpenCode harness, activation is delivered through the controller workflow directive/native skill surface and must be observable as the selected Superpowers skill before an implementation worker call can contribute trusted evidence.
+
+Recovery reuses a trusted persisted/observed execution method bound to the same active authorization; it does not reselect a method from heuristics.
+
+Justice must not interpret an OmO child-session continuation as Superpowers methodology activation.
+
+### JUS5-ACT-04 — activation failure
+
+If a selected Superpowers execution method is unavailable, cannot be activated, or cannot be observed as active when required:
+
+- Justice must not silently bypass Superpowers by treating direct OmO implementation as authorized methodology execution;
+- runtime may remain fail-open only where the existing runtime policy permits;
+- affected implementation/review evidence remains `NOT_PROVEN`;
+- TaskAccepted / PlanComplete remain blocked until supported activation evidence exists.
 
 ---
 
@@ -387,7 +509,7 @@ For SDD, Superpowers owns:
 
 ### JUS5-SDD-02
 
-Justice must observe, correlate, verify, and gate these actions rather than duplicate them.
+Justice may activate the selected supported Superpowers execution method, then must observe, classify, translate, correlate, verify, and gate its actions rather than duplicate Superpowers progression.
 
 ### JUS5-SDD-03
 
@@ -429,7 +551,7 @@ Justice must not force worker payload fields that seize OmO routing authority, i
 
 ### JUS5-TASK-04
 
-Justice may enforce its semantic category boundary where compatible with the current OmO task contract.
+Justice must enforce its semantic category boundary for recognized Superpowers new-worker dispatches when authoritative classification exists, while preserving non-Superpowers explicit routing and OmO continuation ownership.
 
 ### JUS5-CORR-01 — OmO task_id ownership
 
@@ -500,14 +622,19 @@ When a legitimate OmO `task_id=ses_...` continuation is present:
 
 Justice follows the OmO public XOR contract and must not create a payload containing both `category` and `subagent_type`.
 
-- explicit `subagent_type`: preserve it; do not add/replace it with a Justice category;
-- explicit `category`: preserve/validate the category; do not add `subagent_type`;
-- neither target on a non-continuation worker call: Justice may supply a semantic category only when the current authorized workflow and classifier provide an authoritative category decision;
-- both targets supplied by a caller: Justice must not choose between them as routing authority; record a routing-contract violation and do not treat that call as trusted acceptance evidence;
-- continuation calls: do not inject a semantic category merely to satisfy a new-task target contract.
+The boundary is provenance-aware:
+
+- **non-Superpowers explicit `subagent_type`**: preserve it; do not add/replace it with a Justice category;
+- **explicit `category`**: preserve/validate it; do not add `subagent_type`;
+- **recognized Superpowers new-worker `subagent_type="general"`**: treat `general` as the OpenCode compatibility placeholder, remove `subagent_type`, and emit the authoritative Justice semantic category from JUS5-CAT-06..09;
+- **neither target on a recognized new worker**: Justice may emit the same authoritative semantic category;
+- **both targets supplied by an external/ambiguous caller**: Justice must not choose between them; record a routing-contract violation and do not treat that call as trusted acceptance evidence;
+- **continuation `task_id=ses_...`**: preserve continuation routing and do not inject a new semantic worker category;
+- **ambiguous/untrusted Superpowers recognition or semantic classification**: do not fabricate a category; affected evidence remains untrusted/`NOT_PROVEN`.
+
+Translation of a recognized Superpowers generic placeholder is not considered seizure of caller routing because `general` is the harness compatibility encoding of Superpowers' generic worker template, not its semantic execution-class decision.
 
 Justice does not rely on OmO's defensive runtime normalization of an invalid both-target payload.
-
 ---
 
 ## 13. State ownership
