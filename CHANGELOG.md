@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [4.2.3](https://github.com/yohi/justice/compare/v4.2.2...v4.2.3) (2026-09-29)
+
+### Bug Fixes
+
+* Design / Plan Review Gate の executor 選択を決定的にし、workflow bootstrap との紐付けを強化
+* Review Gate の再検証で成果物の読み込みに失敗した場合の扱いを修正
+
 ## [4.0.0](https://github.com/yohi/justice/compare/v3.0.0...v4.0.0) (2026-09-27)
 
 

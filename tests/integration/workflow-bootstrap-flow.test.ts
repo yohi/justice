@@ -156,7 +156,7 @@ describe("Justice workflow bootstrap integration flow", () => {
       sessionId,
       `--plan ${PLAN_PATH} ship the bootstrap`,
     );
-    const guidance = workflowGuidance(output, "AIレビューを依頼してください");
+    const guidance = workflowGuidance(output, "利用者が `/justice-review-gate");
 
     expect(guidance).toContain("[JUSTICE: Workflow Bootstrap]");
     expect(guidance).toContain("[JUSTICE: PLAN REVIEW REQUIRED]");
