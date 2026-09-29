@@ -452,8 +452,11 @@ type PendingReviewCorrelationBase = {
   readonly reviewedRange: { readonly base: string; readonly head: string };
   readonly contractId: string;
   readonly contractDigest: string;
-  readonly status: "pending_child" | "child_bound" | "ambiguous" | "terminal";
+  readonly status: "pending_native_result" | "runtime_bound" | "ambiguous" | "terminal";
+  readonly omoTaskId?: string;
   readonly childSessionId?: string;
+  readonly dagRunId?: string;
+  readonly dagNodeId?: string;
 };
 
 type PendingReviewCorrelation =
@@ -482,21 +485,22 @@ type PreparePendingReviewResult =
       readonly details: readonly string[];
     };
 
-type ReviewChildBindingResult =
+
+type NativeReviewRuntimeBindingResult =
   | { readonly kind: "bound" | "idempotent"; readonly correlation: PendingReviewCorrelation }
+  | { readonly kind: "not_found"; readonly reason: string }
   | {
-      readonly kind: "lookup_failed";
-      readonly reason: "sdk_error_response" | "missing_data" | "transport_error";
+      readonly kind: "untrusted";
+      readonly reason:
+        | "tool_result_identity_mismatch"
+        | "native_task_identity_conflict"
+        | "child_session_conflict"
+        | "dag_identity_conflict";
       readonly details?: string;
     }
-  | { readonly kind: "parent_missing"; readonly childSessionId: string }
-  | { readonly kind: "not_found"; readonly reason: string }
-  | { readonly kind: "ambiguous"; readonly reasons: readonly [string, ...string[]] }
-  | {
-      readonly kind: "conflict";
-      readonly reason: "child_id_mismatch" | "incompatible_existing_binding";
-      readonly details?: string;
-    };
+  | { readonly kind: "persistence_failed"; readonly reason: string };
+
+type ParseReviewResult =
 
 type ParseReviewResult =
   | { readonly kind: "valid"; readonly result: JusticeReviewResult }
@@ -685,8 +689,11 @@ type BindPendingInput = {
   readonly taskIdentity: TaskIdentity;
   readonly executionMethod: "subagent-driven-development" | "executing-plans";
   readonly parentSessionId: string;
-  readonly parentCallId: string;
-  readonly omoContinuationSessionId?: string;
+  readonly parentCallId: string; // senpi toolCallId
+  readonly omoTaskId?: string;
+  readonly batchItemIndex?: number;
+  readonly dagRunId?: string;
+  readonly dagNodeId?: string;
   readonly dispatchRevision: string;
 };
 
@@ -698,12 +705,13 @@ type ResolveTaskIdentityInput = {
 };
 ```
 
+
 **Task 7**
 
 ```ts
 type ReviewDispatchInput = {
   readonly parentSessionId: string;
-  readonly parentCallId: string;
+  readonly parentCallId: string; // senpi toolCallId
   readonly taskArgs: Readonly<Record<string, unknown>>;
   readonly executionMethod: "subagent-driven-development" | "executing-plans";
   readonly artifactChain: ApprovedArtifactChain;
@@ -711,36 +719,51 @@ type ReviewDispatchInput = {
   readonly contract: ConformanceContract;
 };
 
-type ChatMessageHook = NonNullable<Hooks["chat.message"]>;
-type ChatMessageInput = Parameters<ChatMessageHook>[0];
-type ChatMessageOutput = Parameters<ChatMessageHook>[1];
-
-type JusticePluginClient = Pick<PluginInput["client"], "app" | "session">;
+type NativeReviewCallInput = {
+  readonly sessionId: string;
+  readonly toolCallId: string;
+  readonly taskInput: Record<string, unknown>;
+};
 
 type ReviewAppendixInput = {
   readonly correlation: PendingReviewCorrelation & {
-    readonly status: "child_bound";
-    readonly childSessionId: string;
+    readonly status: "pending_native_result";
   };
   readonly contractPath: string;
 };
 
-type ResolveReviewChildInput = {
-  readonly childSessionId: string;
-  readonly client: JusticePluginClient;
-  readonly pendingReviews: readonly PendingReviewCorrelation[];
-};
+type NativeReviewEnrichmentResult =
+  | {
+      readonly kind: "enriched";
+      readonly correlation: PendingReviewCorrelation;
+      readonly taskInput: Record<string, unknown>;
+    }
+  | { readonly kind: "not_review"; readonly taskInput: Record<string, unknown> }
+  | {
+      readonly kind: "untrusted";
+      readonly reason:
+        | "missing_session_identity"
+        | "missing_tool_call_identity"
+        | "prompt_unavailable"
+        | "appendix_conflict"
+        | "review_context_unavailable"
+        | "persistence_failed";
+      readonly taskInput: Record<string, unknown>;
+      readonly details: readonly string[];
+    };
 
-type SessionGetFieldsResult = Awaited<
-  ReturnType<JusticePluginClient["session"]["get"]>
->;
-
-type BuildReviewAppendixPartInput = {
-  readonly input: ChatMessageInput;
-  readonly output: ChatMessageOutput;
-  readonly appendix: string;
+type BindNativeReviewResultInput = {
+  readonly sessionId: string;
+  readonly toolCallId: string;
+  readonly toolResult: unknown;
+  readonly omoTaskId?: string;
+  readonly childSessionId?: string;
+  readonly dagRunId?: string;
+  readonly dagNodeId?: string;
 };
 ```
+
+**Task 9**
 
 **Task 9**
 
@@ -896,7 +919,7 @@ explicit current selection
 
 `WorkflowMethodSelectionEvidence` is one current record per authorization and may be recovered across sessions, but it restores only the selected method. A new explicit selection atomically replaces that record. It never proves current-session activation.
 
-`WorkflowActivationEvidence` is one current record per `authorizationId + sessionId`. A successful later activation atomically replaces that session record. It is trusted only when `authorizationId + sessionId + method` match the active selection, it originated from successful `tool.execute.after` observation of the native `skill` tool with `args.name === method` and `callID === skillCallId`, and `setActivation` returned `saved | idempotent`.
+`WorkflowActivationEvidence` is one current record per `authorizationId + sessionId`. A successful later activation atomically replaces that session record. It is trusted only when `authorizationId + sessionId + method` match the active selection, senpi observed a `tool_call` for Native tool `skill` with `input.name === method`, the matching `tool_result` for the same `sessionId + toolCallId` completed successfully, and `setActivation` returned `saved | idempotent`.
 
 Decision rules are exact:
 
@@ -1090,7 +1113,7 @@ git commit -m "test: lock Justice v5 OmO Native review interop"
   }): SuperpowersRoutingTranslationResult;
   ```
 - Translation precedence is exact:
-  1. legitimate `task_id=ses_...` continuation → `continuation`, no new category;
+  1. a Native lifecycle/control input carrying an existing OmO-owned `task_id` → `native_task_lifecycle`, no new category;
   2. explicit non-empty category string → preserve byte-for-byte as `OmoCategoryName`; do not require membership in `TaskCategory` or `SpCategory`;
   3. non-Superpowers explicit subagent → preserve;
   4. recognized Superpowers non-generic specialized subagent (for example `explore`) → preserve;
@@ -1099,14 +1122,14 @@ git commit -m "test: lock Justice v5 OmO Native review interop"
   7. invalid both-target / ambiguous provenance / ambiguous classification → `untrusted`.
 - `TaskCategory` is only the known/current built-in vocabulary for compatibility/doctor assertions; it is not the caller-owned wire namespace.
 - `parseOmoCategoryName` accepts every non-empty string and returns it unchanged; unknown-to-Justice names remain OmO-owned.
-- `translateTaskRouting` never chooses model/provider/reasoning/fallback and never mutates continuation `task_id`.
-- `normalizeTaskToolInput(InPlace)` preserves a legitimate OmO `task_id=ses_...`.
+- `translateTaskRouting` never chooses model/provider/reasoning/fallback and never mutates an OmO-owned Native `task_id`.
+- `normalizeTaskToolInput(InPlace)` preserves a legitimate OmO Native `task_id` unchanged.
 - `enrichTaskToolInput` never serializes `TaskIdentity` into `task_id`.
 
 - [ ] **Step 1: Write RED routing/domain tests**
 
 Exact tests in `tests/core/v5-task-routing-contract.test.ts`:
-- `preserves_omo_continuation_task_id`
+- `preserves_omo_native_task_id`
 - `never_serializes_justice_task_identity_as_task_id`
 - `reports_category_subagent_type_as_invalid_both`
 - `preserves_non_superpowers_explicit_subagent_type_without_category_injection`
@@ -1119,7 +1142,7 @@ Exact tests in `tests/core/v5-task-routing-contract.test.ts`:
 - `recognized_superpowers_general_worker_translates_classified_intent_to_category`
 - `recognized_superpowers_general_worker_never_emits_category_and_subagent_type_together`
 - `ambiguous_superpowers_semantic_classification_is_untrusted`
-- `does_not_inject_category_into_continuation`
+- `does_not_inject_category_into_native_task_lifecycle`
 - `justice_category_is_the_only_semantic_routing_signal_to_omo`
 - `justice_does_not_select_concrete_model_or_provider`
 
@@ -1447,10 +1470,11 @@ git commit -m "feat: project versioned conformance contracts"
 - `ExecutionCorrelationStore` methods:
   - `bindPending(input: BindPendingInput): Promise<CorrelationMutationResult>`
   - `attachChild(key: ExecutionCorrelationKey, childSessionId: string): Promise<CorrelationMutationResult>`
-  - `attachContinuation(key: ExecutionCorrelationKey, sesId: string): Promise<CorrelationMutationResult>`
+  - `attachNativeTaskId(key: ExecutionCorrelationKey, taskId: string): Promise<CorrelationMutationResult>`
   - `markTerminal(key: ExecutionCorrelationKey): Promise<CorrelationMutationResult>`
   - `findByCall(key: ExecutionCorrelationKey): Promise<ExecutionCorrelation | null>`
   - `findTrustedByChildSession(childSessionId: string): Promise<ExecutionCorrelation | null>`
+  - `attachDagIdentity(key: ExecutionCorrelationKey, dag: { readonly runId: string; readonly nodeId: string }): Promise<CorrelationMutationResult>`
 - `resolveSuperpowersImplementationTask(input: ResolveTaskIdentityInput): Promise<TaskIdentityResolution>`:
   - extracts exactly one Superpowers task-brief reference;
   - reads `task-N-brief.md`;
@@ -1465,8 +1489,8 @@ Cover:
 - same `parentSessionId+parentCallId` is idempotent;
 - conflicting semantic task for same call → `untrusted`;
 - child relation accepted only when parent relation agrees;
-- unrelated `ses_...` cannot rebind semantic task;
-- trusted child continuation can reattach;
+- an unrelated OmO Native `task_id` cannot rebind semantic task;
+- trusted Native task/child metadata can reattach to the existing correlation;
 - persistence failure → `persistence_failed`;
 - recovery uses durable file, not an ephemeral map.
 
@@ -1518,7 +1542,7 @@ git commit -m "feat: persist Justice execution correlation"
 **Interfaces:**
 - Consumes: `ExecutionCorrelationStore`, `resolveSuperpowersImplementationTask`, active `ApprovedArtifactChain`.
 - Produces runtime-neutral observations with `parentSessionId`, `parentCallId = toolCallId`, optional `omoTaskId`, `childSessionId`, batch/DAG provenance, and semantic correlation ID.
-- Senpi adapter maps Native events into Justice observations; core stores do not import senpi/OpenCode SDK types.
+- Senpi adapter maps Native events into Justice observations; core stores do not import harness SDK types.
 - Ephemeral adapter maps are caches only; recovery authority is durable `ExecutionCorrelationStore`.
 
 - [ ] **Step 1: Write RED Native adapter tests**
@@ -1593,7 +1617,7 @@ git commit -m "feat: bind OmO Native calls to Justice task identity"
 
 **Interfaces:**
 - Keep the Task 7 pure review/result types from the Canonical Cross-Task Interface Registry.
-- Replace OpenCode-only child-message types with a runtime-neutral Native enrichment seam:
+- Use a runtime-neutral Native review-enrichment seam:
   - `preparePendingReviewCorrelation(...)`
   - `buildJusticeReviewAppendix(...)`
   - `enrichRecognizedNativeReviewCall(input): NativeReviewEnrichmentResult`
@@ -2023,7 +2047,7 @@ git commit -m "feat: gate acceptance on type-safe final evidence"
   - explicit current selection wins over stale recovered selection, but requires fresh activation if current activation is another method;
   - recovered-only selection conflicting with current-session activation → `conflict` / untrusted;
   - mismatched activation authorization/session → `conflict(activation_identity_mismatch)`.
-- OmO `task_id=ses_...` never counts as methodology selection or activation.
+- OmO Native `task_id`, task resumption, or task lifecycle/control never counts as methodology selection or activation.
 
 **Selection / activation source model:**
 ```text
