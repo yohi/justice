@@ -56,7 +56,10 @@ describe("OpenCodePlugin (integration)", () => {
 
   it("registers justice commands via the config hook", async () => {
     const handlers = await OpenCodePlugin(fakeInit() as never);
-    const config: { command: Record<string, unknown> } = { command: {} };
+    const config: {
+      command: Record<string, unknown>;
+      agent?: Record<string, unknown>;
+    } = { command: {} };
 
     await handlers.config?.(config as never);
 
@@ -71,6 +74,12 @@ describe("OpenCodePlugin (integration)", () => {
     expect(config.command["justice-review-gate"]).toEqual({
       template: "$ARGUMENTS",
       description: "Run the Justice Design / Implementation Plan review gate",
+      agent: "justice-review-controller",
+      subtask: true,
+    });
+    expect(config.agent?.["justice-review-controller"]).toMatchObject({
+      mode: "subagent",
+      permission: { "*": "deny", task: "allow" },
     });
   });
 

@@ -139,6 +139,7 @@ export interface ReviewGateStartResult {
   readonly planPath: string | null;
   readonly directiveStage: "plan_review_required";
   readonly guidance: string;
+  readonly reviewerPrompt?: string;
 }
 
 type PendingPlanReviewGate = {
@@ -183,7 +184,11 @@ export class PlanBridge {
   private readonly pendingPlanReviewGates = new Map<string, PendingPlanReviewGate>();
   private readonly planReviewGateCalls = new Map<
     string,
-    { readonly sessionId: string; readonly gateId: string }
+    {
+      readonly parentSessionId: string;
+      readonly workerSessionId: string;
+      readonly gateId: string;
+    }
   >();
   private readonly lastCompletionInputs: Map<
     string,
@@ -449,7 +454,9 @@ export class PlanBridge {
     this.workflowBootstraps.delete(sessionId);
     this.pendingPlanReviewGates.delete(sessionId);
     for (const [callId, claim] of this.planReviewGateCalls) {
-      if (claim.sessionId === sessionId) this.planReviewGateCalls.delete(callId);
+      if (claim.parentSessionId === sessionId || claim.workerSessionId === sessionId) {
+        this.planReviewGateCalls.delete(callId);
+      }
     }
     this.observationHandler?.setReviewGateScope(sessionId, null);
     this.clearSessionCompletionInputs(sessionId);
@@ -482,11 +489,6 @@ export class PlanBridge {
     request: WorkflowStartRequest,
   ): Promise<WorkflowStartResult> {
     this.implementationArmedSessions.delete(sessionId);
-    // A new workflow bootstrap supersedes any pending pre-implementation Review Gate.
-    // Keep an already-claimed call mapping until PostToolUse so its stale completion
-    // is recognized and blocked instead of leaking into the mandatory-review protocol.
-    this.pendingPlanReviewGates.delete(sessionId);
-    this.observationHandler?.setReviewGateScope(sessionId, null);
     const phase = await this.resolveBootstrapPhase(request);
     const directiveStage = this.resolveBootstrapDirectiveStage(phase);
     this.workflowBootstraps.set(sessionId, { phase, request });
@@ -532,41 +534,11 @@ export class PlanBridge {
     this.pendingPlanReviewGates.delete(sessionId);
     this.observationHandler?.setReviewGateScope(sessionId, null);
 
-    const bootstrap = this.getWorkflowBootstrap(sessionId);
-    if (bootstrap === null) {
-      return this.reviewGateBootstrapBlocked(
-        request,
-        "No matching Justice workflow bootstrap exists for this session. Run /justice-start with the same Design and Implementation Plan first.",
-      );
-    }
-    if (bootstrap.phase !== "plan_ready") {
-      return this.reviewGateBootstrapBlocked(
-        request,
-        "The current Justice workflow is not plan_ready. Complete Design/Plan preparation and rerun /justice-start before /justice-review-gate.",
-      );
-    }
-    if (
-      bootstrap.request.designPath !== request.designPath ||
-      bootstrap.request.planPath !== request.planPath
-    ) {
-      return this.reviewGateBootstrapBlocked(
-        request,
-        "The requested Design/Plan do not match the artifacts bound by /justice-start in this session. Rerun /justice-start with the intended artifacts first.",
-      );
-    }
-
     const planPath = this.resolveActivatablePlanPath(request.planPath);
-    if (planPath === null || this.getActivePlan(sessionId) !== planPath) {
-      return this.reviewGateBootstrapBlocked(
-        request,
-        "The active Justice Plan no longer matches the plan_ready bootstrap. Rerun /justice-start before /justice-review-gate.",
-      );
-    }
-
     const designReadable = await this.isArtifactReadable(request.designPath);
-    const planReadable = await this.isArtifactReadable(planPath);
+    const planReadable = planPath !== null && (await this.isArtifactReadable(planPath));
 
-    if (!designReadable || !planReadable) {
+    if (!designReadable || !planReadable || planPath === null) {
       this.setActivePlan(sessionId, null);
       this.clearSessionCompletionInputs(sessionId);
       const missing = [
@@ -626,7 +598,7 @@ export class PlanBridge {
       "Review ONLY the Design and Implementation Plan together as one pre-implementation plan review.",
       "Do not modify files. Do not run implementation. Do not invoke CodeRabbit CLI or another Skill named code-review.",
       "Return exactly one JSON object and no prose:",
-      '{"schemaVersion":1,"gateId":"<exact Gate-ID>","reviewScope":["<exact Design path>","<exact Implementation Plan path>"],"complete":true,"findings":[{"itemKey":"RG-001","severity":"critical|major|minor","summary":"...","location":"path:line or section"}]}',
+      '{"schemaVersion":1,"gateId":"<exact Gate-ID>","complete":true,"findings":[{"itemKey":"RG-001","severity":"critical|major|minor","summary":"...","location":"path:line or section"}]}',
       "Use findings: [] only when the review is complete and no actionable findings remain.",
     ].join("\n");
     this.pendingPlanReviewGates.set(sessionId, {
@@ -645,6 +617,7 @@ export class PlanBridge {
       designPath: request.designPath,
       planPath,
       directiveStage: "plan_review_required",
+      reviewerPrompt,
       guidance: [
         "---",
         "[JUSTICE: REVIEW GATE REQUESTED]",
@@ -675,25 +648,15 @@ export class PlanBridge {
     };
   }
 
-  private reviewGateBootstrapBlocked(
-    request: ReviewGateRequest,
-    message: string,
-  ): ReviewGateStartResult {
-    return {
-      dispatched: false,
-      designPath: request.designPath,
-      planPath: this.resolveActivatablePlanPath(request.planPath),
-      directiveStage: "plan_review_required",
-      guidance: [
-        "---",
-        "[JUSTICE: REVIEW GATE BLOCKED]",
-        "",
-        message,
-        "",
-        "Review Gate was not dispatched. Do not infer review completion, READY, approval, merge, or implementation authorization.",
-        "---",
-      ].join("\n"),
-    };
+  hasPendingPlanReviewGate(sessionId: string): boolean {
+    return this.pendingPlanReviewGates.has(sessionId);
+  }
+
+  cancelPendingPlanReviewGate(sessionId: string): void {
+    const pending = this.pendingPlanReviewGates.get(sessionId);
+    if (pending?.callId !== undefined) this.planReviewGateCalls.delete(pending.callId);
+    this.pendingPlanReviewGates.delete(sessionId);
+    this.observationHandler?.setReviewGateScope(sessionId, null);
   }
 
   async handlePlanReviewGatePreToolUse(
@@ -703,14 +666,17 @@ export class PlanBridge {
     const gateId = extractReviewGateIdFromTaskPrompt(event.payload.toolInput.prompt);
     if (gateId === undefined) return null;
 
-    const pending = this.pendingPlanReviewGates.get(event.sessionId);
-    if (pending === undefined || pending.gateId !== gateId) {
+    const matches = [...this.pendingPlanReviewGates.entries()].filter(
+      ([, candidate]) => candidate.gateId === gateId,
+    );
+    if (matches.length !== 1) {
       return {
         action: "inject",
         injectedContext:
-          "[JUSTICE: REVIEW GATE CLAIM BLOCKED] no matching user-invoked pending Gate",
+          "[JUSTICE: REVIEW GATE CLAIM BLOCKED] no unique matching user-invoked pending Gate",
       };
     }
+    const [parentSessionId, pending] = matches[0]!;
     const callId = event.callId;
     if (callId === undefined || callId.trim().length === 0) {
       return {
@@ -734,7 +700,11 @@ export class PlanBridge {
     }
 
     pending.callId = callId;
-    this.planReviewGateCalls.set(callId, { sessionId: event.sessionId, gateId });
+    this.planReviewGateCalls.set(callId, {
+      parentSessionId,
+      workerSessionId: event.sessionId,
+      gateId,
+    });
     return {
       action: "inject",
       injectedContext: "[JUSTICE: PLAN REVIEW GATE CLAIMED]",
@@ -756,15 +726,15 @@ export class PlanBridge {
     const callId = event.callId;
     if (callId === undefined) return null;
     const claimed = this.planReviewGateCalls.get(callId);
-    if (claimed === undefined || claimed.sessionId !== event.sessionId) return null;
+    if (claimed === undefined || claimed.workerSessionId !== event.sessionId) return null;
 
-    const pending = this.pendingPlanReviewGates.get(event.sessionId);
+    const pending = this.pendingPlanReviewGates.get(claimed.parentSessionId);
     const clearPending = (): void => {
       this.planReviewGateCalls.delete(callId);
-      const current = this.pendingPlanReviewGates.get(event.sessionId);
+      const current = this.pendingPlanReviewGates.get(claimed.parentSessionId);
       if (current === undefined || current.gateId === claimed.gateId) {
-        this.pendingPlanReviewGates.delete(event.sessionId);
-        this.observationHandler?.setReviewGateScope(event.sessionId, null);
+        this.pendingPlanReviewGates.delete(claimed.parentSessionId);
+        this.observationHandler?.setReviewGateScope(claimed.parentSessionId, null);
       }
     };
     if (pending === undefined || pending.gateId !== claimed.gateId || pending.callId !== callId) {
@@ -789,8 +759,7 @@ export class PlanBridge {
     if (
       result === undefined ||
       result.complete !== true ||
-      result.gateId !== pending.gateId ||
-      JSON.stringify(result.reviewScope) !== pending.reviewScope
+      result.gateId !== pending.gateId
     ) {
       clearPending();
       return {
@@ -827,7 +796,7 @@ export class PlanBridge {
     }
 
     const response = await this.observationHandler?.handlePlanReviewGateResult({
-      sessionId: event.sessionId,
+      sessionId: claimed.parentSessionId,
       reviewScope: pending.reviewScope,
       findings: result.findings,
     });
