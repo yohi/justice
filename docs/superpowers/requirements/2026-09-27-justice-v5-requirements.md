@@ -1505,28 +1505,3 @@ Justice v5 is acceptable only if E2E evidence proves at least:
 23. mass-ulw/workflow DAG observations preserve independent task provenance without deriving dependency order from event arrival.
 24. an existing Superpowers reviewer receives the Conformance Contract through the same Native `task` call, without a duplicate dispatch.
 25. Native effective configuration uses user/project + `[native]` + profile precedence and does not depend on an OpenCode profile directory.
-
-
-
-Justice v5 is acceptable only if E2E evidence proves at least:
-
-1. checkbox-only Plan updates preserve authorization.
-2. substantive Plan contract changes invalidate authorization.
-3. substantive Design changes invalidate downstream Plan authority.
-4. SDD review is observed without duplicate Justice reviewer dispatch.
-5. Needs fixes → fix → scoped re-review can reach acceptance.
-6. NOT ADDRESSED remains blocking.
-7. executing-plans is not rejected solely for lacking per-task fresh reviewer.
-8. Plan/Code interface mismatch blocks task acceptance.
-9. Design/Plan mismatch blocks downstream authorization.
-10. implementation-discovered design change requires artifact reconciliation before resume.
-11. passing tests cannot override approved-contract drift.
-12. omitted required conformance proof becomes NOT_PROVEN and blocks.
-13. review of stale revision cannot authorize current completion candidate.
-14. custom sp-* categories coexist with OmO v5.
-15. canonical `deep` is not emitted.
-16. Justice does not directly choose model/provider.
-17. capability-compatible OpenCode patch is not rejected solely for version mismatch.
-18. compaction preserves correlation and does not reuse stale evidence.
-19. final completion has zero unresolved/unauthorized semantic drift.
-20. final completion has zero missing required evidence and zero blocking quality findings.
