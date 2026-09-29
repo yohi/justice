@@ -468,7 +468,7 @@ A legitimate observed or incoming Native `task_id` is preserved unchanged. Justi
 
 ### 7.3 Canonical sidecar binding — J5D-CORR-02
 
-The canonical Native execution-call key is:
+The Native parent-call container identity is:
 
 ```text
 ExecutionCallKey = parentSessionId + parentToolCallId
@@ -477,7 +477,19 @@ ExecutionCallKey = parentSessionId + parentToolCallId
 - `parentSessionId` is the current senpi extension session identity.
 - `parentToolCallId` is the stable `toolCallId` of the observed Native `task` call.
 
-Justice persists a sidecar binding before relying on execution evidence:
+A parent call may represent either one task or a batch. Justice therefore persists **item-level** correlations:
+
+```text
+ExecutionCorrelationKey
+├─ parentSessionId
+├─ parentCallId
+├─ itemKind            # single | batch
+└─ batchItemIndex?     # required iff itemKind=batch
+```
+
+The v5.1.2 Native regression gate must prove that `task({tasks:[...]})` preserves input item order into `TaskToolDetails.items[]`. Only after that proof may `batchItemIndex` be used to join pre-execution input items to result items.
+
+Each durable value is:
 
 ```text
 ExecutionCorrelation
@@ -488,9 +500,10 @@ ExecutionCorrelation
 ├─ executionMethod
 ├─ parentSessionId
 ├─ parentCallId
+├─ itemKind
+├─ batchItemIndex?
 ├─ omoTaskId?
 ├─ childSessionId?
-├─ batchItemIndex?
 ├─ dagRunId?
 ├─ dagNodeId?
 ├─ dispatchRevision
@@ -503,16 +516,19 @@ Lifecycle:
 
 ```text
 senpi tool_call(task)
-  → persist PENDING correlation for (parentSessionId, toolCallId)
+  → single: persist one PENDING correlation keyed by (session, call, single)
+  → batch: persist one PENDING correlation for each input tasks[index]
 
 matching senpi tool_result(task)
-  → attach Native task_id and result metadata
+  → single: attach the Native task_id/result
+  → batch: attach details.items[index].task_id/result to the matching batchItemIndex
+  → never fan out the top-level aggregate/first-item task_id to all batch items
 
 trusted OmO Native task lifecycle / TaskRecord observation
-  → attach child/session/DAG metadata when available and consistent
+  → attach child/session/DAG metadata to the exact correlation when available and consistent
 
 review / verification
-  → resolve semantic evidence through that correlation
+  → resolve semantic evidence through that item-level correlation
 
 recovery
   → reconstruct from durable Justice bindings + trusted Native runtime metadata
@@ -522,52 +538,59 @@ If Native result/task/session metadata disagree, the relation is untrusted.
 
 Correlation persistence failure does not have to abort Native execution, but the affected execution cannot become trusted acceptance evidence.
 
-#### Parallel and DAG identity
+#### Parallel, batch, and DAG identity
 
-OmO Native can execute multiple tools concurrently in one turn, and mass-ulw/workflow can run parallel-ready DAG nodes.
+OmO Native can execute multiple tools concurrently in one turn, can spawn multiple ordered items from one batch call, and mass-ulw/workflow can run parallel-ready DAG nodes.
 
-Justice therefore treats callback/event order as non-semantic. Every observation must be keyed by stable identity. A batch or DAG execution is trusted only when each semantic work item can be independently attributed to a call/task/node identity.
+Justice therefore treats callback/event order as non-semantic. Every observation is keyed by stable call + work-item identity. DAG identity is corroborating runtime provenance attached to that exact work item. A batch or DAG execution is trusted only when every semantic work item is independently attributable; ambiguity remains `NOT_PROVEN`.
 
 ### 7.4 category / subagent_type and semantic translation — J5D-ROUTE-01 / J5D-ROUTE-02
 
 Justice follows the OmO Native `task` XOR contract; it never intentionally emits both `category` and `subagent_type`.
 
-Routing decisions are provenance-aware.
+Routing decisions are provenance-aware and bound to a versioned `NativeSuperpowersDispatchProfile`.
 
 #### Non-Superpowers / explicit caller routing
 
 - explicit `subagent_type` from a non-Superpowers caller is preserved;
-- recognized Superpowers explicit specialized non-generic `subagent_type` is also preserved and is not category-translated;
+- recognized Superpowers explicit specialized non-generic routing is also preserved and is not category-translated;
 - explicit `category` is accepted as a caller-owned non-empty OmO category name and preserved byte-for-byte;
 - external both-target input is a routing-contract violation;
 - Justice does not invent precedence between explicit external targets.
 
-#### Recognized Superpowers new-worker routing
+#### NativeSuperpowersDispatchProfile
 
-For the supported Native compatibility profile, a recognized generic Superpowers worker may arrive on OmO Native as:
+The Native profile is established by Task 1 using the exact supported Superpowers v6.4.2 Pi extension and OmO Native / senpi baseline. It records at least:
 
 ```text
-task(subagent_type="general")
+profile version / upstream SHAs
+actual worker-dispatch tool surface
+actual generic target shape/marker, if one exists
+actual review-dispatch shape
+observable Native skill-activation channels
+batch input-index ↔ result-items[index] ordering proof
 ```
 
-For that recognized **new-worker** dispatch, `general` is a compatibility encoding rather than a semantic execution-class choice.
+The profile MUST come from runtime evidence, not a hand-written synthetic fixture. OpenCode V1's `task(subagent_type="general")` mapping is historical evidence only and is not a Native default.
 
-Justice therefore performs:
+If the runtime regression does not expose a stable generic dispatch on a surface that Justice can translate in place, the supported Native compatibility capability is unavailable and implementation returns to artifact reconciliation. Justice does not manufacture a `task` call merely to fit its desired routing model.
+
+#### Recognized Superpowers new-worker routing
+
+For a dispatch that exactly matches the active profile's proven generic Native target:
 
 ```text
-recognized Superpowers dispatch
-+ subagent_type="general"
-+ new Native task call
+profile-recognized Superpowers generic dispatch
         ↓
 semantic execution classification
         ↓
-remove subagent_type
+remove only the profile-defined generic marker
 set category = exactly one Justice sp-* category
         ↓
-OmO Native task engine
+same OmO Native task execution
 ```
 
-The final payload still satisfies XOR.
+The final payload still satisfies XOR. A shape that differs from the profile is untrusted rather than normalized.
 
 Deterministic review mapping is:
 
@@ -584,7 +607,7 @@ Implementation dispatches use the semantic classifier in §21.
 
 #### Ambiguous recognition/classification
 
-If Superpowers provenance or semantic classification is not authoritative:
+If Superpowers provenance, profile matching, or semantic classification is not authoritative:
 
 - Justice does not fabricate an `sp-*` category;
 - runtime may remain fail-open where safe;
@@ -1778,26 +1801,28 @@ explicit user/command selection for this implementation start
 → otherwise method_selection_required
 ```
 
-No additional pre-activation method-observation source exists. A native `skill` invocation is not a selection event; it is activation evidence.
+No additional pre-activation method-observation source exists. Native skill-system activation evidence is not a selection event.
 
 Cross-session Justice state may recover which method was selected/used previously for the same authorization, but only as `recovered_selection`.
 
+#### Native activation seam
 
-#### Activation evidence
+The supported Pi/Senpi contract does **not** assume a `skill` tool. Superpowers v6.4.2 directs Pi to use its native skill system. Task 1 therefore proves the concrete OmO Native observation channels before production implementation.
 
-The OmO Native activation event is a successful Native `skill` tool execution:
+The v5 activation model accepts only profile-proven current-session observations:
 
 ```text
-tool_call:
-  toolName == "skill"
-  input.name == selected method
-  sessionId == current controller session
-  toolCallId == skillCallId
+A. successful skill read
+   read tool_result(success)
+   canonical path == <Superpowers skill root>/skills/<selected-method>/SKILL.md
 
-matching tool_result:
-  same sessionId + toolCallId
-  terminal success
+B. trusted native skill input
+   non-extension input
+   host-expanded <skill name="<selected-method>" ...>
+   (or raw /skill:<selected-method> only if the host exposes that pre-expansion form)
 ```
+
+Extension-injected text, pointers/reminders, skill-name mentions, child `load_skills`, or the generic `using-superpowers` bootstrap are not activation proof.
 
 Trusted evidence binds:
 
@@ -1805,14 +1830,15 @@ Trusted evidence binds:
 authorizationId
 sessionId
 method
-skillCallId
+activationKind
+activationSourceRef
 observedAt
 ```
 
-The `tool_call` observation alone is not proof of activation. Parallel tool results may complete out of order, so call/result matching is by stable identity, not position.
+A skill-read observation additionally binds its canonical SKILL.md path and read `toolCallId`. The read call alone is insufficient; its result must be successful.
 
 An exact persisted same-session activation record may be reused after restart only when all identity fields required by the contract still match. A record from another session never proves current activation.
-Justice stores one current selection per authorization and one current activation per `authorizationId + sessionId`. Explicit reselection atomically replaces the selection record; a later successful matching skill activation atomically replaces that session's activation record.
+Justice stores one current selection per authorization and one current activation per `authorizationId + sessionId`. Explicit reselection atomically replaces the selection record; a later successful profile-proven Native activation atomically replaces that session's activation record.
 
 A selection/activation store read, schema, or write failure is fail-closed for methodology evidence: it cannot yield `already_active` or trusted recovered selection. Runtime may remain fail-open only under the existing global policy, while acceptance remains `NOT_PROVEN`.
 
@@ -1824,15 +1850,17 @@ no selected method
 
 selected method + matching current-session activation evidence
 → already_active
-→ do NOT invoke the skill again
+→ do NOT request duplicate activation
 
 selected method + no matching current-session activation evidence
 → needs_activation
-→ invoke exactly skill(name=selected method)
+→ request exactly the selected method through the profile-proven Native skill system
 
-selected method + missing host capability
+selected method + no proven activation channel
 → unavailable
 ```
+
+Justice may direct the controller to load the exact selected SKILL.md through the Native skill system, but it must not fabricate a Claude Code/OpenCode-style `skill` tool call.
 
 Conflict handling is deterministic:
 
@@ -1846,7 +1874,7 @@ Therefore:
 cross-session recovered method
 → selection restored
 → needs_activation
-→ fresh current-session skill invocation
+→ fresh profile-proven current-session Native skill activation
 
 same-session exact activation evidence
 → already_active
@@ -2375,9 +2403,9 @@ The v5 implementation plan must include E2E/integration coverage for at least th
 
 ### Activation and semantic bridge
 
-41. authorized implementation intent activates the selected Superpowers execution method through a matched Native skill tool_call/tool_result.
+41. authorized implementation intent activates the selected Superpowers execution method through a Task-1-proven Native skill-system observation (successful selected SKILL.md read or trusted native skill expansion), never an assumed `skill` tool.
 42. Justice activation does not take ownership of Superpowers task/review progression.
-43. a recognized Superpowers generic Native worker is translated into one Justice semantic category while preserving XOR.
+43. a recognized Superpowers generic Native worker is translated into one Justice semantic category only when its dispatch shape matches the runtime-proven NativeSuperpowersDispatchProfile, while preserving XOR.
 44. a non-Superpowers explicit `subagent_type` remains caller-owned and is not translated.
 45. Justice semantic classification uses task/review semantics and complexity without selecting a concrete model/provider.
 46. OmO remains the only concrete model/provider/runtime resolver for translated Superpowers work.
@@ -2386,7 +2414,7 @@ The v5 implementation plan must include E2E/integration coverage for at least th
 ### Native concurrency
 
 48. two or more same-turn parallel Native task/tool calls completing out of order cannot cross-correlate execution or review evidence.
-49. a batched Native task dispatch keeps each item independently attributable or remains NOT_PROVEN when the upstream surface lacks stable per-item identity.
+49. a batched Native task dispatch creates one item-level correlation per zero-based input index and attaches only the matching `items[index]` Native metadata; any unproven/ambiguous index mapping remains NOT_PROVEN.
 50. mass-ulw/workflow DAG execution records run/node identity where observable and never derives dependency ordering from callback arrival.
 
 ## 30. Acceptance criteria for Justice v5 architecture

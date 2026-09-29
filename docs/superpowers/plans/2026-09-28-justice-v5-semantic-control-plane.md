@@ -21,7 +21,7 @@
 - Superpowers owns execution-method selection, task selection, review scheduling, fix/re-review progression, ledger progression, and final whole-branch review. Justice MUST NOT duplicate that orchestration.
 - Justice owns activation of the authoritatively selected supported Superpowers execution method and semantic Superpowers→OmO category translation; activation does not grant progression ownership.
 - OmO owns concrete agent/runtime/category resolution, model/provider/reasoning selection, retry, fallback, Native task lifecycle, and OmO `task_id`. Justice MUST NOT seize those responsibilities.
-- Recognized Superpowers `subagent_type="general"` on a Native new-worker task is a compatibility encoding and MUST be translated to exactly one authoritative Justice category; non-Superpowers explicit subagent routing and Native lifecycle/control calls remain preserved.
+- A recognized Superpowers generic Native new-worker target is translated only when it exactly matches the Task-1-proven `NativeSuperpowersDispatchProfile`; OpenCode V1 `subagent_type="general"` is not a Native default. Non-Superpowers explicit routing and Native lifecycle/control calls remain preserved.
 - Justice MUST NOT select a concrete model/provider. Ambiguous semantic classification is untrusted/`NOT_PROVEN`, not a reason to fabricate a category or model.
 - Justice semantic `TaskIdentity` MUST NOT be encoded into OmO `task_id`.
 - Runtime execution may fail open where safe; Authorization / Accepted / Verified / Complete MUST fail closed when required proof is missing.
@@ -42,7 +42,7 @@
   - `blocking quality findings == 0`
 - Do not manually set the package release version; the repository's release automation remains responsible for release versioning.
 - Every production-code task follows RED → GREEN → focused verification → full task test → commit.
-- Task 1 is a regression gate for the OmO Native v5.1.x / senpi / Superpowers v6.4.2 review-interop contract. A failure is upstream compatibility drift: STOP the supported-stack implementation and report the drift; do not invent a Justice-owned review fallback.
+- Task 1 is the test-only runtime contract gate for OmO Native v5.1.x / senpi / Superpowers v6.4.2 activation, generic worker/reviewer dispatch, review interop, and batch item identity. Production Tasks 2–14 MUST NOT begin until it passes. Failure means upstream compatibility drift: STOP and return to artifact reconciliation; do not synthesize a `general` target, `skill` tool, or Justice-owned reviewer fallback.
 - All production implementation tasks start from `master @ a67af6e47560d2bb7e6fe25d28dc9e644860e7ed`. Justice `v4.2.0` is not a merge/cherry-pick prerequisite and does not replace this base.
 
 ## Review Focus
@@ -59,7 +59,7 @@ Justice `v4.2.0` was released from the v4 side branch and is **not** the v5 impl
 
 - `821343eba1223371ae0a7a20e02e7370db900306` — completed-plan final review must be recognized before implementation-task exhaustion / plan-completion cleanup can suppress the review path;
 - `4759d777aab9c80b897c55392bcc0f5833d79d7b` — task/scoped/final review workers must remain outside implementation semantics and implementation-worker enrichment;
-- `1781c7efae22ac1304fa8dc0d1f621c888943a1e` — historical evidence that recognized Superpowers review semantic routing must survive a generic `subagent_type="general"` compatibility encoding; the Native adapter must re-prove this contract independently.
+- `1781c7efae22ac1304fa8dc0d1f621c888943a1e` — historical OpenCode-era evidence that generic review routing needed semantic translation. Its `subagent_type="general"` encoding is explicitly non-normative for Native; Task 1 must discover and prove the actual Native dispatch shape.
 
 The v4 implementations themselves are **not** normative. In particular, do not carry forward:
 
@@ -74,7 +74,7 @@ Where historical v4 behavior conflicts with the current Superpowers=WHAT / Justi
 
 The v4.2.0 review setting `run_in_background=false` is also non-normative. It may only appear as a bounded Task 1/7 compatibility assertion if current supported-runtime evidence proves it is required to preserve the Superpowers review lifecycle; it must not become a new Justice-owned review-scheduling policy.
 
-Task 1 is now the OmO Native / senpi / Superpowers v6.4.2 runtime review-interop regression gate. It is **not** a v4.2.0 behavior-compatibility gate.
+Task 1 is now the OmO Native / senpi / Superpowers v6.4.2 activation/dispatch/review/batch runtime contract gate. It is **not** a v4.2.0 behavior-compatibility gate.
 
 ---
 
@@ -102,49 +102,38 @@ New focused modules:
 Existing files retain their existing responsibility unless a task below explicitly changes it.
 
 
-## Verified Review-Interop Baseline
+## Native Runtime Contract Evidence Gate
 
-The architecture-critical review transport is fixed before implementation.
+The architecture-critical Native activation, dispatch, review-transport, and batch-correlation seams are **not inferred from OpenCode mappings**. Task 1 must lock them against the exact supported upstream baselines before any production task begins.
 
-### OmO Native / senpi extension contract
+### Audited OmO Native / senpi host surface
 
 The audited senpi extension surface provides:
 
-- `tool_call` before tool execution; its `event.input` may be mutated in place;
+- `tool_call` before tool execution; mutable `event.input` where the host/tool contract permits;
 - matching `tool_result` after tool execution;
 - stable `toolCallId` on tool execution events;
 - current extension/session context, including the session manager and effective agent directory;
 - Native `task` tooling owned by OmO, with `category` / `subagent_type` XOR and OmO-owned `task_id`;
+- batched `task({tasks:[...]})` results with per-item detail records;
 - same-turn parallel tool execution, so result arrival order is not identity;
-- Native workflow/DAG execution (mass-ulw) whose run/node identity is runtime-owned.
+- Native workflow/DAG execution whose run/node identity is runtime-owned;
+- native skill expansion/read surfaces, rather than a guaranteed Claude Code/OpenCode-style `skill` tool.
 
 Justice MUST bind observations by stable identities rather than callback order.
 
-### Selected review-delivery contract
+### Task 1 proof obligations
 
-Justice uses the original Superpowers reviewer call:
+Task 1 loads/executes the exact Superpowers v6.4.2 Pi adapter and OmO Native / senpi baseline and produces runtime evidence for all of the following before Production Task 2:
 
-```text
-senpi tool_call(task)
-  → observe recognized Superpowers review
-  → persist PendingReviewCorrelation(parentSessionId + toolCallId)
-  → classify task/scoped review as review; final as final-review
-  → translate subagent_type="general" to category=sp-review/sp-final-review when applicable
-  → remove subagent_type; preserve XOR
-  → append one sentinel-delimited Justice Conformance Contract appendix
-    to the SAME event.input.prompt in place
+1. **activation seam** — prove successful selected `SKILL.md` reads and/or trusted native `/skill:` expansion as observable activation channels; prove that no Justice contract requires a `skill` tool;
+2. **generic worker dispatch** — capture the actual Superpowers→Native dispatch tool and target shape. No synthetic `subagent_type="general"` fixture is accepted as evidence;
+3. **review dispatch** — capture the actual task/scoped/final review dispatch and prove whether same-call prompt enrichment/category translation is supported;
+4. **batch identity** — prove input `tasks[index]` corresponds to result `details.items[index]` before `batchItemIndex` is trusted as an item-level join key.
 
-OmO Native task engine executes the same mutated task call
+The resulting versioned `NativeSuperpowersDispatchProfile` is the only authority Tasks 2/7/10 may use for generic Native routing. If the observed Superpowers runtime uses a different tool surface, lacks a stable generic target, or otherwise cannot be translated in place without Justice taking over orchestration, Task 1 fails and the Plan returns to Design review.
 
-matching senpi tool_result(task)
-  → correlate by same parentSessionId + toolCallId
-  → attach OmO task_id/result metadata
-  → corroborate trusted child/process/session/DAG metadata when available
-```
-
-Prompt injection is trusted only when the original Superpowers prompt is a single string, the pending correlation is durable, and the Justice sentinel is not already present. Justice preserves the original prompt as an exact prefix and never creates a second reviewer.
-
-Concurrent reviews/workers are legal. No relation may be inferred from callback order.
+For review transport, Justice may enrich the original Superpowers reviewer call only when Task 1 proves that the actual Native reviewer dispatch reaches a mutable OmO Native `task` call. The original prompt remains an exact prefix, the pending correlation is durable, and Justice never creates a second reviewer.
 
 ### Native configuration baseline
 
@@ -690,8 +679,9 @@ type BindPendingInput = {
   readonly executionMethod: "subagent-driven-development" | "executing-plans";
   readonly parentSessionId: string;
   readonly parentCallId: string; // senpi toolCallId
+  readonly itemKind: "single" | "batch";
   readonly omoTaskId?: string;
-  readonly batchItemIndex?: number;
+  readonly batchItemIndex?: number; // required iff itemKind=batch
   readonly dagRunId?: string;
   readonly dagNodeId?: string;
   readonly dispatchRevision: string;
@@ -814,14 +804,25 @@ type WorkflowMethodSelectionEvidence = {
   readonly selectedAt: string;
 };
 
+type NativeSkillActivationObservation =
+  | {
+      readonly kind: "skill_read";
+      readonly toolCallId: string;
+      readonly canonicalSkillPath: string;
+    }
+  | {
+      readonly kind: "native_skill_input";
+      readonly activationSourceRef: string;
+      readonly expandedSkillName: SuperpowersExecutionMethod;
+    };
+
 type WorkflowActivationEvidence = {
-  readonly schemaVersion: "justice-workflow-activation-v1";
+  readonly schemaVersion: "justice-workflow-activation-v2";
   readonly authorizationId: string;
   readonly sessionId: string;
   readonly method: SuperpowersExecutionMethod;
-  readonly skillCallId: string;
+  readonly observation: NativeSkillActivationObservation;
   readonly observedAt: string;
-  readonly source: "skill_tool_success";
 };
 
 type WorkflowActivationInput = {
@@ -830,7 +831,8 @@ type WorkflowActivationInput = {
   readonly selection: WorkflowMethodSelection;
   readonly currentSessionActivation?: WorkflowActivationEvidence;
   readonly capabilities: {
-    readonly nativeSkillInvocation: boolean;
+    readonly nativeSkillReadObservation: boolean;
+    readonly nativeSkillInputObservation: boolean;
     readonly subagentExecution: boolean;
   };
 };
@@ -853,7 +855,7 @@ type WorkflowActivationDecision =
   | {
       readonly kind: "unavailable";
       readonly selection: Extract<WorkflowMethodSelection, { readonly kind: "selected" }>;
-      readonly reason: "skill_invocation_unavailable" | "subagent_capability_unavailable" | "activation_state_unavailable";
+      readonly reason: "native_skill_activation_unavailable" | "subagent_capability_unavailable" | "activation_state_unavailable";
     }
   | {
       readonly kind: "conflict";
@@ -919,7 +921,7 @@ explicit current selection
 
 `WorkflowMethodSelectionEvidence` is one current record per authorization and may be recovered across sessions, but it restores only the selected method. A new explicit selection atomically replaces that record. It never proves current-session activation.
 
-`WorkflowActivationEvidence` is one current record per `authorizationId + sessionId`. A successful later activation atomically replaces that session record. It is trusted only when `authorizationId + sessionId + method` match the active selection, senpi observed a `tool_call` for Native tool `skill` with `input.name === method`, the matching `tool_result` for the same `sessionId + toolCallId` completed successfully, and `setActivation` returned `saved | idempotent`.
+`WorkflowActivationEvidence` is one current record per `authorizationId + sessionId`. A successful later activation atomically replaces that session record. It is trusted only when `authorizationId + sessionId + method` match the active selection, Task 1 proved the observation channel, the adapter observed either (a) a successful `read` result for the selected Superpowers SKILL.md or (b) a trusted non-extension Native skill expansion for that method, and `setActivation` returned `saved | idempotent`. No `skill` tool is assumed.
 
 Decision rules are exact:
 
@@ -929,7 +931,7 @@ selection_required
 
 selected + exact matching current-session ActivationEvidence
 → already_active
-→ no duplicate skill invocation
+→ no duplicate Native skill activation request
 
 selected + no current-session ActivationEvidence
 → needs_activation
@@ -949,7 +951,7 @@ Cross-session recovery therefore has this exact flow:
 ```text
 recovered selection from prior session
 → needs_activation
-→ fresh current-session skill invocation
+→ fresh profile-proven current-session Native skill activation
 → persisted current-session ActivationEvidence
 → already_active
 ```
@@ -991,79 +993,88 @@ type ResolveOmoEffectiveConfigInput = {
 ---
 
 
-### Task 1: Lock the OmO Native / senpi Review-Interop Contract as a Runtime Regression Gate
+### Task 1: Lock the Superpowers v6.4.2 / OmO Native Activation, Dispatch, Review, and Batch Contract
 
-**Requirements / Design:** JUS5-COMP-01..03, JUS5-HARNESS-01..03, JUS5-REV-06..09, JUS5-CAT-05, JUS5-CORR-06..07, J5D-REVIEW-01..04, J5D-ROUTE-01.
+**Requirements / Design:** JUS5-COMP-01..03, JUS5-HARNESS-01..03, JUS5-ACT-01..04, JUS5-CAT-05, JUS5-CORR-02..07, JUS5-REV-06..09, J5D-ACT-01, J5D-CORR-02, J5D-ROUTE-01, J5D-REVIEW-01..04.
 
 **Files:**
-- Create: `tests/integration/justice-v5-review-interop-native-host.test.ts`
-- Create: `tests/fixtures/superpowers-v6.4.2-review-prompts.ts`
+- Create: `tests/integration/justice-v5-native-upstream-contract.test.ts`
+- Create: `tests/fixtures/superpowers-v6.4.2-native-contract.ts`
 - Production source: **none**
 
-**Interfaces:**
-- Consumes the fixed Design §14.2 Native contract:
-  - existing Superpowers Native `task` reviewer call;
-  - senpi `tool_call` with stable `toolCallId` and mutable `event.input`;
-  - original review prompt remains exact prefix;
-  - same-call `general → sp-review/sp-final-review` translation preserves XOR;
-  - exactly one Justice appendix is injected into that same prompt;
-  - matching `tool_result` is correlated by stable identity;
-  - Native `task_id` / child / process / DAG metadata is corroboration, never callback-order authority;
-  - no duplicate reviewer dispatch.
-- Produces runtime regression evidence only. It does not select/discover another architecture.
+**Interfaces / gate contract:**
+- Run against the pinned supported baselines, not a Justice-authored synthetic wire fixture:
+  - Superpowers v6.4.2 / commit `8ca22dba9a94f28898bbce59f2537ff4d87c747d`;
+  - OmO Native / senpi v5.1.2 / commit `d1ee37cfbbfa29c37691f67a62592e42071b19e9`.
+- Prove the selected-method activation observation surface:
+  - successful `read` result of the selected Superpowers `skills/<method>/SKILL.md`;
+  - trusted non-extension native skill input / expanded `<skill name="...">` where available;
+  - no required Native `skill` tool.
+- Capture the **actual** Superpowers generic implementation-worker dispatch and task/scoped/final-review dispatch emitted under OmO Native. Record tool name, target field/value shape, prompt field, and the stable identities Justice can observe.
+- Produce test evidence for a versioned `NativeSuperpowersDispatchProfile`; Tasks 2/7/10 may encode only the shape proven here.
+- If the actual dispatch does not reach a stable, in-place translatable OmO Native `task` surface, STOP. Do not manufacture `task(subagent_type="general")`, do not add a Justice-owned dispatcher, and return to Design review.
+- Prove Native batch ordering: input `tasks[index]` maps to result `details.items[index]`, with each item carrying its own `task_id`/target metadata. If this ordering is not stable, batch acceptance remains unsupported/`NOT_PROVEN` and the item-key design must be reconciled before Task 5.
+- For a profile-proven review `task` call, preserve the existing review-interop invariants: same call, exact original-prompt prefix, one appendix, XOR preserved, matching result correlated by stable identity, no duplicate reviewer.
 
-- [ ] **Step 1: Add the exact Superpowers v6.4.2 reviewer fixtures**
+- [ ] **Step 1: Build the exact upstream Native harness fixtures**
 
-Represent task review, scoped re-review, final whole-branch review, and supported generic Native routing encoding.
+Load the two pinned upstream baselines through the same Pi/senpi integration surfaces the supported runtime uses. The fixture may adapt environment setup, but MUST NOT hard-code the desired worker target or activation event.
 
 - [ ] **Step 2: Add RED/compatibility regression cases**
 
-In `tests/integration/justice-v5-review-interop-native-host.test.ts`:
+In `tests/integration/justice-v5-native-upstream-contract.test.ts`:
 
-- `task_review_enriches_existing_native_task_prompt_in_place`
-- `scoped_re_review_enriches_existing_native_task_prompt_in_place`
-- `final_review_enriches_existing_native_task_prompt_in_place`
-- `native_review_translation_preserves_category_subagent_xor`
-- `original_superpowers_prompt_remains_exact_prefix`
-- `duplicate_appendix_sentinel_is_fail_closed`
+- `native_contract_does_not_require_skill_tool`
+- `selected_skill_read_success_is_observable_activation`
+- `trusted_native_skill_expansion_is_observable_when_supported`
+- `extension_injected_skill_text_is_not_activation`
+- `captures_actual_superpowers_generic_worker_dispatch_shape`
+- `synthetic_opencode_general_encoding_is_not_native_evidence`
+- `captures_actual_task_review_dispatch_shape`
+- `captures_actual_scoped_re_review_dispatch_shape`
+- `captures_actual_final_review_dispatch_shape`
+- `profile_proven_review_prompt_can_be_enriched_in_place`
+- `profile_proven_review_translation_preserves_category_subagent_xor`
 - `matching_tool_result_is_attributed_by_session_and_tool_call_id`
 - `out_of_order_parallel_tool_results_do_not_cross_correlate_reviews`
-- `native_task_id_is_runtime_metadata_not_justice_task_identity`
-- `mass_ulw_metadata_never_replaces_review_call_identity`
+- `batch_input_index_matches_result_items_index`
+- `batch_items_expose_independent_task_ids`
+- `mass_ulw_metadata_never_replaces_call_or_item_identity`
 - `review_interop_uses_exactly_one_existing_superpowers_dispatch`
 
 Assertions:
-- exactly one existing Superpowers reviewer dispatch occurs;
-- `parentSessionId + toolCallId` are the review call identity;
-- prompt mutation occurs on the same `event.input` consumed by the task call;
-- original prompt remains byte-for-byte prefix;
-- exactly one appendix is present;
-- translated payload never contains both category and subagent_type;
+- no test passes solely because a hand-authored fixture says `subagent_type="general"`;
+- the captured dispatch profile is derived from the actual integrated upstream execution;
+- activation proof uses only a successful selected-skill read or a trusted Native skill expansion;
+- extension-manufactured text/pointers do not count as activation;
+- profile-proven review mutation occurs on the same Native call consumed by OmO;
+- original review prompt remains byte-for-byte prefix with exactly one appendix;
+- translated task payload never contains both category and subagent_type;
+- batch `tasks[index]` and `details.items[index]` retain stable item correspondence;
 - model/provider/reasoning/fallback are not rewritten;
-- parallel result order does not change attribution;
 - no Justice-owned child/reviewer is created.
 
-- [ ] **Step 3: Run the Native regression gate**
+- [ ] **Step 3: Run the Native upstream-contract gate**
 
 Run:
 
 ```bash
-bun run vitest run tests/integration/justice-v5-review-interop-native-host.test.ts
+bun run vitest run tests/integration/justice-v5-native-upstream-contract.test.ts
 ```
 
-Expected: PASS on the supported OmO Native / senpi fixture/runtime baseline.
+Expected: PASS on the supported pinned upstream baselines.
 
-Failure means upstream/runtime compatibility drift. STOP implementation and return to Design review; do not add Justice-owned reviewers and do not fall back to OpenCode-specific review delivery.
+Any failure in activation observability, actual generic/review dispatch shape, same-call mutability, or batch index stability is architecture-significant. STOP before Task 2 and return to Requirements/Design/Plan reconciliation.
 
-- [ ] **Step 4: Commit the regression evidence**
+- [ ] **Step 4: Commit the runtime evidence**
 
 ```bash
-git add tests/integration/justice-v5-review-interop-native-host.test.ts   tests/fixtures/superpowers-v6.4.2-review-prompts.ts
-git commit -m "test: lock Justice v5 OmO Native review interop"
+git add tests/integration/justice-v5-native-upstream-contract.test.ts \
+  tests/fixtures/superpowers-v6.4.2-native-contract.ts
+git commit -m "test: lock Justice v5 Native upstream contract"
 ```
 
 ---
-
 
 ### Task 2:
 
@@ -1100,6 +1111,17 @@ git commit -m "test: lock Justice v5 OmO Native review interop"
     | { readonly kind: "unrouted" }
     | { readonly kind: "invalid_both"; readonly category: string; readonly subagentType: string };
 
+  type NativeSuperpowersDispatchProfile = {
+    readonly schemaVersion: "justice-native-superpowers-dispatch-v1";
+    readonly superpowersCommit: string;
+    readonly omoCommit: string;
+    readonly toolName: "task";
+    readonly genericTarget:
+      | { readonly kind: "subagent"; readonly subagentType: string }
+      | { readonly kind: "unrouted" };
+    readonly reviewPromptField: "prompt";
+  };
+
   function parseOmoCategoryName(value: unknown): OmoCategoryName | null;
 
   function inspectTaskRoutingTarget(
@@ -1109,6 +1131,7 @@ git commit -m "test: lock Justice v5 OmO Native review interop"
   function translateTaskRouting(input: {
     readonly target: TaskRoutingTarget;
     readonly provenance: TaskRoutingProvenance;
+    readonly dispatchProfile: NativeSuperpowersDispatchProfile;
     readonly classification?: SemanticClassificationResult;
   }): SuperpowersRoutingTranslationResult;
   ```
@@ -1117,9 +1140,9 @@ git commit -m "test: lock Justice v5 OmO Native review interop"
   2. explicit non-empty category string → preserve byte-for-byte as `OmoCategoryName`; do not require membership in `TaskCategory` or `SpCategory`;
   3. non-Superpowers explicit subagent → preserve;
   4. recognized Superpowers non-generic specialized subagent (for example `explore`) → preserve;
-  5. recognized Superpowers new-worker `subagent_type="general"` + classified semantic intent → remove `subagent_type`, emit one mapped `sp-*` category;
-  6. recognized Superpowers new worker with no target + classified semantic intent → emit one mapped `sp-*` category;
-  7. invalid both-target / ambiguous provenance / ambiguous classification → `untrusted`.
+  5. recognized Superpowers new-worker target exactly matching `dispatchProfile.genericTarget` + classified semantic intent → remove only that profile-defined generic marker and emit one mapped `sp-*` category;
+  6. a profile whose proven generic target is `unrouted` + classified semantic intent → emit one mapped `sp-*` category;
+  7. target/profile mismatch, invalid both-target, ambiguous provenance, or ambiguous classification → `untrusted`.
 - `TaskCategory` is only the known/current built-in vocabulary for compatibility/doctor assertions; it is not the caller-owned wire namespace.
 - `parseOmoCategoryName` accepts every non-empty string and returns it unchanged; unknown-to-Justice names remain OmO-owned.
 - `translateTaskRouting` never chooses model/provider/reasoning/fallback and never mutates an OmO-owned Native `task_id`.
@@ -1455,16 +1478,29 @@ git commit -m "feat: project versioned conformance contracts"
     readonly executionMethod: "subagent-driven-development" | "executing-plans";
     readonly parentSessionId: string;
     readonly parentCallId: string;
+    readonly itemKind: "single" | "batch";
+    readonly batchItemIndex?: number;
+    readonly omoTaskId?: string;
     readonly childSessionId?: string;
     readonly omoContinuationSessionId?: string;
+    readonly dagRunId?: string;
+    readonly dagNodeId?: string;
     readonly dispatchRevision: string;
     readonly status: "pending" | "child_observed" | "terminal" | "untrusted";
   };
 
-  type ExecutionCorrelationKey = {
-    readonly parentSessionId: string;
-    readonly parentCallId: string;
-  };
+  type ExecutionCorrelationKey =
+    | {
+        readonly parentSessionId: string;
+        readonly parentCallId: string;
+        readonly itemKind: "single";
+      }
+    | {
+        readonly parentSessionId: string;
+        readonly parentCallId: string;
+        readonly itemKind: "batch";
+        readonly batchItemIndex: number;
+      };
   ```
 - Store path: `.justice/v5/execution-correlations.json`.
 - `ExecutionCorrelationStore` methods:
@@ -1472,7 +1508,8 @@ git commit -m "feat: project versioned conformance contracts"
   - `attachChild(key: ExecutionCorrelationKey, childSessionId: string): Promise<CorrelationMutationResult>`
   - `attachNativeTaskId(key: ExecutionCorrelationKey, taskId: string): Promise<CorrelationMutationResult>`
   - `markTerminal(key: ExecutionCorrelationKey): Promise<CorrelationMutationResult>`
-  - `findByCall(key: ExecutionCorrelationKey): Promise<ExecutionCorrelation | null>`
+  - `findByKey(key: ExecutionCorrelationKey): Promise<ExecutionCorrelation | null>`
+  - `findByParentCall(call: { readonly parentSessionId: string; readonly parentCallId: string }): Promise<readonly ExecutionCorrelation[]>`
   - `findTrustedByChildSession(childSessionId: string): Promise<ExecutionCorrelation | null>`
   - `attachDagIdentity(key: ExecutionCorrelationKey, dag: { readonly runId: string; readonly nodeId: string }): Promise<CorrelationMutationResult>`
 - `resolveSuperpowersImplementationTask(input: ResolveTaskIdentityInput): Promise<TaskIdentityResolution>`:
@@ -1486,11 +1523,13 @@ git commit -m "feat: project versioned conformance contracts"
 - [ ] **Step 1: Write RED correlation-store tests**
 
 Cover:
-- same `parentSessionId+parentCallId` is idempotent;
-- conflicting semantic task for same call → `untrusted`;
+- same single-item `parentSessionId+parentCallId+itemKind=single` is idempotent;
+- a batch parent call creates one distinct correlation per zero-based `batchItemIndex`;
+- conflicting semantic task for the same item-level key → `untrusted`;
 - child relation accepted only when parent relation agrees;
 - an unrelated OmO Native `task_id` cannot rebind semantic task;
-- trusted Native task/child metadata can reattach to the existing correlation;
+- batch `items[index].task_id` attaches only to the same `batchItemIndex`; the top-level batch `task_id` is never fanned out;
+- trusted Native task/child/DAG metadata can reattach only to the exact existing item correlation;
 - persistence failure → `persistence_failed`;
 - recovery uses durable file, not an ephemeral map.
 
@@ -1541,7 +1580,7 @@ git commit -m "feat: persist Justice execution correlation"
 
 **Interfaces:**
 - Consumes: `ExecutionCorrelationStore`, `resolveSuperpowersImplementationTask`, active `ApprovedArtifactChain`.
-- Produces runtime-neutral observations with `parentSessionId`, `parentCallId = toolCallId`, optional `omoTaskId`, `childSessionId`, batch/DAG provenance, and semantic correlation ID.
+- Produces runtime-neutral observations with `parentSessionId`, `parentCallId = toolCallId`, `itemKind`, required `batchItemIndex` for batch items, optional per-item `omoTaskId`, `childSessionId`, DAG provenance, and semantic correlation ID.
 - Senpi adapter maps Native events into Justice observations; core stores do not import harness SDK types.
 - Ephemeral adapter maps are caches only; recovery authority is durable `ExecutionCorrelationStore`.
 
@@ -1558,6 +1597,8 @@ Exact tests:
 - `correlation_persistence_failure_proceeds_runtime_but_not_evidence`
 - `recovers_task_call_from_durable_parent_session_tool_call_binding`
 - `out_of_order_parallel_tool_results_do_not_cross_correlate`
+- `batch_items_use_parent_call_plus_input_index_as_independent_identity`
+- `batch_result_items_index_attaches_only_matching_task_id`
 - `batch_items_require_independent_stable_identity_or_remain_not_proven`
 - `mass_ulw_dag_metadata_does_not_define_callback_order_as_dependency_order`
 
@@ -1630,8 +1671,8 @@ git commit -m "feat: bind OmO Native calls to Justice task identity"
 - review recognition happens on senpi `tool_call(task)` before Native task execution;
 - recognized task/scoped review → `review → sp-review`;
 - recognized final review → `final-review → sp-final-review`;
-- supported generic `subagent_type="general"` is removed and replaced by the matching Justice category on the same task input;
-- specialized non-generic routes remain caller-owned;
+- only the generic target exactly matching the Task-1-proven `NativeSuperpowersDispatchProfile` is removed/replaced by the matching Justice category on the same task input;
+- specialized non-generic routes remain caller-owned, and a target/profile mismatch is untrusted;
 - ambiguous/untrusted recognition is not translated as trusted routing;
 - no second task/reviewer is dispatched.
 
@@ -2032,17 +2073,17 @@ git commit -m "feat: gate acceptance on type-safe final evidence"
 - Extend `ImplementationArmResult` with `selection: WorkflowMethodSelection` and `activation: WorkflowActivationDecision`.
 - Extend `CanonicalWorkflowSkill` with `subagent-driven-development | executing-plans`.
 - Extend `WorkflowDirectiveInput` with `activation?: WorkflowActivationDecision`.
-- Extend `WorkflowNextAction` with `continue_superpowers | await_method_selection | report_activation_blocked`.
+- Extend `WorkflowNextAction` with `activate_native_skill | continue_superpowers | await_method_selection | report_activation_blocked`.
 - Implementation/implementation-arm directive mapping is exact:
-  - `needs_activation` → `requiredSkills=[selected method]`, `nextAction="invoke_skill"`;
-  - `already_active` → `requiredSkills=[]`, `nextAction="continue_superpowers"`; do not invoke the skill again;
+  - `needs_activation` → `requiredSkills=[selected method]`, `nextAction="activate_native_skill"`; the controller must use a Task-1-proven Native skill-system channel, not an assumed `skill` tool;
+  - `already_active` → `requiredSkills=[]`, `nextAction="continue_superpowers"`; do not request duplicate activation;
   - `method_selection_required` → `requiredSkills=[]`, `nextAction="await_method_selection"`;
   - `unavailable | conflict` → `requiredSkills=[]`, `nextAction="report_activation_blocked"`;
   - implementation stages no longer use `delegate_task` as a Justice-owned progression action.
-- OmO Native activation observation is exact: senpi `tool_call` for tool `skill` captures the selected method/session/toolCallId, and only the matching successful `tool_result` proves activation. Use current session + toolCallId plus active `authorizationId` to persist `WorkflowActivationEvidence`. The activation is trusted only after `setActivation` returns `saved | idempotent`; persistence failure is fail-closed for methodology evidence.
+- OmO Native activation observation follows the Task-1-proven Native skill-system contract: either a successful `read` result for the selected Superpowers SKILL.md under the discovered skill root, or a trusted non-extension Native skill expansion for the selected method. Persist the exact observation variant in `WorkflowActivationEvidence`; no `skill` tool call is assumed. The activation is trusted only after `setActivation` returns `saved | idempotent`; persistence failure is fail-closed for methodology evidence.
 - A worker call is trusted as selected-method execution only when `resolveWorkflowActivation` returns `already_active` for that same authorization/session/method.
 - Same-session persisted activation may satisfy `already_active` after restart; cross-session activation evidence is never reused.
-- Cross-session selection recovery flow is always: recovered selection → `needs_activation` → fresh current-session skill invocation → activation evidence.
+- Cross-session selection recovery flow is always: recovered selection → `needs_activation` → fresh profile-proven current-session Native skill activation → activation evidence.
 - Conflict policy:
   - explicit current selection wins over stale recovered selection, but requires fresh activation if current activation is another method;
   - recovered-only selection conflicting with current-session activation → `conflict` / untrusted;
@@ -2057,11 +2098,11 @@ explicit current selection
 > method_selection_required
 
 ActivationEvidence:
-successful current-session skill(name=selected method)
+successful current-session profile-proven selected-skill read or trusted Native skill expansion
 or exact persisted same authorization + same session + same method evidence
 ```
 
-Justice does not infer SDD vs inline from task complexity. If selected SDD lacks subagent capability, return `unavailable`; do not silently switch to executing-plans. If native skill invocation is unavailable, return `unavailable`.
+Justice does not infer SDD vs inline from task complexity. If selected SDD lacks subagent capability, return `unavailable`; do not silently switch to executing-plans. If Task 1 proves no trustworthy Native activation channel, return `unavailable`.
 **Interfaces — semantic classifier:**
 - Implement registry-defined `classifySemanticExecution(input): SemanticClassificationResult`.
 - Implementation input is the full Task 4 `ParsedSuperpowersTask` plus advisory cross-task dependency IDs; review input uses explicit `ReviewKindV5` semantics.
@@ -2082,7 +2123,7 @@ Justice does not infer SDD vs inline from task complexity. If selected SDD lacks
 **Interfaces — implementation routing:**
 - For an authorized SDD implementation task, `resolveSuperpowersImplementationTask` first proves TaskIdentity/provenance from the Superpowers task brief.
 - Task 10 then classifies that exact approved task and calls Task 2 `translateTaskRouting` on the existing parent task args.
-- Recognized new-worker `subagent_type="general"` becomes exactly one `sp-mechanical | sp-implementation | sp-integration | sp-deep | sp-architecture` category and removes `subagent_type`.
+- A recognized new-worker target exactly matching `NativeSuperpowersDispatchProfile.genericTarget` becomes exactly one `sp-mechanical | sp-implementation | sp-integration | sp-deep | sp-architecture` category and removes only the profile-defined generic marker.
 - Recognized specialized non-generic subagent routing is preserved.
 - Ambiguous classification may run fail-open on original generic routing where safe, but correlation/acceptance is untrusted/`NOT_PROVEN`.
 - Justice never directly dispatches the implementer; it only translates the already-existing Superpowers dispatch.
@@ -2112,8 +2153,11 @@ In `tests/core/workflow-activation-v5.test.ts`:
 - `explicit_inline_execution_activates_superpowers_executing_plans`
 - `explicit_method_precedes_recovered_selection`
 - `same_authorization_recovery_restores_method_selection_without_reselection`
-- `observed_skill_activation_does_not_request_duplicate_skill_invocation`
-- `cross_session_recovered_method_requires_fresh_skill_activation`
+- `observed_native_skill_activation_does_not_request_duplicate_activation`
+- `successful_selected_skill_read_produces_activation_evidence`
+- `trusted_native_skill_expansion_produces_activation_evidence`
+- `extension_injected_skill_text_cannot_produce_activation_evidence`
+- `cross_session_recovered_method_requires_fresh_native_skill_activation`
 - `same_session_activation_evidence_can_be_reused_only_when_identity_matches`
 - `recovered_method_does_not_by_itself_prove_current_session_activation`
 - `conflicting_recovered_and_current_activation_is_fail_closed`
@@ -2138,7 +2182,7 @@ In `tests/hooks/plan-bridge-implement.test.ts` add the historical boundary regre
 - `final_review_never_enters_implementation_semantics`
 
 Exact assertions:
-- completed approved Plan + all implementation tasks complete + existing Superpowers whole-branch reviewer → recognized `final-review`, semantic `final-review`, `category="sp-final-review"`, no `subagent_type="general"`, no implementation task selection/classifier path, and no cleanup before review recognition/correlation;
+- completed approved Plan + all implementation tasks complete + existing Superpowers whole-branch reviewer → recognized `final-review`, semantic `final-review`, `category="sp-final-review"`, the profile-defined generic target removed, no implementation task selection/classifier path, and no cleanup before review recognition/correlation;
 - task/scoped review → `sp-review`; final review → `sp-final-review`;
 - all three review kinds bypass implementation task-contract enrichment, implementation-only context/markers, implementation-only TDD/verification skill injection, and implementation prompt reconstruction;
 - original Superpowers review prompt/content is preserved, with Justice appendix enrichment only through Task 7 review interop;
@@ -2554,7 +2598,7 @@ Required corrections:
 - primary Justice v5 target: OmO Native / senpi.
 - OpenCode plugin edition: secondary/degraded compatibility only.
 - current Native config: effective `omo.jsonc`, `[native]`, profile, and safe effective agent-state view.
-- document selected-method activation via matched Native skill `tool_call/tool_result`.
+- document selected-method activation through the Task-1-proven Native skill-system observations (successful selected SKILL.md read and/or trusted native skill expansion); explicitly document that a `skill` tool is not required.
 - document same-call Native task category translation and review prompt enrichment.
 - document same-turn parallel and mass-ulw/DAG correlation rules.
 - document OmO as the sole concrete model/provider/runtime resolver.
