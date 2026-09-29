@@ -60,6 +60,16 @@ describe("formatWorkflowDirective", () => {
     expect(directive).toContain(marker);
   });
 
+  it("marks a clear Review Gate as terminal and waits for a separate implementation authorization", () => {
+    const directive = resolveWorkflowDirective({ stage: "review_clear" });
+    const formatted = formatWorkflowDirective({ stage: "review_clear" });
+
+    expect(directive.nextAction).toBe("await_human_approval");
+    expect(directive.requiredSkills).toEqual([]);
+    expect(directive.authority).toBe("external_unverified");
+    expect(formatted).toContain("[JUSTICE: STOP AFTER REVIEW; WAIT FOR USER]");
+  });
+
   it.each([
     ["review_remediation", "receiving-code-review"],
     ["implementation_arm", "subagent-driven-development"],

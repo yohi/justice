@@ -1171,7 +1171,6 @@ export class OpenCodeAdapter {
       ...subtaskPart,
       prompt: result.reviewerPrompt,
       description: "Justice plan review gate",
-      command: input.command,
     });
   }
 

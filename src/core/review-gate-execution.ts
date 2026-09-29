@@ -1,6 +1,7 @@
 import type { ReviewArtifactFindingV1 } from "./types";
 
 export const REVIEW_GATE_EXECUTION_MARKER = "[JUSTICE: PLAN REVIEW GATE EXECUTION]";
+export const REVIEW_GATE_WORKER_AGENT = "justice-review-worker";
 
 export interface ReviewGateWorkerResult {
   readonly schemaVersion: 1;

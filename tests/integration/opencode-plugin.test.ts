@@ -81,6 +81,10 @@ describe("OpenCodePlugin (integration)", () => {
       mode: "subagent",
       permission: { "*": "deny", task: "allow" },
     });
+    expect(config.agent?.["justice-review-worker"]).toMatchObject({
+      mode: "subagent",
+      permission: { "*": "deny", read: "allow" },
+    });
   });
 
   it("does not overwrite existing commands via the config hook", async () => {

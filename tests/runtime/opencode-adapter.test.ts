@@ -5,6 +5,10 @@ import {
 } from "../../src/runtime/opencode-adapter";
 import { OpenCodeNotifier } from "../../src/runtime/opencode-notifier";
 import { JusticePlugin } from "../../src/core/justice-plugin";
+import {
+  REVIEW_GATE_EXECUTION_MARKER,
+  REVIEW_GATE_WORKER_AGENT,
+} from "../../src/core/review-gate-execution";
 import { fakeInit } from "../helpers/fake-opencode-init";
 
 describe("OpenCodeAdapter skeleton", () => {
@@ -470,6 +474,44 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
     expect(output.args.category).toBe("sp-implementation");
   });
 
+  it("routes a marked Review Gate task to its dedicated worker agent", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const prompt = `${REVIEW_GATE_EXECUTION_MARKER}\nGate-ID: gate-123`;
+    vi.spyOn(justice, "handleEvent").mockResolvedValue({
+      action: "inject",
+      injectedContext: "[JUSTICE: PLAN REVIEW GATE CLAIMED]",
+      modifiedPayload: {
+        args: {
+          prompt,
+          subagent_type: REVIEW_GATE_WORKER_AGENT,
+          category: "sp-final-review",
+          run_in_background: false,
+        },
+      },
+    });
+    const output: { args: Record<string, unknown> } = {
+      args: {
+        prompt,
+        subagent_type: REVIEW_GATE_WORKER_AGENT,
+        load_skills: [],
+        run_in_background: false,
+      },
+    };
+
+    await adapter.onToolExecuteBefore(
+      { tool: "task", sessionID: "review-controller", callID: "review-worker" },
+      output,
+    );
+
+    expect(output.args).toMatchObject({
+      subagent_type: REVIEW_GATE_WORKER_AGENT,
+      run_in_background: false,
+    });
+    expect(output.args).not.toHaveProperty("category");
+  });
+
   it("removes caller category when explore subagent routing is present", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
@@ -895,7 +937,6 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
       type: "subtask",
       agent: "justice-review-controller",
       description: "Run the Justice Design / Implementation Plan review gate",
-      command: "justice-review-gate",
       model: { providerID: "test", modelID: "test" },
       prompt:
         "--design @docs/specs/design.md --plan @docs/plans/implementation-plan.md",
@@ -923,7 +964,6 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
       type: "subtask",
       agent: "justice-review-controller",
       description: "Justice plan review gate",
-      command: "/justice-review-gate",
       prompt: reviewerPrompt,
     });
   });

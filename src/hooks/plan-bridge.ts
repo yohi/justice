@@ -29,6 +29,7 @@ import { normalizeSafeRelativePath, TriggerDetector } from "../core/trigger-dete
 import type { ReviewGateRequest } from "../core/review-gate-command";
 import {
   REVIEW_GATE_EXECUTION_MARKER,
+  REVIEW_GATE_WORKER_AGENT,
   extractReviewGateIdFromTaskPrompt,
   parseReviewGateWorkerResult,
 } from "../core/review-gate-execution";
@@ -629,7 +630,7 @@ export class PlanBridge {
         "",
         "**Deterministic executor contract**:",
         "- This `/justice-review-gate` invocation is the explicit review-controller entrypoint; do NOT invoke another review Skill first.",
-        "- Invoke exactly one foreground `task()` reviewer using the exact prompt below. Justice forces its runtime category to `sp-final-review` and foreground execution.",
+        "- Invoke exactly one foreground `task()` reviewer using the exact prompt below and the dedicated `justice-review-worker` subagent type. Do not send a category: OmO category routing always selects Sisyphus-Junior. Justice records the marked task as `sp-final-review` and forces foreground execution internally.",
         "- Do NOT invoke another Skill named `code-review`.",
         "- Do NOT use CodeRabbit CLI as this Gate executor.",
         "- Do NOT call `justice_review` to start or execute this Gate; `justice_review` is query/resolve only.",
@@ -711,7 +712,7 @@ export class PlanBridge {
       modifiedPayload: {
         args: {
           ...normalizeTaskToolInput(event.payload.toolInput),
-          subagent_type: undefined,
+          subagent_type: REVIEW_GATE_WORKER_AGENT,
           category: "sp-final-review",
           run_in_background: false,
         },

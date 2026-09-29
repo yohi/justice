@@ -11,7 +11,6 @@ import { LoopDetectionHandler } from "../../src/hooks/loop-handler";
 import { createMockFileWriter, wirePlanBridgeAuthorization } from "../helpers/mock-file-system";
 import { TaskSplitter } from "../../src/core/task-splitter";
 import { parseWorkflowStartCommandArguments } from "../../src/core/trigger-detector";
-import { REVIEW_GATE_EXECUTION_MARKER } from "../../src/core/review-gate-execution";
 import type { JusticeNotifier } from "../../src/core/justice-notifier";
 import { WisdomStore } from "../../src/core/wisdom-store";
 import { makeWisdomDraft } from "../helpers/wisdom-draft-factory";
@@ -1333,7 +1332,7 @@ describe("PlanBridge", () => {
       expect(gateId).toBeDefined();
       expect(reviewerPrompt).toBeDefined();
       expect(started.guidance).toContain("exactly one foreground `task()` reviewer");
-      expect(started.guidance).toContain("runtime category to `sp-final-review`");
+      expect(started.guidance).toContain("Do not send a category");
       expect(started.guidance).toContain("Do NOT invoke another Skill named `code-review`");
       expect(started.guidance).toContain("Do NOT use CodeRabbit CLI");
       expect(started.guidance).toContain("Do NOT call `justice_review`");
@@ -1361,7 +1360,11 @@ describe("PlanBridge", () => {
         action: "inject",
         injectedContext: "[JUSTICE: PLAN REVIEW GATE CLAIMED]",
         modifiedPayload: {
-          args: { subagent_type: undefined, category: "sp-final-review", run_in_background: false },
+          args: {
+            subagent_type: "justice-review-worker",
+            category: "sp-final-review",
+            run_in_background: false,
+          },
         },
       });
 
@@ -1594,7 +1597,7 @@ describe("PlanBridge", () => {
       });
       expect(subsequentClaim).toMatchObject({
         action: "inject",
-        injectedContext: expect.stringContaining("no matching user-invoked pending Gate"),
+        injectedContext: expect.stringContaining("no unique matching user-invoked pending Gate"),
       });
       expect(observationHandler.handlePlanReviewGateResult).not.toHaveBeenCalled();
     });
