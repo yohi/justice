@@ -116,6 +116,43 @@ The Native adapter must support both ordinary delegated tasks and Native concurr
 
 Parallel completion order must never be used as semantic ordering authority.
 
+### JUS5-HARNESS-04 — Native contract evidence spike and production authorization boundary
+
+The pinned Superpowers / OmO Native compatibility run is an **architecture evidence spike**, not a production implementation gate that can self-authorize downstream source work.
+
+The spike may establish or invalidate architecture-critical facts including the actual Native dispatch tool/target, review call shape, activation channels, batch-index behavior, and Superpowers model-field behavior. Therefore:
+
+```text
+Fresh Review Gate approving the evidence-spike Plan
+→ Task 1 evidence spike only
+→ PASS/FAIL evidence receipt
+→ Requirements / Design / Plan reconciliation using the measured facts
+→ Fresh Review Gate + required human approval of the reconciled artifact chain
+→ only then Production Tasks 2–14
+```
+
+A Task 1 PASS MUST NOT directly authorize Production Task 2. A Task 1 result that changes or fills an architecture-critical compatibility value is not production authority until the three authoritative artifacts contain that value and the reconciled chain is reviewed/approved.
+
+### JUS5-HARNESS-05 — production compatibility-profile authority
+
+After the evidence spike is reconciled, the production Native compatibility profile MUST be a versioned **built-in Justice contract** with one explicit producer. Runtime discovery, ambient machine state, user config, and test fixtures MUST NOT become production authority for the Superpowers→OmO compatibility shape.
+
+The reconciled artifacts must fix at least:
+
+```text
+upstream Superpowers SHA
+upstream OmO SHA / senpi package version
+actual dispatch tool surface
+generic target kind/value
+review dispatch target
+review prompt field
+activation channel(s)
+batch index contract
+Superpowers model-field policy
+```
+
+If any required value remains unknown, Production Tasks 2–14 remain unauthorized.
+
 ## 5. Ownership invariants
 
 ### JUS5-OWN-01 — Superpowers
@@ -292,19 +329,24 @@ The static current built-in category list is compatibility/diagnostic vocabulary
 
 ### JUS5-CAT-05 — provenance-aware Superpowers routing translation
 
-Justice must distinguish caller provenance before applying the OmO XOR contract.
+Justice must distinguish caller provenance before applying the OmO target/model contracts.
 
 - a non-Superpowers caller's explicit `subagent_type` remains caller-owned and is preserved;
 - an explicit caller `category` is accepted as a caller-owned non-empty OmO category name and preserved byte-for-byte; Justice must not reject or translate it merely because it is outside Justice's static built-in category vocabulary;
-- a recognized Superpowers new-worker dispatch is eligible for Justice semantic translation only when it matches a versioned **NativeSuperpowersDispatchProfile** proven by a runtime regression against the supported Superpowers + OmO Native / senpi baseline;
+- an external/caller-owned concrete `model` remains caller-owned and is never removed merely to make Justice category translation possible;
+- a recognized Superpowers new-worker dispatch is eligible for Justice semantic translation only when it matches a versioned **NativeSuperpowersDispatchProfile** fixed in the reconciled Requirements / Design / Plan after the Task 1 evidence spike;
 - that profile records the actual Native tool surface and exact generic target encoding produced by the supported integration. Justice MUST NOT assume an OpenCode V1 encoding such as `subagent_type="general"` is also the Native encoding;
-- when the proven profile identifies a generic compatibility target on the Native `task` surface, Justice removes only that exact profile-defined generic marker and emits exactly one authoritative Justice semantic category;
+- model handling is part of the same profile. The profile model policy is either `absent` or a measured Superpowers-only `semantic_hint` for the `model` field;
+- `semantic_hint` is legal only when the evidence spike proves that the field is compatibility capability/role intent rather than an authoritative concrete-model requirement and proves that removing it before category translation preserves the supported integration semantics;
+- if a profile-recognized Superpowers model value is authoritative concrete-model intent, the category-translation profile is unsupported. Justice MUST NOT discard that intent;
+- for a supported profile-recognized generic dispatch, Justice removes only the profile-defined generic marker and, only for `semantic_hint`, the profile-defined Superpowers model hint before emitting exactly one authoritative Justice semantic category;
+- the translated category payload MUST pass the pinned OmO Native task target validator; trusted translation can never leave `category + model` together;
 - a recognized Superpowers explicit specialized non-generic target remains an explicit specialized route and is preserved without Justice category replacement;
 - if the supported runtime does not expose a stable, profile-proven generic dispatch that Justice can translate in place, the compatibility capability is unavailable/untrusted; Justice must not fabricate a `task` call or synthetic generic marker;
 - an OmO Native task lifecycle/control call (`task_send`, `task_output`, `task_cancel`, or equivalent) remains Native-owned and must not receive a newly selected worker category;
-- an ambiguous/untrusted Superpowers provenance or a dispatch shape that does not match the active NativeSuperpowersDispatchProfile must not be translated as trusted semantic routing.
+- an ambiguous/untrusted Superpowers provenance or a dispatch shape/model policy that does not match the active NativeSuperpowersDispatchProfile must not be translated as trusted semantic routing.
 
-Final wire payloads must still satisfy category/subagent_type XOR.
+Final wire payloads must still satisfy both OmO constraints: category/subagent_type XOR and category/model incompatibility.
 
 ### JUS5-CAT-06 — semantic execution classes
 
@@ -355,9 +397,9 @@ The runtime call may remain on its original generic path only under the existing
 
 Justice must not choose a concrete model/provider as an ambiguity fallback.
 
-### JUS5-CAT-09 — review and runtime mapping
+### JUS5-CAT-09 — review, runtime, and model-field mapping
 
-For the supported Superpowers v6.4.2 / OmO Native compatibility profile:
+For a **reconciled and Fresh-Review-approved** Superpowers v6.4.2 / OmO Native compatibility profile:
 
 ```text
 task/scoped reviewer      → review       → sp-review
@@ -368,7 +410,26 @@ implementation worker     → classifier   → sp-mechanical | sp-implementation
 
 Justice category is the semantic routing signal delivered to OmO. OmO effective configuration remains the authority that resolves that category to the actual agent/model/provider/reasoning/fallback behavior.
 
-Superpowers model-selection guidance is treated as semantic capability/complexity intent in this compatibility profile, not as Justice authority to select a concrete model. If a future supported Superpowers/Native contract exposes a concrete model field as wire authority, Justice must require an explicit compatibility-profile update rather than silently invent precedence.
+The production profile must carry an explicit model policy:
+
+```text
+absent
+  → the profile-recognized generic Superpowers dispatch has no model override;
+    category translation leaves no model field.
+
+semantic_hint(field=model, removeBeforeCategoryTranslation=true)
+  → Task 1 measured a Superpowers-owned model field whose supported compatibility
+    meaning is semantic capability/role intent;
+  → Justice removes that profile-defined hint together with the profile-defined
+    generic target before setting category=sp-*;
+  → OmO then resolves the concrete model from category configuration.
+```
+
+This exception applies **only** to a profile-recognized Superpowers generic dispatch. External/caller-owned concrete model choices remain untouched. Provider/reasoning/fallback fields remain caller/runtime-owned unless a future separately reviewed profile contract explicitly proves otherwise.
+
+If Task 1 observes a Superpowers model field that cannot be safely classified as a removable semantic hint, the Native category-translation profile is unsupported and requires Design reconciliation; Justice must not silently choose between Superpowers concrete-model intent and OmO category routing.
+
+The final translated profile-generic payload must be accepted by the pinned OmO Native target validator and therefore can never contain both `category` and `model`.
 
 ### JUS5-CTRL-01
 
@@ -869,7 +930,7 @@ Missing/malformed prompt, duplicate/conflicting sentinel, ambiguous review prove
 
 For parallel CodeMode execution, callback order is not authority: review correlation is keyed by stable call identity. For mass-ulw/workflow execution, DAG/run/node metadata may enrich provenance when observable but never substitutes for the review correlation.
 
-Justice must not change a caller-owned concrete model/provider/reasoning/fallback choice. Its only permitted routing mutation is the existing provenance-aware semantic category translation defined by JUS5-CAT-05..09 and JUS5-CORR-06.
+Justice must preserve external/caller-owned concrete model/provider/reasoning/fallback choices. For a profile-recognized Superpowers generic dispatch only, the reconciled NativeSuperpowersDispatchProfile may additionally remove the exact Superpowers `model` field when—and only when—its model policy is the Task-1-proven `semantic_hint` policy from JUS5-CAT-05/JUS5-CAT-09. No other caller-owned runtime field may be rewritten.
 
 ### JUS5-REV-08 — Structured review result, current-dispatch finding continuity, and final evidence closure
 
@@ -1528,3 +1589,4 @@ Justice v5 is acceptable only if E2E evidence proves at least:
 23. mass-ulw/workflow DAG observations preserve independent task provenance without deriving dependency order from event arrival.
 24. an existing Superpowers reviewer receives the Conformance Contract through the same Native `task` call, without a duplicate dispatch.
 25. Native effective configuration uses user/project + `[native]` + profile precedence and does not depend on an OpenCode profile directory.
+26. profile-recognized Superpowers category translation never produces OmO-invalid `category + model`, while external caller-owned model routing remains unchanged.

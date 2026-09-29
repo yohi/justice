@@ -12,6 +12,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-27-justice-v5-semantic-control-plane-design.md`
 
+**Execution status:** **PRE-PRODUCTION EVIDENCE SPIKE ONLY.** This revision may authorize Task 1 test/harness work after review, but it does **not** authorize Production Tasks 2–14. A Task 1 PASS must be reconciled into Requirements / Design / Plan and pass a new Fresh Review Gate + required human approval first.
+
 **Implementation Baseline:** `master @ a67af6e47560d2bb7e6fe25d28dc9e644860e7ed`
 
 **Historical Compatibility Reference:** Justice `v4.2.0` is a side-branch historical compatibility/regression reference only. It is **not** the Justice v5 implementation base. Do not merge or wholesale cherry-pick `v4.2.0` before implementing this Plan. Carry forward only regression contracts explicitly incorporated below.
@@ -42,7 +44,7 @@
   - `blocking quality findings == 0`
 - Do not manually set the package release version; the repository's release automation remains responsible for release versioning.
 - Every production-code task follows RED → GREEN → focused verification → full task test → commit.
-- Task 1 is the test-only runtime contract gate for OmO Native v5.1.x / senpi / Superpowers v6.4.2 activation, generic worker/reviewer dispatch, review interop, and batch item identity. Production Tasks 2–14 MUST NOT begin until it passes. Failure means upstream compatibility drift: STOP and return to artifact reconciliation; do not synthesize a `general` target, `skill` tool, or Justice-owned reviewer fallback.
+- Task 1 is a test-only **upstream evidence spike** for OmO Native v5.1.2 / senpi / Superpowers v6.4.2 activation, generic worker/reviewer dispatch, model-field behavior, review interop, and batch item identity. Task 1 PASS does NOT authorize Production Tasks 2–14. After PASS, STOP, reconcile the measured profile into Requirements / Design / Plan, obtain a Fresh Review Gate and required human approval, and only then start Task 2. Failure also returns to artifact reconciliation. Do not synthesize a generic target, `skill` tool, model policy, or Justice-owned reviewer fallback.
 - All production implementation tasks start from `master @ a67af6e47560d2bb7e6fe25d28dc9e644860e7ed`. Justice `v4.2.0` is not a merge/cherry-pick prerequisite and does not replace this base.
 
 ## Review Focus
@@ -98,13 +100,29 @@ New focused modules:
 - `src/core/omo-effective-config.ts` — OmO v5.1 Native file-layer + `[native]`/profile effective config and safe agent-state resolver.
 - `src/core/v5-persistence.ts` — recognized v4 schema classification and v5 migration diagnostics.
 - `src/runtime/senpi-adapter.ts` — OmO Native / senpi ExtensionAPI adapter for tool/session observation, routing translation, review enrichment, and runtime correlation.
+- `src/runtime/native-superpowers-profile.ts` — **post-Task-1-reconciliation production authority** for the exact versioned built-in Superpowers→OmO Native dispatch/model compatibility profile; it MUST NOT perform runtime discovery or read profile authority from config/test fixtures.
 
 Existing files retain their existing responsibility unless a task below explicitly changes it.
 
 
-## Native Runtime Contract Evidence Gate
+## Native Runtime Contract Evidence Spike
 
-The architecture-critical Native activation, dispatch, review-transport, and batch-correlation seams are **not inferred from OpenCode mappings**. Task 1 must lock them against the exact supported upstream baselines before any production task begins.
+This Plan intentionally separates **evidence acquisition** from **production authority**.
+
+Task 1 measures architecture-critical facts from exact pinned upstreams. Its output is `NativeSuperpowersDispatchEvidence`, not the production `NativeSuperpowersDispatchProfile`.
+
+```text
+Fresh Review Gate on this pre-spike revision
+→ Task 1 only
+→ evidence receipt PASS/FAIL
+→ STOP
+→ reconcile Requirements / Design / Plan with exact measured values
+→ Fresh Review Gate + required human approval
+→ reconciled Task 2 creates the built-in production profile
+→ Production Tasks 2–14
+```
+
+A PASS must never flow directly into Task 2. Until the post-spike artifact reconciliation is approved, all Production Tasks 2–14 remain unauthorized.
 
 ### Audited OmO Native / senpi host surface
 
@@ -114,7 +132,7 @@ The audited senpi extension surface provides:
 - matching `tool_result` after tool execution;
 - stable `toolCallId` on tool execution events;
 - current extension/session context, including the session manager and effective agent directory;
-- Native `task` tooling owned by OmO, with `category` / `subagent_type` XOR and OmO-owned `task_id`;
+- Native `task` tooling owned by OmO, with `category` / `subagent_type` XOR, `category + model` rejection, and OmO-owned `task_id`;
 - batched `task({tasks:[...]})` results with per-item detail records;
 - same-turn parallel tool execution, so result arrival order is not identity;
 - Native workflow/DAG execution whose run/node identity is runtime-owned;
@@ -122,18 +140,40 @@ The audited senpi extension surface provides:
 
 Justice MUST bind observations by stable identities rather than callback order.
 
-### Task 1 proof obligations
+### Task 1 evidence obligations
 
-Task 1 loads/executes the exact Superpowers v6.4.2 Pi adapter and OmO Native / senpi baseline and produces runtime evidence for all of the following before Production Task 2:
+Task 1 must emit one machine-readable receipt containing all of:
 
-1. **activation seam** — prove successful selected `SKILL.md` reads and/or trusted native `/skill:` expansion as observable activation channels; prove that no Justice contract requires a `skill` tool;
-2. **generic worker dispatch** — capture the actual Superpowers→Native dispatch tool and target shape. No synthetic `subagent_type="general"` fixture is accepted as evidence;
-3. **review dispatch** — capture the actual task/scoped/final review dispatch and prove whether same-call prompt enrichment/category translation is supported;
-4. **batch identity** — prove input `tasks[index]` corresponds to result `details.items[index]` before `batchItemIndex` is trusted as an item-level join key.
+1. **activation seam** — successful selected `SKILL.md` read and/or trusted native `/skill:` expansion channels actually observable;
+2. **generic worker dispatch** — actual Superpowers→Native dispatch tool and target kind/value; no OpenCode `general` assumption;
+3. **review dispatch** — actual task/scoped/final review target plus prompt field and same-call mutation capability;
+4. **model behavior** — whether the profile-recognized Superpowers dispatch carries `model`, the observed meaning/value class, whether it is safely classifiable as a removable semantic capability hint, and the result of OmO target validation after proposed category translation;
+5. **batch identity** — input `tasks[index]` ↔ result `details.items[index]` stability and per-item `task_id`;
+6. exact Superpowers / OmO commits, pinned senpi package version, Bun version, host platform, and hashes of the built OmO extension + evidence driver.
 
-The resulting versioned `NativeSuperpowersDispatchProfile` is the only authority Tasks 2/7/10 may use for generic Native routing. If the observed Superpowers runtime uses a different tool surface, lacks a stable generic target, or otherwise cannot be translated in place without Justice taking over orchestration, Task 1 fails and the Plan returns to Design review.
+The evidence receipt is not imported by production runtime and is not production configuration.
 
-For review transport, Justice may enrich the original Superpowers reviewer call only when Task 1 proves that the actual Native reviewer dispatch reaches a mutable OmO Native `task` call. The original prompt remains an exact prefix, the pending correlation is durable, and Justice never creates a second reviewer.
+### Post-spike reconciliation contract
+
+After Task 1 PASS, update only the authoritative artifacts needed to fix the measured values. The reconciled profile must specify concrete:
+
+```text
+toolName
+genericTarget.kind
+genericTarget value (when applicable)
+reviewTarget
+reviewPromptField
+activationChannels
+batchIndexContract
+modelPolicy
+upstream commits / senpi version
+```
+
+The reconciled Plan must define Task 2 as the sole producer of the built-in profile in `src/runtime/native-superpowers-profile.ts`. Runtime discovery, user config, ambient installs, and Task 1 fixtures/receipts are never production authority.
+
+If `modelPolicy=semantic_hint`, the profile must also state that the exact Superpowers `model` hint is removed before `category=sp-*` and that the resulting payload passes OmO `category_with_model` validation. If the model is authoritative concrete-model intent, the profile is unsupported and Design reconciliation is required.
+
+For review transport, Justice may enrich the original Superpowers reviewer call only when Task 1 proves the actual Native reviewer dispatch reaches a mutable OmO Native `task` call. The original prompt remains an exact prefix, the pending correlation is durable, and Justice never creates a second reviewer.
 
 ### Native configuration baseline
 
@@ -149,7 +189,7 @@ user/project file merge
 
 The effective Native agent directory (normally `~/.omo/agent`, subject to the runtime's supported override) provides separate state such as `settings.json`, `auth.json`, and `models.json`. Justice may inspect safe metadata/state projections but never persist or emit authentication secrets.
 
-Task 1 is a runtime regression/replay gate for this already-selected Native architecture. A failure is upstream/runtime compatibility drift, not permission to invent a different architecture.
+Task 1 is an architecture evidence spike. PASS and FAIL are both evidence outcomes: PASS still requires artifact reconciliation and a Fresh Review Gate before production, while FAIL requires reconciliation of the unsupported/mismatched architecture. Neither outcome permits the Task 1 implementer to design a production profile in source code.
 
 ## Canonical Cross-Task Interface Registry
 
@@ -993,46 +1033,146 @@ type ResolveOmoEffectiveConfigInput = {
 ---
 
 
-### Task 1: Lock the Superpowers v6.4.2 / OmO Native Activation, Dispatch, Review, and Batch Contract
+### Task 1: Measure the Pinned Superpowers v6.4.2 / OmO Native 5.1.2 Contract
 
-**Requirements / Design:** JUS5-COMP-01..03, JUS5-HARNESS-01..03, JUS5-ACT-01..04, JUS5-CAT-05, JUS5-CORR-02..07, JUS5-REV-06..09, J5D-ACT-01, J5D-CORR-02, J5D-ROUTE-01, J5D-REVIEW-01..04.
+**Phase:** EVIDENCE SPIKE ONLY — no production source, no Production Task 2 continuation.
+
+**Requirements / Design:** JUS5-COMP-01..03, JUS5-HARNESS-01..05, JUS5-ACT-01..04, JUS5-CAT-05, JUS5-CAT-09, JUS5-CORR-02..07, JUS5-REV-06..09, J5D-ACT-01, J5D-PROFILE-01, J5D-CORR-02, J5D-ROUTE-01, J5D-REVIEW-01..04.
 
 **Files:**
+- Create: `tests/integration/helpers/native-upstream-harness.ts`
 - Create: `tests/integration/justice-v5-native-upstream-contract.test.ts`
-- Create: `tests/fixtures/superpowers-v6.4.2-native-contract.ts`
 - Production source: **none**
+- CI/config: **none**
+- Do NOT create a hand-authored dispatch-target fixture.
 
-**Interfaces / gate contract:**
-- Run against the pinned supported baselines, not a Justice-authored synthetic wire fixture:
-  - Superpowers v6.4.2 / commit `8ca22dba9a94f28898bbce59f2537ff4d87c747d`;
-  - OmO Native / senpi v5.1.2 / commit `d1ee37cfbbfa29c37691f67a62592e42071b19e9`.
-- Prove the selected-method activation observation surface:
-  - successful `read` result of the selected Superpowers `skills/<method>/SKILL.md`;
-  - trusted non-extension native skill input / expanded `<skill name="...">` where available;
-  - no required Native `skill` tool.
-- Capture the **actual** Superpowers generic implementation-worker dispatch and task/scoped/final-review dispatch emitted under OmO Native. Record tool name, target field/value shape, prompt field, and the stable identities Justice can observe.
-- Produce test evidence for a versioned `NativeSuperpowersDispatchProfile`; Tasks 2/7/10 may encode only the shape proven here.
-- If the actual dispatch does not reach a stable, in-place translatable OmO Native `task` surface, STOP. Do not manufacture `task(subagent_type="general")`, do not add a Justice-owned dispatcher, and return to Design review.
-- Prove Native batch ordering: input `tasks[index]` maps to result `details.items[index]`, with each item carrying its own `task_id`/target metadata. If this ordering is not stable, batch acceptance remains unsupported/`NOT_PROVEN` and the item-key design must be reconciled before Task 5.
-- For a profile-proven review `task` call, preserve the existing review-interop invariants: same call, exact original-prompt prefix, one appendix, XOR preserved, matching result correlated by stable identity, no duplicate reviewer.
+**Canonical harness construction — the only permitted Task 1 method**
 
-- [ ] **Step 1: Build the exact upstream Native harness fixtures**
+Host scope:
+- canonical evidence host: Linux x64;
+- Bun: exactly `1.4.2` (the pinned OmO upstream CI toolchain);
+- Node/Git may be host-provided but their versions are recorded in the receipt;
+- use a fresh OS temp directory created by the helper; never use installed user OmO/Senpi/Superpowers state.
 
-Load the two pinned upstream baselines through the same Pi/senpi integration surfaces the supported runtime uses. The fixture may adapt environment setup, but MUST NOT hard-code the desired worker target or activation event.
+Acquisition is networked and allowed **only during Task 1 preparation**:
 
-- [ ] **Step 2: Add RED/compatibility regression cases**
+```text
+Superpowers repository:
+  https://github.com/obra/superpowers.git
+  commit 8ca22dba9a94f28898bbce59f2537ff4d87c747d
+
+OmO repository:
+  https://github.com/code-yeongyu/oh-my-openagent.git
+  commit d1ee37cfbbfa29c37691f67a62592e42071b19e9
+```
+
+The helper MUST use this algorithm and no npm/git-package substitute:
+
+```bash
+git clone --filter=blob:none --no-checkout https://github.com/obra/superpowers.git "$TMP/superpowers"
+git -C "$TMP/superpowers" fetch --depth=1 origin 8ca22dba9a94f28898bbce59f2537ff4d87c747d
+git -C "$TMP/superpowers" checkout --detach 8ca22dba9a94f28898bbce59f2537ff4d87c747d
+
+git clone --filter=blob:none --no-checkout https://github.com/code-yeongyu/oh-my-openagent.git "$TMP/omo"
+git -C "$TMP/omo" fetch --depth=1 origin d1ee37cfbbfa29c37691f67a62592e42071b19e9
+git -C "$TMP/omo" checkout --detach d1ee37cfbbfa29c37691f67a62592e42071b19e9
+
+test "$(git -C "$TMP/superpowers" rev-parse HEAD)" = "8ca22dba9a94f28898bbce59f2537ff4d87c747d"
+test "$(git -C "$TMP/omo" rev-parse HEAD)" = "d1ee37cfbbfa29c37691f67a62592e42071b19e9"
+test "$(bun --version)" = "1.4.2"
+
+(cd "$TMP/omo" && bun install --frozen-lockfile)
+(cd "$TMP/omo" && bun run build:senpi-plugin)
+```
+
+Pinned runtime entries:
+- Senpi CLI: `$TMP/omo/node_modules/@code-yeongyu/senpi/dist/cli.js` — its package version must equal the OmO-pinned `2026.9.29-4`;
+- OmO extension: `$TMP/omo/packages/omo-senpi/plugin/extensions/omo.js`;
+- Superpowers Pi package: `$TMP/superpowers`, loaded through the Pi/Senpi temporary-package `-e <package-root>` surface documented by Superpowers;
+- if Senpi does not honor that exact Pi package-loading surface, Task 1 FAILS. Do not switch to a different install/loading mechanism inside the task.
+
+Runtime isolation:
+- helper creates isolated `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_STATE_HOME`, `SENPI_CODING_AGENT_DIR`, `PI_CODING_AGENT_DIR`, and `OMO_AGENT_DIR` under the temp root;
+- set `OMO_DISABLE_TELEMETRY=1` and `DO_NOT_TRACK=1`;
+- configure only a local `mock/mock-model` provider in the isolated `models.json`;
+- the helper owns a local deterministic OpenAI-compatible fake-model server and records every request/tool schema;
+- the deterministic driver may script user goals and ordinary assistant text, but MUST NOT hard-code a desired dispatch tool name, `category`, `subagent_type`, generic target value, or model-removal result. Those are observations/assertions derived from the integrated upstream request/tool surface. If they cannot be established without hard-coding, the corresponding contract is NOT_PROVEN and Task 1 fails;
+- after acquisition/install, runtime network access is not required and no real provider credentials are read.
+
+Canonical host invocation:
+
+```text
+<bun-1.4.2> <OMO_ROOT>/node_modules/@code-yeongyu/senpi/dist/cli.js
+  --mode rpc
+  --multi-session
+  --listen unix://<temp>/rpc.sock
+  --provider mock
+  --model mock-model
+  --extension <OMO_ROOT>/packages/omo-senpi/plugin/extensions/omo.js
+  -e <SUPERPOWERS_ROOT>
+```
+
+Cleanup is mandatory in `finally`: terminate the complete spawned process group, close the local fake-model server/socket, remove the temp tree, and assert no process whose argv references the temp root survives.
+
+**Network / CI policy**
+- Task 1 is an explicitly invoked evidence spike, not part of normal offline unit/integration CI and requires `JUSTICE_NATIVE_UPSTREAM_SPIKE=1`;
+- without that environment variable the spike test reports SKIP, never PASS evidence;
+- no CI workflow/config change is made by Task 1;
+- the canonical evidence command below is the only PASS-authoritative run;
+- post-reconciliation production tests must be hermetic and consume the built-in profile, not rerun network discovery.
+
+**Evidence type**
+
+Task 1 emits an untracked receipt at `<temp-parent>/justice-v5-native-profile-evidence.json` before cleanup/copy-out. The test copies the sanitized receipt to the path supplied by `JUSTICE_NATIVE_UPSTREAM_EVIDENCE_OUT`. The receipt is evidence input for artifact reconciliation only; production code must never read it.
+
+```ts
+type NativeSuperpowersModelEvidence =
+  | { readonly kind: "absent" }
+  | {
+      readonly kind: "observed_model";
+      readonly field: "model";
+      readonly observedValues: readonly string[];
+      readonly semanticHintSafe: boolean;
+      readonly omoCategoryTranslationAccepted: boolean;
+    };
+
+type NativeSuperpowersDispatchEvidence = {
+  readonly superpowersCommit: "8ca22dba9a94f28898bbce59f2537ff4d87c747d";
+  readonly omoCommit: "d1ee37cfbbfa29c37691f67a62592e42071b19e9";
+  readonly senpiVersion: "2026.9.29-4";
+  readonly bunVersion: "1.4.2";
+  readonly toolName: string;
+  readonly genericTarget: unknown;
+  readonly reviewTarget: unknown;
+  readonly reviewPromptField: string;
+  readonly activationChannels: readonly string[];
+  readonly batchIndexStable: boolean;
+  readonly modelEvidence: NativeSuperpowersModelEvidence;
+  readonly translatedTargetValidation: "accepted" | "rejected" | "not_proven";
+};
+```
+
+- [ ] **Step 1: Implement the canonical acquisition/host helper**
+
+Implement exactly the construction above in `tests/integration/helpers/native-upstream-harness.ts`. Any SHA/version mismatch is a hard failure.
+
+- [ ] **Step 2: Add evidence-spike cases**
 
 In `tests/integration/justice-v5-native-upstream-contract.test.ts`:
 
+- `pinned_upstream_shas_and_senpi_version_are_exact`
 - `native_contract_does_not_require_skill_tool`
 - `selected_skill_read_success_is_observable_activation`
 - `trusted_native_skill_expansion_is_observable_when_supported`
 - `extension_injected_skill_text_is_not_activation`
 - `captures_actual_superpowers_generic_worker_dispatch_shape`
-- `synthetic_opencode_general_encoding_is_not_native_evidence`
+- `opencode_general_encoding_is_not_assumed_as_native_evidence`
 - `captures_actual_task_review_dispatch_shape`
 - `captures_actual_scoped_re_review_dispatch_shape`
 - `captures_actual_final_review_dispatch_shape`
+- `captures_superpowers_model_field_behavior`
+- `proposed_profile_translation_passes_omo_target_validation`
+- `category_translation_never_retains_conflicting_model`
 - `profile_proven_review_prompt_can_be_enriched_in_place`
 - `profile_proven_review_translation_preserves_category_subagent_xor`
 - `matching_tool_result_is_attributed_by_session_and_tool_call_id`
@@ -1043,36 +1183,52 @@ In `tests/integration/justice-v5-native-upstream-contract.test.ts`:
 - `review_interop_uses_exactly_one_existing_superpowers_dispatch`
 
 Assertions:
-- no test passes solely because a hand-authored fixture says `subagent_type="general"`;
-- the captured dispatch profile is derived from the actual integrated upstream execution;
+- no test passes solely because a hand-authored fixture supplies a generic target;
+- actual dispatch/model evidence is taken from the integrated pinned upstream surface;
 - activation proof uses only a successful selected-skill read or a trusted Native skill expansion;
 - extension-manufactured text/pointers do not count as activation;
-- profile-proven review mutation occurs on the same Native call consumed by OmO;
-- original review prompt remains byte-for-byte prefix with exactly one appendix;
-- translated task payload never contains both category and subagent_type;
+- if `model` is present, the receipt records whether it can safely be a semantic hint; a concrete/unsafe model makes the proposed category profile unsupported;
+- any proposed profile-generic category translation must be accepted by OmO target validation and must not retain `model`;
+- external caller-owned model preservation is separately asserted in Production Task 2 and is not weakened by this compatibility probe;
 - batch `tasks[index]` and `details.items[index]` retain stable item correspondence;
-- model/provider/reasoning/fallback are not rewritten;
 - no Justice-owned child/reviewer is created.
 
-- [ ] **Step 3: Run the Native upstream-contract gate**
+- [ ] **Step 3: Run the canonical evidence spike**
 
-Run:
+Run on Linux x64 with Bun 1.4.2:
 
 ```bash
+JUSTICE_NATIVE_UPSTREAM_SPIKE=1 \
+JUSTICE_NATIVE_UPSTREAM_EVIDENCE_OUT=/tmp/justice-v5-native-profile-evidence.json \
 bun run vitest run tests/integration/justice-v5-native-upstream-contract.test.ts
 ```
 
-Expected: PASS on the supported pinned upstream baselines.
+Expected:
+- **PASS** only when every required field in `NativeSuperpowersDispatchEvidence` is positively established and the proposed translated target is OmO-validator-accepted;
+- otherwise **FAIL / NOT_PROVEN**, which is architecture evidence and blocks production.
 
-Any failure in activation observability, actual generic/review dispatch shape, same-call mutability, or batch index stability is architecture-significant. STOP before Task 2 and return to Requirements/Design/Plan reconciliation.
-
-- [ ] **Step 4: Commit the runtime evidence**
+- [ ] **Step 4: Commit Task 1 test/harness only**
 
 ```bash
-git add tests/integration/justice-v5-native-upstream-contract.test.ts \
-  tests/fixtures/superpowers-v6.4.2-native-contract.ts
-git commit -m "test: lock Justice v5 Native upstream contract"
+git add tests/integration/helpers/native-upstream-harness.ts \
+  tests/integration/justice-v5-native-upstream-contract.test.ts
+git commit -m "test: measure Justice v5 Native upstream contract"
 ```
+
+Do not add the evidence receipt to production runtime inputs.
+
+- [ ] **Step 5: STOP for artifact reconciliation and Fresh Review**
+
+Even after PASS:
+
+1. read the sanitized evidence receipt;
+2. update Requirements / Design / Plan with the exact measured profile values, including model policy;
+3. replace every provisional profile statement with concrete values;
+4. define the exact built-in `src/runtime/native-superpowers-profile.ts` constant/factory contract in the reconciled Plan;
+5. obtain a Fresh Superpowers Review Gate and required human re-approval;
+6. only then may Task 2 begin.
+
+Task 1 never directly hands an inferred profile to production code.
 
 ---
 
@@ -1084,6 +1240,7 @@ git commit -m "test: lock Justice v5 Native upstream contract"
 
 **Files:**
 - Modify: `src/core/types.ts`
+- Create: `src/runtime/native-superpowers-profile.ts` — exact built-in profile values copied from the Fresh-Review-approved post-Task-1 artifacts; no runtime discovery/config/test-fixture authority
 - Modify: `src/core/task-packager.ts`
 - Modify: `src/core/omo-category-mapper.ts`
 - Test: `tests/core/v5-task-routing-contract.test.ts`
@@ -1111,16 +1268,33 @@ git commit -m "test: lock Justice v5 Native upstream contract"
     | { readonly kind: "unrouted" }
     | { readonly kind: "invalid_both"; readonly category: string; readonly subagentType: string };
 
+  type NativeSuperpowersModelPolicy =
+    | { readonly kind: "absent" }
+    | {
+        readonly kind: "semantic_hint";
+        readonly field: "model";
+        readonly removeBeforeCategoryTranslation: true;
+      };
+
   type NativeSuperpowersDispatchProfile = {
     readonly schemaVersion: "justice-native-superpowers-dispatch-v1";
     readonly superpowersCommit: string;
     readonly omoCommit: string;
+    readonly senpiVersion: string;
     readonly toolName: "task";
     readonly genericTarget:
       | { readonly kind: "subagent"; readonly subagentType: string }
       | { readonly kind: "unrouted" };
+    readonly reviewTarget: TaskRoutingTarget;
     readonly reviewPromptField: "prompt";
+    readonly activationChannels: readonly ("skill_read" | "native_skill_input")[];
+    readonly batchIndexContract: "input_index_matches_result_items_index";
+    readonly modelPolicy: NativeSuperpowersModelPolicy;
   };
+
+  // Production authority after post-Task-1 artifact reconciliation:
+  declare const NATIVE_SUPERPOWERS_DISPATCH_PROFILE: NativeSuperpowersDispatchProfile;
+  declare function getNativeSuperpowersDispatchProfile(): NativeSuperpowersDispatchProfile;
 
   function parseOmoCategoryName(value: unknown): OmoCategoryName | null;
 
@@ -1140,12 +1314,14 @@ git commit -m "test: lock Justice v5 Native upstream contract"
   2. explicit non-empty category string → preserve byte-for-byte as `OmoCategoryName`; do not require membership in `TaskCategory` or `SpCategory`;
   3. non-Superpowers explicit subagent → preserve;
   4. recognized Superpowers non-generic specialized subagent (for example `explore`) → preserve;
-  5. recognized Superpowers new-worker target exactly matching `dispatchProfile.genericTarget` + classified semantic intent → remove only that profile-defined generic marker and emit one mapped `sp-*` category;
-  6. a profile whose proven generic target is `unrouted` + classified semantic intent → emit one mapped `sp-*` category;
-  7. target/profile mismatch, invalid both-target, ambiguous provenance, or ambiguous classification → `untrusted`.
+  5. recognized Superpowers new-worker target exactly matching `dispatchProfile.genericTarget` + classified semantic intent → remove only that profile-defined generic marker; if `dispatchProfile.modelPolicy.kind === "semantic_hint"`, also remove only the profile-recognized Superpowers `model` hint; emit one mapped `sp-*` category;
+  6. a profile whose proven generic target is `unrouted` + classified semantic intent follows the same model-policy rule before emitting one mapped `sp-*` category;
+  7. external/caller-owned concrete `model` is preserved and never stripped to force category translation;
+  8. translated profile-generic payload with `category` must contain no `model` and must satisfy OmO Native target validation;
+  9. target/profile/model-policy mismatch, invalid both-target, ambiguous provenance, or ambiguous classification → `untrusted`.
 - `TaskCategory` is only the known/current built-in vocabulary for compatibility/doctor assertions; it is not the caller-owned wire namespace.
 - `parseOmoCategoryName` accepts every non-empty string and returns it unchanged; unknown-to-Justice names remain OmO-owned.
-- `translateTaskRouting` never chooses model/provider/reasoning/fallback and never mutates an OmO-owned Native `task_id`.
+- `translateTaskRouting` never chooses a concrete model/provider/reasoning/fallback and never mutates an OmO-owned Native `task_id`. Its only model mutation is removing the exact profile-recognized Superpowers `model` hint when `modelPolicy.kind === "semantic_hint"`; external/caller-owned concrete model values are preserved.
 - `normalizeTaskToolInput(InPlace)` preserves a legitimate OmO Native `task_id` unchanged.
 - `enrichTaskToolInput` never serializes `TaskIdentity` into `task_id`.
 
@@ -1156,14 +1332,18 @@ Exact tests in `tests/core/v5-task-routing-contract.test.ts`:
 - `never_serializes_justice_task_identity_as_task_id`
 - `reports_category_subagent_type_as_invalid_both`
 - `preserves_non_superpowers_explicit_subagent_type_without_category_injection`
+- `preserves_external_caller_owned_model_without_forced_category_translation`
+- `profile_generic_semantic_model_hint_is_removed_before_category_translation`
+- `profile_generic_category_translation_never_emits_category_with_model`
+- `profile_generic_translation_is_accepted_by_omo_target_validator`
 - `preserves_superpowers_specialized_non_generic_subagent_type_without_category_injection`
 - `preserves_explicit_category_without_subagent_type_injection`
 - `preserves_user_defined_omo_category_without_translation`
 - `unknown_to_justice_but_caller_owned_category_is_not_rejected_by_static_union`
 - `explicit_custom_category_never_gains_subagent_type`
 - `justice_generated_semantic_category_remains_sp_category`
-- `recognized_superpowers_general_worker_translates_classified_intent_to_category`
-- `recognized_superpowers_general_worker_never_emits_category_and_subagent_type_together`
+- `recognized_superpowers_profile_generic_worker_translates_classified_intent_to_category`
+- `recognized_superpowers_profile_generic_worker_preserves_target_xor_and_model_policy`
 - `ambiguous_superpowers_semantic_classification_is_untrusted`
 - `does_not_inject_category_into_native_task_lifecycle`
 - `justice_category_is_the_only_semantic_routing_signal_to_omo`
@@ -1671,8 +1851,9 @@ git commit -m "feat: bind OmO Native calls to Justice task identity"
 - review recognition happens on senpi `tool_call(task)` before Native task execution;
 - recognized task/scoped review → `review → sp-review`;
 - recognized final review → `final-review → sp-final-review`;
-- only the generic target exactly matching the Task-1-proven `NativeSuperpowersDispatchProfile` is removed/replaced by the matching Justice category on the same task input;
-- specialized non-generic routes remain caller-owned, and a target/profile mismatch is untrusted;
+- only the generic target exactly matching the Fresh-Review-approved built-in `NativeSuperpowersDispatchProfile` is removed/replaced by the matching Justice category on the same task input;
+- when that profile declares `modelPolicy=semantic_hint`, remove only the profile-recognized Superpowers `model` hint before setting the review category; the resulting payload must pass OmO target validation and contain no `category + model` conflict;
+- external/caller-owned model values and specialized non-generic routes remain caller-owned; a target/model/profile mismatch is untrusted;
 - ambiguous/untrusted recognition is not translated as trusted routing;
 - no second task/reviewer is dispatched.
 
@@ -2123,7 +2304,7 @@ Justice does not infer SDD vs inline from task complexity. If selected SDD lacks
 **Interfaces — implementation routing:**
 - For an authorized SDD implementation task, `resolveSuperpowersImplementationTask` first proves TaskIdentity/provenance from the Superpowers task brief.
 - Task 10 then classifies that exact approved task and calls Task 2 `translateTaskRouting` on the existing parent task args.
-- A recognized new-worker target exactly matching `NativeSuperpowersDispatchProfile.genericTarget` becomes exactly one `sp-mechanical | sp-implementation | sp-integration | sp-deep | sp-architecture` category and removes only the profile-defined generic marker.
+- A recognized new-worker target exactly matching the Fresh-Review-approved built-in `NativeSuperpowersDispatchProfile.genericTarget` becomes exactly one `sp-mechanical | sp-implementation | sp-integration | sp-deep | sp-architecture` category, removes only the profile-defined generic marker, and applies the profile model policy before category emission. `semantic_hint` removes only the profile-recognized Superpowers model hint; external/caller-owned model is preserved.
 - Recognized specialized non-generic subagent routing is preserved.
 - Ambiguous classification may run fail-open on original generic routing where safe, but correlation/acceptance is untrusted/`NOT_PROVEN`.
 - Justice never directly dispatches the implementer; it only translates the already-existing Superpowers dispatch.
@@ -2204,8 +2385,8 @@ In `tests/unit/core/execution-role-classifier.test.ts`:
 - `ambiguous_semantic_classification_does_not_select_concrete_model`
 
 In `tests/runtime/senpi-adapter-semantic-routing.test.ts`:
-- `recognized_superpowers_general_worker_translates_to_justice_category`
-- `recognized_superpowers_general_worker_never_emits_category_and_subagent_type_together`
+- `recognized_superpowers_profile_generic_worker_translates_to_justice_category`
+- `recognized_superpowers_profile_generic_worker_preserves_target_xor_and_model_policy`
 - `external_explicit_subagent_type_is_preserved`
 - `superpowers_specialized_subagent_type_is_preserved`
 - `omo_continuation_does_not_receive_new_worker_category`
@@ -2752,7 +2933,7 @@ Any tracked change outside the single Superpowers final fix wave invalidates the
 | J5D-TASK-01 | Tasks 5, 10 |
 | J5D-CHAIN-01, J5D-CHAIN-02, J5D-RULING-01 | Tasks 3, 9 |
 | J5D-CORR-01, J5D-CORR-02 | Tasks 2, 5, 6 |
-| J5D-ROUTE-01 | Tasks 1, 2, 7, 10 |
+| J5D-ROUTE-01, J5D-PROFILE-01 | Tasks 1, 2, 7, 10 |
 | J5D-ROUTE-02 | Tasks 2, 7, 10 |
 | J5D-PROJ-01, J5D-PROJ-02, J5D-PROJ-03 | Task 4 |
 | J5D-REVIEW-01, J5D-REVIEW-02, J5D-REVIEW-03, J5D-REVIEW-04 | Tasks 1, 7 |
@@ -2812,7 +2993,7 @@ The numbering below is Design §29. Every row fixes the owning task, exact test 
 | 40 | unknown/newer persistence preserved and acceptance fail-closed | 13 | `tests/core/v5-recovery.test.ts` | `unknown_newer_schema_is_preserved_and_acceptance_fails_closed` | integration |
 | 41 | authorized implementation intent activates the selected Superpowers execution method | 10 | `tests/core/workflow-activation-v5.test.ts` | `authorized_implementation_activates_selected_superpowers_execution_method` | integration |
 | 42 | Justice activation does not own Superpowers task/review progression | 10 | `tests/core/superpowers-ownership-v5.test.ts` | `justice_activation_does_not_own_superpowers_task_progression` | unit |
-| 43 | recognized Superpowers generic Native worker translates to one Justice semantic category | 10 | `tests/runtime/senpi-adapter-semantic-routing.test.ts` | `recognized_superpowers_general_worker_translates_to_justice_category` | integration |
+| 43 | recognized Superpowers profile-generic Native worker translates to one Justice semantic category under the approved target/model policy and produces an OmO-valid payload | 10 | `tests/runtime/senpi-adapter-semantic-routing.test.ts` | `recognized_superpowers_profile_generic_worker_translates_to_justice_category` | integration |
 | 44 | non-Superpowers explicit subagent_type remains caller-owned | 2 | `tests/core/v5-task-routing-contract.test.ts` | `preserves_non_superpowers_explicit_subagent_type_without_category_injection` | unit |
 | 45 | semantic classification uses task semantics/complexity without selecting concrete runtime | 10 | `tests/unit/core/execution-role-classifier.test.ts` | `classifier_uses_full_plan_semantics_without_selecting_concrete_runtime` | unit |
 | 46 | OmO remains concrete model/provider/runtime resolver for translated Superpowers work | 14 | `tests/integration/justice-v5-semantic-control-plane.integration.test.ts` | `translated_superpowers_work_leaves_concrete_runtime_resolution_to_omo` | E2E |
@@ -2840,7 +3021,7 @@ Justice `v4.2.0` is consulted only for the historical regression contracts expli
 
 | Producer | Consumer | Contract to compare |
 |---|---|---|
-| Task 2 | Tasks 5–12, 14 | `TaskIdentity`, `ReviewFindingV5`, `SuperpowersExecutionMethod`, `OmoCategoryName`, known built-in `TaskCategory`, `SemanticExecutionClass`, `SemanticClassificationResult`, `TaskRoutingProvenance`, `TaskRoutingTarget`, `SuperpowersRoutingTranslationResult`, pure `translateTaskRouting` |
+| Task 2 | Tasks 5–12, 14 | `TaskIdentity`, `ReviewFindingV5`, `SuperpowersExecutionMethod`, `OmoCategoryName`, known built-in `TaskCategory`, `SemanticExecutionClass`, `SemanticClassificationResult`, `TaskRoutingProvenance`, `TaskRoutingTarget`, `NativeSuperpowersModelPolicy`, Fresh-Review-approved built-in `NativeSuperpowersDispatchProfile`, `SuperpowersRoutingTranslationResult`, pure `translateTaskRouting` |
 | Task 3 | Tasks 4–14 | `ArtifactFingerprint`, `ApprovedArtifactChain`, `ApprovedPlanBinding.artifactChain`, `ApprovePlanInput` |
 | Task 4 | Tasks 7–10, 13–14 | `ParsedSuperpowersTask`, `ProjectionDiagnostic`, `ProjectionResult<T>`, `ClauseEvidenceScope`, `ClauseResult`, `ConformanceContract`, `ConformanceContractPersistenceResult` + immutable contract path/digest |
 | Task 5 | Tasks 6–10, 13 | `TaskIdentityResolution`, `CorrelationMutationResult`, `ExecutionCorrelation`, `ExecutionCorrelationKey` |
@@ -2870,18 +3051,18 @@ Before this Plan is approved for execution, the Superpowers Review Gate must ver
 2. **50 scenarios**
    - every Design §29 scenario has an owning task/test in the traceability table.
 3. **Type/signature consistency**
-   - `ApprovedArtifactChain`, `TaskIdentity`, `SuperpowersExecutionMethod`, `OmoCategoryName`, `WorkflowMethodSelection`, `WorkflowMethodSelectionEvidence`, `WorkflowActivationEvidence`, `WorkflowActivationDecision`, `SemanticExecutionClass`, `SemanticClassificationResult`, `TaskRoutingProvenance`, `SuperpowersRoutingTranslationResult`, `ExecutionCorrelation`, `ConformanceContract`, `ScopedFindingMarkerExtraction`, `ReviewFindingTarget`, `ReviewFindingContextProvider`, `JusticeReviewResult`, `RevisionDiffProvider`, `FinalReviewEvidenceClosure`, `BlockedFinalReviewEvidenceAttempt`, `PlanConformanceInput`, and severity/finding-disposition vocabulary are identical at every producer/consumer boundary.
+   - `ApprovedArtifactChain`, `TaskIdentity`, `SuperpowersExecutionMethod`, `OmoCategoryName`, `WorkflowMethodSelection`, `WorkflowMethodSelectionEvidence`, `WorkflowActivationEvidence`, `WorkflowActivationDecision`, `SemanticExecutionClass`, `SemanticClassificationResult`, `TaskRoutingProvenance`, `NativeSuperpowersModelPolicy`, `NativeSuperpowersDispatchProfile`, `SuperpowersRoutingTranslationResult`, `ExecutionCorrelation`, `ConformanceContract`, `ScopedFindingMarkerExtraction`, `ReviewFindingTarget`, `ReviewFindingContextProvider`, `JusticeReviewResult`, `RevisionDiffProvider`, `FinalReviewEvidenceClosure`, `BlockedFinalReviewEvidenceAttempt`, `PlanConformanceInput`, and severity/finding-disposition vocabulary are identical at every producer/consumer boundary.
 4. **Ownership**
    - Superpowers remains the owner of execution-method selection and all task/review/fix/final progression;
    - Justice owns only selected-method activation plus semantic classification/category translation/correlation/evidence/acceptance;
    - no task adds Justice-owned task/review/fix scheduling;
    - no task adds concrete model/provider/reasoning/retry/fallback ownership;
-   - recognized Superpowers generic `general` is translated without breaking category/subagent_type XOR; explicit specialized/external routing, caller-owned custom OmO categories, and Native task lifecycle/control ownership remain preserved;
+   - only the Fresh-Review-approved profile-generic Superpowers target is translated; target XOR and OmO category/model validation remain valid, profile-defined `semantic_hint` model is the only removable model field, and external/caller-owned model/custom category/specialized routing plus Native lifecycle ownership remain preserved;
    - same-turn parallel and mass-ulw/DAG observations are matched by stable identities rather than callback order;
    - selection recovery and activation recovery are separate: cross-session state can restore method selection but only exact same-session activation evidence can suppress a fresh skill invocation.
 5. **TDD**
    - production behavior changes have RED then GREEN steps;
-   - Task 1 is a regression gate for the pre-established baseline; failure is upstream compatibility drift, not architecture discovery.
+   - Task 1 is an upstream evidence spike only. PASS does not authorize production: exact measured dispatch/model/activation/batch values must be reconciled into Requirements / Design / Plan, then pass a Fresh Review Gate and required human approval before Task 2.
 6. **Persistence**
    - v4 state is recognized without becoming v5 authority;
    - unknown/newer state is preserved and blocks affected acceptance.

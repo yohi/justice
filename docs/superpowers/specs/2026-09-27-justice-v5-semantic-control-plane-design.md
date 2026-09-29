@@ -190,9 +190,10 @@ Other prose in this Design explains or elaborates these contracts. It is not ind
 | J5D-RULING-01 | Superpowers Rulings may guide execution but cannot rewrite approved Justice authority. |
 | J5D-CORR-01 | OmO `task_id` is continuation-session state and never Justice TaskIdentity. |
 | J5D-CORR-02 | Runtime execution is correlated by durable Native `parentSessionId + parentToolCallId` sidecar binding, extended with observed OmO task/child/session metadata when available. Parallel callback order is never identity authority. |
-| J5D-ROUTE-01 | Justice obeys Native task category/subagent_type XOR with provenance-aware translation: recognized Superpowers generic `general` is a compatibility encoding translated to one Justice category, while non-Superpowers explicit routing and Native task lifecycle/control remain caller/runtime-owned. |
+| J5D-ROUTE-01 | Justice obeys Native task category/subagent_type XOR and category/model incompatibility with provenance/profile-aware translation: only the reconciled profile's proven generic target and optional Superpowers-only semantic model hint may be removed before emitting one Justice category; external caller-owned routing/model choices and Native lifecycle/control remain caller/runtime-owned. |
 | J5D-ROUTE-02 | Semantic execution classification is deterministic from structured task/review semantics with precedence final-review > review > architecture > deep > integration > mechanical > implementation; ambiguity never fabricates a category. |
-| J5D-CAT-02 | Justice categories are semantic routing inputs only; OmO effective configuration resolves them to concrete runtime/model/provider, and Justice never selects a concrete model/provider. |
+| J5D-PROFILE-01 | Task 1 is an upstream evidence spike only. Its measured Native dispatch/model/activation/batch facts must be reconciled into Requirements/Design/Plan and pass a Fresh Review Gate before any Production Task 2–14; production uses one versioned built-in profile rather than runtime discovery/config/test-fixture authority. |
+| J5D-CAT-02 | Justice categories are semantic routing inputs only; OmO effective configuration resolves them to concrete runtime/model/provider. Trusted profile-generic translation must produce an OmO-valid category payload with no conflicting model override, while external caller-owned concrete model routing is preserved. |
 | J5D-PROJ-01 | Requirements/Design/Plan normative sources are deterministically enumerable. |
 | J5D-PROJ-02 | Projection has COMPLETE/INCOMPLETE/INVALID state; only COMPLETE may pass acceptance. |
 | J5D-PROJ-03 | Projection schema/version is bound to artifact-chain and evidence identity. |
@@ -558,39 +559,81 @@ Routing decisions are provenance-aware and bound to a versioned `NativeSuperpowe
 - external both-target input is a routing-contract violation;
 - Justice does not invent precedence between explicit external targets.
 
-#### NativeSuperpowersDispatchProfile
+#### Native compatibility evidence and production profile authority — J5D-PROFILE-01
 
-The Native profile is established by Task 1 using the exact supported Superpowers v6.4.2 Pi extension and OmO Native / senpi baseline. It records at least:
+Task 1 does **not** directly establish production authority. It is a pinned upstream evidence spike that emits a `NativeSuperpowersDispatchEvidence` receipt containing measured facts:
 
 ```text
-profile version / upstream SHAs
+Superpowers commit
+OmO commit + pinned senpi package version
 actual worker-dispatch tool surface
-actual generic target shape/marker, if one exists
-actual review-dispatch shape
+actual generic target kind/value, if one exists
+actual task/scoped/final review target shape
+review prompt field
 observable Native skill-activation channels
-batch input-index ↔ result-items[index] ordering proof
+batch input-index ↔ result-items[index] behavior
+actual Superpowers model-field presence/value semantics
+OmO task-target validation outcome after proposed translation
 ```
 
-The profile MUST come from runtime evidence, not a hand-written synthetic fixture. OpenCode V1's `task(subagent_type="general")` mapping is historical evidence only and is not a Native default.
+After Task 1 PASS, execution MUST stop. Requirements / Design / Plan are then reconciled so those measured values become an explicit versioned `NativeSuperpowersDispatchProfile`, followed by a Fresh Review Gate and required human approval. Only that reconciled profile may authorize Production Tasks 2–14.
 
-If the runtime regression does not expose a stable generic dispatch on a surface that Justice can translate in place, the supported Native compatibility capability is unavailable and implementation returns to artifact reconciliation. Justice does not manufacture a `task` call merely to fit its desired routing model.
+Production authority is a single built-in Justice profile owned by `src/runtime/native-superpowers-profile.ts`. It is compiled from exact values fixed by the reconciled artifacts. Runtime discovery, user configuration, ambient installed packages, or test fixtures cannot replace or override that profile.
+
+The production profile contains at least:
+
+```text
+profile version
+upstream SHAs / senpi version
+toolName
+genericTarget
+reviewTarget
+reviewPromptField
+activationChannels
+batchIndexContract
+modelPolicy
+```
+
+`modelPolicy` is one of:
+
+```text
+absent
+semantic_hint(field=model, removeBeforeCategoryTranslation=true)
+```
+
+The `semantic_hint` form is permitted only when Task 1 proves the observed Superpowers model field is compatibility capability/role intent that can be represented by Justice semantic category routing without retaining a concrete model override. If the observed model is authoritative concrete-model intent, this profile is unsupported and the Design must be reconciled rather than discarding it.
+
+OpenCode V1's `task(subagent_type="general")` mapping remains historical evidence only and is never a Native default.
+
+If the evidence spike does not expose a stable generic dispatch, stable review surface, safe model policy, or stable batch identity on a surface that Justice can translate in place, the supported Native compatibility capability is unavailable and the artifacts return to Design reconciliation. Justice does not manufacture a `task` call merely to fit its desired routing model.
 
 #### Recognized Superpowers new-worker routing
 
-For a dispatch that exactly matches the active profile's proven generic Native target:
+For a dispatch that exactly matches the **reconciled built-in profile**:
 
 ```text
 profile-recognized Superpowers generic dispatch
         ↓
 semantic execution classification
         ↓
-remove only the profile-defined generic marker
+remove only profile.genericTarget
+if modelPolicy=semantic_hint:
+  remove only the profile-recognized Superpowers model hint
+        ↓
 set category = exactly one Justice sp-* category
+        ↓
+validate OmO Native target contract
         ↓
 same OmO Native task execution
 ```
 
-The final payload still satisfies XOR. A shape that differs from the profile is untrusted rather than normalized.
+The trusted final payload satisfies all of:
+
+- exactly one of `category` / `subagent_type`;
+- when `category` is present, `model` is absent;
+- external/caller-owned concrete `model` is never removed;
+- provider/reasoning/fallback remain caller/runtime-owned;
+- a dispatch shape or model value that differs from the reconciled profile is untrusted rather than normalized.
 
 Deterministic review mapping is:
 
@@ -1094,7 +1137,7 @@ Rules:
 - original Superpowers prompt/content remains an exact prefix;
 - one Justice appendix is added at most once;
 - review routing mutation and appendix enrichment happen on the same original `task` call;
-- Justice does not change model/provider/reasoning/fallback fields;
+- external/caller-owned model/provider/reasoning/fallback fields are preserved; for a profile-recognized Superpowers generic review only, the exact `model` field may be removed when the reconciled profile declares `modelPolicy=semantic_hint`, before setting `category=sp-review|sp-final-review`;
 - a specialized caller-owned `subagent_type` remains specialized and is not category-translated;
 - no new task/reviewer call is created.
 
@@ -1110,7 +1153,7 @@ Therefore:
 - two concurrent reviews or worker calls must remain independently correlated;
 - missing identity that makes concurrent work ambiguous leaves affected evidence `NOT_PROVEN`.
 
-Task 1 is a Native runtime regression gate for this selected contract, not an architecture-selection spike.
+Task 1 is an upstream evidence spike. PASS proves measured facts only; it does not authorize production until those facts are reconciled into Requirements / Design / Plan and a Fresh Review Gate approves the new artifact chain.
 
 ### 14.3 Structured result, finding continuity, and final evidence composition — J5D-REVIEW-03
 
@@ -1807,7 +1850,7 @@ Cross-session Justice state may recover which method was selected/used previousl
 
 #### Native activation seam
 
-The supported Pi/Senpi contract does **not** assume a `skill` tool. Superpowers v6.4.2 directs Pi to use its native skill system. Task 1 therefore proves the concrete OmO Native observation channels before production implementation.
+The supported Pi/Senpi contract does **not** assume a `skill` tool. Superpowers v6.4.2 directs Pi to use its native skill system. Task 1 therefore measures the concrete OmO Native observation channels as evidence; production implementation remains blocked until the measured channels are reconciled into the authoritative artifacts and pass a Fresh Review Gate.
 
 The v5 activation model accepts only profile-proven current-session observations:
 
@@ -2003,24 +2046,45 @@ Justice never promotes its built-in vocabulary into OmO namespace authority.
 
 ### 21.5 Model/provider boundary
 
-For the supported OmO Native profile:
+OmO Native v5.1.2 rejects a task payload that contains both `category` and `model`. Superpowers v6.4.2 SDD also instructs the controller to specify a model explicitly when dispatching a subagent. The compatibility profile must therefore resolve this wire-contract intersection explicitly rather than relying on a blanket "never rewrite model" rule.
+
+For external/non-Superpowers routing:
 
 ```text
-Superpowers task complexity / capability intent
+caller-owned category/subagent/model
+→ preserve caller intent
+→ Justice does not remove a concrete model to force category translation
+```
+
+For a reconciled profile-recognized Superpowers generic dispatch:
+
+```text
+Superpowers semantic task/review intent
         ↓
-Justice semantic execution class/category
+Task-1-reconciled modelPolicy
+
+modelPolicy=absent
+  → no model field to remove
+
+modelPolicy=semantic_hint
+  → remove the exact profile-recognized Superpowers model hint
+  → classify semantic role/complexity
+  → set category=sp-*
+        ↓
+OmO target validation: category present, model absent
         ↓
 OmO effective category configuration
         ↓
 actual agent/model/provider/reasoning/retry/fallback
 ```
 
-Justice never writes a concrete model/provider into this semantic translation.
+Justice never invents a concrete model/provider. The only permitted model mutation is removal of the exact profile-recognized Superpowers `model` hint under `semantic_hint`; that mutation is compatibility normalization from Superpowers role/capability intent into OmO category semantics, not concrete runtime selection.
 
-Superpowers v6.4.2's generic templates contain model-selection guidance, but the supported OmO Native task surface exposes category/subagent routing while OmO remains runtime/model authority. Therefore the compatibility profile interprets that guidance as semantic capability/complexity intent.
+Task 1 must record the actual model-field behavior. If the observed model is authoritative concrete-model intent that cannot be safely represented by the semantic category, the profile is unsupported: preserve the upstream intent, do not emit an `sp-*` category for that dispatch, and return to artifact reconciliation.
 
-If future supported upstream introduces a concrete model field as authoritative wire input, Justice must update the compatibility profile explicitly; it must not silently choose precedence between category and concrete model fields.
----
+Provider/reasoning/fallback fields remain untouched unless a future separately reviewed compatibility profile explicitly establishes another safe normalization.
+
+Production Tasks 2/7/10 consume only the reconciled built-in profile. They do not discover model policy at runtime and do not read it from user configuration or test fixtures.
 
 ## 22. Dependency analysis
 
@@ -2405,8 +2469,8 @@ The v5 implementation plan must include E2E/integration coverage for at least th
 
 41. authorized implementation intent activates the selected Superpowers execution method through a Task-1-proven Native skill-system observation (successful selected SKILL.md read or trusted native skill expansion), never an assumed `skill` tool.
 42. Justice activation does not take ownership of Superpowers task/review progression.
-43. a recognized Superpowers generic Native worker is translated into one Justice semantic category only when its dispatch shape matches the runtime-proven NativeSuperpowersDispatchProfile, while preserving XOR.
-44. a non-Superpowers explicit `subagent_type` remains caller-owned and is not translated.
+43. a recognized Superpowers profile-generic Native worker is translated to one Justice semantic category only under the reconciled built-in profile; the translated payload preserves category/subagent_type XOR, removes a conflicting `model` only under the profile's proven `semantic_hint` policy, and passes OmO Native target validation.
+44. non-Superpowers explicit routing, including a caller-owned concrete model, remains caller-owned and is not removed to force Justice category translation.
 45. Justice semantic classification uses task/review semantics and complexity without selecting a concrete model/provider.
 46. OmO remains the only concrete model/provider/runtime resolver for translated Superpowers work.
 47. a caller-owned OmO custom category outside Justice's static built-in vocabulary is preserved without translation and remains OmO-resolved.
