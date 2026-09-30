@@ -1196,15 +1196,8 @@ export class OpenCodeAdapter {
     if (!justice) return;
 
     const planBridge = justice.getPlanBridge();
-    const result = await planBridge.handleReviewGateStart(input.sessionID, request);
-    if (!result.dispatched || result.reviewerPrompt === undefined) {
-      this.#replaceCommandPartsWithGuidance(output, input.sessionID, result.guidance);
-      return;
-    }
-
     const subtaskPart = output.parts.find((part) => part.type === "subtask");
     if (subtaskPart === undefined) {
-      planBridge.cancelPendingPlanReviewGate(input.sessionID);
       await this.log(
         "warn",
         "[Justice] /justice-review-gate expected an OpenCode subtask part but none was present",
@@ -1218,6 +1211,12 @@ export class OpenCodeAdapter {
           "Review was not started. Verify that justice-review-gate is registered with the dedicated controller agent and subtask: true, then rerun /justice-review-gate.",
         ].join("\n"),
       );
+      return;
+    }
+
+    const result = await planBridge.handleReviewGateStart(input.sessionID, request);
+    if (!result.dispatched || result.reviewerPrompt === undefined) {
+      this.#replaceCommandPartsWithGuidance(output, input.sessionID, result.guidance);
       return;
     }
 

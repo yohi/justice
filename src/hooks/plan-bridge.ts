@@ -737,6 +737,9 @@ export class PlanBridge {
 
   cancelPendingPlanReviewGate(sessionId: string): void {
     const pending = this.pendingPlanReviewGates.get(sessionId);
+    if (pending !== undefined) {
+      this.setReviewGateLockPhase(sessionId, pending.gateId, "remediation");
+    }
     if (pending?.callId !== undefined) this.planReviewGateCalls.delete(pending.callId);
     this.pendingPlanReviewGates.delete(sessionId);
     this.observationHandler?.setReviewGateScope(sessionId, null);

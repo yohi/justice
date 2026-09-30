@@ -973,7 +973,7 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     await adapter.ensureInitialized();
     const justice = adapter.getJustice() as JusticePlugin;
     const planBridge = justice.getPlanBridge();
-    vi.spyOn(planBridge, "handleReviewGateStart").mockResolvedValue({
+    const handleReviewGateStart = vi.spyOn(planBridge, "handleReviewGateStart").mockResolvedValue({
       dispatched: true,
       designPath: "docs/specs/design.md",
       planPath: "docs/plans/implementation-plan.md",
@@ -1002,7 +1002,8 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
       output,
     );
 
-    expect(cancel).toHaveBeenCalledWith("session-review-gate-missing-subtask");
+    expect(handleReviewGateStart).not.toHaveBeenCalled();
+    expect(cancel).not.toHaveBeenCalled();
     expect(output.parts).toHaveLength(1);
     expect(output.parts[0]).toMatchObject({ type: "text", synthetic: true });
     expect((output.parts[0] as { text: string }).text).toContain(
