@@ -5,6 +5,10 @@ import {
 } from "../../src/runtime/opencode-adapter";
 import { OpenCodeNotifier } from "../../src/runtime/opencode-notifier";
 import { JusticePlugin } from "../../src/core/justice-plugin";
+import {
+  REVIEW_GATE_EXECUTION_MARKER,
+  REVIEW_GATE_WORKER_AGENT,
+} from "../../src/core/review-gate-execution";
 import { fakeInit } from "../helpers/fake-opencode-init";
 
 describe("OpenCodeAdapter skeleton", () => {
@@ -470,6 +474,44 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
     expect(output.args.category).toBe("sp-implementation");
   });
 
+  it("routes a marked Review Gate task to its dedicated worker agent", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const prompt = `${REVIEW_GATE_EXECUTION_MARKER}\nGate-ID: gate-123`;
+    vi.spyOn(justice, "handleEvent").mockResolvedValue({
+      action: "inject",
+      injectedContext: "[JUSTICE: PLAN REVIEW GATE CLAIMED]",
+      modifiedPayload: {
+        args: {
+          prompt,
+          subagent_type: REVIEW_GATE_WORKER_AGENT,
+          category: "sp-final-review",
+          run_in_background: false,
+        },
+      },
+    });
+    const output: { args: Record<string, unknown> } = {
+      args: {
+        prompt,
+        subagent_type: REVIEW_GATE_WORKER_AGENT,
+        load_skills: [],
+        run_in_background: false,
+      },
+    };
+
+    await adapter.onToolExecuteBefore(
+      { tool: "task", sessionID: "review-controller", callID: "review-worker" },
+      output,
+    );
+
+    expect(output.args).toMatchObject({
+      subagent_type: REVIEW_GATE_WORKER_AGENT,
+      run_in_background: false,
+    });
+    expect(output.args).not.toHaveProperty("category");
+  });
+
   it("removes caller category when explore subagent routing is present", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
@@ -819,7 +861,13 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
         guidance: "[JUSTICE: Workflow Bootstrap] plan_ready",
       });
 
-    const output: CommandExecuteBeforeOutput = { parts: [] };
+    const hostTemplatePart = {
+      type: "text",
+      sessionID: "sess-at-path",
+      text: "--design @docs/... --plan @docs/...",
+      synthetic: false,
+    } as unknown as CommandExecuteBeforeOutput["parts"][number];
+    const output: CommandExecuteBeforeOutput = { parts: [hostTemplatePart] };
     await adapter.onCommandExecuteBefore(
       {
         command: "/justice-start",
@@ -837,7 +885,10 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
       planPath: "docs/superpowers/plans/2026-09-28-idle-closed-child-session-reopen.md",
     });
     expect(output.parts).toHaveLength(1);
+    expect(output.parts[0]).not.toBe(hostTemplatePart);
+    expect(output.parts[0]).toMatchObject({ synthetic: true });
     expect((output.parts[0] as { text: string }).text).toContain("[JUSTICE: Workflow Bootstrap]");
+    expect((output.parts[0] as { text: string }).text).not.toContain("--design @docs/...");
   });
 
   it("does not emit workflow observations from the adapter; PlanBridge owns them", async () => {
@@ -866,10 +917,12 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     expect(output.parts).toHaveLength(1);
   });
 
-  it("dispatches /justice-review-gate with normalized Design and Plan paths", async () => {
+  it("rewrites successful /justice-review-gate into one direct OpenCode subtask", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
     const justice = adapter.getJustice() as JusticePlugin;
+    const reviewerPrompt =
+      "[JUSTICE: PLAN REVIEW GATE EXECUTION]\nGate-ID: gate-1\nReview the artifacts.";
     const handleReviewGateStart = vi
       .spyOn(justice.getPlanBridge(), "handleReviewGateStart")
       .mockResolvedValue({
@@ -877,9 +930,18 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
         designPath: "docs/specs/design.md",
         planPath: "docs/plans/implementation-plan.md",
         directiveStage: "plan_review_required",
+        reviewerPrompt,
         guidance: "[JUSTICE: REVIEW GATE REQUESTED]",
       });
-    const output: CommandExecuteBeforeOutput = { parts: [] };
+    const hostSubtaskPart = {
+      type: "subtask",
+      agent: "justice-review-controller",
+      description: "Run the Justice Design / Implementation Plan review gate",
+      model: { providerID: "test", modelID: "test" },
+      prompt:
+        "--design @docs/specs/design.md --plan @docs/plans/implementation-plan.md",
+    } as unknown as CommandExecuteBeforeOutput["parts"][number];
+    const output: CommandExecuteBeforeOutput = { parts: [hostSubtaskPart] };
 
     await adapter.onCommandExecuteBefore(
       {
@@ -897,12 +959,193 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
       planPath: "docs/plans/implementation-plan.md",
     });
     expect(output.parts).toHaveLength(1);
+    expect(output.parts[0]).not.toBe(hostSubtaskPart);
     expect(output.parts[0]).toMatchObject({
-      type: "text",
-      sessionID: "session-review-gate",
-      text: "[JUSTICE: REVIEW GATE REQUESTED]",
-      synthetic: true,
+      type: "subtask",
+      agent: "justice-review-controller",
+      description: "Justice plan review gate",
+      prompt: reviewerPrompt,
     });
+  });
+
+  it("blocks a successful Gate state when OpenCode does not provide the required subtask part", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const planBridge = justice.getPlanBridge();
+    const handleReviewGateStart = vi.spyOn(planBridge, "handleReviewGateStart").mockResolvedValue({
+      dispatched: true,
+      designPath: "docs/specs/design.md",
+      planPath: "docs/plans/implementation-plan.md",
+      directiveStage: "plan_review_required",
+      reviewerPrompt:
+        "[JUSTICE: PLAN REVIEW GATE EXECUTION]\nGate-ID: gate-1\nReview the artifacts.",
+      guidance: "[JUSTICE: REVIEW GATE REQUESTED]",
+    });
+    const cancel = vi.spyOn(planBridge, "cancelPendingPlanReviewGate");
+    const output: CommandExecuteBeforeOutput = {
+      parts: [
+        {
+          type: "text",
+          sessionID: "session-review-gate-missing-subtask",
+          text: "host prompt",
+        } as unknown as CommandExecuteBeforeOutput["parts"][number],
+      ],
+    };
+
+    await adapter.onCommandExecuteBefore(
+      {
+        command: "justice-review-gate",
+        arguments: "--design docs/specs/design.md --plan docs/plans/implementation-plan.md",
+        sessionID: "session-review-gate-missing-subtask",
+      },
+      output,
+    );
+
+    expect(handleReviewGateStart).not.toHaveBeenCalled();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(output.parts).toHaveLength(1);
+    expect(output.parts[0]).toMatchObject({ type: "text", synthetic: true });
+    expect((output.parts[0] as { text: string }).text).toContain(
+      "[JUSTICE: REVIEW GATE BLOCKED]",
+    );
+    expect((output.parts[0] as { text: string }).text).toContain("subtask");
+  });
+
+  it("allows the outer controller task only for its exact pending Gate prompt", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const pendingPrompt = vi
+      .spyOn(justice.getPlanBridge(), "isPendingReviewGatePrompt")
+      .mockReturnValue(true);
+    const handleEvent = vi.spyOn(justice, "handleEvent");
+    const args = {
+      prompt:
+        "[JUSTICE: PLAN REVIEW GATE EXECUTION]\nGate-ID: gate-outer\nReview the artifacts.",
+      description: "Justice plan review gate",
+      subagent_type: "justice-review-controller",
+      command: "/justice-review-gate",
+    };
+
+    const response = await adapter.onToolExecuteBefore(
+      { tool: "task", sessionID: "parent-review", callID: "outer-call" },
+      { args },
+    );
+
+    expect(response).toEqual({ action: "proceed" });
+    expect(pendingPrompt).toHaveBeenCalledWith("parent-review", args.prompt);
+    expect(handleEvent).not.toHaveBeenCalled();
+    expect(args.subagent_type).toBe("justice-review-controller");
+    expect(args).not.toHaveProperty("category");
+  });
+
+  it("allows the exact pending reviewer worker through the active Gate lock", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const planBridge = justice.getPlanBridge();
+    const prompt = "[JUSTICE: PLAN REVIEW GATE EXECUTION]\nGate-ID: gate-worker\nReview the artifacts.";
+    const pendingPrompt = vi
+      .spyOn(planBridge, "isPendingReviewGatePrompt")
+      .mockReturnValue(true);
+    vi.spyOn(planBridge, "getReviewGateLock").mockReturnValue({
+      parentSessionId: "parent-review",
+      gateId: "gate-worker",
+      phase: "reviewing",
+      designPath: "docs/design.md",
+      planPath: "docs/plan.md",
+      designDigest: "design-digest",
+      planDigest: "plan-digest",
+    });
+    const classify = vi
+      .spyOn(planBridge, "classifyReviewGateToolUse")
+      .mockReturnValue({ kind: "allow" });
+    const handleEvent = vi
+      .spyOn(justice, "handleEvent")
+      .mockResolvedValue({ action: "proceed" });
+    const args = { prompt, subagent_type: "justice-review-worker" };
+
+    await adapter.onEvent({
+      event: {
+        id: "event-controller",
+        type: "session.created",
+        properties: { info: { id: "controller", parentID: "parent-review" } },
+      },
+    });
+    await adapter.onEvent({
+      event: {
+        id: "event-worker",
+        type: "session.created",
+        properties: { info: { id: "worker", parentID: "controller" } },
+      },
+    });
+
+    const response = await adapter.onToolExecuteBefore(
+      { tool: "task", sessionID: "worker", callID: "worker-call" },
+      { args },
+    );
+
+    expect(response).toEqual({ action: "proceed" });
+    expect(pendingPrompt).toHaveBeenCalledWith("parent-review", prompt);
+    expect(classify).toHaveBeenCalledWith("parent-review", {
+      toolName: "task",
+      isPendingReviewGateTask: true,
+      queryOnly: false,
+      changedPaths: [],
+    });
+    expect(handleEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "worker", lockOwnerSessionId: "parent-review" }),
+    );
+  });
+
+  it("blocks a stale outer controller task when no matching Gate is pending", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    vi.spyOn(justice.getPlanBridge(), "isPendingReviewGatePrompt").mockReturnValue(false);
+    const args = {
+      prompt: "[JUSTICE: PLAN REVIEW GATE EXECUTION]\nGate-ID: stale-gate",
+      description: "Justice plan review gate",
+      subagent_type: "justice-review-controller",
+      command: "/justice-review-gate",
+    };
+
+    const response = await adapter.onToolExecuteBefore(
+      { tool: "task", sessionID: "parent-review", callID: "stale-outer-call" },
+      { args },
+    );
+
+    expect(response).toMatchObject({ action: "inject" });
+    expect(args.prompt).toContain("[JUSTICE: REVIEW GATE CLAIM BLOCKED]");
+  });
+
+  it("fails the pending Gate when the outer controller returns without an inner terminal worker", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const planBridge = justice.getPlanBridge();
+    vi.spyOn(planBridge, "hasPendingPlanReviewGate").mockReturnValue(true);
+    const cancel = vi.spyOn(planBridge, "cancelPendingPlanReviewGate");
+    const output = { output: "controller output", metadata: {} };
+
+    await adapter.onToolExecuteAfter(
+      {
+        tool: "task",
+        sessionID: "parent-review",
+        callID: "outer-call",
+        args: {
+          prompt:
+            "[JUSTICE: PLAN REVIEW GATE EXECUTION]\nGate-ID: gate-outer\nReview the artifacts.",
+          subagent_type: "justice-review-controller",
+          command: "/justice-review-gate",
+        },
+      },
+      output,
+    );
+
+    expect(cancel).toHaveBeenCalledWith("parent-review");
+    expect(output.output).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
   });
 
   it("reports malformed /justice-review-gate arguments explicitly", async () => {
@@ -942,7 +1185,13 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
         directiveStage: "implementation_arm",
         guidance: "[JUSTICE: IMPLEMENTATION ARMED]",
       });
-    const output: CommandExecuteBeforeOutput = { parts: [] };
+    const hostTemplatePart = {
+      type: "text",
+      sessionID: "session-1",
+      text: "--plan plan.md --approved",
+      synthetic: false,
+    } as unknown as CommandExecuteBeforeOutput["parts"][number];
+    const output: CommandExecuteBeforeOutput = { parts: [hostTemplatePart] };
 
     await adapter.onCommandExecuteBefore(
       {
@@ -960,7 +1209,11 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
       approved: true,
     });
     expect(output.parts).toHaveLength(1);
-    expect(output.parts[0]).toMatchObject({ text: "[JUSTICE: IMPLEMENTATION ARMED]" });
+    expect(output.parts[0]).not.toBe(hostTemplatePart);
+    expect(output.parts[0]).toMatchObject({
+      text: "[JUSTICE: IMPLEMENTATION ARMED]",
+      synthetic: true,
+    });
   });
 
   it("forwards explicit authorization cancellation", async () => {
@@ -1213,5 +1466,69 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     );
 
     expect(output.parts).toEqual([]);
+  });
+});
+
+describe("OpenCodeAdapter lock owner resolution", () => {
+  it("returns the root session for nested Review Gate descendants", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.onEvent({
+      event: {
+        id: "event-child",
+        type: "session.created",
+        properties: { info: { id: "controller", parentID: "main" } },
+      },
+    });
+    await adapter.onEvent({
+      event: {
+        id: "event-worker",
+        type: "session.created",
+        properties: { info: { id: "worker", parentID: "controller" } },
+      },
+    });
+
+    expect(adapter.resolveLockOwnerSession("main")).toBe("main");
+    expect(adapter.resolveLockOwnerSession("worker")).toBe("main");
+    expect(adapter.resolveLockOwnerSession("unrelated")).toBe("unrelated");
+  });
+
+  it("returns undefined for cyclic or missing parent relations", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.onEvent({
+      event: {
+        id: "event-a",
+        type: "session.created",
+        properties: { info: { id: "a", parentID: "b" } },
+      },
+    });
+    await adapter.onEvent({
+      event: {
+        id: "event-b",
+        type: "session.created",
+        properties: { info: { id: "b", parentID: "a" } },
+      },
+    });
+
+    expect(adapter.resolveLockOwnerSession("a")).toBeUndefined();
+  });
+
+  it("stops inheriting a parent lock owner after the child session is deleted", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.onEvent({
+      event: {
+        id: "event-child",
+        type: "session.created",
+        properties: { info: { id: "child", parentID: "parent" } },
+      },
+    });
+    await adapter.onEvent({
+      event: {
+        id: "event-delete",
+        type: "session.deleted",
+        properties: { info: { id: "child" } },
+      },
+    });
+
+    expect(adapter.resolveLockOwnerSession("child")).toBe("child");
   });
 });

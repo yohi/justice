@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   JUSTICE_COMMAND_DEFINITIONS,
+  JUSTICE_REVIEW_CONTROLLER_AGENT,
+  JUSTICE_REVIEW_CONTROLLER_DEFINITION,
   buildJusticeCommandSystemContext,
   listJusticeCommandNames,
   registerJusticeCommands,
@@ -29,8 +31,85 @@ describe("registerJusticeCommands", () => {
     expect(config.command?.["justice-review-gate"]).toEqual({
       template: "$ARGUMENTS",
       description: "Run the Justice Design / Implementation Plan review gate",
+      agent: JUSTICE_REVIEW_CONTROLLER_AGENT,
+      subtask: true,
     });
+    expect(config.agent?.[JUSTICE_REVIEW_CONTROLLER_AGENT]).toMatchObject({
+      mode: "subagent",
+      permission: { "*": "deny", task: "allow" },
+    });
+    expect(config.agent?.["justice-review-worker"]).toMatchObject({
+      mode: "subagent",
+      permission: { "*": "deny", read: "allow" },
+    });
+    expect(config.agent?.[JUSTICE_REVIEW_CONTROLLER_AGENT]).not.toBe(
+      JUSTICE_REVIEW_CONTROLLER_DEFINITION,
+    );
     expect(log).not.toHaveBeenCalled();
+  });
+
+  it("does not auto-register Review Gate when its dedicated controller agent collides", async () => {
+    const existing = {
+      description: "custom controller",
+      mode: "subagent" as const,
+      prompt: "custom",
+      permission: { "*": "allow" as const },
+    };
+    const config: CommandRegistrationTarget = {
+      command: {},
+      agent: { [JUSTICE_REVIEW_CONTROLLER_AGENT]: existing },
+    };
+    const log = vi.fn(async () => {});
+
+    await registerJusticeCommands(config, log);
+
+    expect(config.agent?.[JUSTICE_REVIEW_CONTROLLER_AGENT]).toBe(existing);
+    expect(config.command?.["justice-review-gate"]).toBeUndefined();
+    expect(config.command?.["justice-start"]).toBeDefined();
+    expect(config.command?.["justice-implement"]).toBeDefined();
+    expect(log).toHaveBeenCalledWith(
+      "warn",
+      expect.stringContaining("already defined"),
+    );
+    expect(log).toHaveBeenCalledWith(
+      "warn",
+      expect.stringContaining("Review Gate command was not auto-registered"),
+    );
+  });
+
+  it("routes one final-review task to a configured read-only Justice worker", async () => {
+    const config: CommandRegistrationTarget = {
+      command: {},
+      agent: {
+        [JUSTICE_REVIEW_CONTROLLER_AGENT]: {
+          model: "amazon-bedrock/global.anthropic.claude-sonnet-5",
+        },
+        "justice-review-worker": {
+          model: "amazon-bedrock/global.anthropic.claude-opus-5",
+        },
+      },
+    };
+
+    await registerJusticeCommands(config, async () => {});
+
+    expect(config.agent?.[JUSTICE_REVIEW_CONTROLLER_AGENT]).toMatchObject({
+      model: "amazon-bedrock/global.anthropic.claude-sonnet-5",
+      mode: "subagent",
+      permission: { "*": "deny", task: "allow" },
+    });
+    expect(config.agent?.["justice-review-worker"]).toMatchObject({
+      model: "amazon-bedrock/global.anthropic.claude-opus-5",
+      mode: "subagent",
+      permission: { "*": "deny", read: "allow" },
+    });
+    expect(config.agent?.["justice-review-worker"]).not.toHaveProperty("permission.task");
+    expect(config.command?.["justice-review-gate"]).toEqual({
+      template: "$ARGUMENTS",
+      description: "Run the Justice Design / Implementation Plan review gate",
+      agent: JUSTICE_REVIEW_CONTROLLER_AGENT,
+      model: "amazon-bedrock/global.anthropic.claude-sonnet-5",
+      subtask: true,
+    });
   });
 
   it("does not overwrite existing user-defined commands and logs a warning", async () => {

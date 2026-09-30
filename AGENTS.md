@@ -6,7 +6,7 @@ Justice is an OpenCode plugin providing the quality control nervous system that 
 
 - **Thinking Plane**: Superpowers (`plan.md`, `design.md`) — Desired State
 - **Execution Plane**: oh-my-openagent (`task()`) — Actual State
-- **Quality Control Plane**: Justice — observes tool/message events and emits non-blocking (L0 advisory) quality verdicts; never executes directly
+- **Quality Control Plane**: Justice — observes tool/message events and emits non-blocking (L0 advisory) quality verdicts; the Review Gate additionally enforces a session-scoped implementation lock until `/justice-implement --approved`; Justice never performs implementation directly
 
 ## Project Structure & Architecture
 
@@ -34,13 +34,13 @@ Before declaring any task complete, run all four commands fresh and ensure they 
 Core invariants that must never be broken:
 
 1. **Pure core**: `src/core/**` never imports `@opencode-ai/*`. Hooks coordinate; core owns business logic.
-2. **Fail-open**: Hook/adapter I/O and notifier boundaries catch errors and degrade to `PROCEED` or safe fallback. Plugin failure never crashes a session.
+2. **Fail-open**: Hook/adapter I/O and notifier boundaries catch errors and degrade to `PROCEED` or safe fallback. Plugin failure never crashes a session. The in-memory Review Gate implementation-authorization lock is the narrow enforcement exception: while its lock is active, implementation-capable tool calls must fail closed; unrelated I/O and quality verdicts remain fail-open/advisory.
 3. **Immutable public state**: Use `readonly`, `ReadonlyArray`, and `ReadonlyMap`. Mutate only private internal state; return resolved immutable snapshots.
 4. **JSON-only persistence**: Atomic temp-file-plus-rename writes. No external databases or binary storage.
 5. **One public tool**: `OpenCodeAdapter.getTools()` exposes only `justice_review`. Internal tools stay behind the trust boundary.
 6. **Evidence trust**: `declared` provenance (agent self-claims) never satisfies a Gate PASS; only `observed` and `derived` evidence can (FF-008).
 7. **Advisory bootstrap**: `/justice-start` and `/justice-implement` guidance never invokes a skill or `task()`.
-8. **Implementation arm**: `handlePreToolUse` enriches `task()` only when explicitly armed via `/justice-implement` or trusted trigger; otherwise emits `implementation_unauthorized`.
+8. **Implementation arm**: `handlePreToolUse` enriches `task()` only when explicitly armed via `/justice-implement` or trusted trigger; otherwise emits `implementation_unauthorized`. After a Review Gate, a process-local session lock cancels implementation-capable tools until `/justice-implement --approved` validates the unchanged clear Plan. Findings permit only Design/Plan remediation and re-review; a new user message alone never unlocks execution.
 9. **Reserved fallback**: Do not wire `parseWorkflowStartFallbackMarker()` into `PlanBridge.handleMessage()` without explicit approval.
 
 ## Testing & Safety Rules

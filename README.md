@@ -268,6 +268,8 @@ Justice を使った開発は、**設計・計画 → 人間承認 → 実装委
 
 OpenCode の command registry は LLM の tool list とは別系統です。Justice は `experimental.chat.system.transform` で、解決済み `config.command` に存在する安全な `justice-*` コマンド名だけを LLM の system context に公開します。これは存在認識のためだけであり、slash command を LLM-callable tool に変換しません。特に `/justice-implement --approved` の承認は引き続き利用者による明示操作が必要です。
 
+OpenCode の custom command は「plugin handler で完結する RPC」ではなく **prompt template** です。ホストは command template の `$ARGUMENTS` を展開し、`@path` を解決した後で `command.execute.before` を呼び、その hook が戻ると通常の `prompt()` を続行します。`justice-start` / `justice-implement` と blocked/rejected Review Gate は host が生成した既存 `output.parts` を Justice の canonical synthetic text directive に置換します。成功した `justice-review-gate` は `subtask: true` で **専用 `justice-review-controller` 子 session** を起動します。controller は `permission: {"*":"deny","task":"allow"}` により model-visible tool を `task` だけに限定され、自身ではレビューせず exact reviewer prompt を OmO `task` の `subagent_type="justice-review-worker"`（categoryなし）で1回だけ委譲します。Justice は marked task を内部で `sp-final-review` として記録し、foreground 実行を強制します。OpenCode native TaskTool は controller wrapper に限定し、実レビューは OmO `task` が担当します。
+
 > [!NOTE]
 > 自動登録される template は `$ARGUMENTS` です。`$ARGUMENTS` は、コマンド名の後に入力した文字列全体がそのまま渡されるプレースホルダーです（`/justice-start ship the feature --plan plan.md` なら `ship the feature --plan plan.md`）。
 > Justice のフックは同じ引数文字列を独自にパースするため、**template の内容自体は Justice の動作に影響しません**。template が決めるのは「LLM に送られるプロンプト」だけで、Justice のガイダンス注入は `output.parts` への追記という別経路で行われます。そのため、最も単純で安全な template は `"$ARGUMENTS"`（入力をそのままプロンプトにする）です。
@@ -390,7 +392,7 @@ Justice: start workflow ship the feature --plan docs/plans/feature.md
 
 ## `/justice-review-gate` コマンド
 
-Design と Implementation Plan を **明示的に Review Gate へ投入する入口**です。Review Gate は独立した任意ファイルレビューではなく、**同一 session の `/justice-start` が `plan_ready` / `plan_review_required` として束縛した Design / Implementation Plan に対してのみ**開始できます。コマンド境界で workflow bootstrap と review 対象を一致させ、別 artifact へのすり替えを防ぎます。
+Design と Implementation Plan を **明示的に Review Gate へ投入する入口**です。`/justice-review-gate` 自体が user-invoked authority であり、`/justice-start` の事前実行は必須ではありません。指定された Design / Plan を直接検証し、その内容から Gate ID / scope / digest / exact reviewer prompt を固定します。
 
 ```bash
 /justice-review-gate --design <designPath> --plan <planPath>
@@ -405,16 +407,17 @@ OpenCode の file-reference 記法も利用できます。
 ```
 
 - `--design` と `--plan` はともに必須。
-- 同一 session に `/justice-start` の bootstrap が存在し、phase が `plan_ready` であることが必須。`--design` / `--plan` は bootstrap が束縛した path と完全一致し、active Plan も同じ Plan でなければ `[JUSTICE: REVIEW GATE BLOCKED]` となる。
 - 両成果物が読み取り可能な場合だけ `[JUSTICE: REVIEW GATE REQUESTED]` を注入する。この時点で Justice はランダムな Gate ID、正規化済み review scope、Design/Plan の SHA-256 digest、reviewer prompt 全文を pending state として固定する。
 - `/justice-review-gate` 自体を review-controller entrypoint とし、実行後に `requesting-code-review` や別の review Skill を起動しない。
-- 実レビューは、pending Gate と完全一致する Justice marker / Gate ID / reviewer prompt を持つ **1回だけの foreground `task()`** として直ちに実行する。Justice が runtime で `category="sp-final-review"` と `run_in_background=false` を強制するため、LLM が別 category を選んでも executor routing は変わらない。
+- canonical command registration は `agent="justice-review-controller"` + `subtask: true`。controller は内側で exact reviewer prompt を `subagent_type="justice-review-worker"` として一度だけ委譲する。OmO task に `category` を渡すと Sisyphus-Junior に route されるため、Justice は Gate 内部で `sp-final-review` として記録しつつ、wire から category を除去する。worker は read-only、`task`/skill/shell は禁止。
+- 実レビューは、pending Gate と完全一致する Justice marker / Gate ID / reviewer prompt を持つ **1回だけの foreground `task()`** として実行する。profile ごとに指定した Justice worker model を使用し、結果は `PostToolUse` の terminal task result として Gate が検証する。
 - `code-review` Skill、CodeRabbit CLI、`justice_review` をこの Gate の executor として使用しない。`justice_review` は既存 review state の参照・人間承認済み resolve 用のまま。
-- reviewer は prose ではなく、Gate ID / reviewScope / `complete` / findings を含む strict JSON を返す。Justice は PostToolUse でこれを検証し、review 中に Design/Plan digest が変わっていないことも再確認する。
+- reviewer は prose ではなく、Gate ID / `complete` / findings を含む strict JSON を返す。OmO sync `task` はこの JSON を既知の completion wrapper と `<task_metadata>` で包むため、Justice は raw JSON またはその既知 wrapper の reviewer payload だけを抽出・検証する。reviewScope は Justice-owned pending state を正本とする。
 - complete findings があれば exact Gate scope の `review_observed` を永続化して `review_remediation`、complete zero findings なら同じ scope で `review_clear` に遷移する。remediation 後の再レビューも同じ Design/Plan を指定して `/justice-review-gate` を再実行する。
 - malformed / incomplete / scope不一致 / Gate ID不一致 / review中の成果物変更 / reviewer実行失敗は `[JUSTICE: REVIEW GATE BLOCKED]` とし、pending Gate を破棄して再実行を要求する。
 - marker だけを偽装しても、対応する user-invoked pending Gate がなければ claim できず、通常の mandatory `sp-final-review` authorization boundary を迂回できない。
-- `review_clear` は READY のためのレビュー条件を満たしたことを示すだけで、人間の承認・マージを意味しない。実装開始には引き続き `/justice-implement --approved` が必要。
+- `review_clear` はレビュー条件を満たしたことだけを示し、実装許可ではない。Review Gate 開始後は session lock を有効にし、実装可能な tool を拒否する。findings がある間は Design/Plan の修正と再レビューだけが可能。
+- findings が空でも、Review Gate の結果後に実装へ自動移行しません。現在の応答を終了し、利用者が `/justice-implement --approved` を実行するまで、読み取りと再レビュー以外の操作を拒否します。lock は同一 OpenCode process 内に限り、再起動後の維持は対象外です。
 
 成果物が読めない場合は `[JUSTICE: REVIEW GATE BLOCKED]` を返し、レビューを dispatch しません。不正文法は `[JUSTICE: COMMAND REJECTED]` として扱われます。
 
@@ -440,7 +443,8 @@ OpenCode の file-reference 記法も利用できます。
 ### 動作
 
 - コマンドは `task()` やスキルを起動しません。次の `task()` 呼び出しに対して、Justice が計画コンテキストと実装 directive を注入する権利を 1 回だけ付与します。
-- 未アーム状態で active plan に対して `task()` が呼ばれた場合、または plan.md 言及による委譲が発生した場合、`[JUSTICE: IMPLEMENTATION UNAUTHORIZED]` advisory だけが注入されます。plan context、delegation metadata、`taskId`、追加スキルは渡されません。`task()` 呼び出しの場合、advisory は prompt に注入されますが、それ以外の引数は変更されません。
+- Review Gate lock がある場合、clear 済みの最新 Review Gate と未変更の Plan に限って lock を解除します。findings が残る場合、Gate が未完了の場合、または Design/Plan digest が変わっている場合は arm されません。
+- active Review Gate lock の外では、未アーム状態で active plan に対して `task()` が呼ばれた場合に `[JUSTICE: IMPLEMENTATION UNAUTHORIZED]` advisory が注入されます。lock 中は advisory ではなく tool 実行をキャンセルし、task は worker execution へ到達しません。
 - 許可は 1 回の `task()` 呼び出しで消費されます。追加のタスクを委譲する場合は、再度 `/justice-implement --plan <planPath> --approved` を実行してください。
 - active plan が別のパスへ変更またはクリアされると、未消費の許可も失効します。`/justice-start` を再実行した場合は、同じ plan パスでも再アームが必要です。
 

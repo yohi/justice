@@ -52,7 +52,7 @@ const GUIDANCE = {
   review_remediation:
     "`receiving-code-review` を使って未解決のレビュー指摘を検討・修正してください。修正後の再レビューは、同じ Design / Implementation Plan を指定して `/justice-review-gate --design <designPath> --plan <planPath>` を再実行してください。\n`justice_review` の解決記録は、人間が承認した項目だけに使用してください。",
   review_clear:
-    "レビュー指摘がない完全スナップショットを観測しました。既存の承認フローに進んでください。\nこの結果から、PR作成、人間の承認、またはマージ済みとは推測しません。",
+    "[JUSTICE: STOP AFTER REVIEW; WAIT FOR USER]\nReview Gate は完了しましたが、これは実装開始の許可ではありません。この結果を報告したら、現在の応答を終了してください。実装スキルを読み込む、計画を実行用に読み直す、worktree/workspace を作成する、task() を呼び出す、またはファイルを変更してはいけません。\n実装は、利用者からの別の明示的な開始指示と `/justice-implement --approved` を受けた後にのみ開始してください。",
   implementation:
     "実装対象の設計・計画を確認し、変更を最小限にして検証を実行してください。\nJusticeは外部での承認やマージ状態を検証できません。実行は、外部の人間による承認・マージ完了の確認後にのみ継続してください。\n実装PRでは、計画との差分、テスト、退行リスクをAIレビューし、人間の承認を待ってください。",
   implementation_unauthorized:

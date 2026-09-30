@@ -1,11 +1,11 @@
 import type { ReviewArtifactFindingV1 } from "./types";
 
 export const REVIEW_GATE_EXECUTION_MARKER = "[JUSTICE: PLAN REVIEW GATE EXECUTION]";
+export const REVIEW_GATE_WORKER_AGENT = "justice-review-worker";
 
 export interface ReviewGateWorkerResult {
   readonly schemaVersion: 1;
   readonly gateId: string;
-  readonly reviewScope: readonly [string, string];
   readonly complete: boolean;
   readonly findings: readonly ReviewArtifactFindingV1[];
 }
@@ -27,10 +27,29 @@ function isFinding(value: unknown): value is ReviewArtifactFindingV1 {
   );
 }
 
+function extractKnownReviewPayload(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) return trimmed;
+
+  const separator = "\n---\n\n";
+  const separatorIndex = trimmed.indexOf(separator);
+  if (separatorIndex < 0) return undefined;
+
+  const metadataStart = trimmed.lastIndexOf("\n\n<task_metadata>");
+  if (metadataStart < 0 || metadataStart <= separatorIndex + separator.length) return undefined;
+
+  const payload = trimmed.slice(separatorIndex + separator.length, metadataStart).trim();
+  if (!payload.startsWith("{") || !payload.endsWith("}")) return undefined;
+  return payload;
+}
+
 export function parseReviewGateWorkerResult(raw: string): ReviewGateWorkerResult | undefined {
+  const payload = extractKnownReviewPayload(raw);
+  if (payload === undefined) return undefined;
+
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw.trim());
+    parsed = JSON.parse(payload);
   } catch {
     return undefined;
   }
@@ -39,9 +58,6 @@ export function parseReviewGateWorkerResult(raw: string): ReviewGateWorkerResult
     parsed.schemaVersion !== 1 ||
     typeof parsed.gateId !== "string" ||
     parsed.gateId.length === 0 ||
-    !Array.isArray(parsed.reviewScope) ||
-    parsed.reviewScope.length !== 2 ||
-    !parsed.reviewScope.every((entry) => typeof entry === "string" && entry.length > 0) ||
     typeof parsed.complete !== "boolean" ||
     !Array.isArray(parsed.findings) ||
     !parsed.findings.every(isFinding)
@@ -51,7 +67,6 @@ export function parseReviewGateWorkerResult(raw: string): ReviewGateWorkerResult
   return {
     schemaVersion: 1,
     gateId: parsed.gateId,
-    reviewScope: Object.freeze([...parsed.reviewScope]) as readonly [string, string],
     complete: parsed.complete,
     findings: Object.freeze(parsed.findings.map((finding) => Object.freeze({ ...finding }))),
   };

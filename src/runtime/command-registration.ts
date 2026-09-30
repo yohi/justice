@@ -1,6 +1,10 @@
+import { REVIEW_GATE_WORKER_AGENT } from "../core/review-gate-execution";
+
 export interface JusticeCommandDefinition {
   readonly template: string;
   readonly description: string;
+  readonly agent?: string;
+  readonly subtask?: boolean;
 }
 
 export interface CommandRegistrationEntry {
@@ -11,9 +15,63 @@ export interface CommandRegistrationEntry {
   subtask?: boolean;
 }
 
+export interface JusticeAgentRegistrationEntry {
+  readonly description: string;
+  readonly mode: "subagent";
+  readonly prompt: string;
+  readonly permission: Readonly<Record<string, "allow" | "ask" | "deny">>;
+  readonly model?: string;
+}
+
 export interface CommandRegistrationTarget {
   command?: Record<string, CommandRegistrationEntry>;
+  agent?: Record<
+    string,
+    JusticeAgentRegistrationEntry | Record<string, unknown> | undefined
+  >;
 }
+
+export const JUSTICE_REVIEW_CONTROLLER_AGENT = "justice-review-controller";
+export const JUSTICE_REVIEW_WORKER_AGENT = REVIEW_GATE_WORKER_AGENT;
+
+export const JUSTICE_REVIEW_CONTROLLER_DEFINITION: Readonly<JusticeAgentRegistrationEntry> =
+  Object.freeze({
+    description:
+      "Justice-only controller that dispatches exactly one Design/Plan Review Gate task.",
+    mode: "subagent",
+    prompt: [
+      "You are the Justice Review Gate controller.",
+      "Do not review, inspect, summarize, or modify the artifacts yourself.",
+      "For the single user message you receive, invoke the task tool exactly once.",
+      'Use subagent_type="justice-review-worker", run_in_background=false, load_skills=[], and description="Justice plan review gate".',
+      "Do not pass a category; Justice records this marked task as sp-final-review internally.",
+      "Pass the full user message byte-for-byte as the task prompt.",
+      "Do not call call_omo_agent or any other tool.",
+      "Do not alter, quote, wrap, or summarize the delegated prompt.",
+      "After task returns, return its output verbatim with no additional prose.",
+      'If task is unavailable or fails, return exactly "[JUSTICE: REVIEW GATE CONTROLLER FAILED]" and do not fall back.',
+    ].join("\n"),
+    permission: Object.freeze({
+      "*": "deny",
+      task: "allow",
+    }),
+  });
+
+export const JUSTICE_REVIEW_WORKER_DEFINITION: Readonly<JusticeAgentRegistrationEntry> =
+  Object.freeze({
+    description: "Read-only Justice worker for Design/Plan Review Gate tasks.",
+    mode: "subagent",
+    prompt: [
+      "You are the isolated Justice Review Gate worker. Review only the Design and Implementation Plan named in the user message together.",
+      "Read only those two named artifacts. Do not read README, AGENTS, SPEC, code, or other files.",
+      "Do not invoke skills, memory search, code search, shell, task, or any other agent/tool. Do not modify files.",
+      "Return exactly the JSON object and gateId requested in the user message, with no prose or markdown fences.",
+    ].join("\n"),
+    permission: Object.freeze({
+      "*": "deny",
+      read: "allow",
+    }),
+  });
 
 const justiceCommandDefinitions = {
   "justice-start": Object.freeze({
@@ -27,6 +85,8 @@ const justiceCommandDefinitions = {
   "justice-review-gate": Object.freeze({
     template: "$ARGUMENTS",
     description: "Run the Justice Design / Implementation Plan review gate",
+    agent: JUSTICE_REVIEW_CONTROLLER_AGENT,
+    subtask: true,
   }),
 } satisfies Record<string, JusticeCommandDefinition>;
 
@@ -70,9 +130,64 @@ export async function registerJusticeCommands(
   log: CommandRegistrationLogger,
 ): Promise<void> {
   const commands = config.command ?? {};
+  const agents = config.agent ?? {};
   config.command = commands;
+  config.agent = agents;
+
+  let reviewControllerAvailable = true;
+  let reviewControllerModel: string | undefined;
+  const configuredController = agents[JUSTICE_REVIEW_CONTROLLER_AGENT];
+  if (configuredController !== undefined) {
+    const configuredModel =
+      typeof configuredController === "object" && configuredController !== null
+        ? configuredController.model
+        : undefined;
+    if (typeof configuredModel === "string" && configuredModel.trim().length > 0) {
+      reviewControllerModel = configuredModel;
+      agents[JUSTICE_REVIEW_CONTROLLER_AGENT] = {
+        ...JUSTICE_REVIEW_CONTROLLER_DEFINITION,
+        ...configuredController,
+        description: JUSTICE_REVIEW_CONTROLLER_DEFINITION.description,
+        mode: JUSTICE_REVIEW_CONTROLLER_DEFINITION.mode,
+        prompt: JUSTICE_REVIEW_CONTROLLER_DEFINITION.prompt,
+        permission: { ...JUSTICE_REVIEW_CONTROLLER_DEFINITION.permission },
+      };
+    } else {
+      reviewControllerAvailable = false;
+      await log(
+        "warn",
+        `[Justice] Agent "${JUSTICE_REVIEW_CONTROLLER_AGENT}" is already defined without a model; skipping automatic Review Gate controller registration.`,
+      );
+    }
+  } else {
+    agents[JUSTICE_REVIEW_CONTROLLER_AGENT] = {
+      ...JUSTICE_REVIEW_CONTROLLER_DEFINITION,
+      permission: { ...JUSTICE_REVIEW_CONTROLLER_DEFINITION.permission },
+    };
+  }
+
+  const configuredWorker = agents[JUSTICE_REVIEW_WORKER_AGENT];
+  agents[JUSTICE_REVIEW_WORKER_AGENT] = {
+    ...JUSTICE_REVIEW_WORKER_DEFINITION,
+    ...(typeof configuredWorker === "object" && configuredWorker !== null
+      ? configuredWorker
+      : {}),
+    description: JUSTICE_REVIEW_WORKER_DEFINITION.description,
+    mode: JUSTICE_REVIEW_WORKER_DEFINITION.mode,
+    prompt: JUSTICE_REVIEW_WORKER_DEFINITION.prompt,
+    permission: { ...JUSTICE_REVIEW_WORKER_DEFINITION.permission },
+  };
 
   for (const [name, definition] of Object.entries(JUSTICE_COMMAND_DEFINITIONS)) {
+    if (name === "justice-review-gate" && !reviewControllerAvailable) {
+      if (!Object.prototype.hasOwnProperty.call(commands, name)) {
+        await log(
+          "warn",
+          "[Justice] Review Gate command was not auto-registered because its dedicated controller agent is unavailable.",
+        );
+      }
+      continue;
+    }
     if (Object.prototype.hasOwnProperty.call(commands, name)) {
       await log(
         "warn",
@@ -80,6 +195,11 @@ export async function registerJusticeCommands(
       );
       continue;
     }
-    commands[name] = { ...definition };
+    commands[name] = {
+      ...definition,
+      ...(name === "justice-review-gate" && reviewControllerModel !== undefined
+        ? { model: reviewControllerModel }
+        : {}),
+    };
   }
 }

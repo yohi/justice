@@ -695,15 +695,6 @@ export class JusticePlugin {
           });
       }
       case "PreToolUse": {
-        // Open the callId-keyed task window before delegation logic runs. The
-        // window is closed in the matching PostToolUse case regardless of success.
-        openSessionTaskWindow(this.sessionStateProvider, event);
-        // Capture session generation before Promise.all so we can detect if the
-        // session was removed while handlers were pending (race-condition guard).
-        const capturedGeneration =
-          event.sessionId !== undefined
-            ? this.sessionStateProvider.getSessionGeneration(event.sessionId)
-            : undefined;
         const planReviewGateResponse =
           event.payload.toolName === "task"
             ? await this.planBridge.handlePlanReviewGatePreToolUse(event).catch((err: unknown) => {
@@ -712,6 +703,31 @@ export class JusticePlugin {
               })
             : null;
         if (planReviewGateResponse !== null) return planReviewGateResponse;
+
+        const lockOwnerSessionId =
+          event.lockOwnerSessionId === undefined ? event.sessionId : event.lockOwnerSessionId;
+        const reviewGateToolPaths =
+          event.reviewGateToolPaths ??
+          (event.payload.toolName === "edit" ||
+          event.payload.toolName === "write" ||
+          event.payload.toolName === "apply_patch"
+            ? null
+            : []);
+        const lockDecision = this.planBridge.classifyReviewGateToolUse(lockOwnerSessionId, {
+          toolName: event.payload.toolName,
+          isPendingReviewGateTask: false,
+          queryOnly:
+            event.payload.toolName === "justice_review" && !("resolve" in event.payload.toolInput),
+          changedPaths: reviewGateToolPaths,
+        });
+        if (lockDecision?.kind === "deny") {
+          return { action: "skip", reason: lockDecision.reason };
+        }
+
+        openSessionTaskWindow(this.sessionStateProvider, event);
+        // Capture session generation before Promise.all so we can detect if the
+        // session was removed while handlers were pending (race-condition guard).
+        const capturedGeneration = this.sessionStateProvider.getSessionGeneration(event.sessionId);
         const reviewCategory = resolveMandatoryReviewCategory(event);
         if (reviewCategory !== undefined && event.callId !== undefined) {
           const calls = this.reviewCallsBySession.get(event.sessionId) ?? new Set<string>();

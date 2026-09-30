@@ -258,10 +258,10 @@ Event:session.error → ObservationHandler.handleSessionError()  (all session.er
 
 config                              → registerJusticeCommands(config)  (registration only; adds `justice-start` / `justice-review-gate` / `justice-implement` to `Config.command`)
 experimental.chat.system.transform  → safe `justice-*` command names only  (LLM visibility only; no tool capability or execution authority)
-command.execute.before              → PlanBridge.handleWorkflowStart() / handleReviewGateStart() / handleImplementationArm()  (execution only; `justice-start` / `justice-review-gate` / `justice-implement`。handleEvent() 非経由の直接ディスパッチ。詳細は §4.1a)
+command.execute.before              → host-expanded command prompt parts を Justice canonical directive に置換しつつ PlanBridge.handleWorkflowStart() / handleReviewGateStart() / handleImplementationArm() を実行（詳細は §4.1a）
 ```
 
-> **Registration vs. visibility vs. execution.** The `config` hook is responsible for registration only: it mutates the host's `Config.command` map to add the canonical `justice-start`, `justice-review-gate`, and `justice-implement` definitions when absent, leaving any existing definitions untouched. `experimental.chat.system.transform` exposes only syntactically safe `justice-*` command names from the resolved command map so the LLM does not confuse absence from its tool list with absence from OpenCode. Descriptions/templates are never promoted into system context, and this hook grants no execution capability. The `command.execute.before` hook is responsible for execution only: it fires after a registered command is invoked and runs the corresponding workflow bootstrap or implementation-arm logic. `/justice-implement --approved` remains an explicit user authorization boundary.
+> **Registration vs. visibility vs. prompt execution.** The `config` hook is responsible for registration only: it mutates the host's `Config.command` map to add the canonical `justice-start`, `justice-review-gate`, and `justice-implement` definitions when absent, leaving any existing definitions untouched. The canonical `justice-review-gate` registration sets `agent="justice-review-controller"` and `subtask: true`. OpenCode native TaskTool creates only the dedicated controller child session; that controller is registered with `permission: {"*":"deny","task":"allow"}` so its model-visible tools contain only `task`. It must delegate the exact Justice reviewer prompt once through OmO `task` using `subagent_type="justice-review-worker"` and no category; Justice records the marked task internally as `sp-final-review` and forces foreground execution. The native outer task is never treated as the review worker. `experimental.chat.system.transform` exposes only syntactically safe `justice-*` command names from the resolved command map so the LLM does not confuse absence from its tool list with absence from OpenCode. OpenCode custom commands are prompt templates: the host expands `$ARGUMENTS`, resolves `@path` references into prompt parts, invokes `command.execute.before`, and then still executes the normal `prompt()` path. Justice therefore treats `command.execute.before` as a prompt-rewrite/controller boundary, not as a cancelable RPC handler. `/justice-implement --approved` remains an explicit user authorization boundary.
 
 ### 4.1 `plan-bridge` — タスク委譲と参謀誘導の連携
 
@@ -385,7 +385,7 @@ command.execute.before              → PlanBridge.handleWorkflowStart() / handl
 `OpenCodeAdapter.onCommandExecuteBefore` は以下の 3 つのコマンドを処理する:
 
 - `justice-start`: ワークフロー・ブートストラップを開始し、design/plan/レビュー段階の guidance を注入する。
-- `justice-review-gate`: Design と Implementation Plan の両方を検証し、`[JUSTICE: REVIEW GATE REQUESTED]` または `[JUSTICE: REVIEW GATE BLOCKED]` guidance を注入する。成功時は `requesting-code-review` を要求し、既存 `code_review` complete snapshot 経路へレビュー実行を委ねる。
+- `justice-review-gate`: Design と Implementation Plan の両方を直接検証し、`[JUSTICE: REVIEW GATE REQUESTED]` または `[JUSTICE: REVIEW GATE BLOCKED]` guidance を生成する。成功時は Justice-owned marker / Gate ID / exact prompt を持つ単一 foreground `task()` を runtime で `sp-final-review` へ固定し、strict structured result を Gate outcome として取り込む。`requesting-code-review` / `code-review` Skill、CodeRabbit CLI、generic `code_review` tool に executor selection を委ねない。
 - `justice-implement`: active plan に対する継続的な実装委譲を許可し、`[JUSTICE: IMPLEMENTATION ARMED]` guidance を注入する。
 
 3コマンドはいずれも skill や `task()` を直接起動せず、純粋に synthetic text part を注入する Controller 境界である。`justice-review-gate` も review executor そのものではなく、レビュー対象と実行契約を deterministic に固定する入口である。
@@ -410,15 +410,15 @@ command.execute.before              → PlanBridge.handleWorkflowStart() / handl
    b. セッションごとの bootstrap 状態（phase・request）を保存する。`destroySession()` で削除される。
    c. `ObservationHandler` が設定されている場合のみ、`workflow_started` と `design_requested`/`plan_requested`/`plan_activated` のいずれか1件を `emitWorkflowStartedEvent()`/`emitWorkflowPhaseEvent()` 経由で `Promise.allSettled` により並行発火する（best-effort）。各レコードの `directiveStage` は注入した指示段階を後から追跡するための audit-only メタデータであり、実行権限や Gate Evidence には使用しない。`ObservationHandler` が `null` の場合はイベント発火自体を行わずスキップする。`Promise.allSettled` の個別失敗（片方または両方）は通知のみに使われて握り潰され、ガイダンス生成（後述 5.）は audit イベントの成否に関わらず常に継続する（fail-open）。
    d. workflow-start のたびにメモリ内のアーム補助状態をクリアする。同じ plan パスでの再開も例外ではないが、永続化された Plan 認可は失効させない。`phase === "plan_ready"` の場合のみ `setActivePlan()` で読み取り可能なプランを後続の task コンテキスト候補として活性化する。それ以外は `setActivePlan(null)` に加え完了入力のクリアを行う。`plan_activated` はこの選択を監査記録に残すだけで、実装の認可を意味しない。
-5. `justice-review-gate` の場合は Design / Plan の両方を必須とする。`PlanBridge.handleReviewGateStart(sessionId, request)` はまず同一 session の workflow bootstrap が存在し、`phase=plan_ready` で、bootstrap の `designPath` / `planPath` が command request と完全一致し、active Plan も同じ Plan であることを検証する。この bootstrap binding を満たした後にのみ双方の read-only 可読性を再検証する。条件を満たす場合だけランダム Gate ID、正規化済み review scope、Design/Plan 内容の SHA-256 digest、Justice が生成した reviewer prompt 全文を session 単位の pending Gate として保持する。bootstrap 不在・phase 不一致・artifact mismatch・active Plan mismatch・artifact unreadable は `[JUSTICE: REVIEW GATE BLOCKED]` とし、reviewer を dispatch しない。
-6. `/justice-review-gate` 自体を pre-implementation review の Controller entrypoint とし、`[JUSTICE: REVIEW GATE REQUESTED]` 後に `requesting-code-review` または別 review Skill を起動しない。実 reviewer は Justice marker と Gate ID を含む exact reviewer prompt を使う単一 foreground `task()` とし、PreToolUse で Justice が `category="sp-final-review"` / `run_in_background=false` を強制する。別 Skill `code-review`、CodeRabbit CLI、`justice_review` は Design/Plan Gate executor として使用しない。
+5. `justice-review-gate` の場合は Design / Plan の両方を必須とする。`/justice-review-gate` 自体が user-invoked pre-implementation review authority であり、`/justice-start` bootstrap の存在や `plan_ready` state は前提にしない。`PlanBridge.handleReviewGateStart(sessionId, request)` は指定 path の安全性・可読性を直接検証し、条件を満たす場合だけランダム Gate ID、正規化済み review scope、Design/Plan 内容の SHA-256 digest、Justice が生成した reviewer prompt 全文を session 単位の pending Gate として保持する。artifact unreadable / invalid は `[JUSTICE: REVIEW GATE BLOCKED]` とし、reviewer を dispatch しない。
+6. `/justice-review-gate` 自体を pre-implementation review の Controller entrypoint とし、canonical command registration は `agent="justice-review-controller"` + `subtask: true` とする。成功時の `command.execute.before` は OpenCode が生成した native subtask part を1件だけ残し、その prompt を Justice marker / Gate ID を含む exact reviewer prompt に置換する。native subtask は review worker ではなく controller wrapper であり、controller agent は `permission: {"*":"deny","task":"allow"}` により `task` 以外を model-visible tool set から除外される。controller は exact prompt を OmO plugin `task` に `subagent_type="justice-review-worker"`、categoryなしで1回だけ委譲する。Justice は marked task を内部で `sp-final-review` として記録し、foreground 実行を強制する。inner task の PreToolUse は Gate ID を全 pending Gates から一意解決し、controller child session から parent Gate を claimする。`call_omo_agent` は controller から不可視であり fallback 不可。
 7. `JusticePlugin` は marked plan-review task を通常の mandatory `sp-final-review` claim より先に `PlanBridge.handlePlanReviewGatePreToolUse()` へルーティングする。matching user-invoked pending Gate と exact reviewer prompt が存在する場合だけ callId を claim する。pending Gate のない forged marker は `[JUSTICE: REVIEW GATE CLAIM BLOCKED]` となり、post-authorization mandatory-review authorization/correlation 境界を迂回しない。
-8. matching call の PostToolUse は `PlanBridge.handlePlanReviewGatePostToolUse()` が mandatory review completion より先に処理する。reviewer 出力は strict JSON (`schemaVersion=1`, exact Gate ID, exact reviewScope, `complete=true`, findings[]) でなければならない。Justice は completion 時に Design/Plan を再読込して digest を再計算し、レビュー中に成果物が変わっていれば stale result として `[JUSTICE: REVIEW GATE BLOCKED]` を返して pending state を破棄する。
+8. matching inner OmO task の PostToolUse は `PlanBridge.handlePlanReviewGatePostToolUse()` が mandatory review completion より先に処理する。OmO sync task は reviewer text を `Task completed ... --- ... <task_metadata>` の既知 wrapper で返すため、Justice は raw JSON またはこの既知 wrapper から strict reviewer JSON (`schemaVersion=1`, exact Gate ID, `complete=true`, findings[]) だけを抽出する。任意 prose wrapper は受理しない。reviewScope は pending Gate が canonical authority を保持する。completion 時には Design/Plan digest も再検証する。
 9. valid reviewer result は `ObservationHandler.handlePlanReviewGateResult()` が exact Gate scope の complete `review_observed` として永続化する。findings があれば `review_remediation`、complete zero findings なら `review_clear` を注入する。この pre-implementation Gate result は generic host `code_review` tool の存在に依存しない。`justice_review` は引き続き review state query / human-approved resolve 専用である。
 10. malformed / incomplete / Gate ID 不一致 / scope 不一致 / reviewer error / digest stale の各結果は `[JUSTICE: REVIEW GATE BLOCKED]` として terminal に扱い、当該 pending Gate / call claim を破棄してユーザーに `/justice-review-gate` の再実行を要求する。
 11. `justice-implement` の場合は `PlanBridge.handleImplementationArm(sessionId, request)` を呼び出し、承認済み Plan に対する実装 guidance を返す。
-12. `result.guidance` が空でなければ、対応する guidance を synthetic な `output.parts` テキストパートとして追記する。`justice-start` は設計・計画段階、`justice-review-gate` はレビュー開始/blocked、`justice-implement` は Plan 単位の実装許可を示す。
-13. `plan_ready` / `review_clear` のいずれも人間承認・マージを意味しない。`/justice-implement --plan <planPath> --approved` により active Plan を明示承認した場合のみ、その Plan に含まれる `task()` 委譲へ `test-driven-development` と `verification-before-completion` を既存指定とマージし、内部の `loadSkills` から OMO wire の `load_skills` に接続する。
+12. recognized Justice command では host-expanded parts をそのまま LLM に渡さない。`justice-start` / `justice-implement` および blocked/rejected `justice-review-gate` は既存 parts を Justice canonical synthetic text に置換する。成功した Review Gate は host native subtask part を controller wrapper として保持し、agent は登録済み `justice-review-controller`、prompt は exact reviewer prompt とする。outer controller task は Justice worker claim から除外し、inner OmO `task` が terminal result を生成しないまま outer task が終了した場合は pending Gate を破棄して `[JUSTICE: REVIEW GATE BLOCKED]` とする。
+13. `plan_ready` / `review_clear` のいずれも人間承認・マージを意味しない。Review Gate lock 中の実装可能 tool は `/justice-implement --plan <planPath> --approved` が同一の clear 済み Plan を正常に arm するまで拒否する。arm 成功時のみ、その Plan の `task()` 委譲へ `test-driven-development` と `verification-before-completion` を既存指定とマージし、内部の `loadSkills` から OMO wire の `load_skills` に接続する。
 
 `WorkflowStartResult` は bootstrap の機械可読な結果として、artifact 状態の `phase`、
 注入した policy の `directiveStage`、その policy が推奨する
@@ -426,7 +426,7 @@ command.execute.before              → PlanBridge.handleWorkflowStart() / handl
 実行コンテキスト・表示用フィールドであり、いずれも PR 承認・マージ・実装認可を
 表現しない。
 
-**Design/Plan Review Gate bootstrap binding:** `/justice-review-gate` は同一 session の `/justice-start` が確立した `plan_ready` workflow の Design / Plan と完全一致する場合にのみ Gate authority を生成する。別 session、bootstrap 未実行、`design_required` / `plan_required`、path 差し替え、active Plan drift のいずれでも Gate ID / reviewer prompt は発行しない。`/justice-start` の再実行は既存 pending Gate を supersede する。
+**Design/Plan Review Gate authority:** `/justice-review-gate --design <path> --plan <path>` の明示的 user invocation 自体を Gate authority とする。`/justice-start` は artifact readiness を案内する convenience bootstrap であり、Review Gate の前提 state ではない。したがって plugin reload / session recreation 等で bootstrap state が失われても、指定 artifact が有効なら Review Gate は standalone に開始できる。
 
 **Design/Plan Review Gate executor と mandatory review の分離:** pre-implementation Gate の `sp-final-review` は model routing category を再利用するが、実装後の mandatory Final Review と同じ authorization/correlation state machine は使用しない。前者の authority は user-invoked `/justice-review-gate` が生成した pending Gate ID + exact prompt + artifact digests であり、後者の authority は `ApprovedPlanBinding`、`final_review_pending` lifecycle、`ReviewDispatchSlot` である。JusticePlugin の PreToolUse/PostToolUse routing は plan-review marker を先に判定することで両 protocol を明示的に分離する。
 **実行権限との関係:** `PlanBridge.handleWorkflowStart()` は `task()` を一切呼び出さない（自動でのサブエージェント委譲やスキル起動は行わない）。ガイダンス文字列の提示に留め、実際の PR・レビュー機能と `task()` 呼び出しはエージェントが既存の権限で実行する。Justice は PR を作成せず、レビューを承認せず、PR をマージせず、PR 作成・承認・マージ状態を推測しない。人間が承認・マージ判断を保持する — Justice はここでも「神経系」であり「手足」ではない。
@@ -466,16 +466,19 @@ directive 本文は HookResponse の synthetic guidance としてのみ扱い、
 | `implementation_arm_required` | なし | `await_human_approval` | `external_unverified` | 未アーム状態、または要求された plan が読めないなど不完全・失敗した arm リクエストへの安全側通知 |
 
 `plan_ready`、`plan_activated`、`review_clear` は、承認・マージ・実装認可を意味
-しない。`implementation_unauthorized` も L0 advisory であり、実行を物理的に
-停止しない。将来、信頼済みの人間承認 artifact を導入した場合にのみ
-`implementation_authorized` を導出できる。
+しない。通常の `implementation_unauthorized` は引き続き L0 advisory であり、
+実行を物理的に停止しない。ただし `/justice-review-gate` 開始後は、別の
+session-scoped Implementation Lock が Review Gate の状態を追跡し、実装可能な
+tool を adapter 境界で拒否する。解除は、未変更の clear 済み Plan に対する
+`/justice-implement --approved` の成功時に限る。
 
 `PlanBridge.handlePreToolUse()` は active plan を持つ `task()` に対し、認可済みの
-session / planPath と現行 Plan の fingerprint を照合する。認可不在または失効済み
-認可の呼び出しは
-`implementation_unauthorized` advisory だけを返し、plan 読み込み、delegation 構築、
-wisdom/persona 解決、loop 状態更新、completion 入力記録、`modifiedPayload` 生成を
-行わない。Adapter は全ての `task()` 呼び出しで、早期 return の前にも元の
+session / planPath と現行 Plan の fingerprint を照合する。Review Gate lock 外で
+認可不在または失効済み認可の呼び出しは `implementation_unauthorized` advisory
+だけを返し、plan 読み込み、delegation 構築、wisdom/persona 解決、loop 状態更新、
+completion 入力記録、`modifiedPayload` 生成を行わない。Review Gate lock 中の
+実装可能 tool はこの legacy advisory 経路へ到達する前に adapter boundary で skip
+される。Adapter は全ての `task()` 呼び出しで、早期 return の前にも元の
 `output.args` object を差し替えずに sanitize・canonicalize する。したがって未アーム
 経路でも `taskId` / `loadSkills` / `runInBackground` はそれぞれ `task_id` /
 `load_skills` / `run_in_background` になり、禁止された routing field は除去される。
@@ -1584,7 +1587,7 @@ bun run build
 
 AI 開発では「タスクは完了と報告されたが機能は壊れている」（Task Success ≠ Feature Success）という失敗が頻発します。v2.0 はこれを検出するための **Quality Control Plane の基盤層**です。Justice が観測した事実（Evidence）と下した判定（Verdict）をイベントとして記録し、状態をそこから投影（projection）する「背骨」を、既存の v1 機能（plan-bridge / task-feedback / wisdom）を **一切変更せず加算**する形で追加しています（加算シャドウ・dual アーキテクチャ）。
 
-- **L0 Advisory のみ**: v2.0 は強制（block）を行いません。Gate が `FAIL` を返してもツール実行やタスク完了そのものは妨げられず、警告・バナー・チェックリストの提示に留まります。判定権限（Verdict authority）は Justice が保持しますが、強制機構（Enforcement）の段階的強化は v2.5 以降に委ねられます。
+- **Quality Gate は L0 Advisory**: v2.0 の evidence Gate は強制（block）を行いません。Gate が `FAIL` を返してもツール実行やタスク完了そのものは妨げられず、警告・バナー・チェックリストの提示に留まります。別機構の Review Gate Implementation Lock は、レビュー結果に基づく実装認可を `/justice-implement --approved` まで保留し、その間の実装可能な tool を拒否します。この限定的な認可境界は evidence Gate の判定・強制レベルを変更しません。
 - **Pure Core / Fail-Open / Immutable**: v1 と同じ設計原則を継承します。`src/core/v2/` は `@opencode-ai/*` を import しない純粋関数群であり、I/O 境界（`src/runtime/`）・Hook 境界（`src/hooks/observation-handler.ts`）はすべて `try/catch` で保護され、失敗時は `PROCEED` に縮退します。
 
 ### 15.2 アーキテクチャ概要
@@ -1700,7 +1703,7 @@ type EvidenceRef = FullEvidenceRef | SelfEvidenceRef;
 
 - `review_observed` レコード（`reviewScope` 付き）を scope 別に集約し、severity（`critical`/`major`/`minor`）は凍結語彙の決定論的正規表現分類器（`review-severity.ts`）で導出する。`itemKey` は severity・ruleId・location ハッシュ・evidence ハッシュから決定的に合成される。
 - `task` と runtime の汎用 `code_review` capability の出力を review observation の入口とする。core policy はレビュー製品名を持たず、完全スナップショットは `code_review` から受け取る信頼済み typed artifact に限って認める。別の直接 review tool を統合する場合は runtime adapter を拡張し、core policy や Gate contract は変更しない。
-- 観測結果に指摘があれば `review_remediation`、完全スナップショットに指摘がなければ `review_clear` directive を L0 advisory として Gate advice と合成する。不完全なレビューで指摘がないだけの場合は `review_clear` を発行しない。directive は Evidence ではなく、人間承認・PR 作成・マージの事実を主張しない。
+- 観測結果に指摘があれば `review_remediation`、完全スナップショットに指摘がなければ `review_clear` directive を L0 advisory として Gate advice と合成する。不完全なレビューで指摘がないだけの場合は `review_clear` を発行しない。directive 自体は Evidence ではなく、人間承認・PR 作成・マージの事実を主張しない。実装拒否は別個の session-scoped Review Gate lock が担い、`review_clear` directive の L0 性質を変更しない。
 - 再配送の抑止 key は session ごとの `Map<sessionId, Set<string>>` に、`callId`、結果 hash、完全スナップショットフラグを JSON tuple として保存する。同一 tuple は再注入しないが、結果 hash が変わった再レビューは新規観測とする。`destroySession()` はこの状態を破棄する。
 - **`open → resolved` の遷移が許される経路は次の 3 つのみ**（D32）。単なる指摘の消失（範囲差・検出漏れ・出力形式変化）では **`open` のまま据置**する:
   1. 明示的解決マーカー（`resolutionMarkers[]`）
@@ -1737,7 +1740,7 @@ OpenCode に公開される **唯一のカスタムツール**です（`OpenCode
 - **Final Verifier（FR-007）**: v2.5 以降。
 - **Acceptance Criteria 判定（FR-005）**: `plan.md` 由来の feature 級基準は外部 SoT に属するため v2.5+（Feature Gate）で対応。
 - **OmO agents awareness（FR-002 の一部）**: v2.0 は skill awareness（`skill_invoked` 観測）のみに対応。どの OmO agent が起動したかの把握は v2.5 Handoff へ。
-- **Enforcement 強化（L1 deny 等）**: v2.0 は L0 Advisory のみ。強制ブロックは v2.5 以降で段階的に導入。
+- **Enforcement 強化（L1 deny 等）**: Quality Gate の強制ブロックは v2.5 以降で段階的に導入する。Review Gate に付随する実装認可 lock は、この一般的な Quality Gate enforcement の拡張ではなく、明示承認まで実装操作を拒否する限定例外である。
 - **物理 prune / checkpoint**: v2.0 は archive への移送のみ。event log の物理削除は canonical snapshot/checkpoint 定義後（v2.5+）に解禁。
 - **Artifact の authorship**: v2.0 の Artifact（`gate.yaml`/Review Summary）は `authority`（`human_approved` 等）のみを保持し、`authorship`（from→to）は持たない。Handoff（v2.5）導入時に拡張。
 - **`exit_code` の直接観測不可（限界-2）**: `tool.execute.after` には `exit_code`/`stderr` フィールドが無いため、Evidence は独立の `exit_code` フィールドを持たず、出力テキストの解析または `metadata.error` から導出した `interpretation.outcome`（`provenance: derived`）で代替する。`stderr` は `rawOutput` に統合される。将来的な OpenCode API 拡張の要望として記録。
@@ -1746,7 +1749,7 @@ OpenCode に公開される **唯一のカスタムツール**です（`OpenCode
 
 ### 15.12 既知の未解決事項・ガバナンス状況（重要）
 
-v2.0 の出荷判定に必要な前提条件は、**2026-08-04 の実機実証と再計測により、解決済み、L0 Advisory として許容、または後述の未実証限界として記録された**。したがって v2.0 Quality Control Plane は、確認済みの実行経路では実機動作が観測された状態にある。なお v2.0 はあくまで L0 Advisory（非ブロッキング）であり、Enforcement（L1 deny 等）は v2.5+ の対象である。
+v2.0 Quality Control Plane の一般的な quality verdict は L0 Advisory（非ブロッキング）である。Review Gate の implementation-authorization lock のみは、`/justice-implement --approved` まで implementation-capable tool を拒否する限定例外であり、evidence Gate の verdict enforcement を意味しない。その他の v2.0 前提条件は、**2026-08-04 の実機実証と再計測により、解決済み、L0 Advisory として許容、または後述の未実証限界として記録された**。確認済みの実行経路では実機動作が観測されており、一般的な Enforcement（L1 deny 等）は引き続き v2.5+ の対象である。
 
 - **配布エントリの根因と修正**: v3.0.0 未満は package `exports["."]` が barrel エントリを指し、OpenCode の「全 export が plugin factory または `{ server: fn }`」というローダ契約に違反していたため、`Plugin export is not a function` で plugin が一度もロードされなかった。v3.0.0 では `exports["."]` と `exports["./opencode"]` を plugin 専用エントリへ再構成し、`./core` は library entry として分離した。FF-009（`bun run test:dist`）で root / subpath のロード契約と factory 実行可能性を回帰検証する。
 
@@ -1801,7 +1804,7 @@ v2.0 の出荷判定に必要な前提条件は、**2026-08-04 の実機実証�
 | FR-603 Plan Mutation | 部分実装 | `task()` の PreToolUse 時に計画を再読込し、fingerprint mismatch を検出すると承認を無効化する。ファイル変更時の即時監視は行わない |
 | FR-604 Continuous Execution | 実装済み | 同一の承認済み plan に対する後続の `task()` 委譲では、現在の fingerprint を照合したうえで永続化済みの認可を再利用する。再アームは不要 |
 
-FR-603 の即時無効化は実装済みとして扱ってはならない。拡張時は既存の authorization ライフサイクル、plan fingerprint、fail-open 境界、および `implementation_unauthorized` の挙動を整合させる。
+FR-603 の即時無効化は実装済みとして扱ってはならない。拡張時は既存の authorization ライフサイクル、plan fingerprint、fail-open 境界、および Review Gate lock 外の `implementation_unauthorized` の挙動を整合させる。
 
 upstream compatibility audit の対象と再検証手順は [`docs/agents/upstream-drift.md`](docs/agents/upstream-drift.md) に定義する。監査証跡の正本は [`docs/reports/upstream-compatibility-audit.md`](docs/reports/upstream-compatibility-audit.md) とし、検証済みの upstream revision、検証結果、観測証拠、残存差異、受容した制限を調査日ごとのセクションへ記録する。
 

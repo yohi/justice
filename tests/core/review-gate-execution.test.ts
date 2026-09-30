@@ -21,7 +21,6 @@ describe("review gate execution contract", () => {
         JSON.stringify({
           schemaVersion: 1,
           gateId: "gate-1",
-          reviewScope: ["docs/design.md", "docs/plan.md"],
           complete: true,
           findings: [
             {
@@ -41,12 +40,49 @@ describe("review gate execution contract", () => {
     });
   });
 
+  it("parses the known OmO synchronous task completion wrapper", () => {
+    const raw = [
+      "Task completed in 12s.",
+      "",
+      "Agent: Sisyphus-Junior (category: sp-final-review)",
+      "Model: provider/model (category: sp-final-review)",
+      "",
+      "---",
+      "",
+      JSON.stringify({
+        schemaVersion: 1,
+        gateId: "gate-wrapped",
+        complete: true,
+        findings: [],
+      }),
+      "",
+      "<task_metadata>",
+      "session_id: ses_worker",
+      "task_id: ses_worker",
+      "subagent: Sisyphus-Junior",
+      "category: sp-final-review",
+      "</task_metadata>",
+    ].join("\n");
+
+    expect(parseReviewGateWorkerResult(raw)).toEqual({
+      schemaVersion: 1,
+      gateId: "gate-wrapped",
+      complete: true,
+      findings: [],
+    });
+  });
+
+  it("rejects arbitrary prose wrappers even when they contain JSON", () => {
+    const raw =
+      'review done\n{"schemaVersion":1,"gateId":"gate-1","complete":true,"findings":[]}';
+    expect(parseReviewGateWorkerResult(raw)).toBeUndefined();
+  });
+
   it.each([
     "not json",
-    JSON.stringify({ schemaVersion: 1, gateId: "", reviewScope: ["d", "p"], complete: true, findings: [] }),
-    JSON.stringify({ schemaVersion: 1, gateId: "g", reviewScope: [], complete: true, findings: [] }),
-    JSON.stringify({ schemaVersion: 1, gateId: "g", reviewScope: ["d", "p"], complete: "yes", findings: [] }),
-    JSON.stringify({ schemaVersion: 1, gateId: "g", reviewScope: ["d", "p"], complete: true, findings: [{}] }),
+    JSON.stringify({ schemaVersion: 1, gateId: "", complete: true, findings: [] }),
+    JSON.stringify({ schemaVersion: 1, gateId: "g", complete: "yes", findings: [] }),
+    JSON.stringify({ schemaVersion: 1, gateId: "g", complete: true, findings: [{}] }),
   ])("rejects malformed worker results", (raw) => {
     expect(parseReviewGateWorkerResult(raw)).toBeUndefined();
   });

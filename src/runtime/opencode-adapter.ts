@@ -18,16 +18,22 @@ import {
 } from "../core/review-gate-command";
 import { parseReviewSnapshotArtifact } from "../core/review-snapshot-artifact";
 import {
+  REVIEW_GATE_EXECUTION_MARKER,
+  REVIEW_GATE_WORKER_AGENT,
+} from "../core/review-gate-execution";
+import {
   normalizeTaskToolInputForJusticeInPlace,
   normalizeTaskToolInputForOmoWireInPlace,
   resolveTaskIdFromToolInput,
 } from "../core/task-packager";
 import { defineJusticeReviewTool } from "./justice-tools";
+import { JUSTICE_REVIEW_CONTROLLER_AGENT } from "./command-registration";
 import { createLinuxOpenat2ReviewArtifactProvider } from "./linux-review-artifact-provider";
 import type { LinuxOpenat2ReviewArtifactProvider } from "./linux-review-artifact-provider";
 import { NodeFileSystem } from "./node-file-system";
 import { OpenCodeNotifier } from "./opencode-notifier";
 import { allocateWriterId, generateWriterId } from "./writer-id";
+import { extractReviewGateToolPaths } from "./review-gate-tool-paths";
 import type { DelegatedExecutionRelationObserved } from "../core/types";
 
 const PROCEED: HookResponse = { action: "proceed" };
@@ -185,6 +191,21 @@ export class OpenCodeAdapter {
 
   getWorkspaceRoot(): string | null {
     return this.#workspaceRoot;
+  }
+
+  resolveLockOwnerSession(sessionID: string): string | undefined {
+    if (sessionID.length === 0) return undefined;
+    const visited = new Set<string>();
+    let currentSessionID = sessionID;
+    for (let depth = 0; depth <= this.#childSessionEvents.size; depth += 1) {
+      if (visited.has(currentSessionID)) return undefined;
+      visited.add(currentSessionID);
+      const relation = this.#childSessionEvents.get(currentSessionID);
+      if (relation === undefined) return currentSessionID;
+      if (relation.parentSessionId.length === 0) return undefined;
+      currentSessionID = relation.parentSessionId;
+    }
+    return undefined;
   }
 
   getJustice(): JusticePlugin | null {
@@ -656,7 +677,16 @@ export class OpenCodeAdapter {
   ): Promise<HookResponse> {
     const isTask = input.tool === "task";
     const originalPrompt = typeof output.args.prompt === "string" ? output.args.prompt : "";
+    let reviewGateLockActive = false;
     try {
+      if (isTask && this.#isReviewGateControllerTask(output.args)) {
+        await this.ensureInitialized();
+        if (
+          this.#justice
+            ?.getPlanBridge()
+            .isPendingReviewGatePrompt(input.sessionID, originalPrompt) === true
+        ) return PROCEED;
+      }
       if (isTask) {
         this.#rememberReviewCategory(input, output.args);
         normalizeTaskToolInputForJusticeInPlace(output.args);
@@ -666,9 +696,6 @@ export class OpenCodeAdapter {
         return PROCEED;
       }
 
-      // Forward every tool except justice_* query tools, which must not perturb
-      // the canonical Observation Log (D50).
-      if (input.tool.startsWith("justice_")) return PROCEED;
       await this.ensureInitialized();
       const justice = this.#justice;
       if (!justice) {
@@ -676,10 +703,38 @@ export class OpenCodeAdapter {
         return PROCEED;
       }
 
+      const lockOwnerSessionId = this.resolveLockOwnerSession(input.sessionID) ?? null;
+      reviewGateLockActive =
+        lockOwnerSessionId === null
+          ? justice.getPlanBridge().hasAnyReviewGateLock()
+          : justice.getPlanBridge().getReviewGateLock(lockOwnerSessionId) !== undefined;
+      const isPendingReviewGateTask =
+        isTask &&
+        output.args.subagent_type === REVIEW_GATE_WORKER_AGENT &&
+        lockOwnerSessionId !== null &&
+        justice
+          .getPlanBridge()
+          .isPendingReviewGatePrompt(lockOwnerSessionId, originalPrompt);
+      const reviewGateToolPaths = extractReviewGateToolPaths(input.tool, output.args);
+      const lockDecision = justice.getPlanBridge().classifyReviewGateToolUse(lockOwnerSessionId, {
+        toolName: input.tool,
+        isPendingReviewGateTask,
+        queryOnly: input.tool === "justice_review" && !("resolve" in output.args),
+        changedPaths: reviewGateToolPaths,
+      });
+      if (lockDecision?.kind === "deny") {
+        return { action: "skip", reason: lockDecision.reason };
+      }
+
+      // Justice query tools must not perturb the canonical Observation Log (D50).
+      if (input.tool.startsWith("justice_")) return PROCEED;
+
       const response = await justice.handleEvent({
         type: "PreToolUse",
         sessionId: input.sessionID,
         callId: input.callID,
+        lockOwnerSessionId,
+        reviewGateToolPaths,
         payload: {
           toolName: input.tool,
           callId: input.callID,
@@ -692,7 +747,13 @@ export class OpenCodeAdapter {
         return response;
       }
 
+      const isMarkedPlanReviewTask =
+        isTask && originalPrompt.startsWith(REVIEW_GATE_EXECUTION_MARKER);
       const modified = response.modifiedPayload as { args?: Record<string, unknown> } | undefined;
+      if (isMarkedPlanReviewTask && modified?.args === undefined) {
+        this.#failClosedReviewGateTask(output.args, response.injectedContext);
+        return response;
+      }
       const modifiedPrompt = modified?.args?.prompt;
       if (isTask && typeof modifiedPrompt === "string") {
         output.args.prompt = modifiedPrompt;
@@ -726,10 +787,38 @@ export class OpenCodeAdapter {
       this.#finalizeTaskToolInput(isTask, input, output.args);
       return response;
     } catch (err) {
-      if (isTask) normalizeTaskToolInputForOmoWireInPlace(output.args);
+      if (reviewGateLockActive) {
+        await this.log("error", "[Justice] Review Gate lock check failed closed", err);
+        return { action: "skip", reason: "implementation_not_authorized" };
+      }
+      if (isTask && originalPrompt.startsWith(REVIEW_GATE_EXECUTION_MARKER)) {
+        this.#failClosedReviewGateTask(
+          output.args,
+          "[JUSTICE: REVIEW GATE CLAIM BLOCKED] Justice failed while validating the marked Review Gate task.",
+        );
+      } else if (isTask) {
+        normalizeTaskToolInputForOmoWireInPlace(output.args);
+      }
       await this.log("error", "[Justice] onToolExecuteBefore failure", err);
       return PROCEED;
     }
+  }
+
+  #failClosedReviewGateTask(args: Record<string, unknown>, message: string): void {
+    args.prompt = message;
+    delete args.category;
+    delete args.subagent_type;
+    delete args.subagentType;
+    args.run_in_background = false;
+    delete args.runInBackground;
+  }
+
+  #isReviewGateControllerTask(args: Record<string, unknown>): boolean {
+    const command = typeof args.command === "string" ? args.command : "";
+    return (
+      args.subagent_type === JUSTICE_REVIEW_CONTROLLER_AGENT &&
+      isJusticeReviewGateCommand(command)
+    );
   }
 
   #finalizeTaskToolInput(
@@ -770,6 +859,17 @@ export class OpenCodeAdapter {
     if (this.#noOp) return;
 
     try {
+      if (input.tool === "task" && this.#isReviewGateControllerTask(input.args)) {
+        await this.ensureInitialized();
+        const planBridge = this.#justice?.getPlanBridge();
+        if (planBridge?.hasPendingPlanReviewGate(input.sessionID)) {
+          planBridge.cancelPendingPlanReviewGate(input.sessionID);
+          output.output =
+            output.output +
+            "\n\n[JUSTICE: REVIEW GATE BLOCKED] Review Gate controller returned without a terminal inner sp-final-review result. Rerun /justice-review-gate.";
+        }
+        return;
+      }
       const isTrustedReviewResolutionArtifactSource =
         TRUSTED_REVIEW_RESOLUTION_ARTIFACT_TOOLS.includes(input.tool);
       if (input.tool.startsWith("justice_") && !isTrustedReviewResolutionArtifactSource) return;
@@ -878,6 +978,8 @@ export class OpenCodeAdapter {
     args: Record<string, unknown>,
   ): void {
     if (input.tool !== "task") return;
+    const prompt = typeof args.prompt === "string" ? args.prompt : "";
+    if (prompt.startsWith(REVIEW_GATE_EXECUTION_MARKER)) return;
     const rawCategory = args.category ?? args.subagent_type;
     const category = rawCategory;
     if (category !== "sp-review" && category !== "sp-final-review") return;
@@ -978,8 +1080,14 @@ export class OpenCodeAdapter {
   }
 
   /**
-   * Handle Justice slash commands and hand the caller's synthetic guidance as an
-   * appended directive part.
+   * Handle Justice slash commands as OpenCode prompt-template rewrites.
+   *
+   * Recognized Justice commands replace the host-expanded template parts before
+   * OpenCode continues into its normal prompt(). Start/implement and blocked/rejected
+   * review commands become canonical synthetic text guidance. A successful Review Gate
+   * preserves exactly one native OpenCode subtask part, retargeted to the dedicated
+   * justice-review-controller. That wrapper child can see only the OmO plugin task tool
+   * and delegates the exact Justice-owned reviewer prompt once through sp-final-review.
    *
    * Fail-open is structural here, not a style choice: the SDK handler resolves to
    * `Promise<void>` and `output` exposes only `parts`, so there is no channel by which a
@@ -1055,8 +1163,7 @@ export class OpenCodeAdapter {
     // to avoid double-writing the same workflow lifecycle events (workflow_started +
     // plan_activated/design_requested/plan_requested) into the observation log.
 
-    if (result.guidance.length === 0) return;
-    output.parts.push(this.#buildWorkflowDirectivePart(input.sessionID, result.guidance));
+    this.#replaceCommandPartsWithGuidance(output, input.sessionID, result.guidance);
   }
 
   async #handleReviewGate(
@@ -1088,10 +1195,38 @@ export class OpenCodeAdapter {
     const justice = this.#justice;
     if (!justice) return;
 
-    const result = await justice.getPlanBridge().handleReviewGateStart(input.sessionID, request);
-    if (result.guidance.length === 0) return;
-    output.parts.push(this.#buildWorkflowDirectivePart(input.sessionID, result.guidance));
+    const planBridge = justice.getPlanBridge();
+    const subtaskPart = output.parts.find((part) => part.type === "subtask");
+    if (subtaskPart === undefined) {
+      await this.log(
+        "warn",
+        "[Justice] /justice-review-gate expected an OpenCode subtask part but none was present",
+      );
+      this.#replaceCommandPartsWithGuidance(
+        output,
+        input.sessionID,
+        [
+          "[JUSTICE: REVIEW GATE BLOCKED]",
+          "OpenCode did not provide the controller subtask part required by this Review Gate.",
+          "Review was not started. Verify that justice-review-gate is registered with the dedicated controller agent and subtask: true, then rerun /justice-review-gate.",
+        ].join("\n"),
+      );
+      return;
+    }
+
+    const result = await planBridge.handleReviewGateStart(input.sessionID, request);
+    if (!result.dispatched || result.reviewerPrompt === undefined) {
+      this.#replaceCommandPartsWithGuidance(output, input.sessionID, result.guidance);
+      return;
+    }
+
+    output.parts.splice(0, output.parts.length, {
+      ...subtaskPart,
+      prompt: result.reviewerPrompt,
+      description: "Justice plan review gate",
+    });
   }
+
   async #handleImplementationArm(
     input: CommandExecuteBeforeInput,
     output: CommandExecuteBeforeOutput,
@@ -1121,9 +1256,26 @@ export class OpenCodeAdapter {
     if (!justice) return;
 
     const result = await justice.getPlanBridge().handleImplementationArm(input.sessionID, request);
+    this.#replaceCommandPartsWithGuidance(output, input.sessionID, result.guidance);
+  }
 
-    if (result.guidance.length === 0) return;
-    output.parts.push(this.#buildWorkflowDirectivePart(input.sessionID, result.guidance));
+  /**
+   * OpenCode custom commands are prompt templates. By the time command.execute.before
+   * runs, the host has already expanded $ARGUMENTS and resolved @file references into
+   * output.parts, and it will always call prompt() after this hook returns.
+   *
+   * For recognized Justice commands, never leave those host-expanded parts visible to
+   * the model alongside Justice's canonical directive. Replace them atomically so the
+   * LLM sees only the plugin-authored command result/guidance.
+   */
+  #replaceCommandPartsWithGuidance(
+    output: CommandExecuteBeforeOutput,
+    sessionId: string,
+    guidance: string,
+  ): void {
+    output.parts.length = 0;
+    if (guidance.length === 0) return;
+    output.parts.push(this.#buildWorkflowDirectivePart(sessionId, guidance));
   }
 
   /**
