@@ -46,7 +46,7 @@ const GUIDANCE = {
   design_required:
     "`brainstorming` を使い、要件、境界、テスト方針、未確定事項を設計してください。\n設計が承認されるまで実装コードを変更しません。",
   plan_required:
-    "`writing-plans` を使い、設計を検証可能なタスク、依存関係、完了条件に分解してください。\n計画が承認されるまで実装コードを変更しません。",
+    "`writing-plans` を使い、設計を検証可能なタスク、依存関係、完了条件に分解してください。計画ファイルを保存したら、Design と Plan のパスを示し、利用者に `/justice-review-gate --design <designPath> --plan <planPath>` の実行を案内してください。\n実行方式を選ばせたり、実装スキルを起動したり、実装 task() を開始したりしてはいけません。利用者が Review Gate を実行するまで停止してください。",
   plan_review_required:
     "Design と Implementation Plan の Review Gate を開始するには、利用者が `/justice-review-gate --design <designPath> --plan <planPath>` を実行してください。\nこの段階から `requesting-code-review` / `code-review` Skill、CodeRabbit CLI、`justice_review` を直接 Review Gate executor として起動しません。\nGate が `review_clear` になり、人間による明示的な承認とマージが確認されるまで実装 task() を開始しません。",
   review_remediation:

@@ -456,7 +456,7 @@ directive 本文は HookResponse の synthetic guidance としてのみ扱い、
 | stage | required skills | next action | authority | 用途 |
 |---|---|---|---|---|
 | `design_required` | `brainstorming` | `invoke_skill` | `artifact_ready` | 設計成果物の作成 |
-| `plan_required` | `writing-plans` | `invoke_skill` | `artifact_ready` | 計画成果物の作成 |
+| `plan_required` | `writing-plans` | `invoke_skill` | `artifact_ready` | 計画作成後に Design / Plan のパスを利用者へ示し、実行方式の選択や実装を始めず `/justice-review-gate` の明示実行を案内 |
 | `plan_review_required` | なし | `run_review_gate` | `artifact_ready` | `/justice-review-gate` による Design / Implementation Plan Review Gate の明示開始待ち |
 | `review_remediation` | `receiving-code-review` | `invoke_skill` | `artifact_ready` | 指摘を検討・修正した後、同じ Design/Plan で `/justice-review-gate` を再実行 |
 | `review_clear` | なし | `await_human_approval` | `external_unverified` | 完全な指摘なしスナップショットの観測 |
