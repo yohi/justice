@@ -612,7 +612,10 @@ describe("PlanBridge", () => {
       // Bootstrap the workflow into plan_ready first
       await bridge.handleWorkflowStart(
         "s-ready",
-        createWorkflowStartRequest({ planPath: "docs/plans/sample-plan.md" }),
+        createWorkflowStartRequest({
+          designPath: "docs/design.md",
+          planPath: "docs/plans/sample-plan.md",
+        }),
       );
       await bridge.handleImplementationArm("s-ready", {
         source: "command",
@@ -988,12 +991,18 @@ describe("PlanBridge", () => {
     }
 
     it("should emit workflow bootstrap observations when an observation handler is wired", async () => {
-      const reader = createMockFileReader({ "docs/plan.md": "# Plan" });
+      const reader = createMockFileReader({
+        "docs/design.md": "# Design",
+        "docs/plan.md": "# Plan",
+      });
       const handler = createObservationHandler();
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
       bridge.setObservationHandler(handler);
 
-      const request = createWorkflowStartRequest({ planPath: "docs/plan.md" });
+      const request = createWorkflowStartRequest({
+        designPath: "docs/design.md",
+        planPath: "docs/plan.md",
+      });
       await bridge.handleWorkflowStart("s-wf-obs", request);
 
       expect(handler.emitWorkflowStartedEvent).toHaveBeenCalledTimes(1);
@@ -1014,7 +1023,7 @@ describe("PlanBridge", () => {
 
     it("absorbs asynchronous notifier rejection after a bootstrap observation failure", async () => {
       // Given
-      const reader = createMockFileReader({ "docs/plan.md": "# Plan" });
+      const reader = createMockFileReader({ "docs/design.md": "# Design", "docs/plan.md": "# Plan" });
       const handler = createObservationHandler();
       handler.emitWorkflowStartedEvent.mockRejectedValueOnce(new Error("append failed"));
       const rejection = Promise.reject(new Error("notification failed"));
@@ -1030,7 +1039,10 @@ describe("PlanBridge", () => {
       await expect(
         bridge.handleWorkflowStart(
           "s-wf-notifier-rejection",
-          createWorkflowStartRequest({ planPath: "docs/plan.md" }),
+          createWorkflowStartRequest({
+            designPath: "docs/design.md",
+            planPath: "docs/plan.md",
+          }),
         ),
       ).resolves.toMatchObject({ phase: "plan_ready" });
       expect(rejectionCatch).toHaveBeenCalledTimes(1);
@@ -1077,14 +1089,15 @@ describe("PlanBridge", () => {
       );
     });
 
-    it("should return plan_required without touching the file system when no artifact is requested", async () => {
+    it("should return design_required without touching the file system when no design is requested", async () => {
       const reader = createMockFileReader({});
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
 
       const result = await bridge.handleWorkflowStart("s-wf-4", createWorkflowStartRequest());
 
-      expect(result.phase).toBe("plan_required");
-      expect(result.nextSkill).toBe("writing-plans");
+      expect(result.phase).toBe("design_required");
+      expect(result.nextSkill).toBe("brainstorming");
+      expect(result.recommendedSkills).toEqual(["brainstorming"]);
       expect(result.activePlanPath).toBeNull();
       expect(reader.fileExists).not.toHaveBeenCalled();
     });
@@ -1093,28 +1106,37 @@ describe("PlanBridge", () => {
       expect(parseWorkflowStartCommandArguments("goal --plan ../outside/plan.md")).toBeNull();
       expect(parseWorkflowStartCommandArguments("goal --design /etc/design.md")).toBeNull();
 
-      const reader = createMockFileReader({ "docs/plans/sample-plan.md": samplePlanContent });
+      const reader = createMockFileReader({
+        "docs/design.md": "# Design",
+        "docs/plans/sample-plan.md": samplePlanContent,
+      });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
 
       // Defense in depth: a hand-built request must not be dereferenced either.
       const result = await bridge.handleWorkflowStart(
         "s-wf-5",
-        createWorkflowStartRequest({ planPath: "../outside/plan.md" }),
+        createWorkflowStartRequest({ designPath: "docs/design.md", planPath: "../outside/plan.md" }),
       );
 
       expect(result.phase).toBe("plan_required");
       expect(result.activePlanPath).toBeNull();
       expect(bridge.getActivePlan("s-wf-5")).toBeNull();
-      expect(reader.readFile).not.toHaveBeenCalled();
+      expect(reader.readFile).not.toHaveBeenCalledWith("../outside/plan.md");
     });
 
     it("should drop the bootstrap state on destroySession", async () => {
-      const reader = createMockFileReader({ "docs/plans/sample-plan.md": samplePlanContent });
+      const reader = createMockFileReader({
+        "docs/design.md": "# Design",
+        "docs/plans/sample-plan.md": samplePlanContent,
+      });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
 
       await bridge.handleWorkflowStart(
         "s-wf-6",
-        createWorkflowStartRequest({ planPath: "docs/plans/sample-plan.md" }),
+        createWorkflowStartRequest({
+          designPath: "docs/design.md",
+          planPath: "docs/plans/sample-plan.md",
+        }),
       );
       expect(bridge.getWorkflowBootstrap("s-wf-6")?.phase).toBe("plan_ready");
 
@@ -1124,8 +1146,8 @@ describe("PlanBridge", () => {
       expect(bridge.getActivePlan("s-wf-6")).toBeNull();
     });
 
-    it("should return plan_ready when the design is absent but the plan is readable", async () => {
-      const reader = createMockFileReader({ "docs/plan.md": "# Plan" });
+    it("should return design_required when no design is specified even if the plan is readable", async () => {
+      const reader = createMockFileReader({ "docs/design.md": "# Design", "docs/plan.md": "# Plan" });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
 
       const result = await bridge.handleWorkflowStart(
@@ -1133,9 +1155,11 @@ describe("PlanBridge", () => {
         createWorkflowStartRequest({ planPath: "docs/plan.md" }),
       );
 
-      expect(result.phase).toBe("plan_ready");
-      expect(result.activePlanPath).toBe("docs/plan.md");
-      expect(bridge.getActivePlan("s-wf-9")).toBe("docs/plan.md");
+      expect(result.phase).toBe("design_required");
+      expect(result.nextSkill).toBe("brainstorming");
+      expect(result.recommendedSkills).toEqual(["brainstorming"]);
+      expect(result.activePlanPath).toBeNull();
+      expect(bridge.getActivePlan("s-wf-9")).toBeNull();
     });
 
     it("should return plan_required when the design is readable but the plan is missing", async () => {
@@ -1152,20 +1176,23 @@ describe("PlanBridge", () => {
     });
 
     it("should treat an unsafe artifact path as unreadable and never dereference it", async () => {
-      const reader = createMockFileReader({ "docs/plan.md": "# Plan" });
+      const reader = createMockFileReader({
+        "docs/design.md": "# Design",
+        "docs/plan.md": "# Plan",
+      });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
 
       const result = await bridge.handleWorkflowStart(
         "s-wf-10",
-        createWorkflowStartRequest({ planPath: "/etc/passwd" }),
+        createWorkflowStartRequest({ designPath: "docs/design.md", planPath: "/etc/passwd" }),
       );
 
       expect(result.phase).toBe("plan_required");
       expect(result.activePlanPath).toBeNull();
-      expect(reader.readFile).not.toHaveBeenCalled();
+      expect(reader.readFile).not.toHaveBeenCalledWith("/etc/passwd");
     });
 
-    it("should degrade to plan_required when artifact read throws inside the probe", async () => {
+    it("should degrade to design_required when the requested design read throws", async () => {
       const reader: FileReader = {
         fileExists: vi.fn(async () => true),
         readFile: vi.fn(async () => {
@@ -1178,20 +1205,23 @@ describe("PlanBridge", () => {
 
       const result = await bridge.handleWorkflowStart(
         "s-wf-11",
-        createWorkflowStartRequest({ planPath: "docs/plan.md" }),
+        createWorkflowStartRequest({ designPath: "docs/design.md", planPath: "docs/plan.md" }),
       );
 
-      expect(result.phase).toBe("plan_required");
+      expect(result.phase).toBe("design_required");
       expect(result.activePlanPath).toBeNull();
     });
 
     it("should include the active plan path in the plan_ready guidance", async () => {
-      const reader = createMockFileReader({ "docs/plan.md": "# Plan" });
+      const reader = createMockFileReader({
+        "docs/design.md": "# Design",
+        "docs/plan.md": "# Plan",
+      });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
 
       const result = await bridge.handleWorkflowStart(
         "s-wf-12",
-        createWorkflowStartRequest({ planPath: "docs/plan.md" }),
+        createWorkflowStartRequest({ designPath: "docs/design.md", planPath: "docs/plan.md" }),
       );
 
       expect(result.phase).toBe("plan_ready");
@@ -1650,13 +1680,17 @@ describe("PlanBridge", () => {
     });
     it("uses unauthorized implementation directive when plan_required bootstrap has an active plan", async () => {
       const reader = createMockFileReader({
+        "docs/design.md": "# Design",
         "docs/plans/sample-plan.md": samplePlanContent,
       });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
 
       await bridge.handleWorkflowStart(
         "s-wf-unauth",
-        createWorkflowStartRequest({ planPath: "docs/plans/sample-plan.md" }),
+        createWorkflowStartRequest({
+          designPath: "docs/design.md",
+          planPath: "docs/plans/sample-plan.md",
+        }),
       );
       // Force a plan_required bootstrap while keeping a manually activated plan.
       (

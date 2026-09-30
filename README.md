@@ -311,9 +311,9 @@ justice-start add retry logic --plan plan.md
 
 | 状態 | 条件 | 次のアクション | 備考 |
 |------|------|----------------|------|
-| `design_required` | `--design` で指定されたファイルが読めない | `brainstorming` スキルで設計を作成 | 計画ファイルが読める場合でも、設計が優先される |
-| `plan_required` | 設計は OK だが、計画ファイルが読めない | `writing-plans` スキルで計画を作成 | 計画ファイルが指定されていない場合も含む |
-| `plan_ready` | 計画ファイルが読める | 設計・計画だけの PR を準備して自動レビューを依頼し、人間による明示的な承認・マージを待つ | `activePlanPath` は後続の `task()` 用コンテキストを準備するだけで、実装の認可を意味しない |
+| `design_required` | `--design` が指定されていない、または指定ファイルが読めない | `brainstorming` スキルで設計を作成 | Plan が読める場合でも、Design 未指定なら設計が優先される。作成後、`--design` を指定して `/justice-start` を再実行する |
+| `plan_required` | Design が指定され読み取り可能だが、計画ファイルが読めない | `writing-plans` スキルで計画を作成 | 計画ファイルが指定されていない場合も含む |
+| `plan_ready` | `--design` で指定された Design と Plan の両方が読める | Design / Plan Review Gate の開始を案内 | `activePlanPath` は後続の `task()` 用コンテキストを準備するだけで、実装の認可を意味しない |
 
 ### Directive と委譲の接続
 
@@ -372,7 +372,7 @@ Justice: start workflow ship the feature --plan docs/plans/feature.md
 
 コマンド実行後、`output.parts` に synthetic なテキストパートが追記されます。内容は状態に応じて異なります。
 
-- **`design_required`**: `brainstorming` を使って要件、境界、テスト方針、未確定事項を設計するよう自動指示する。
+- **`design_required`**: `brainstorming` を使って要件、境界、テスト方針、未確定事項を設計するよう自動指示する。`--design` が指定されていない場合は、Goal や既存 Plan の有無にかかわらずこの状態になる。Design 作成後は `--design <path>` を指定して `/justice-start` を再実行する。
 - **`plan_required`**: `writing-plans` を使って設計を検証可能なタスク、依存関係、完了条件へ分解するよう自動指示する。
 - **`plan_ready`**: 設計・計画だけの PR を利用可能な連携で準備して AI レビューを依頼し、指摘の修正と同じレビューの再実行を経て、人間による明示的な承認・マージを待つよう自動指示する。確認されるまで `task()` は呼び出さない。
 
