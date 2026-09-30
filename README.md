@@ -374,9 +374,9 @@ Justice: start workflow ship the feature --plan docs/plans/feature.md
 
 - **`design_required`**: `brainstorming` を使って設計し、bounded 判定でも承認済み Design をファイルに保存して利用者の確認を得る。Gate 前は `explore` / `librarian` による読み取り専用の `task()` 調査を許可するが、実装 task と実装変更は禁止する。その後 `writing-plans` で Plan を作成し、Design / Plan の両パスで `/justice-review-gate` を実行するよう案内する。`--design` が指定されていない場合は、Goal や既存 Plan の有無にかかわらずこの状態になる。
 - **`plan_required`**: `writing-plans` を使って計画を作成する。保存後は実行方式を選ばず、Design / Plan のパスを利用者に示して `/justice-review-gate --design <designPath> --plan <planPath>` の実行を案内する。Gate が明示的に実行されるまで実装を開始しない。
-- **`plan_ready`**: 設計・計画だけの PR を利用可能な連携で準備して AI レビューを依頼し、指摘の修正と同じレビューの再実行を経て、人間による明示的な承認・マージを待つよう自動指示する。確認されるまで `task()` は呼び出さない。
+- **`plan_ready`**: Design / Plan Review Gate の開始として、`/justice-review-gate --design <designPath> --plan <planPath>` を明示的に実行するよう案内する。Justice は `task()` を呼び出さず、Gate の実行は利用者の明示操作を待つ。
 
-これらの指示はレビュー製品やベンダーを指定しません。エージェントは既存の権限の範囲で利用可能な PR・レビュー機能を実行します。Justice 自身は PR を作成せず、レビューを承認せず、PR をマージせず、PR の作成・承認・マージ状態を推測しません。承認とマージの判断は人間が保持します。
+Review Gate は `/justice-review-gate` の明示的な実行で開始します。Justice 自身は PR を作成せず、レビューを承認せず、PR をマージせず、PR の作成・承認・マージ状態を推測しません。承認とマージの判断は人間が保持します。
 
 レビュー出力で指摘を観測すると `[JUSTICE: REVIEW REMEDIATION]` を、信頼済みの
 完全スナップショットで指摘がない場合は `[JUSTICE: REVIEW CLEAR]` を注入します。
