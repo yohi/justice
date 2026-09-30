@@ -44,7 +44,7 @@ export interface WorkflowDirective {
 
 const GUIDANCE = {
   design_required:
-    "`brainstorming` を使い、要件、境界、テスト方針、未確定事項を設計してください。\n設計が承認されるまで実装コードを変更しません。",
+    "`brainstorming` を使い、要件、境界、テスト方針、未確定事項を設計してください。`/justice-start` のフローでは bounded 判定でもチャット内だけで設計を終えず、承認済み Design をファイルに保存して利用者の確認を得てください。\nReview Gate 前の調査には `explore` / `librarian` への読み取り専用 task() 委譲を使えます。これらの task() では読み取り専用の調査に限定し、実装やファイル変更を行いません。Design の確認後は `writing-plans` を使って Implementation Plan を作成してください。Design と Plan が揃ったら、実行方式を選ばせず、両方のパスを示して利用者に `/justice-review-gate --design <designPath> --plan <planPath>` の実行を案内してください。Review Gate が実行されるまで実装スキル、実装 task()、実装コードの変更に進んではいけません。",
   plan_required:
     "`writing-plans` を使い、設計を検証可能なタスク、依存関係、完了条件に分解してください。計画ファイルを保存したら、Design と Plan のパスを示し、利用者に `/justice-review-gate --design <designPath> --plan <planPath>` の実行を案内してください。\n実行方式を選ばせたり、実装スキルを起動したり、実装 task() を開始したりしてはいけません。利用者が Review Gate を実行するまで停止してください。",
   plan_review_required:
