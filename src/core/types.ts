@@ -467,6 +467,8 @@ export interface PreToolUseEvent {
   readonly payload: PreToolUsePayload;
   readonly sessionId: string;
   readonly callId?: string;
+  readonly lockOwnerSessionId?: string | null;
+  readonly reviewGateToolPaths?: readonly string[] | null;
 }
 
 export interface PostToolUseEvent {
@@ -539,12 +541,16 @@ export interface ProceedResponse {
 
 export interface SkipResponse {
   readonly action: "skip";
-  readonly reason?: ReviewArtifactWriteSkipReason;
+  readonly reason?: ToolExecutionCancellationReason;
 }
 
-export type ReviewArtifactWriteSkipReason =
+export type ToolExecutionCancellationReason =
   | "review_artifact_write_committed"
-  | "review_artifact_write_rejected";
+  | "review_artifact_write_rejected"
+  | "implementation_not_authorized"
+  | "review_scope_violation";
+
+export type ReviewArtifactWriteSkipReason = ToolExecutionCancellationReason;
 
 export interface InjectResponse {
   readonly action: "inject";

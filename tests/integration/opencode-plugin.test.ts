@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Plugin } from "@opencode-ai/plugin";
 import { OpenCodePlugin } from "../../src/opencode-plugin";
 import type { OpenCodeAdapter, OpenCodePluginInit } from "../../src/runtime/opencode-adapter";
+import type { HookResponse } from "../../src/core/types";
 import { fakeInit } from "../helpers/fake-opencode-init";
 
 function createMockAdapter(): OpenCodeAdapter {
@@ -52,6 +53,28 @@ describe("OpenCodePlugin (integration)", () => {
   it("exposes a config hook", async () => {
     const handlers = await OpenCodePlugin(fakeInit() as never);
     expect(typeof handlers.config).toBe("function");
+  });
+
+  it("cancels an OpenCode tool call for a hard implementation lock", async () => {
+    const adapter = createMockAdapter();
+    vi.mocked(adapter.onToolExecuteBefore).mockResolvedValue({
+      action: "skip",
+      reason: "implementation_not_authorized",
+    } as unknown as HookResponse);
+    const init = Object.assign(fakeInit(), { __justiceTestAdapter: adapter });
+    const handlers = await OpenCodePlugin(init as never);
+    const executeBefore = handlers["tool.execute.before"];
+    if (executeBefore === undefined) throw new Error("tool.execute.before hook is missing");
+
+    await expect(
+      executeBefore(
+        { tool: "skill", sessionID: "session-1", callID: "skill-call" },
+        { args: { name: "executing-plans" } },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolExecutionCancelled",
+      reason: "implementation_not_authorized",
+    });
   });
 
   it("registers justice commands via the config hook", async () => {

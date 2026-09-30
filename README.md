@@ -409,14 +409,15 @@ OpenCode の file-reference 記法も利用できます。
 - `--design` と `--plan` はともに必須。
 - 両成果物が読み取り可能な場合だけ `[JUSTICE: REVIEW GATE REQUESTED]` を注入する。この時点で Justice はランダムな Gate ID、正規化済み review scope、Design/Plan の SHA-256 digest、reviewer prompt 全文を pending state として固定する。
 - `/justice-review-gate` 自体を review-controller entrypoint とし、実行後に `requesting-code-review` や別の review Skill を起動しない。
-- canonical command registration は `agent="justice-review-controller"` + `subtask: true`。外側の OpenCode native TaskTool は controller session を作るだけで Review worker として claim しない。controller には OmO plugin `task` だけを見せ、内側の `task` が exact marker/Gate ID で parent pending Gate を claimする。Justice はその inner task に `subagent_type=undefined`、`category="sp-final-review"`、foreground を強制する。`call_omo_agent` は controller の tool set から除外される。
-- 実レビューは、pending Gate と完全一致する Justice marker / Gate ID / reviewer prompt を持つ **1回だけの foreground `task()`** として直ちに実行する。Justice が runtime で `category="sp-final-review"` と `run_in_background=false` を強制するため、LLM が別 category を選んでも executor routing は変わらない。
+- canonical command registration は `agent="justice-review-controller"` + `subtask: true`。controller は内側で exact reviewer prompt を `subagent_type="justice-review-worker"` として一度だけ委譲する。OmO task に `category` を渡すと Sisyphus-Junior に route されるため、Justice は Gate 内部で `sp-final-review` として記録しつつ、wire から category を除去する。worker は read-only、`task`/skill/shell は禁止。
+- 実レビューは、pending Gate と完全一致する Justice marker / Gate ID / reviewer prompt を持つ **1回だけの foreground `task()`** として実行する。profile ごとに指定した Justice worker model を使用し、結果は `PostToolUse` の terminal task result として Gate が検証する。
 - `code-review` Skill、CodeRabbit CLI、`justice_review` をこの Gate の executor として使用しない。`justice_review` は既存 review state の参照・人間承認済み resolve 用のまま。
 - reviewer は prose ではなく、Gate ID / `complete` / findings を含む strict JSON を返す。OmO sync `task` はこの JSON を既知の completion wrapper と `<task_metadata>` で包むため、Justice は raw JSON またはその既知 wrapper の reviewer payload だけを抽出・検証する。reviewScope は Justice-owned pending state を正本とする。
 - complete findings があれば exact Gate scope の `review_observed` を永続化して `review_remediation`、complete zero findings なら同じ scope で `review_clear` に遷移する。remediation 後の再レビューも同じ Design/Plan を指定して `/justice-review-gate` を再実行する。
 - malformed / incomplete / scope不一致 / Gate ID不一致 / review中の成果物変更 / reviewer実行失敗は `[JUSTICE: REVIEW GATE BLOCKED]` とし、pending Gate を破棄して再実行を要求する。
 - marker だけを偽装しても、対応する user-invoked pending Gate がなければ claim できず、通常の mandatory `sp-final-review` authorization boundary を迂回できない。
-- `review_clear` は READY のためのレビュー条件を満たしたことを示すだけで、人間の承認・マージを意味しない。実装開始には引き続き `/justice-implement --approved` が必要。
+- `review_clear` はレビュー条件を満たしたことだけを示し、実装許可ではない。Review Gate 開始後は session lock を有効にし、実装可能な tool を拒否する。findings がある間は Design/Plan の修正と再レビューだけが可能。
+- findings が空でも、Review Gate の結果後に実装へ自動移行しません。現在の応答を終了し、利用者が `/justice-implement --approved` を実行するまで、読み取りと再レビュー以外の操作を拒否します。lock は同一 OpenCode process 内に限り、再起動後の維持は対象外です。
 
 成果物が読めない場合は `[JUSTICE: REVIEW GATE BLOCKED]` を返し、レビューを dispatch しません。不正文法は `[JUSTICE: COMMAND REJECTED]` として扱われます。
 
@@ -442,7 +443,8 @@ OpenCode の file-reference 記法も利用できます。
 ### 動作
 
 - コマンドは `task()` やスキルを起動しません。次の `task()` 呼び出しに対して、Justice が計画コンテキストと実装 directive を注入する権利を 1 回だけ付与します。
-- 未アーム状態で active plan に対して `task()` が呼ばれた場合、または plan.md 言及による委譲が発生した場合、`[JUSTICE: IMPLEMENTATION UNAUTHORIZED]` advisory だけが注入されます。plan context、delegation metadata、`taskId`、追加スキルは渡されません。`task()` 呼び出しの場合、advisory は prompt に注入されますが、それ以外の引数は変更されません。
+- Review Gate lock がある場合、clear 済みの最新 Review Gate と未変更の Plan に限って lock を解除します。findings が残る場合、Gate が未完了の場合、または Design/Plan digest が変わっている場合は arm されません。
+- active Review Gate lock の外では、未アーム状態で active plan に対して `task()` が呼ばれた場合に `[JUSTICE: IMPLEMENTATION UNAUTHORIZED]` advisory が注入されます。lock 中は advisory ではなく tool 実行をキャンセルし、task は worker execution へ到達しません。
 - 許可は 1 回の `task()` 呼び出しで消費されます。追加のタスクを委譲する場合は、再度 `/justice-implement --plan <planPath> --approved` を実行してください。
 - active plan が別のパスへ変更またはクリアされると、未消費の許可も失効します。`/justice-start` を再実行した場合は、同じ plan パスでも再アームが必要です。
 

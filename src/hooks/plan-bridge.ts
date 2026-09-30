@@ -28,6 +28,13 @@ import type { TelemetryStore } from "../core/telemetry-store";
 import { normalizeSafeRelativePath, TriggerDetector } from "../core/trigger-detector";
 import type { ReviewGateRequest } from "../core/review-gate-command";
 import {
+  classifyReviewGateToolUse as classifyLockedToolUse,
+  type ReviewGateLockPhase,
+  type ReviewGateLockSnapshot,
+  type ReviewGateToolDecision,
+  type ReviewGateToolUse,
+} from "../core/review-gate-lock";
+import {
   REVIEW_GATE_EXECUTION_MARKER,
   REVIEW_GATE_WORKER_AGENT,
   extractReviewGateIdFromTaskPrompt,
@@ -183,6 +190,7 @@ export class PlanBridge {
   private readonly lastUserMessages: Map<string, string> = new Map();
   private readonly workflowBootstraps: Map<string, WorkflowBootstrapState> = new Map();
   private readonly pendingPlanReviewGates = new Map<string, PendingPlanReviewGate>();
+  private readonly reviewGateLocks = new Map<string, ReviewGateLockSnapshot>();
   private readonly planReviewGateCalls = new Map<
     string,
     {
@@ -443,6 +451,37 @@ export class PlanBridge {
     return this.activePlanPaths.get(sessionId) ?? null;
   }
 
+  getReviewGateLock(sessionId: string): ReviewGateLockSnapshot | undefined {
+    const lock = this.reviewGateLocks.get(sessionId);
+    return lock === undefined ? undefined : Object.freeze({ ...lock });
+  }
+
+  hasAnyReviewGateLock(): boolean {
+    return this.reviewGateLocks.size > 0;
+  }
+
+  classifyReviewGateToolUse(
+    sessionId: string | null,
+    use: Omit<ReviewGateToolUse, "lockOwnerSessionId">,
+  ): ReviewGateToolDecision | undefined {
+    const lock =
+      sessionId === null
+        ? this.reviewGateLocks.values().next().value
+        : this.reviewGateLocks.get(sessionId);
+    if (lock === undefined) return undefined;
+    return classifyLockedToolUse(lock, { ...use, lockOwnerSessionId: sessionId });
+  }
+
+  private setReviewGateLockPhase(
+    sessionId: string,
+    gateId: string,
+    phase: ReviewGateLockPhase,
+  ): void {
+    const lock = this.reviewGateLocks.get(sessionId);
+    if (lock === undefined || lock.gateId !== gateId) return;
+    this.reviewGateLocks.set(sessionId, { ...lock, phase });
+  }
+
   /**
    * Clear all internal state for a specific session.
    */
@@ -453,6 +492,7 @@ export class PlanBridge {
     this.implementationArmedSessions.delete(sessionId);
     this.lastUserMessages.delete(sessionId);
     this.workflowBootstraps.delete(sessionId);
+    this.reviewGateLocks.delete(sessionId);
     this.pendingPlanReviewGates.delete(sessionId);
     for (const [callId, claim] of this.planReviewGateCalls) {
       if (claim.parentSessionId === sessionId || claim.workerSessionId === sessionId) {
@@ -535,11 +575,25 @@ export class PlanBridge {
     this.pendingPlanReviewGates.delete(sessionId);
     this.observationHandler?.setReviewGateScope(sessionId, null);
 
+    const gateId = randomUUID();
+    const designPath = normalizeSafeRelativePath(request.designPath);
     const planPath = this.resolveActivatablePlanPath(request.planPath);
-    const designReadable = await this.isArtifactReadable(request.designPath);
+    const lock: ReviewGateLockSnapshot = {
+      parentSessionId: sessionId,
+      gateId,
+      phase: "reviewing",
+      designPath,
+      planPath,
+      designDigest: null,
+      planDigest: null,
+    };
+    this.reviewGateLocks.set(sessionId, lock);
+
+    const designReadable = designPath !== null && await this.isArtifactReadable(designPath);
     const planReadable = planPath !== null && (await this.isArtifactReadable(planPath));
 
-    if (!designReadable || !planReadable || planPath === null) {
+    if (!designReadable || !planReadable || designPath === null || planPath === null) {
+      this.setReviewGateLockPhase(sessionId, gateId, "remediation");
       this.setActivePlan(sessionId, null);
       this.clearSessionCompletionInputs(sessionId);
       const missing = [
@@ -566,13 +620,33 @@ export class PlanBridge {
       };
     }
 
-    const designContent = await this.readPlanFile(request.designPath);
-    const planContent = await this.readPlanFile(planPath);
-    if (designContent === null || planContent === null) {
+    let designContent: string | null;
+    let planContent: string | null;
+    try {
+      designContent = await this.readPlanFile(designPath);
+      planContent = await this.readPlanFile(planPath);
+    } catch {
+      this.setReviewGateLockPhase(sessionId, gateId, "remediation");
       this.setActivePlan(sessionId, null);
       return {
         dispatched: false,
-        designPath: request.designPath,
+        designPath,
+        planPath,
+        directiveStage: "plan_review_required",
+        guidance: [
+          "---",
+          "[JUSTICE: REVIEW GATE BLOCKED]",
+          "Review Gate artifacts became unreadable before dispatch. Rerun /justice-review-gate.",
+          "---",
+        ].join("\n"),
+      };
+    }
+    if (designContent === null || planContent === null) {
+      this.setReviewGateLockPhase(sessionId, gateId, "remediation");
+      this.setActivePlan(sessionId, null);
+      return {
+        dispatched: false,
+        designPath,
         planPath,
         directiveStage: "plan_review_required",
         guidance: [
@@ -586,14 +660,18 @@ export class PlanBridge {
     }
 
     this.setActivePlan(sessionId, planPath);
-    const reviewScope = JSON.stringify([request.designPath, planPath]);
-    const gateId = randomUUID();
+    const reviewScope = JSON.stringify([designPath, planPath]);
+    this.reviewGateLocks.set(sessionId, {
+      ...lock,
+      designDigest: createHash("sha256").update(designContent).digest("hex"),
+      planDigest: createHash("sha256").update(planContent).digest("hex"),
+    });
 
     const reviewerPrompt = [
       REVIEW_GATE_EXECUTION_MARKER,
       `Gate-ID: ${gateId}`,
       `Review-Scope: ${reviewScope}`,
-      `Design: ${request.designPath}`,
+      `Design: ${designPath}`,
       `Implementation-Plan: ${planPath}`,
       "",
       "Review ONLY the Design and Implementation Plan together as one pre-implementation plan review.",
@@ -604,7 +682,7 @@ export class PlanBridge {
     ].join("\n");
     this.pendingPlanReviewGates.set(sessionId, {
       gateId,
-      designPath: request.designPath,
+      designPath,
       planPath,
       reviewScope,
       designDigest: createHash("sha256").update(designContent).digest("hex"),
@@ -615,7 +693,7 @@ export class PlanBridge {
 
     return {
       dispatched: true,
-      designPath: request.designPath,
+      designPath,
       planPath,
       directiveStage: "plan_review_required",
       reviewerPrompt,
@@ -651,6 +729,10 @@ export class PlanBridge {
 
   hasPendingPlanReviewGate(sessionId: string): boolean {
     return this.pendingPlanReviewGates.has(sessionId);
+  }
+
+  isPendingReviewGatePrompt(sessionId: string, prompt: string): boolean {
+    return this.pendingPlanReviewGates.get(sessionId)?.reviewerPrompt === prompt;
   }
 
   cancelPendingPlanReviewGate(sessionId: string): void {
@@ -739,6 +821,7 @@ export class PlanBridge {
       }
     };
     if (pending === undefined || pending.gateId !== claimed.gateId || pending.callId !== callId) {
+      this.setReviewGateLockPhase(claimed.parentSessionId, claimed.gateId, "remediation");
       clearPending();
       return {
         action: "inject",
@@ -748,6 +831,7 @@ export class PlanBridge {
     }
 
     if (event.payload.error === true) {
+      this.setReviewGateLockPhase(claimed.parentSessionId, claimed.gateId, "remediation");
       clearPending();
       return {
         action: "inject",
@@ -762,6 +846,7 @@ export class PlanBridge {
       result.complete !== true ||
       result.gateId !== pending.gateId
     ) {
+      this.setReviewGateLockPhase(claimed.parentSessionId, claimed.gateId, "remediation");
       clearPending();
       return {
         action: "inject",
@@ -776,6 +861,7 @@ export class PlanBridge {
       designContent = await this.readPlanFile(pending.designPath);
       planContent = await this.readPlanFile(pending.planPath);
     } catch {
+      this.setReviewGateLockPhase(claimed.parentSessionId, claimed.gateId, "remediation");
       clearPending();
       return {
         action: "inject",
@@ -788,6 +874,7 @@ export class PlanBridge {
     const currentPlanDigest =
       planContent === null ? null : createHash("sha256").update(planContent).digest("hex");
     if (currentDesignDigest !== pending.designDigest || currentPlanDigest !== pending.planDigest) {
+      this.setReviewGateLockPhase(claimed.parentSessionId, claimed.gateId, "remediation");
       clearPending();
       return {
         action: "inject",
@@ -796,21 +883,30 @@ export class PlanBridge {
       };
     }
 
+    this.setReviewGateLockPhase(claimed.parentSessionId, claimed.gateId, "remediation");
     const response = await this.observationHandler?.handlePlanReviewGateResult({
       sessionId: claimed.parentSessionId,
       reviewScope: pending.reviewScope,
       findings: result.findings,
     });
-    clearPending();
-    return (
+    const finalResponse =
       response ?? {
-        action: "inject",
+        action: "inject" as const,
         injectedContext:
           result.findings.length > 0
             ? formatWorkflowDirective({ stage: "review_remediation" })
             : formatWorkflowDirective({ stage: "review_clear" }),
-      }
+      };
+    const reviewCleared =
+      finalResponse.action === "inject" &&
+      finalResponse.injectedContext.includes("[JUSTICE: REVIEW CLEAR]");
+    this.setReviewGateLockPhase(
+      claimed.parentSessionId,
+      claimed.gateId,
+      reviewCleared ? "awaiting_implementation_authorization" : "remediation",
     );
+    clearPending();
+    return finalResponse;
   }
 
   private resolveBootstrapDirectiveStage(phase: WorkflowBootstrapPhase): WorkflowDirectiveStage {
@@ -921,6 +1017,53 @@ export class PlanBridge {
       return this.handleImplementationCancellation(sessionId);
     }
 
+    const reviewGateLock = this.reviewGateLocks.get(sessionId);
+    if (reviewGateLock !== undefined) {
+      if (
+        reviewGateLock.phase !== "awaiting_implementation_authorization" ||
+        request.source !== "command" ||
+        !("approved" in request) ||
+        request.approved !== true
+      ) {
+        return this.implementationArmRequiredResult();
+      }
+
+      const requestedPlanPath = this.resolveActivatablePlanPath(request.planPath);
+      if (
+        reviewGateLock.designPath === null ||
+        reviewGateLock.planPath === null ||
+        reviewGateLock.designDigest === null ||
+        reviewGateLock.planDigest === null ||
+        requestedPlanPath !== reviewGateLock.planPath ||
+        this.getActivePlan(sessionId) !== reviewGateLock.planPath
+      ) {
+        return this.implementationArmRequiredResult();
+      }
+
+      let reviewedDesign: string | null;
+      let reviewedPlan: string | null;
+      try {
+        reviewedDesign = await this.readPlanFile(reviewGateLock.designPath);
+        reviewedPlan = await this.readPlanFile(reviewGateLock.planPath);
+      } catch {
+        this.setReviewGateLockPhase(sessionId, reviewGateLock.gateId, "remediation");
+        return this.implementationArmRequiredResult();
+      }
+      const currentDesignDigest =
+        reviewedDesign === null
+          ? null
+          : createHash("sha256").update(reviewedDesign).digest("hex");
+      const currentPlanDigest =
+        reviewedPlan === null ? null : createHash("sha256").update(reviewedPlan).digest("hex");
+      if (
+        currentDesignDigest !== reviewGateLock.designDigest ||
+        currentPlanDigest !== reviewGateLock.planDigest
+      ) {
+        this.setReviewGateLockPhase(sessionId, reviewGateLock.gateId, "remediation");
+        return this.implementationArmRequiredResult();
+      }
+    }
+
     const planPath = this.resolveActivatablePlanPath(request.planPath);
     if (planPath === null || !(await this.isArtifactReadable(planPath))) {
       return {
@@ -996,6 +1139,7 @@ export class PlanBridge {
 
     this.cancelledImplementationSessions.delete(sessionId);
     this.implementationArmedSessions.set(sessionId, { planPath: approved.planPath });
+    if (reviewGateLock !== undefined) this.reviewGateLocks.delete(sessionId);
 
     return {
       armed: true,

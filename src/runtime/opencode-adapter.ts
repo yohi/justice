@@ -17,7 +17,10 @@ import {
   parseJusticeReviewGateCommandArguments,
 } from "../core/review-gate-command";
 import { parseReviewSnapshotArtifact } from "../core/review-snapshot-artifact";
-import { REVIEW_GATE_EXECUTION_MARKER } from "../core/review-gate-execution";
+import {
+  REVIEW_GATE_EXECUTION_MARKER,
+  REVIEW_GATE_WORKER_AGENT,
+} from "../core/review-gate-execution";
 import {
   normalizeTaskToolInputForJusticeInPlace,
   normalizeTaskToolInputForOmoWireInPlace,
@@ -30,6 +33,7 @@ import type { LinuxOpenat2ReviewArtifactProvider } from "./linux-review-artifact
 import { NodeFileSystem } from "./node-file-system";
 import { OpenCodeNotifier } from "./opencode-notifier";
 import { allocateWriterId, generateWriterId } from "./writer-id";
+import { extractReviewGateToolPaths } from "./review-gate-tool-paths";
 import type { DelegatedExecutionRelationObserved } from "../core/types";
 
 const PROCEED: HookResponse = { action: "proceed" };
@@ -187,6 +191,21 @@ export class OpenCodeAdapter {
 
   getWorkspaceRoot(): string | null {
     return this.#workspaceRoot;
+  }
+
+  resolveLockOwnerSession(sessionID: string): string | undefined {
+    if (sessionID.length === 0) return undefined;
+    const visited = new Set<string>();
+    let currentSessionID = sessionID;
+    for (let depth = 0; depth <= this.#childSessionEvents.size; depth += 1) {
+      if (visited.has(currentSessionID)) return undefined;
+      visited.add(currentSessionID);
+      const relation = this.#childSessionEvents.get(currentSessionID);
+      if (relation === undefined) return currentSessionID;
+      if (relation.parentSessionId.length === 0) return undefined;
+      currentSessionID = relation.parentSessionId;
+    }
+    return undefined;
   }
 
   getJustice(): JusticePlugin | null {
@@ -658,9 +677,15 @@ export class OpenCodeAdapter {
   ): Promise<HookResponse> {
     const isTask = input.tool === "task";
     const originalPrompt = typeof output.args.prompt === "string" ? output.args.prompt : "";
+    let reviewGateLockActive = false;
     try {
       if (isTask && this.#isReviewGateControllerTask(output.args)) {
-        return PROCEED;
+        await this.ensureInitialized();
+        if (
+          this.#justice
+            ?.getPlanBridge()
+            .isPendingReviewGatePrompt(input.sessionID, originalPrompt) === true
+        ) return PROCEED;
       }
       if (isTask) {
         this.#rememberReviewCategory(input, output.args);
@@ -671,9 +696,6 @@ export class OpenCodeAdapter {
         return PROCEED;
       }
 
-      // Forward every tool except justice_* query tools, which must not perturb
-      // the canonical Observation Log (D50).
-      if (input.tool.startsWith("justice_")) return PROCEED;
       await this.ensureInitialized();
       const justice = this.#justice;
       if (!justice) {
@@ -681,10 +703,38 @@ export class OpenCodeAdapter {
         return PROCEED;
       }
 
+      const lockOwnerSessionId = this.resolveLockOwnerSession(input.sessionID) ?? null;
+      reviewGateLockActive =
+        lockOwnerSessionId === null
+          ? justice.getPlanBridge().hasAnyReviewGateLock()
+          : justice.getPlanBridge().getReviewGateLock(lockOwnerSessionId) !== undefined;
+      const isPendingReviewGateTask =
+        isTask &&
+        output.args.subagent_type === REVIEW_GATE_WORKER_AGENT &&
+        lockOwnerSessionId !== null &&
+        justice
+          .getPlanBridge()
+          .isPendingReviewGatePrompt(lockOwnerSessionId, originalPrompt);
+      const reviewGateToolPaths = extractReviewGateToolPaths(input.tool, output.args);
+      const lockDecision = justice.getPlanBridge().classifyReviewGateToolUse(lockOwnerSessionId, {
+        toolName: input.tool,
+        isPendingReviewGateTask,
+        queryOnly: input.tool === "justice_review" && !("resolve" in output.args),
+        changedPaths: reviewGateToolPaths,
+      });
+      if (lockDecision?.kind === "deny") {
+        return { action: "skip", reason: lockDecision.reason };
+      }
+
+      // Justice query tools must not perturb the canonical Observation Log (D50).
+      if (input.tool.startsWith("justice_")) return PROCEED;
+
       const response = await justice.handleEvent({
         type: "PreToolUse",
         sessionId: input.sessionID,
         callId: input.callID,
+        lockOwnerSessionId,
+        reviewGateToolPaths,
         payload: {
           toolName: input.tool,
           callId: input.callID,
@@ -737,6 +787,10 @@ export class OpenCodeAdapter {
       this.#finalizeTaskToolInput(isTask, input, output.args);
       return response;
     } catch (err) {
+      if (reviewGateLockActive) {
+        await this.log("error", "[Justice] Review Gate lock check failed closed", err);
+        return { action: "skip", reason: "implementation_not_authorized" };
+      }
       if (isTask && originalPrompt.startsWith(REVIEW_GATE_EXECUTION_MARKER)) {
         this.#failClosedReviewGateTask(
           output.args,

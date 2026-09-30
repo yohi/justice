@@ -315,7 +315,7 @@ describe.skipIf(!RUN_LIVE_HOST_E2E)("review artifact supported-host acceptance (
         const write = tools.find((tool) => tool.tool === "write" && tool.input.filePath === artifactPath);
         if (write === undefined) throw new Error("unsupported setup: pinned host did not dispatch the child write tool");
         expect(write.status).toBe("error");
-        expect(write.output).toContain("ReviewArtifactWriteCancelled");
+        expect(write.output).toContain("ToolExecutionCancelled");
         expect(write.output).toContain("review_artifact_write_rejected");
         expect(await readFile(outsidePath, "utf8")).toBe("outside unchanged");
       } finally {

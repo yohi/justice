@@ -11,20 +11,20 @@ import {
   registerJusticeCommands,
   type CommandRegistrationTarget,
 } from "./runtime/command-registration";
-import type { HookResponse, ReviewArtifactWriteSkipReason } from "./core/types";
+import type { HookResponse, ToolExecutionCancellationReason } from "./core/types";
 
-class ReviewArtifactWriteCancelled extends Error {
-  readonly reason: ReviewArtifactWriteSkipReason;
+class ToolExecutionCancelled extends Error {
+  readonly reason: ToolExecutionCancellationReason;
 
-  constructor(reason: ReviewArtifactWriteSkipReason) {
-    super(`review artifact write cancelled: ${reason}`);
-    this.name = "ReviewArtifactWriteCancelled";
+  constructor(reason: ToolExecutionCancellationReason) {
+    super(`tool execution cancelled: ${reason}`);
+    this.name = "ToolExecutionCancelled";
     this.reason = reason;
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
-function cancellationReason(response: HookResponse | undefined): ReviewArtifactWriteSkipReason | undefined {
+function cancellationReason(response: HookResponse | undefined): ToolExecutionCancellationReason | undefined {
   return response?.action === "skip" ? response.reason : undefined;
 }
 
@@ -111,7 +111,7 @@ export const OpenCodePlugin: Plugin = async (init, pluginOptions) => {
         output as { args: Record<string, unknown> },
       );
       const reason = cancellationReason(response);
-      if (reason !== undefined) throw new ReviewArtifactWriteCancelled(reason);
+      if (reason !== undefined) throw new ToolExecutionCancelled(reason);
 
       const justiceInstance = adapter.getJustice();
       if (!justiceInstance && !adapter.isNoOp()) {

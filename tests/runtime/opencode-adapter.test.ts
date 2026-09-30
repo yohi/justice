@@ -1011,10 +1011,13 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     expect((output.parts[0] as { text: string }).text).toContain("subtask");
   });
 
-  it("does not route the outer Review Gate controller task into Justice worker claiming", async () => {
+  it("allows the outer controller task only for its exact pending Gate prompt", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
     const justice = adapter.getJustice() as JusticePlugin;
+    const pendingPrompt = vi
+      .spyOn(justice.getPlanBridge(), "isPendingReviewGatePrompt")
+      .mockReturnValue(true);
     const handleEvent = vi.spyOn(justice, "handleEvent");
     const args = {
       prompt:
@@ -1030,9 +1033,90 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     );
 
     expect(response).toEqual({ action: "proceed" });
+    expect(pendingPrompt).toHaveBeenCalledWith("parent-review", args.prompt);
     expect(handleEvent).not.toHaveBeenCalled();
     expect(args.subagent_type).toBe("justice-review-controller");
     expect(args).not.toHaveProperty("category");
+  });
+
+  it("allows the exact pending reviewer worker through the active Gate lock", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const planBridge = justice.getPlanBridge();
+    const prompt = "[JUSTICE: PLAN REVIEW GATE EXECUTION]\nGate-ID: gate-worker\nReview the artifacts.";
+    const pendingPrompt = vi
+      .spyOn(planBridge, "isPendingReviewGatePrompt")
+      .mockReturnValue(true);
+    vi.spyOn(planBridge, "getReviewGateLock").mockReturnValue({
+      parentSessionId: "parent-review",
+      gateId: "gate-worker",
+      phase: "reviewing",
+      designPath: "docs/design.md",
+      planPath: "docs/plan.md",
+      designDigest: "design-digest",
+      planDigest: "plan-digest",
+    });
+    const classify = vi
+      .spyOn(planBridge, "classifyReviewGateToolUse")
+      .mockReturnValue({ kind: "allow" });
+    const handleEvent = vi
+      .spyOn(justice, "handleEvent")
+      .mockResolvedValue({ action: "proceed" });
+    const args = { prompt, subagent_type: "justice-review-worker" };
+
+    await adapter.onEvent({
+      event: {
+        id: "event-controller",
+        type: "session.created",
+        properties: { info: { id: "controller", parentID: "parent-review" } },
+      },
+    });
+    await adapter.onEvent({
+      event: {
+        id: "event-worker",
+        type: "session.created",
+        properties: { info: { id: "worker", parentID: "controller" } },
+      },
+    });
+
+    const response = await adapter.onToolExecuteBefore(
+      { tool: "task", sessionID: "worker", callID: "worker-call" },
+      { args },
+    );
+
+    expect(response).toEqual({ action: "proceed" });
+    expect(pendingPrompt).toHaveBeenCalledWith("parent-review", prompt);
+    expect(classify).toHaveBeenCalledWith("parent-review", {
+      toolName: "task",
+      isPendingReviewGateTask: true,
+      queryOnly: false,
+      changedPaths: [],
+    });
+    expect(handleEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "worker", lockOwnerSessionId: "parent-review" }),
+    );
+  });
+
+  it("blocks a stale outer controller task when no matching Gate is pending", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    vi.spyOn(justice.getPlanBridge(), "isPendingReviewGatePrompt").mockReturnValue(false);
+    const args = {
+      prompt: "[JUSTICE: PLAN REVIEW GATE EXECUTION]\nGate-ID: stale-gate",
+      description: "Justice plan review gate",
+      subagent_type: "justice-review-controller",
+      command: "/justice-review-gate",
+    };
+
+    const response = await adapter.onToolExecuteBefore(
+      { tool: "task", sessionID: "parent-review", callID: "stale-outer-call" },
+      { args },
+    );
+
+    expect(response).toMatchObject({ action: "inject" });
+    expect(args.prompt).toContain("[JUSTICE: REVIEW GATE CLAIM BLOCKED]");
   });
 
   it("fails the pending Gate when the outer controller returns without an inner terminal worker", async () => {
@@ -1381,5 +1465,69 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     );
 
     expect(output.parts).toEqual([]);
+  });
+});
+
+describe("OpenCodeAdapter lock owner resolution", () => {
+  it("returns the root session for nested Review Gate descendants", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.onEvent({
+      event: {
+        id: "event-child",
+        type: "session.created",
+        properties: { info: { id: "controller", parentID: "main" } },
+      },
+    });
+    await adapter.onEvent({
+      event: {
+        id: "event-worker",
+        type: "session.created",
+        properties: { info: { id: "worker", parentID: "controller" } },
+      },
+    });
+
+    expect(adapter.resolveLockOwnerSession("main")).toBe("main");
+    expect(adapter.resolveLockOwnerSession("worker")).toBe("main");
+    expect(adapter.resolveLockOwnerSession("unrelated")).toBe("unrelated");
+  });
+
+  it("returns undefined for cyclic or missing parent relations", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.onEvent({
+      event: {
+        id: "event-a",
+        type: "session.created",
+        properties: { info: { id: "a", parentID: "b" } },
+      },
+    });
+    await adapter.onEvent({
+      event: {
+        id: "event-b",
+        type: "session.created",
+        properties: { info: { id: "b", parentID: "a" } },
+      },
+    });
+
+    expect(adapter.resolveLockOwnerSession("a")).toBeUndefined();
+  });
+
+  it("stops inheriting a parent lock owner after the child session is deleted", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.onEvent({
+      event: {
+        id: "event-child",
+        type: "session.created",
+        properties: { info: { id: "child", parentID: "parent" } },
+      },
+    });
+    await adapter.onEvent({
+      event: {
+        id: "event-delete",
+        type: "session.deleted",
+        properties: { info: { id: "child" } },
+      },
+    });
+
+    expect(adapter.resolveLockOwnerSession("child")).toBe("child");
   });
 });
