@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## [4.3.0](https://github.com/yohi/justice/compare/v4.2.3...v4.3.0) (2026-09-30)
+
+### Features
+
+* Review Gate を専用 controller 経由で実行し、実装継続を session lock で制御
+
+### Bug Fixes
+
+* `/justice-start` の Design / Plan Review Gate 案内と開始条件を修正
+* Review Gate の取消処理と Gate 前調査の制御を修正
+* 組み込み agent を認識し、計画作成後の Review Gate 誘導を改善
+
 ## [4.2.3](https://github.com/yohi/justice/compare/v4.2.2...v4.2.3) (2026-09-29)
 
 ### Bug Fixes
