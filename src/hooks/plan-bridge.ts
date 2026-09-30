@@ -966,12 +966,17 @@ export class PlanBridge {
 
   /**
    * Select exactly one phase: design gate first, then plan gate.
-   * A requested artifact counts as satisfied only when it is actually readable.
+   * Brainstorming is required unless a Design path was explicitly provided and
+   * the artifact is readable. A requested artifact counts as satisfied only
+   * when it is actually readable.
    */
   private async resolveBootstrapPhase(
     request: WorkflowStartRequest,
   ): Promise<WorkflowBootstrapPhase> {
-    if (request.designPath !== null && !(await this.isArtifactReadable(request.designPath))) {
+    if (
+      request.designPath === null ||
+      !(await this.isArtifactReadable(request.designPath))
+    ) {
       return "design_required";
     }
 

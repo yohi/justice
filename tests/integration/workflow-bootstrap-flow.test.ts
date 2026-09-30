@@ -147,6 +147,26 @@ function workflowAuditOf(
 }
 
 describe("Justice workflow bootstrap integration flow", () => {
+  it("requires brainstorming for a goal-only start even when a plan exists", async () => {
+    const { adapter, justice } = await createHarness();
+    const sessionId = "s-goal-only";
+
+    const guidance = workflowGuidance(
+      await startWorkflow(
+        adapter,
+        sessionId,
+        "https://github.com/yohi/nexus/issues/296",
+      ),
+      "`brainstorming` を使い",
+    );
+
+    expect(guidance).toContain("**Phase**: design_required");
+    expect(guidance).toContain("https://github.com/yohi/nexus/issues/296");
+    expect(justice.getPlanBridge().getActivePlan(sessionId)).toBeNull();
+    const records = await observationRecordsFor(justice, sessionId);
+    expect(records.map((record) => record.kind)).toEqual(["workflow_started", "design_requested"]);
+  });
+
   it("activates a readable plan and injects task context without an assistant message echo", async () => {
     const { adapter, justice, handleMessage } = await createHarness();
     const sessionId = "s-plan-ready";
@@ -154,7 +174,7 @@ describe("Justice workflow bootstrap integration flow", () => {
     const output = await startWorkflow(
       adapter,
       sessionId,
-      `--plan ${PLAN_PATH} ship the bootstrap`,
+      `--design ${DESIGN_PATH} --plan ${PLAN_PATH} ship the bootstrap`,
     );
     const guidance = workflowGuidance(output, "利用者が `/justice-review-gate");
 
@@ -200,7 +220,11 @@ describe("Justice workflow bootstrap integration flow", () => {
   it("preserves task arguments and exposes only the unauthorized advisory when not armed", async () => {
     const { adapter, justice } = await createHarness();
     const sessionId = "s-plan-ready-unarmed";
-    await startWorkflow(adapter, sessionId, `--plan ${PLAN_PATH} ship the bootstrap`);
+    await startWorkflow(
+      adapter,
+      sessionId,
+      `--design ${DESIGN_PATH} --plan ${PLAN_PATH} ship the bootstrap`,
+    );
     let injectedContext = "";
     const bridge = justice.getPlanBridge();
     const handlePreToolUse = bridge.handlePreToolUse.bind(bridge);
@@ -302,7 +326,11 @@ describe("Justice workflow bootstrap integration flow", () => {
     const { adapter, justice } = await createHarness();
     const sessionId = "s-restart";
 
-    await startWorkflow(adapter, sessionId, `--plan ${PLAN_PATH} ship the bootstrap`);
+    await startWorkflow(
+      adapter,
+      sessionId,
+      `--design ${DESIGN_PATH} --plan ${PLAN_PATH} ship the bootstrap`,
+    );
     expect(justice.getPlanBridge().getActivePlan(sessionId)).toBe(PLAN_PATH);
 
     const guidance = workflowGuidance(
@@ -324,7 +352,11 @@ describe("Justice workflow bootstrap integration flow", () => {
   it("keeps bootstrap state isolated per session", async () => {
     const { adapter, justice } = await createHarness();
 
-    await startWorkflow(adapter, "s-ready", `--plan ${PLAN_PATH} ship the bootstrap`);
+    await startWorkflow(
+      adapter,
+      "s-ready",
+      `--design ${DESIGN_PATH} --plan ${PLAN_PATH} ship the bootstrap`,
+    );
     await startWorkflow(
       adapter,
       "s-blocked",

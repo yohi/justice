@@ -520,11 +520,11 @@ describe("PlanBridge.handleImplementationArm", () => {
   });
 
   it("retains a durable plan authorization after a same-plan workflow restart", async () => {
-    const bridge = createBridge({ "plan.md": planContent });
+    const bridge = createBridge({ "design.md": "# Design", "plan.md": planContent });
     await bridge.handleWorkflowStart("session-restart", {
       source: "command",
       goal: "implement",
-      designPath: null,
+      designPath: "design.md",
       planPath: "plan.md",
     });
     await bridge.handleImplementationArm("session-restart", {
@@ -542,7 +542,7 @@ describe("PlanBridge.handleImplementationArm", () => {
     await bridge.handleWorkflowStart("session-restart", {
       source: "command",
       goal: "restart implementation",
-      designPath: null,
+      designPath: "design.md",
       planPath: "plan.md",
     });
     const response = await bridge.handlePreToolUse({

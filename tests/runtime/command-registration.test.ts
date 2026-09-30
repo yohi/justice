@@ -144,6 +144,69 @@ describe("registerJusticeCommands", () => {
     expect(log).toHaveBeenCalledTimes(1);
   });
 
+  it("removes an unavailable agent from an existing justice-start command", async () => {
+    const existing = {
+      template: "custom template",
+      description: "Custom start command",
+      agent: "hephaestus",
+      model: "provider/model",
+      subtask: true,
+    };
+    const config: CommandRegistrationTarget = {
+      command: { "justice-start": existing },
+      agent: { atlas: {} },
+    };
+    const log = vi.fn(async () => {});
+
+    await registerJusticeCommands(config, log);
+
+    expect(config.command?.["justice-start"]).toEqual({
+      template: "custom template",
+      description: "Custom start command",
+      model: "provider/model",
+      subtask: true,
+    });
+    expect(log).toHaveBeenCalledWith(
+      "warn",
+      expect.stringContaining('targets unavailable agent "hephaestus"'),
+    );
+  });
+
+  it("preserves an existing justice-start agent when it is configured", async () => {
+    const existing = {
+      template: "custom template",
+      description: "Custom start command",
+      agent: "hephaestus",
+    };
+    const config: CommandRegistrationTarget = {
+      command: { "justice-start": existing },
+      agent: { hephaestus: {} },
+    };
+
+    await registerJusticeCommands(config, async () => {});
+
+    expect(config.command?.["justice-start"]).toBe(existing);
+    expect(config.command?.["justice-start"]?.agent).toBe("hephaestus");
+  });
+
+  it.each(["build", "plan"])(
+    "preserves the built-in primary agent %s on justice-start",
+    async (agent) => {
+      const config: CommandRegistrationTarget = {
+        command: { "justice-start": { template: "$ARGUMENTS", agent } },
+      };
+      const log = vi.fn(async () => {});
+
+      await registerJusticeCommands(config, log);
+
+      expect(config.command?.["justice-start"]?.agent).toBe(agent);
+      expect(log).not.toHaveBeenCalledWith(
+        "warn",
+        expect.stringContaining("targets unavailable agent"),
+      );
+    },
+  );
+
   it("initializes config.command when undefined", async () => {
     const config: CommandRegistrationTarget = { command: undefined };
     const log = vi.fn(async () => {});

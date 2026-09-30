@@ -33,6 +33,7 @@ export interface CommandRegistrationTarget {
 
 export const JUSTICE_REVIEW_CONTROLLER_AGENT = "justice-review-controller";
 export const JUSTICE_REVIEW_WORKER_AGENT = REVIEW_GATE_WORKER_AGENT;
+const BUILT_IN_PRIMARY_AGENTS = new Set(["build", "plan"]);
 
 export const JUSTICE_REVIEW_CONTROLLER_DEFINITION: Readonly<JusticeAgentRegistrationEntry> =
   Object.freeze({
@@ -177,6 +178,23 @@ export async function registerJusticeCommands(
     prompt: JUSTICE_REVIEW_WORKER_DEFINITION.prompt,
     permission: { ...JUSTICE_REVIEW_WORKER_DEFINITION.permission },
   };
+
+  const justiceStart = commands["justice-start"];
+  const configuredStartAgent = justiceStart?.agent;
+  const configuredStartAgentAvailable =
+    BUILT_IN_PRIMARY_AGENTS.has(configuredStartAgent ?? "") ||
+    (configuredStartAgent !== undefined && agents[configuredStartAgent] !== undefined);
+  if (
+    justiceStart &&
+    configuredStartAgent !== undefined &&
+    !configuredStartAgentAvailable
+  ) {
+    delete justiceStart.agent;
+    await log(
+      "warn",
+      `[Justice] /justice-start targets unavailable agent "${configuredStartAgent}"; falling back to the current agent.`,
+    );
+  }
 
   for (const [name, definition] of Object.entries(JUSTICE_COMMAND_DEFINITIONS)) {
     if (name === "justice-review-gate" && !reviewControllerAvailable) {
