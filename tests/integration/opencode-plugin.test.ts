@@ -403,7 +403,7 @@ describe("OpenCodePlugin (integration)", () => {
     expect(output.parts).toHaveLength(1);
     const text = (output.parts[0] as { text: string }).text;
     expect(text).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
-    expect(text).toContain("Review Gate was not dispatched");
+    expect(text).toContain("Review was not started");
     expect(text).not.toContain("[JUSTICE: COMMAND REJECTED]");
   });
   it("leaves command.execute.before output untouched for a non-Justice command", async () => {

@@ -1264,6 +1264,26 @@ describe("PlanBridge", () => {
       expect(bridge.getActivePlan("s-wf-plan-required")).toBeNull();
     });
 
+    it("moves a pending review lock to remediation when its gate is cancelled", async () => {
+      const reader = createMockFileReader({
+        "docs/specs/design.md": "# Design",
+        "docs/plans/implementation-plan.md": samplePlanContent,
+      });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      const started = await bridge.handleReviewGateStart("s-review-cancel", {
+        source: "command",
+        designPath: "docs/specs/design.md",
+        planPath: "docs/plans/implementation-plan.md",
+      });
+      expect(started.dispatched).toBe(true);
+      expect(bridge.getReviewGateLock("s-review-cancel")?.phase).toBe("reviewing");
+
+      bridge.cancelPendingPlanReviewGate("s-review-cancel");
+
+      expect(bridge.hasPendingPlanReviewGate("s-review-cancel")).toBe(false);
+      expect(bridge.getReviewGateLock("s-review-cancel")?.phase).toBe("remediation");
+    });
+
     it("dispatches the Design / Implementation Plan review gate standalone when both artifacts are readable", async () => {
       const reader = createMockFileReader({
         "docs/specs/design.md": "# Design",
