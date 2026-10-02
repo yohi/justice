@@ -168,7 +168,7 @@ async function completeRemediation(input: CompleteRemediationInput): Promise<Hoo
 }
 
 describe("Review Gate implementation lock integration", () => {
-  it("cancels task and skill tools after a clear result while allowing reads", async () => {
+  it("cancels implementation tasks after a clear result while allowing skill loading and reads", async () => {
     const { justice, gateId, reviewerPrompt, workerSessionId, workerCallId } = await createReviewedJustice();
     const completionResponse = await completeReview({
       justice,
@@ -218,10 +218,7 @@ describe("Review Gate implementation lock integration", () => {
       action: "skip",
       reason: "implementation_not_authorized",
     });
-    expect(skillResponse).toMatchObject({
-      action: "skip",
-      reason: "implementation_not_authorized",
-    });
+    expect(skillResponse).toEqual({ action: "proceed" });
     expect(readResponse).toEqual({ action: "proceed" });
     expect(justice.getSessionStateProvider().getActiveTaskId("implementation-task-call")).toBeUndefined();
   });

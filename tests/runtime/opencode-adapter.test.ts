@@ -1838,3 +1838,73 @@ describe("OpenCodeAdapter lock owner resolution", () => {
     expect(adapter.resolveLockOwnerSession("child")).toBe("child");
   });
 });
+
+describe("OpenCodeAdapter.onChatMessage fallback", () => {
+  it("logs a warning when a user types /justice-implement but the command is not registered", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const handleImplementationArm = vi
+      .spyOn(justice.getPlanBridge(), "handleImplementationArm")
+      .mockResolvedValue({ armed: true, planPath: "plan.md", directiveStage: "implementation_arm", guidance: "" });
+    const logSpy = vi.spyOn(adapter, "log").mockResolvedValue(undefined);
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await adapter.onChatMessage(
+      { event: { type: "chat.message", properties: { sessionID: "fallback-session" } } },
+      {
+        message: { role: "user", content: "/justice-implement --plan plan.md --approved", sessionID: "fallback-session" },
+        parts: [],
+      },
+    );
+
+    expect(handleImplementationArm).toHaveBeenCalledWith("fallback-session", {
+      source: "fallback_marker",
+      planPath: "plan.md",
+      approved: true,
+    });
+    expect(logSpy).toHaveBeenCalledWith(
+      "warn",
+      expect.stringContaining("Fallback /justice-implement was used because the command was not registered."),
+      expect.any(Object),
+    );
+    consoleErrorSpy.mockRestore();
+  });
+  it("does not log fallback for ordinary user messages", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const logSpy = vi.spyOn(adapter, "log").mockResolvedValue(undefined);
+
+    await adapter.onChatMessage(
+      { event: { type: "chat.message", properties: {} } },
+      {
+        message: { role: "user", content: "hello", sessionID: "normal-session" },
+        parts: [],
+      },
+    );
+
+    expect(logSpy).not.toHaveBeenCalledWith(expect.stringContaining("Fallback /justice-implement"));
+  });
+
+  it("does not forward assistant chat messages as user messages", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const handleEvent = vi.spyOn(justice, "handleEvent");
+
+    await adapter.onChatMessage(
+      { event: { type: "chat.message", properties: { sessionID: "assistant-session" } } },
+      {
+        message: { role: "assistant", agent: "sisyphus", sessionID: "assistant-session" },
+        parts: [{ type: "text", text: "assistant response" }],
+      },
+    );
+
+    expect(handleEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "Message",
+        payload: expect.objectContaining({ role: "user" }),
+      }),
+    );
+  });
+});

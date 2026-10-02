@@ -208,7 +208,7 @@ export async function registerJusticeCommands(
     if (Object.prototype.hasOwnProperty.call(commands, name)) {
       await log(
         "warn",
-        `[Justice] Command "${name}" is already defined; skipping automatic registration.`,
+        `[Justice] Command "${name}" is already defined; skipping automatic registration. The canonical ${name} handler will not run for this session.`,
       );
       continue;
     }
@@ -219,4 +219,17 @@ export async function registerJusticeCommands(
         : {}),
     };
   }
+
+  const registeredNames = collectJusticeCommandNames(commands);
+  if (registeredNames.length > 0) {
+    await log("info", `[Justice] Auto-registered Justice commands: ${registeredNames.join(", ")}.`);
+  }
+}
+
+function collectJusticeCommandNames(
+  commands: Record<string, CommandRegistrationEntry>,
+): readonly string[] {
+  return Object.keys(commands).filter((name) =>
+    Object.prototype.hasOwnProperty.call(JUSTICE_COMMAND_DEFINITIONS, name),
+  );
 }

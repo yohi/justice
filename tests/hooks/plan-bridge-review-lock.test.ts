@@ -286,6 +286,52 @@ describe("PlanBridge Review Gate implementation lock", () => {
     );
   });
 
+  it("includes structured Review Gate result with findings on clear", async () => {
+    const { bridge } = createLockFixture();
+    const { gateId, response } = await runReview({
+      bridge,
+      parentSessionId: "parent",
+      findings: [] as const,
+    });
+
+    expect(response.action).toBe("inject");
+    if (response.action !== "inject") throw new Error("Expected inject response");
+    expect(response.injectedContext).toContain("[JUSTICE: REVIEW GATE RESULT]");
+    const resultMatch = response.injectedContext.match(/\[JUSTICE: REVIEW GATE RESULT\]\s+(\{[\s\S]*?\})/);
+    expect(resultMatch).not.toBeNull();
+    if (resultMatch === null) throw new Error("Result line not found");
+    const result = JSON.parse(resultMatch[1]);
+    expect(result).toMatchObject({
+      schemaVersion: 1,
+      gateId,
+      complete: true,
+      findings: [],
+    });
+  });
+
+  it("forbids the remediation worker from changing the commit strategy section", async () => {
+    const { bridge } = createLockFixture();
+    const { response } = await runReview({
+      bridge,
+      parentSessionId: "parent",
+      retryBudget: 1,
+      findings: [
+        {
+          itemKey: "RG-001",
+          severity: "minor",
+          summary: "Clarify the verification sequence",
+          location: "Task 1",
+        },
+      ],
+    });
+
+    expect(response.action).toBe("inject");
+    if (response.action !== "inject") throw new Error("Expected remediation prompt");
+    expect(response.injectedContext).toContain("Do not modify the Commit Strategy section");
+    expect(response.injectedContext).toContain("Do not add conditional language such as 'only if explicitly requested'");
+    expect(response.injectedContext).toContain("Preserve the existing writing-plans skill format");
+  });
+
   it("keeps incomplete reviewer output locked in remediation", async () => {
     const { bridge } = createLockFixture();
     await runReview({ bridge, parentSessionId: "parent", findings: [], complete: false });

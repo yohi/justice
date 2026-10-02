@@ -131,13 +131,21 @@ describe("classifyReviewGateToolUse", () => {
     ).toEqual({ kind: "deny", reason: "implementation_not_authorized" });
   });
 
-  it.each(["skill", "bash", "mcp_unknown", "unrecognized_tool"])(
+  it.each(["bash", "mcp_unknown", "unrecognized_tool"])(
     "denies implementation-capable or unknown tool %s",
     (toolName) => {
       expect(classifyReviewGateToolUse(clearLock, reviewToolUse(toolName))).toEqual({
         kind: "deny",
         reason: "implementation_not_authorized",
       });
+    },
+  );
+
+  it.each(["reviewing", "remediation", "awaiting_implementation_authorization"] as const)(
+    "allows skill loading during %s",
+    (phase) => {
+      const lock: ReviewGateLockSnapshot = { ...clearLock, phase };
+      expect(classifyReviewGateToolUse(lock, reviewToolUse("skill"))).toEqual({ kind: "allow" });
     },
   );
 

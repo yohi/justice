@@ -395,9 +395,13 @@ export class OpenCodeAdapter {
         .join("\n");
       await this.#handleChatMessage({
         ...inputRecord,
+        sessionID: this.#readString(outputRecord, "sessionID") || this.#readString(message, "sessionID"),
         message: {
           ...message,
-          content: this.#readString(message, "role") === "user" ? text : "",
+          content:
+            this.#readString(message, "role") === "user" && text.length > 0
+              ? text
+              : this.#readString(message, "content"),
           role: this.#readString(message, "role"),
         },
       });
@@ -551,9 +555,39 @@ export class OpenCodeAdapter {
       }
     }
     if (!isUserMessage) return;
+
+    const trimmedContent = content.trim();
+    if (trimmedContent.startsWith("/justice-implement") || trimmedContent.startsWith("justice-implement")) {
+      await this.#tryFallbackImplementCommand(sessionId, trimmedContent);
+    }
+
     await justice.handleEvent({ type: "Message", sessionId, payload: { role: "user", content } });
   }
 
+  async #tryFallbackImplementCommand(sessionId: string, content: string): Promise<void> {
+    const argumentsString = content.replace(/^\/?justice-implement\s*/, "").trim();
+    const request = parseJusticeImplementCommandArguments(argumentsString);
+    if (request === null) {
+      await this.log("warn", "[Justice] Fallback /justice-implement command was typed but arguments were rejected by parser");
+      return;
+    }
+
+    const planBridge = this.#justice?.getPlanBridge();
+    if (!planBridge) return;
+
+    if ("action" in request && request.action === "cancel") {
+      await planBridge.handleImplementationArm(sessionId, { source: "fallback_marker", planPath: "", approved: false });
+      await this.log("warn", "[Justice] Fallback /justice-implement --cancel was used because the command was not registered.");
+      return;
+    }
+
+    const result = await planBridge.handleImplementationArm(sessionId, {
+      source: "fallback_marker",
+      planPath: request.planPath,
+      approved: request.approved,
+    });
+    await this.log("warn", "[Justice] Fallback /justice-implement was used because the command was not registered.", { armed: result.armed, planPath: result.planPath, directiveStage: result.directiveStage });
+  }
   async #handleChatParams(properties: Record<string, unknown>): Promise<void> {
     const sessionId = this.#readString(properties, "sessionID");
     const agentName = this.#readString(properties, "agent");
@@ -1170,6 +1204,8 @@ export class OpenCodeAdapter {
     if (this.#noOp) return;
 
     try {
+      await this.log("info", `[Justice] onCommandExecuteBefore: command=${input.command}, arguments=${input.arguments}`);
+
       if (isJusticeStartCommand(input.command)) {
         await this.#handleWorkflowStart(input, output);
         return;

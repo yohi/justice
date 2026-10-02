@@ -38,6 +38,7 @@ const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "lsp_find_references",
   "lsp_diagnostics",
   "justice_status",
+  "skill",
 ]);
 
 const REVIEW_ARTIFACT_WRITE_TOOLS: ReadonlySet<string> = new Set([
