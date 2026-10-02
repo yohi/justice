@@ -1,6 +1,7 @@
 /* eslint-disable security/detect-object-injection -- Test helper intentionally indexes fixture maps by dynamic path. */
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { normalizeTaskToolInputWithCategory, PlanBridge } from "../../src/hooks/plan-bridge";
+import { extractReviewGateWorkerPrompt } from "../../src/core/review-gate-execution";
 import type {
   FileReader,
   HookEvent,
@@ -1274,6 +1275,7 @@ describe("PlanBridge", () => {
         source: "command",
         designPath: "docs/specs/design.md",
         planPath: "docs/plans/implementation-plan.md",
+        retryBudget: 0,
       });
       expect(started.dispatched).toBe(true);
       expect(bridge.getReviewGateLock("s-review-cancel")?.phase).toBe("reviewing");
@@ -1298,22 +1300,19 @@ describe("PlanBridge", () => {
         source: "command",
         designPath: "docs/specs/design.md",
         planPath: "docs/plans/implementation-plan.md",
+        retryBudget: 0,
       });
 
       expect(result.dispatched).toBe(true);
       expect(result.directiveStage).toBe("plan_review_required");
       expect(result.planPath).toBe("docs/plans/implementation-plan.md");
       expect(bridge.getActivePlan("s-review-gate")).toBe("docs/plans/implementation-plan.md");
-      expect(result.guidance).toContain("[JUSTICE: REVIEW GATE REQUESTED]");
-      expect(result.guidance).not.toContain("requesting-code-review");
-      expect(result.guidance).toContain("do NOT invoke another review Skill first");
-      expect(result.guidance).toContain("one foreground `task()` reviewer");
-      expect(result.guidance).toContain("Do not modify files");
-      expect(result.guidance).toContain("does not itself mean READY");
-      expect(result.guidance).toContain("/justice-implement --approved");
-      expect(result.guidance).toContain(
-        `**Review scope**: \`${JSON.stringify(["docs/specs/design.md", "docs/plans/implementation-plan.md"])}\``,
-      );
+      expect(result.reviewerPrompt).toBeDefined();
+      expect(extractReviewGateWorkerPrompt(result.reviewerPrompt)).toMatchObject({
+        role: "review",
+        round: 1,
+        retryBudget: 0,
+      });
       expect(observationHandler.setReviewGateScope).toHaveBeenCalledWith(
         "s-review-gate",
         JSON.stringify(["docs/specs/design.md", "docs/plans/implementation-plan.md"]),
@@ -1335,6 +1334,7 @@ describe("PlanBridge", () => {
         source: "command",
         designPath: "docs/specs/design.md",
         planPath: "docs/plans/implementation-plan.md",
+        retryBudget: 0,
       });
       const prompt = started.guidance.match(/```text\n([\s\S]*?)\n```/u)?.[1];
       expect(prompt).toBeDefined();
@@ -1353,7 +1353,13 @@ describe("PlanBridge", () => {
 
       expect(claim).toMatchObject({
         action: "inject",
-        injectedContext: "[JUSTICE: PLAN REVIEW GATE CLAIMED]",
+        modifiedPayload: {
+          args: {
+            subagent_type: "justice-review-worker",
+            category: "sp-final-review",
+            run_in_background: false,
+          },
+        },
       });
     });
 
@@ -1376,22 +1382,24 @@ describe("PlanBridge", () => {
         source: "command",
         designPath: "docs/specs/design.md",
         planPath: "docs/plans/implementation-plan.md",
+        retryBudget: 0,
       });
       const gateId = started.guidance.match(/\*\*Gate ID\*\*: ([A-Za-z0-9-]+)/u)?.[1];
       const reviewerPrompt = started.guidance.match(/```text\n([\s\S]*?)\n```/u)?.[1];
       expect(gateId).toBeDefined();
-      expect(reviewerPrompt).toBeDefined();
-      expect(started.guidance).toContain("exactly one foreground `task()` reviewer");
-      expect(started.guidance).toContain("Do not send a category");
-      expect(started.guidance).toContain("Do NOT invoke another Skill named `code-review`");
-      expect(started.guidance).toContain("Do NOT use CodeRabbit CLI");
-      expect(started.guidance).toContain("Do NOT call `justice_review`");
+      if (reviewerPrompt === undefined) throw new Error("Review Gate did not provide a prompt");
+      const prompt = reviewerPrompt;
+      expect(extractReviewGateWorkerPrompt(prompt)).toEqual({
+        role: "review",
+        gateId,
+        round: 1,
+        retryBudget: 0,
+      });
 
       const reviewScope = JSON.stringify([
         "docs/specs/design.md",
         "docs/plans/implementation-plan.md",
       ]);
-      const prompt = reviewerPrompt!;
       const pre = await bridge.handlePlanReviewGatePreToolUse({
         type: "PreToolUse",
         sessionId: "s-review-controller-child",
@@ -1408,7 +1416,6 @@ describe("PlanBridge", () => {
       });
       expect(pre).toMatchObject({
         action: "inject",
-        injectedContext: "[JUSTICE: PLAN REVIEW GATE CLAIMED]",
         modifiedPayload: {
           args: {
             subagent_type: "justice-review-worker",
@@ -1436,7 +1443,9 @@ describe("PlanBridge", () => {
       });
       expect(post).toMatchObject({
         action: "inject",
-        injectedContext: "[JUSTICE: REVIEW CLEAR]",
+        injectedContext: expect.stringContaining(
+          "/justice-implement --plan docs/plans/implementation-plan.md --approved",
+        ),
       });
       expect(observationHandler.handlePlanReviewGateResult).toHaveBeenCalledWith({
         sessionId: "s-review-exec",
@@ -1467,6 +1476,7 @@ describe("PlanBridge", () => {
         source: "command",
         designPath: "docs/specs/design-v1.md",
         planPath: "docs/plans/plan-v1.md",
+        retryBudget: 0,
       });
       const firstGateId = first.guidance.match(/\*\*Gate ID\*\*: ([A-Za-z0-9-]+)/u)?.[1];
       const firstPrompt = first.guidance.match(/```text\n([\s\S]*?)\n```/u)?.[1];
@@ -1489,9 +1499,10 @@ describe("PlanBridge", () => {
         source: "command",
         designPath: "docs/specs/design-v2.md",
         planPath: "docs/plans/plan-v2.md",
+        retryBudget: 0,
       });
       const secondPrompt = second.guidance.match(/```text\n([\s\S]*?)\n```/u)?.[1];
-      expect(secondPrompt).toBeDefined();
+      if (secondPrompt === undefined) throw new Error("Replacement Gate did not provide a prompt");
 
       const stale = await bridge.handlePlanReviewGatePostToolUse({
         type: "PostToolUse",
@@ -1509,10 +1520,9 @@ describe("PlanBridge", () => {
           error: false,
         },
       });
-      expect(stale).toMatchObject({
-        action: "inject",
-        injectedContext: expect.stringContaining("pending Gate state mismatch"),
-      });
+      expect(stale?.action).toBe("inject");
+      expect(bridge.getReviewGateLock("s-review-supersede")?.gateId).not.toBe(firstGateId);
+      expect(bridge.isPendingReviewGatePrompt("s-review-supersede", secondPrompt)).toBe(true);
 
       const replacementClaim = await bridge.handlePlanReviewGatePreToolUse({
         type: "PreToolUse",
@@ -1522,7 +1532,13 @@ describe("PlanBridge", () => {
       });
       expect(replacementClaim).toMatchObject({
         action: "inject",
-        injectedContext: "[JUSTICE: PLAN REVIEW GATE CLAIMED]",
+        modifiedPayload: {
+          args: {
+            subagent_type: "justice-review-worker",
+            category: "sp-final-review",
+            run_in_background: false,
+          },
+        },
       });
     });
     it("blocks a plan review result when either artifact changes during review", async () => {
@@ -1545,6 +1561,7 @@ describe("PlanBridge", () => {
         source: "command",
         designPath: "docs/specs/design.md",
         planPath: "docs/plans/implementation-plan.md",
+        retryBudget: 0,
       });
       const gateId = started.guidance.match(/\*\*Gate ID\*\*: ([A-Za-z0-9-]+)/u)?.[1];
       const prompt = started.guidance.match(/```text\n([\s\S]*?)\n```/u)?.[1];
@@ -1604,6 +1621,7 @@ describe("PlanBridge", () => {
         source: "command",
         designPath: "docs/specs/design.md",
         planPath: "docs/plans/implementation-plan.md",
+        retryBudget: 0,
       });
       const gateId = started.guidance.match(/\*\*Gate ID\*\*: ([A-Za-z0-9-]+)/u)?.[1];
       const prompt = started.guidance.match(/```text\n([\s\S]*?)\n```/u)?.[1];
@@ -1690,6 +1708,7 @@ describe("PlanBridge", () => {
         source: "command",
         designPath: "docs/specs/design.md",
         planPath: "docs/plans/implementation-plan.md",
+        retryBudget: 0,
       });
 
       expect(result.dispatched).toBe(false);

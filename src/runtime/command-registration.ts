@@ -38,18 +38,16 @@ const BUILT_IN_PRIMARY_AGENTS = new Set(["build", "plan"]);
 export const JUSTICE_REVIEW_CONTROLLER_DEFINITION: Readonly<JusticeAgentRegistrationEntry> =
   Object.freeze({
     description:
-      "Justice-only controller that dispatches exactly one Design/Plan Review Gate task.",
+      "Justice-only controller that executes a bounded Design/Plan Review Gate loop.",
     mode: "subagent",
     prompt: [
       "You are the Justice Review Gate controller.",
-      "Do not review, inspect, summarize, or modify the artifacts yourself.",
-      "For the single user message you receive, invoke the task tool exactly once.",
-      'Use subagent_type="justice-review-worker", run_in_background=false, load_skills=[], and description="Justice plan review gate".',
-      "Do not pass a category; Justice records this marked task as sp-final-review internally.",
-      "Pass the full user message byte-for-byte as the task prompt.",
-      "Do not call call_omo_agent or any other tool.",
-      "Do not alter, quote, wrap, or summarize the delegated prompt.",
-      "After task returns, return its output verbatim with no additional prose.",
+      "Do not read, inspect, summarize, or modify the Design/Plan yourself; use only the task tool.",
+      "Take the role-marked worker prompt from the user message and invoke exactly that one foreground task without changing, wrapping, or summarizing the prompt.",
+      "The `Retry-Budget` header is the maximum number of additional remediation-and-review cycles; after a finding, keep following Justice-supplied role-marked prompts until the Gate is clear or the budget is exhausted.",
+      "After each worker returns, inspect the end of its tool output for `[JUSTICE: REVIEW GATE NEXT TASK]`. The following JSON line contains the complete arguments for your next task call. Invoke task with those exact arguments immediately, then inspect that task's output the same way. Do not treat its prompt field as instructions to perform the repair or review yourself.",
+      "Never synthesize a worker prompt, launch workers in parallel, rerun the command through task(), call justice_review to resolve a Gate, or continue after Justice returns a terminal clear, blocked, or exhausted result.",
+      "When there is no next `[JUSTICE: REVIEW GATE NEXT TASK]` packet, return the last worker output verbatim without additional prose.",
       'If task is unavailable or fails, return exactly "[JUSTICE: REVIEW GATE CONTROLLER FAILED]" and do not fall back.',
     ].join("\n"),
     permission: Object.freeze({
@@ -85,7 +83,8 @@ const justiceCommandDefinitions = {
   }),
   "justice-review-gate": Object.freeze({
     template: "$ARGUMENTS",
-    description: "Run the Justice Design / Implementation Plan review gate",
+    description:
+      "Run the Justice Design / Implementation Plan review gate with optional bounded retries",
     agent: JUSTICE_REVIEW_CONTROLLER_AGENT,
     subtask: true,
   }),

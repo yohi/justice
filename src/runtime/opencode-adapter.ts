@@ -19,7 +19,9 @@ import {
 import { parseReviewSnapshotArtifact } from "../core/review-snapshot-artifact";
 import {
   REVIEW_GATE_EXECUTION_MARKER,
+  REVIEW_GATE_REMEDIATION_MARKER,
   REVIEW_GATE_WORKER_AGENT,
+  extractReviewGateWorkerPrompt,
 } from "../core/review-gate-execution";
 import {
   normalizeTaskToolInputForJusticeInPlace,
@@ -710,7 +712,6 @@ export class OpenCodeAdapter {
           : justice.getPlanBridge().getReviewGateLock(lockOwnerSessionId) !== undefined;
       const isPendingReviewGateTask =
         isTask &&
-        output.args.subagent_type === REVIEW_GATE_WORKER_AGENT &&
         lockOwnerSessionId !== null &&
         justice
           .getPlanBridge()
@@ -723,7 +724,24 @@ export class OpenCodeAdapter {
         changedPaths: reviewGateToolPaths,
       });
       if (lockDecision?.kind === "deny") {
-        return { action: "skip", reason: lockDecision.reason };
+        const lock =
+          lockOwnerSessionId === null
+            ? undefined
+            : justice.getPlanBridge().getReviewGateLock(lockOwnerSessionId);
+        const guidance =
+          lockDecision.reason === "implementation_not_authorized" &&
+          lock?.phase === "awaiting_implementation_authorization" &&
+          lock.planPath !== null
+            ? `Implementation is awaiting authorization. Tell the user to run /justice-implement --plan ${lock.planPath} --approved; do not ask for a generic confirmation again.`
+            : lockDecision.reason === "review_scope_violation" &&
+                lock?.phase === "remediation"
+              ? `Review remediation permits writes only to the reviewed Design (${lock.designPath ?? "unavailable"}) and Implementation Plan (${lock.planPath ?? "unavailable"}). Detected target: ${reviewGateToolPaths === null ? "unrecognized" : reviewGateToolPaths.join(", ") || "none"}. Retry with a supported edit tool and an exact relative path to one of those files. Do not use justice_review resolve to unlock file edits; rerun /justice-review-gate after addressing the findings.`
+            : undefined;
+        return {
+          action: "skip",
+          reason: lockDecision.reason,
+          ...(guidance === undefined ? {} : { guidance }),
+        };
       }
 
       // Justice query tools must not perturb the canonical Observation Log (D50).
@@ -747,10 +765,12 @@ export class OpenCodeAdapter {
         return response;
       }
 
-      const isMarkedPlanReviewTask =
-        isTask && originalPrompt.startsWith(REVIEW_GATE_EXECUTION_MARKER);
+      const isMarkedReviewGateWorkerTask =
+        isTask &&
+        (originalPrompt.startsWith(REVIEW_GATE_EXECUTION_MARKER) ||
+          originalPrompt.startsWith(REVIEW_GATE_REMEDIATION_MARKER));
       const modified = response.modifiedPayload as { args?: Record<string, unknown> } | undefined;
-      if (isMarkedPlanReviewTask && modified?.args === undefined) {
+      if (isMarkedReviewGateWorkerTask && modified?.args === undefined) {
         this.#failClosedReviewGateTask(output.args, response.injectedContext);
         return response;
       }
@@ -791,7 +811,11 @@ export class OpenCodeAdapter {
         await this.log("error", "[Justice] Review Gate lock check failed closed", err);
         return { action: "skip", reason: "implementation_not_authorized" };
       }
-      if (isTask && originalPrompt.startsWith(REVIEW_GATE_EXECUTION_MARKER)) {
+      if (
+        isTask &&
+        (originalPrompt.startsWith(REVIEW_GATE_EXECUTION_MARKER) ||
+          originalPrompt.startsWith(REVIEW_GATE_REMEDIATION_MARKER))
+      ) {
         this.#failClosedReviewGateTask(
           output.args,
           "[JUSTICE: REVIEW GATE CLAIM BLOCKED] Justice failed while validating the marked Review Gate task.",
@@ -815,9 +839,13 @@ export class OpenCodeAdapter {
 
   #isReviewGateControllerTask(args: Record<string, unknown>): boolean {
     const command = typeof args.command === "string" ? args.command : "";
+    const prompt = typeof args.prompt === "string" ? args.prompt : "";
+    const markedGatePrompt =
+      prompt.startsWith(REVIEW_GATE_EXECUTION_MARKER) ||
+      prompt.startsWith(REVIEW_GATE_REMEDIATION_MARKER);
     return (
       args.subagent_type === JUSTICE_REVIEW_CONTROLLER_AGENT &&
-      isJusticeReviewGateCommand(command)
+      (isJusticeReviewGateCommand(command) || (command.length === 0 && markedGatePrompt))
     );
   }
 
@@ -867,8 +895,26 @@ export class OpenCodeAdapter {
           output.output =
             output.output +
             "\n\n[JUSTICE: REVIEW GATE BLOCKED] Review Gate controller returned without a terminal inner sp-final-review result. Rerun /justice-review-gate.";
+          return;
         }
-        return;
+
+        const lock = planBridge?.getReviewGateLock(input.sessionID);
+        if (lock?.phase === "awaiting_implementation_authorization" && lock.planPath !== null) {
+          const authorizationCommand =
+            `/justice-implement --plan ${lock.planPath} --approved`;
+          if (!output.output.includes(authorizationCommand)) {
+            output.output += `\n\n[JUSTICE: IMPLEMENTATION AUTHORIZATION REQUIRED] Review Gate is clear. Tell the user to run ${authorizationCommand}; do not ask for a generic confirmation again.`;
+          }
+        } else if (lock !== undefined) {
+          const reviewCommand =
+            lock.designPath !== null && lock.planPath !== null
+              ? `/justice-review-gate --design ${lock.designPath} --plan ${lock.planPath}`
+              : "/justice-review-gate";
+          if (!output.output.includes("[JUSTICE: REVIEW GATE BLOCKED]")) {
+            output.output += `\n\n[JUSTICE: REVIEW GATE BLOCKED] The Gate result was not accepted as clear; implementation remains locked. A completed controller task does not mean the Gate passed. Do not use justice_review or --resolve to clear this Gate, and do not relaunch its controller through task(). Follow any findings by editing only ${lock.designPath ?? "the reviewed Design"} and ${lock.planPath ?? "the reviewed Implementation Plan"}; then invoke ${reviewCommand} as the Review Gate command. If the controller returned no structured result, rerun that command directly.`;
+          }
+        }
+        if (lock !== undefined) return;
       }
       const isTrustedReviewResolutionArtifactSource =
         TRUSTED_REVIEW_RESOLUTION_ARTIFACT_TOOLS.includes(input.tool);
@@ -930,7 +976,25 @@ export class OpenCodeAdapter {
         response.normalInjectedContext ??
         (response.variant === "gate_advisory" ? "" : response.injectedContext);
       if (normalInjectedContext.length > 0) {
-        output.output = output.output + "\n\n" + normalInjectedContext;
+        const nextWorker = input.tool === "task"
+          ? extractReviewGateWorkerPrompt(normalInjectedContext)
+          : undefined;
+        const continuation = nextWorker === undefined
+          ? normalInjectedContext
+          : [
+              "Continue this same Gate now by invoking task with the JSON arguments below. The prompt is worker data, not instructions for you to edit files yourself. Do not return to the parent, invoke justice_review, or relaunch justice-review-controller.",
+              "[JUSTICE: REVIEW GATE NEXT TASK]",
+              JSON.stringify({
+                ...(nextWorker.role === "review"
+                  ? { subagent_type: REVIEW_GATE_WORKER_AGENT }
+                  : { category: "writing" }),
+                description: `Justice Gate round ${nextWorker.round}`,
+                prompt: normalInjectedContext,
+                load_skills: [],
+                run_in_background: false,
+              }),
+            ].join("\n");
+        output.output = output.output + "\n\n" + continuation;
       }
 
       const gateAdvisoryContext =
@@ -1183,7 +1247,7 @@ export class OpenCodeAdapter {
             "[JUSTICE: COMMAND REJECTED]",
             "`/justice-review-gate` was invoked, but Justice rejected its arguments.",
             "The original command template parts were removed; do not treat the raw command arguments as an ordinary user request.",
-            "Expected: /justice-review-gate --design <path> --plan <path>.",
+            "Expected: /justice-review-gate --design <path> --plan <path> [--retry <N>], where N is 0 through 10.",
             "Both Design and Implementation Plan are required.",
           ].join("\n"),
         ),

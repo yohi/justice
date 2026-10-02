@@ -542,6 +542,7 @@ export interface ProceedResponse {
 export interface SkipResponse {
   readonly action: "skip";
   readonly reason?: ToolExecutionCancellationReason;
+  readonly guidance?: string;
 }
 
 export type ToolExecutionCancellationReason =

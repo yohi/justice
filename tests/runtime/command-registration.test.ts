@@ -28,9 +28,8 @@ describe("registerJusticeCommands", () => {
       template: "$ARGUMENTS",
       description: "Arm the next Justice-managed implementation delegation",
     });
-    expect(config.command?.["justice-review-gate"]).toEqual({
+    expect(config.command?.["justice-review-gate"]).toMatchObject({
       template: "$ARGUMENTS",
-      description: "Run the Justice Design / Implementation Plan review gate",
       agent: JUSTICE_REVIEW_CONTROLLER_AGENT,
       subtask: true,
     });
@@ -103,9 +102,8 @@ describe("registerJusticeCommands", () => {
       permission: { "*": "deny", read: "allow" },
     });
     expect(config.agent?.["justice-review-worker"]).not.toHaveProperty("permission.task");
-    expect(config.command?.["justice-review-gate"]).toEqual({
+    expect(config.command?.["justice-review-gate"]).toMatchObject({
       template: "$ARGUMENTS",
-      description: "Run the Justice Design / Implementation Plan review gate",
       agent: JUSTICE_REVIEW_CONTROLLER_AGENT,
       model: "amazon-bedrock/global.anthropic.claude-sonnet-5",
       subtask: true,

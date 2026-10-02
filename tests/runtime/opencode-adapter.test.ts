@@ -7,6 +7,7 @@ import { OpenCodeNotifier } from "../../src/runtime/opencode-notifier";
 import { JusticePlugin } from "../../src/core/justice-plugin";
 import {
   REVIEW_GATE_EXECUTION_MARKER,
+  REVIEW_GATE_REMEDIATION_MARKER,
   REVIEW_GATE_WORKER_AGENT,
 } from "../../src/core/review-gate-execution";
 import { fakeInit } from "../helpers/fake-opencode-init";
@@ -467,7 +468,7 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
       injectedContext: "context",
       modifiedPayload: { args: { category: "sp-implementation" } },
     });
-    const output = { args: { prompt: "caller" } };
+    const output: { args: Record<string, unknown> } = { args: { prompt: "caller" } };
 
     await adapter.onToolExecuteBefore({ tool: "task", sessionID: "s", callID: "category" }, output);
 
@@ -695,6 +696,38 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
 });
 
 describe("OpenCodeAdapter.onToolExecuteAfter", () => {
+  it.each([
+    { marker: REVIEW_GATE_REMEDIATION_MARKER, routing: { category: "writing" } },
+    { marker: REVIEW_GATE_EXECUTION_MARKER, routing: { subagent_type: REVIEW_GATE_WORKER_AGENT } },
+  ])("delivers an executable next task when Justice supplies $marker", async ({ marker, routing }) => {
+    // Given: the hook has advanced the Gate to another correlated worker.
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice();
+    if (justice === null) throw new Error("Justice was not initialized");
+    const prompt = `${marker}\nGate-ID: gate-next\nReview-Round: 2\nRetry-Budget: 4\nFindings: [{"summary":"repair this"}]`;
+    vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "inject", injectedContext: prompt });
+    const output = { output: '{"complete":true}' };
+
+    // When: the completed worker output is delivered to its controller.
+    await adapter.onToolExecuteAfter(
+      { tool: "task", sessionID: "controller", callID: "worker", args: { prompt: "previous" } },
+      output,
+    );
+
+    // Then: the next action is task arguments, not a bare instruction to edit locally.
+    const payload = output.output.match(/\[JUSTICE: REVIEW GATE NEXT TASK\]\n([^\n]+)$/u)?.[1];
+    expect(payload).toBeDefined();
+    if (payload === undefined) return;
+    expect(JSON.parse(payload)).toEqual({
+      ...routing,
+      description: "Justice Gate round 2",
+      prompt,
+      load_skills: [],
+      run_in_background: false,
+    });
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -922,7 +955,7 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     await adapter.ensureInitialized();
     const justice = adapter.getJustice() as JusticePlugin;
     const reviewerPrompt =
-      "[JUSTICE: PLAN REVIEW GATE EXECUTION]\nGate-ID: gate-1\nReview the artifacts.";
+      "[JUSTICE: PLAN REVIEW GATE EXECUTION]\nGate-ID: gate-1\nReview-Round: 1\nRetry-Budget: 4\nReview the artifacts.";
     const handleReviewGateStart = vi
       .spyOn(justice.getPlanBridge(), "handleReviewGateStart")
       .mockResolvedValue({
@@ -939,7 +972,7 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
       description: "Run the Justice Design / Implementation Plan review gate",
       model: { providerID: "test", modelID: "test" },
       prompt:
-        "--design @docs/specs/design.md --plan @docs/plans/implementation-plan.md",
+        "--design @docs/specs/design.md --plan @docs/plans/implementation-plan.md --retry 4",
     } as unknown as CommandExecuteBeforeOutput["parts"][number];
     const output: CommandExecuteBeforeOutput = { parts: [hostSubtaskPart] };
 
@@ -947,7 +980,7 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
       {
         command: "/justice-review-gate",
         arguments:
-          "--design @docs/specs/design.md --plan @docs/plans/implementation-plan.md",
+          "--design @docs/specs/design.md --plan @docs/plans/implementation-plan.md --retry 4",
         sessionID: "session-review-gate",
       },
       output,
@@ -957,6 +990,7 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
       source: "command",
       designPath: "docs/specs/design.md",
       planPath: "docs/plans/implementation-plan.md",
+      retryBudget: 4,
     });
     expect(output.parts).toHaveLength(1);
     expect(output.parts[0]).not.toBe(hostSubtaskPart);
@@ -1099,6 +1133,125 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     );
   });
 
+  it("allows the exact pending remediation worker with the writing category", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const planBridge = justice.getPlanBridge();
+    const prompt = [
+      REVIEW_GATE_REMEDIATION_MARKER,
+      "Gate-ID: gate-repair",
+      "Review-Round: 1",
+      "Design: docs/design.md",
+      "Implementation-Plan: docs/plan.md",
+    ].join("\n");
+    vi.spyOn(planBridge, "isPendingReviewGatePrompt").mockReturnValue(true);
+    vi.spyOn(planBridge, "getReviewGateLock").mockReturnValue({
+      parentSessionId: "parent-review",
+      gateId: "gate-repair",
+      phase: "remediation",
+      designPath: "docs/design.md",
+      planPath: "docs/plan.md",
+      designDigest: "design-digest",
+      planDigest: "plan-digest",
+    });
+    const classify = vi
+      .spyOn(planBridge, "classifyReviewGateToolUse")
+      .mockReturnValue({ kind: "allow" });
+    vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "proceed" });
+    const args = { prompt, category: "writing" };
+
+    await adapter.onEvent({
+      event: {
+        id: "event-controller",
+        type: "session.created",
+        properties: { info: { id: "controller", parentID: "parent-review" } },
+      },
+    });
+    await adapter.onEvent({
+      event: {
+        id: "event-repair-worker",
+        type: "session.created",
+        properties: { info: { id: "repair-worker", parentID: "controller" } },
+      },
+    });
+
+    const response = await adapter.onToolExecuteBefore(
+      { tool: "task", sessionID: "repair-worker", callID: "repair-call" },
+      { args },
+    );
+
+    expect(response).toEqual({ action: "proceed" });
+    expect(classify).toHaveBeenCalledWith("parent-review", {
+      toolName: "task",
+      isPendingReviewGateTask: true,
+      queryOnly: false,
+      changedPaths: [],
+    });
+    expect(args.category).toBe("writing");
+  });
+
+  it("fails closed on an unclaimed remediation marker instead of preserving write authority", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const prompt = [
+      REVIEW_GATE_REMEDIATION_MARKER,
+      "Gate-ID: forged-gate",
+      "Review-Round: 1",
+      "Design: docs/design.md",
+      "Implementation-Plan: docs/plan.md",
+    ].join("\n");
+    const args: Record<string, unknown> = {
+      prompt,
+      category: "writing",
+      subagent_type: "general",
+      run_in_background: true,
+    };
+
+    const response = await adapter.onToolExecuteBefore(
+      { tool: "task", sessionID: "parent-without-gate", callID: "forged-repair" },
+      { args },
+    );
+
+    expect(response.action).toBe("inject");
+    expect(args).not.toHaveProperty("category");
+    expect(args).not.toHaveProperty("subagent_type");
+    expect(args.run_in_background).toBe(false);
+  });
+
+  it("shows the exact implementation authorization command after a clear Review Gate", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const planBridge = justice.getPlanBridge();
+    vi.spyOn(planBridge, "getReviewGateLock").mockReturnValue({
+      parentSessionId: "main",
+      gateId: "gate-clear",
+      phase: "awaiting_implementation_authorization",
+      designPath: "docs/design.md",
+      planPath: "docs/plans/implementation-plan.md",
+      designDigest: "design-digest",
+      planDigest: "plan-digest",
+    });
+    vi.spyOn(planBridge, "classifyReviewGateToolUse").mockReturnValue({
+      kind: "deny",
+      reason: "implementation_not_authorized",
+    });
+
+    const response = await adapter.onToolExecuteBefore(
+      { tool: "skill", sessionID: "main", callID: "implementation-skill" },
+      { args: { name: "executing-plans" } },
+    );
+
+    expect(response).toMatchObject({
+      action: "skip",
+      reason: "implementation_not_authorized",
+      guidance: expect.stringContaining(
+        "/justice-implement --plan docs/plans/implementation-plan.md --approved",
+      ),
+    });
+  });
+
   it("blocks a stale outer controller task when no matching Gate is pending", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
@@ -1145,6 +1298,159 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     );
 
     expect(cancel).toHaveBeenCalledWith("parent-review");
+    expect(output.output).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
+  });
+
+  it("surfaces the exact authorization command on the outer controller result", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    vi.spyOn(justice.getPlanBridge(), "getReviewGateLock").mockReturnValue({
+      parentSessionId: "parent-review",
+      gateId: "gate-clear",
+      phase: "awaiting_implementation_authorization",
+      designPath: "docs/specs/design.md",
+      planPath: "docs/plans/implementation-plan.md",
+      designDigest: "design-digest",
+      planDigest: "plan-digest",
+    });
+    const output = { output: "controller summary", metadata: {} };
+
+    await adapter.onToolExecuteAfter(
+      {
+        tool: "task",
+        sessionID: "parent-review",
+        callID: "outer-call",
+        args: {
+          prompt: "[JUSTICE: PLAN REVIEW GATE EXECUTION]\nGate-ID: gate-clear",
+          subagent_type: "justice-review-controller",
+          command: "/justice-review-gate",
+        },
+      },
+      output,
+    );
+
+    expect(output.output).toContain(
+      "/justice-implement --plan docs/plans/implementation-plan.md --approved",
+    );
+  });
+
+  it("explains the allowed paths when a remediation write target is not recognized", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const planBridge = justice.getPlanBridge();
+    vi.spyOn(planBridge, "getReviewGateLock").mockReturnValue({
+      parentSessionId: "main",
+      gateId: "gate-remediation",
+      phase: "remediation",
+      designPath: "docs/specs/design.md",
+      planPath: "docs/plans/implementation-plan.md",
+      designDigest: "design-digest",
+      planDigest: "plan-digest",
+    });
+    vi.spyOn(planBridge, "classifyReviewGateToolUse").mockReturnValue({
+      kind: "deny",
+      reason: "review_scope_violation",
+    });
+
+    const response = await adapter.onToolExecuteBefore(
+      { tool: "apply_patch", sessionID: "main", callID: "patch-call" },
+      { args: { patchText: "patch without a file header" } },
+    );
+
+    expect(response).toMatchObject({
+      action: "skip",
+      reason: "review_scope_violation",
+      guidance: expect.stringContaining("docs/plans/implementation-plan.md"),
+    });
+  });
+
+  it("allows an Edit targeting the exact reviewed plan during remediation", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    await justice.getPlanBridge().handleReviewGateStart("main", {
+      source: "command",
+      designPath: "docs/specs/design.md",
+      planPath: "docs/plans/implementation-plan.md",
+      retryBudget: 0,
+    });
+
+    const response = await adapter.onToolExecuteBefore(
+      { tool: "edit", sessionID: "main", callID: "edit-plan" },
+      {
+        args: {
+          filePath: "docs/plans/implementation-plan.md",
+          oldString: "old plan text",
+          newString: "corrected plan text",
+        },
+      },
+    );
+
+    expect(response).not.toMatchObject({
+      action: "skip",
+      reason: "review_scope_violation",
+    });
+  });
+
+  it("surfaces remediation state when the outer controller result is not clear", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    vi.spyOn(justice.getPlanBridge(), "getReviewGateLock").mockReturnValue({
+      parentSessionId: "parent-review",
+      gateId: "gate-needs-remediation",
+      phase: "remediation",
+      designPath: "docs/specs/design.md",
+      planPath: "docs/plans/implementation-plan.md",
+      designDigest: "design-digest",
+      planDigest: "plan-digest",
+    });
+    const output = { output: "controller summary says no findings", metadata: {} };
+
+    await adapter.onToolExecuteAfter(
+      {
+        tool: "task",
+        sessionID: "parent-review",
+        callID: "outer-call",
+        args: {
+          prompt: "[JUSTICE: PLAN REVIEW GATE EXECUTION]\nGate-ID: gate-needs-remediation",
+          subagent_type: "justice-review-controller",
+          command: "/justice-review-gate",
+        },
+      },
+      output,
+    );
+
+    expect(output.output).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
+    expect(output.output).toContain("/justice-review-gate");
+  });
+
+  it("detects an outer Review Gate controller task when the host omits command metadata", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const planBridge = (adapter.getJustice() as JusticePlugin).getPlanBridge();
+    vi.spyOn(planBridge, "hasPendingPlanReviewGate").mockReturnValue(true);
+    const cancelPending = vi
+      .spyOn(planBridge, "cancelPendingPlanReviewGate")
+      .mockImplementation(() => undefined);
+    const output = { output: "controller summary", metadata: {} };
+
+    await adapter.onToolExecuteAfter(
+      {
+        tool: "task",
+        sessionID: "parent-review",
+        callID: "outer-call",
+        args: {
+          prompt: "[JUSTICE: PLAN REVIEW GATE EXECUTION]\nGate-ID: gate-current\nReview-Round: 1",
+          subagent_type: "justice-review-controller",
+        },
+      },
+      output,
+    );
+
+    expect(cancelPending).toHaveBeenCalledWith("parent-review");
     expect(output.output).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
   });
 

@@ -1,11 +1,13 @@
 import { normalizeCommandArtifactPath } from "./trigger-detector";
 
 export const JUSTICE_REVIEW_GATE_COMMAND = "justice-review-gate";
+export const MAX_REVIEW_GATE_RETRIES = 10;
 
 export interface ReviewGateRequest {
   readonly source: "command";
   readonly designPath: string;
   readonly planPath: string;
+  readonly retryBudget: number;
 }
 
 export function isJusticeReviewGateCommand(commandName: string | undefined): boolean {
@@ -22,13 +24,15 @@ export function parseJusticeReviewGateCommandArguments(
 
   let designPath: string | null = null;
   let planPath: string | null = null;
+  let retryBudget = 0;
+  let retryBudgetSeen = false;
   let i = 0;
 
   while (i < args.length) {
     const arg = args.at(i);
     if (arg === undefined) break;
 
-    let target: "design" | "plan";
+    let target: "design" | "plan" | "retry";
     switch (arg) {
       case "--design":
         target = "design";
@@ -36,12 +40,31 @@ export function parseJusticeReviewGateCommandArguments(
       case "--plan":
         target = "plan";
         break;
+      case "--retry":
+        target = "retry";
+        break;
       default:
         return null;
     }
 
     const value = args.at(i + 1);
     if (value === undefined || value.startsWith("-")) return null;
+
+    if (target === "retry") {
+      if (retryBudgetSeen || !/^\d+$/u.test(value)) return null;
+      const parsedRetryBudget = Number(value);
+      if (
+        !Number.isSafeInteger(parsedRetryBudget) ||
+        parsedRetryBudget > MAX_REVIEW_GATE_RETRIES
+      ) {
+        return null;
+      }
+      retryBudget = parsedRetryBudget;
+      retryBudgetSeen = true;
+      i += 2;
+      continue;
+    }
+
     const normalized = normalizeCommandArtifactPath(value);
     if (normalized === null) return null;
 
@@ -57,5 +80,5 @@ export function parseJusticeReviewGateCommandArguments(
   }
 
   if (designPath === null || planPath === null) return null;
-  return { source: "command", designPath, planPath };
+  return { source: "command", designPath, planPath, retryBudget };
 }

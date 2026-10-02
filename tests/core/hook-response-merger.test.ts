@@ -23,6 +23,16 @@ describe("mergePreToolUseResponses", () => {
     expect(mergePreToolUseResponses(skip, skip)).toEqual({ action: "skip" });
   });
 
+  it("preserves actionable guidance when merging skip responses", () => {
+    const gated: HookResponse = {
+      action: "skip",
+      reason: "implementation_not_authorized",
+      guidance: "Run the explicit implementation authorization command.",
+    };
+
+    expect(mergePreToolUseResponses(gated, proceed)).toEqual(gated);
+  });
+
   it("merges two inject responses with concatenated contexts", () => {
     const result = mergePreToolUseResponses(injectA, injectB);
     expect(result.action).toBe("inject");

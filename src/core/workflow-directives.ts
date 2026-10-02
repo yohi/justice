@@ -50,9 +50,9 @@ const GUIDANCE = {
   plan_review_required:
     "Design と Implementation Plan の Review Gate を開始するには、利用者が `/justice-review-gate --design <designPath> --plan <planPath>` を実行してください。\nこの段階から `requesting-code-review` / `code-review` Skill、CodeRabbit CLI、`justice_review` を直接 Review Gate executor として起動しません。\nGate が `review_clear` になり、人間による明示的な承認とマージが確認されるまで実装 task() を開始しません。",
   review_remediation:
-    "`receiving-code-review` を使って未解決のレビュー指摘を検討・修正してください。修正後の再レビューは、同じ Design / Implementation Plan を指定して `/justice-review-gate --design <designPath> --plan <planPath>` を再実行してください。\n`justice_review` の解決記録は、人間が承認した項目だけに使用してください。",
+    "`receiving-code-review` を使ってレビュー指摘を検討してください。修正時は、このGateが対象にしたDesign / Implementation Planだけを編集できます。Justiceが提示する対象パス以外を変更してはいけません。\n指摘の解決に `justice_review resolve` や `/justice-review-gate --resolve` は使いません。これはファイル修正の承認を求める場面でもありません。提示されたDesign / Planを修正した後、同じ2つのパスで `/justice-review-gate --design <designPath> --plan <planPath>` を再実行してください。",
   review_clear:
-    "[JUSTICE: STOP AFTER REVIEW; WAIT FOR USER]\nReview Gate は完了しましたが、これは実装開始の許可ではありません。この結果を報告したら、現在の応答を終了してください。実装スキルを読み込む、計画を実行用に読み直す、worktree/workspace を作成する、task() を呼び出す、またはファイルを変更してはいけません。\n実装は、利用者からの別の明示的な開始指示と `/justice-implement --approved` を受けた後にのみ開始してください。",
+    "[JUSTICE: STOP AFTER REVIEW; WAIT FOR USER]\nReview Gate は指摘なしで完了しましたが、これ自体は実装承認ではありません。一般的な実装開始の確認を重ねず、Justiceが提示する対象計画書付きの `/justice-implement --plan <planPath> --approved` を利用者に案内してください。このコマンドによる承認が完了するまでは、実装スキルの読み込み、計画の実行用確認、worktree/workspace の作成、task() の呼び出し、ファイル変更を行ってはいけません。",
   implementation:
     "実装対象の設計・計画を確認し、変更を最小限にして検証を実行してください。\nJusticeは外部での承認やマージ状態を検証できません。実行は、外部の人間による承認・マージ完了の確認後にのみ継続してください。\n実装PRでは、計画との差分、テスト、退行リスクをAIレビューし、人間の承認を待ってください。",
   implementation_unauthorized:

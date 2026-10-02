@@ -43,6 +43,8 @@ const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 const REVIEW_ARTIFACT_WRITE_TOOLS: ReadonlySet<string> = new Set([
   "edit",
   "write",
+  "filesystem_edit_file",
+  "filesystem_write_file",
   "apply_patch",
 ]);
 
