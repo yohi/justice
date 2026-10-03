@@ -893,6 +893,8 @@ export class PlanBridge {
           category: "writing",
           run_in_background: false,
         };
+        delete workerArgs.subagent_type;
+        delete workerArgs.subagentType;
         break;
       default:
         return assertNever(workerPrompt);

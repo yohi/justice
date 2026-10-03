@@ -834,6 +834,25 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     vi.clearAllMocks();
   });
 
+  it("does not include command arguments in the info log", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    const logSpy = vi.spyOn(adapter, "log").mockResolvedValue(undefined);
+
+    await adapter.onCommandExecuteBefore(
+      {
+        command: "other-command",
+        sessionID: "log-session",
+        arguments: "sensitive command arguments",
+      },
+      { parts: [] },
+    );
+
+    expect(logSpy).toHaveBeenCalledWith(
+      "info",
+      "[Justice] onCommandExecuteBefore: command=other-command",
+    );
+  });
+
   // The SDK does not document whether `input.command` carries a leading slash, so both
   // spellings must activate the workflow (matching isJusticeStartCommand in Todo1).
   it.each(["justice-start", "/justice-start"])(
@@ -1883,6 +1902,38 @@ describe("OpenCodeAdapter.onChatMessage fallback", () => {
     });
   });
 
+  it("blocks child-session fallback authorization but still forwards the message", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const handleImplementationArm = vi
+      .spyOn(justice.getPlanBridge(), "handleImplementationArm");
+    const handleEvent = vi.spyOn(justice, "handleEvent");
+    const content = "/justice-implement --plan plan.md --approved";
+
+    await adapter.onEvent({
+      event: {
+        id: "child-session-created",
+        type: "session.created",
+        properties: { info: { id: "child-session", parentID: "root-session" } },
+      },
+    });
+    await adapter.onChatMessage(
+      { sessionID: "child-session" },
+      {
+        message: { role: "user", content, sessionID: "child-session" },
+        parts: [],
+      },
+    );
+
+    expect(handleImplementationArm).not.toHaveBeenCalled();
+    expect(handleEvent).toHaveBeenCalledWith({
+      type: "Message",
+      sessionId: "child-session",
+      payload: { role: "user", content },
+    });
+  });
+
   it("logs a warning when a user types /justice-implement but the command is not registered", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
@@ -1926,7 +1977,14 @@ describe("OpenCodeAdapter.onChatMessage fallback", () => {
       },
     );
 
-    expect(logSpy).not.toHaveBeenCalledWith(expect.stringContaining("Fallback /justice-implement"));
+    expect(
+      logSpy.mock.calls.some(
+        ([level, message]) =>
+          level === "warn" &&
+          typeof message === "string" &&
+          message.includes("Fallback /justice-implement"),
+      ),
+    ).toBe(false);
   });
 
   it("does not forward assistant chat messages as user messages", async () => {

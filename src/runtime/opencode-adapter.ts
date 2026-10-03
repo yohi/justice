@@ -560,7 +560,13 @@ export class OpenCodeAdapter {
     if (!isUserMessage) return;
 
     const trimmedContent = content.trim();
-    if (trimmedContent.startsWith("/justice-implement") || trimmedContent.startsWith("justice-implement")) {
+    const isImplementationCommand =
+      trimmedContent.startsWith("/justice-implement") ||
+      trimmedContent.startsWith("justice-implement");
+    if (
+      isImplementationCommand &&
+      this.resolveLockOwnerSession(sessionId) === sessionId
+    ) {
       await this.#tryFallbackImplementCommand(sessionId, trimmedContent);
     }
 
@@ -1208,7 +1214,7 @@ export class OpenCodeAdapter {
     if (this.#noOp) return;
 
     try {
-      await this.log("info", `[Justice] onCommandExecuteBefore: command=${input.command}, arguments=${input.arguments}`);
+      await this.log("info", `[Justice] onCommandExecuteBefore: command=${input.command}`);
 
       if (isJusticeStartCommand(input.command)) {
         await this.#handleWorkflowStart(input, output);

@@ -221,13 +221,19 @@ describe("PlanBridge Review Gate implementation lock", () => {
       payload: {
         toolName: "task",
         callId: remediationCallId,
-        toolInput: { prompt: initialResponse.injectedContext },
+        toolInput: {
+          prompt: initialResponse.injectedContext,
+          subagent_type: "caller-snake-route",
+          subagentType: "caller-camel-route",
+        },
       },
     });
     expect(remediationClaim).toMatchObject({
       action: "inject",
       modifiedPayload: { args: { category: "writing", run_in_background: false } },
     });
+    expect(remediationClaim).not.toHaveProperty("modifiedPayload.args.subagent_type");
+    expect(remediationClaim).not.toHaveProperty("modifiedPayload.args.subagentType");
 
     files[PLAN_PATH] = `${PLAN_CONTENT}\n- [ ] Clarify verification order`;
     const reReviewResponse = await bridge.handlePlanReviewGatePostToolUse({
