@@ -395,7 +395,10 @@ export class OpenCodeAdapter {
         .join("\n");
       await this.#handleChatMessage({
         ...inputRecord,
-        sessionID: this.#readString(outputRecord, "sessionID") || this.#readString(message, "sessionID"),
+        sessionID:
+          this.#readString(outputRecord, "sessionID") ||
+          this.#readString(message, "sessionID") ||
+          this.#readString(inputRecord, "sessionID"),
         message: {
           ...message,
           content:
@@ -576,7 +579,7 @@ export class OpenCodeAdapter {
     if (!planBridge) return;
 
     if ("action" in request && request.action === "cancel") {
-      await planBridge.handleImplementationArm(sessionId, { source: "fallback_marker", planPath: "", approved: false });
+      await planBridge.handleImplementationArm(sessionId, request);
       await this.log("warn", "[Justice] Fallback /justice-implement --cancel was used because the command was not registered.");
       return;
     }
@@ -762,15 +765,16 @@ export class OpenCodeAdapter {
           lockOwnerSessionId === null
             ? undefined
             : justice.getPlanBridge().getReviewGateLock(lockOwnerSessionId);
-        const guidance =
+        let guidance: string | undefined;
+        if (
           lockDecision.reason === "implementation_not_authorized" &&
           lock?.phase === "awaiting_implementation_authorization" &&
           lock.planPath !== null
-            ? `Implementation is awaiting authorization. Tell the user to run /justice-implement --plan ${lock.planPath} --approved; do not ask for a generic confirmation again.`
-            : lockDecision.reason === "review_scope_violation" &&
-                lock?.phase === "remediation"
-              ? `Review remediation permits writes only to the reviewed Design (${lock.designPath ?? "unavailable"}) and Implementation Plan (${lock.planPath ?? "unavailable"}). Detected target: ${reviewGateToolPaths === null ? "unrecognized" : reviewGateToolPaths.join(", ") || "none"}. Retry with a supported edit tool and an exact relative path to one of those files. Do not use justice_review resolve to unlock file edits; rerun /justice-review-gate after addressing the findings.`
-            : undefined;
+        ) {
+          guidance = `Implementation is awaiting authorization. Tell the user to run /justice-implement --plan ${lock.planPath} --approved; do not ask for a generic confirmation again.`;
+        } else if (lockDecision.reason === "review_scope_violation" && lock?.phase === "remediation") {
+          guidance = `Review remediation permits writes only to the reviewed Design (${lock.designPath ?? "unavailable"}) and Implementation Plan (${lock.planPath ?? "unavailable"}). Detected target: ${reviewGateToolPaths === null ? "unrecognized" : reviewGateToolPaths.join(", ") || "none"}. Retry with a supported edit tool and an exact relative path to one of those files. Do not use justice_review resolve to unlock file edits; rerun /justice-review-gate after addressing the findings.`;
+        }
         return {
           action: "skip",
           reason: lockDecision.reason,

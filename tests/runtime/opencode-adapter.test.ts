@@ -1840,6 +1840,49 @@ describe("OpenCodeAdapter lock owner resolution", () => {
 });
 
 describe("OpenCodeAdapter.onChatMessage fallback", () => {
+  it("preserves the input session ID when output omits it", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const handleImplementationArm = vi
+      .spyOn(justice.getPlanBridge(), "handleImplementationArm")
+      .mockResolvedValue({ armed: true, planPath: "plan.md", directiveStage: "implementation_arm", guidance: "" });
+
+    await adapter.onChatMessage(
+      { sessionID: "input-session" },
+      {
+        message: { role: "user", content: "/justice-implement --plan plan.md --approved" },
+        parts: [],
+      },
+    );
+
+    expect(handleImplementationArm).toHaveBeenCalledWith("input-session", {
+      source: "fallback_marker",
+      planPath: "plan.md",
+      approved: true,
+    });
+  });
+
+  it("preserves the cancel action for fallback implementation commands", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice() as JusticePlugin;
+    const handleImplementationArm = vi.spyOn(justice.getPlanBridge(), "handleImplementationArm");
+
+    await adapter.onChatMessage(
+      { sessionID: "fallback-cancel-session" },
+      {
+        message: { role: "user", content: "/justice-implement --cancel" },
+        parts: [],
+      },
+    );
+
+    expect(handleImplementationArm).toHaveBeenCalledWith("fallback-cancel-session", {
+      source: "command",
+      action: "cancel",
+    });
+  });
+
   it("logs a warning when a user types /justice-implement but the command is not registered", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
