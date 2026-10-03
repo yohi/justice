@@ -64,7 +64,12 @@ export function extractReviewGateToolPaths(
   toolName: string,
   args: Readonly<Record<string, unknown>>,
 ): readonly string[] | null {
-  if (toolName === "edit" || toolName === "write") {
+  if (
+    toolName === "edit" ||
+    toolName === "write" ||
+    toolName === "filesystem_edit_file" ||
+    toolName === "filesystem_write_file"
+  ) {
     return normalizeTargetPaths(readStringFields(args, FILE_PATH_KEYS));
   }
 

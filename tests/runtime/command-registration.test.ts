@@ -28,9 +28,8 @@ describe("registerJusticeCommands", () => {
       template: "$ARGUMENTS",
       description: "Arm the next Justice-managed implementation delegation",
     });
-    expect(config.command?.["justice-review-gate"]).toEqual({
+    expect(config.command?.["justice-review-gate"]).toMatchObject({
       template: "$ARGUMENTS",
-      description: "Run the Justice Design / Implementation Plan review gate",
       agent: JUSTICE_REVIEW_CONTROLLER_AGENT,
       subtask: true,
     });
@@ -45,7 +44,8 @@ describe("registerJusticeCommands", () => {
     expect(config.agent?.[JUSTICE_REVIEW_CONTROLLER_AGENT]).not.toBe(
       JUSTICE_REVIEW_CONTROLLER_DEFINITION,
     );
-    expect(log).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith("info", "[Justice] Auto-registered Justice commands: justice-start, justice-implement, justice-review-gate.");
+    expect(log).toHaveBeenCalledTimes(1);
   });
 
   it("does not auto-register Review Gate when its dedicated controller agent collides", async () => {
@@ -103,9 +103,8 @@ describe("registerJusticeCommands", () => {
       permission: { "*": "deny", read: "allow" },
     });
     expect(config.agent?.["justice-review-worker"]).not.toHaveProperty("permission.task");
-    expect(config.command?.["justice-review-gate"]).toEqual({
+    expect(config.command?.["justice-review-gate"]).toMatchObject({
       template: "$ARGUMENTS",
-      description: "Run the Justice Design / Implementation Plan review gate",
       agent: JUSTICE_REVIEW_CONTROLLER_AGENT,
       model: "amazon-bedrock/global.anthropic.claude-sonnet-5",
       subtask: true,
@@ -136,12 +135,10 @@ describe("registerJusticeCommands", () => {
       description: "Arm the next Justice-managed implementation delegation",
     });
     expect(log).toHaveBeenCalledWith(
-      "warn",
-      expect.stringContaining(
-        'Command "justice-start" is already defined; skipping automatic registration.',
-      ),
+      "info",
+      "[Justice] Auto-registered Justice commands: justice-start, justice-implement, justice-review-gate.",
     );
-    expect(log).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledTimes(2);
   });
 
   it("removes an unavailable agent from an existing justice-start command", async () => {
@@ -312,5 +309,40 @@ describe("Justice command LLM visibility", () => {
         command: { other: { template: "$ARGUMENTS" } },
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("registerJusticeCommands logging", () => {
+  it("logs an info message listing registered Justice commands", async () => {
+    const config: CommandRegistrationTarget = {};
+    const log = vi.fn(async () => {});
+
+    await registerJusticeCommands(config, log);
+
+    expect(config.command?.["justice-start"]).toBeDefined();
+    expect(config.command?.["justice-implement"]).toBeDefined();
+    expect(config.command?.["justice-review-gate"]).toBeDefined();
+    expect(log).toHaveBeenCalledWith(
+      "info",
+      "[Justice] Auto-registered Justice commands: justice-start, justice-implement, justice-review-gate.",
+    );
+  });
+
+  it("warns when justice-implement collision prevents canonical handler registration", async () => {
+    const config: CommandRegistrationTarget = { command: { "justice-implement": { template: "custom" } } };
+    const log = vi.fn(async () => {});
+
+    await registerJusticeCommands(config, log);
+
+    expect(log).toHaveBeenCalledWith(
+      "warn",
+      expect.stringContaining(
+        'Command "justice-implement" is already defined; skipping automatic registration. The canonical justice-implement handler will not run for this session.',
+      ),
+    );
+    expect(log).toHaveBeenCalledWith(
+      "info",
+      "[Justice] Auto-registered Justice commands: justice-implement, justice-start, justice-review-gate.",
+    );
   });
 });

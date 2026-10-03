@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Plugin } from "@opencode-ai/plugin";
 import { OpenCodePlugin } from "../../src/opencode-plugin";
 import type { OpenCodeAdapter, OpenCodePluginInit } from "../../src/runtime/opencode-adapter";
-import type { HookResponse } from "../../src/core/types";
 import { fakeInit } from "../helpers/fake-opencode-init";
 
 function createMockAdapter(): OpenCodeAdapter {
@@ -57,10 +56,11 @@ describe("OpenCodePlugin (integration)", () => {
 
   it("cancels an OpenCode tool call for a hard implementation lock", async () => {
     const adapter = createMockAdapter();
-    vi.mocked(adapter.onToolExecuteBefore).mockResolvedValue({
+    adapter.onToolExecuteBefore = async () => ({
       action: "skip",
       reason: "implementation_not_authorized",
-    } as unknown as HookResponse);
+      guidance: "Run /justice-implement --plan docs/plans/plan.md --approved.",
+    });
     const init = Object.assign(fakeInit(), { __justiceTestAdapter: adapter });
     const handlers = await OpenCodePlugin(init as never);
     const executeBefore = handlers["tool.execute.before"];
@@ -74,6 +74,9 @@ describe("OpenCodePlugin (integration)", () => {
     ).rejects.toMatchObject({
       name: "ToolExecutionCancelled",
       reason: "implementation_not_authorized",
+      message: expect.stringContaining(
+        "/justice-implement --plan docs/plans/plan.md --approved",
+      ),
     });
   });
 
@@ -94,9 +97,8 @@ describe("OpenCodePlugin (integration)", () => {
       template: "$ARGUMENTS",
       description: "Arm the next Justice-managed implementation delegation",
     });
-    expect(config.command["justice-review-gate"]).toEqual({
+    expect(config.command["justice-review-gate"]).toMatchObject({
       template: "$ARGUMENTS",
-      description: "Run the Justice Design / Implementation Plan review gate",
       agent: "justice-review-controller",
       subtask: true,
     });

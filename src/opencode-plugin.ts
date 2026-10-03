@@ -16,8 +16,12 @@ import type { HookResponse, ToolExecutionCancellationReason } from "./core/types
 class ToolExecutionCancelled extends Error {
   readonly reason: ToolExecutionCancellationReason;
 
-  constructor(reason: ToolExecutionCancellationReason) {
-    super(`tool execution cancelled: ${reason}`);
+  constructor(reason: ToolExecutionCancellationReason, guidance?: string) {
+    super(
+      guidance === undefined
+        ? `tool execution cancelled: ${reason}`
+        : `tool execution cancelled: ${reason}\n${guidance}`,
+    );
     this.name = "ToolExecutionCancelled";
     this.reason = reason;
     Object.setPrototypeOf(this, new.target.prototype);
@@ -26,6 +30,10 @@ class ToolExecutionCancelled extends Error {
 
 function cancellationReason(response: HookResponse | undefined): ToolExecutionCancellationReason | undefined {
   return response?.action === "skip" ? response.reason : undefined;
+}
+
+function cancellationGuidance(response: HookResponse | undefined): string | undefined {
+  return response?.action === "skip" ? response.guidance : undefined;
 }
 
 function safeErrorMessage(error: unknown): string {
@@ -111,7 +119,9 @@ export const OpenCodePlugin: Plugin = async (init, pluginOptions) => {
         output as { args: Record<string, unknown> },
       );
       const reason = cancellationReason(response);
-      if (reason !== undefined) throw new ToolExecutionCancelled(reason);
+      if (reason !== undefined) {
+        throw new ToolExecutionCancelled(reason, cancellationGuidance(response));
+      }
 
       const justiceInstance = adapter.getJustice();
       if (!justiceInstance && !adapter.isNoOp()) {

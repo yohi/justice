@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { extractReviewGateIdFromTaskPrompt } from "../../src/core/review-gate-execution";
+import {
+  extractReviewGateIdFromTaskPrompt,
+  extractReviewGateWorkerPrompt,
+} from "../../src/core/review-gate-execution";
 import { PlanBridge } from "../../src/hooks/plan-bridge";
+import type { HookResponse } from "../../src/core/types";
 import {
   createMockFileReader,
   wirePlanBridgeAuthorization,
@@ -28,21 +32,28 @@ function createLockFixture(): {
   return { files, bridge };
 }
 
-async function runReview(
-  bridge: PlanBridge,
-  parentSessionId: string,
-  findings: readonly {
+type RunReviewInput = {
+  readonly bridge: PlanBridge;
+  readonly parentSessionId: string;
+  readonly findings: readonly {
     readonly itemKey: string;
     readonly severity: "critical" | "major" | "minor";
     readonly summary: string;
     readonly location: string;
-  }[],
-  complete = true,
-): Promise<string> {
+  }[];
+  readonly complete?: boolean;
+  readonly retryBudget?: number;
+};
+
+async function runReview(
+  input: RunReviewInput,
+): Promise<{ readonly gateId: string; readonly response: HookResponse }> {
+  const { bridge, parentSessionId, findings, complete = true, retryBudget = 0 } = input;
   const started = await bridge.handleReviewGateStart(parentSessionId, {
     source: "command",
     designPath: DESIGN_PATH,
     planPath: PLAN_PATH,
+    retryBudget,
   });
   if (started.reviewerPrompt === undefined) throw new Error("Review Gate did not dispatch");
   const gateId = extractReviewGateIdFromTaskPrompt(started.reviewerPrompt);
@@ -64,7 +75,7 @@ async function runReview(
     throw new Error("Review worker did not claim the Gate");
   }
 
-  await bridge.handlePlanReviewGatePostToolUse({
+  const response = await bridge.handlePlanReviewGatePostToolUse({
     type: "PostToolUse",
     sessionId: workerSessionId,
     callId,
@@ -75,7 +86,8 @@ async function runReview(
       error: false,
     },
   });
-  return gateId;
+  if (response === null) throw new Error("Review Gate result was not handled");
+  return { gateId, response };
 }
 
 describe("PlanBridge Review Gate implementation lock", () => {
@@ -86,6 +98,7 @@ describe("PlanBridge Review Gate implementation lock", () => {
       source: "command",
       designPath: DESIGN_PATH,
       planPath: PLAN_PATH,
+      retryBudget: 0,
     });
 
     expect(started.dispatched).toBe(true);
@@ -98,6 +111,7 @@ describe("PlanBridge Review Gate implementation lock", () => {
       source: "command",
       designPath: DESIGN_PATH,
       planPath: PLAN_PATH,
+      retryBudget: 0,
     });
     if (started.reviewerPrompt === undefined) throw new Error("Review Gate did not dispatch");
 
@@ -108,7 +122,7 @@ describe("PlanBridge Review Gate implementation lock", () => {
 
   it("requires an explicit arm after a complete zero-finding Gate result", async () => {
     const { bridge } = createLockFixture();
-    await runReview(bridge, "parent", []);
+    await runReview({ bridge, parentSessionId: "parent", findings: [] });
 
     expect(bridge.getReviewGateLock("parent")?.phase).toBe(
       "awaiting_implementation_authorization",
@@ -127,14 +141,18 @@ describe("PlanBridge Review Gate implementation lock", () => {
 
   it("keeps the lock in remediation while actionable findings remain", async () => {
     const { bridge } = createLockFixture();
-    await runReview(bridge, "parent", [
-      {
-        itemKey: "RG-001",
-        severity: "major",
-        summary: "Missing lifecycle test",
-        location: "Task 2",
-      },
-    ]);
+    await runReview({
+      bridge,
+      parentSessionId: "parent",
+      findings: [
+        {
+          itemKey: "RG-001",
+          severity: "major",
+          summary: "Missing lifecycle test",
+          location: "Task 2",
+        },
+      ],
+    });
 
     expect(bridge.getReviewGateLock("parent")?.phase).toBe("remediation");
     expect(
@@ -148,9 +166,181 @@ describe("PlanBridge Review Gate implementation lock", () => {
     expect(bridge.getReviewGateLock("parent")?.phase).toBe("remediation");
   });
 
+  it("schedules a marked remediation worker when findings remain and retries are available", async () => {
+    const { bridge } = createLockFixture();
+    const { gateId, response } = await runReview({
+      bridge,
+      parentSessionId: "parent",
+      retryBudget: 1,
+      findings: [
+        {
+          itemKey: "RG-001",
+          severity: "minor",
+          summary: "Clarify the verification sequence",
+          location: "Task 1",
+        },
+      ],
+    });
+
+    expect(response.action).toBe("inject");
+    if (response.action !== "inject") return;
+    expect(extractReviewGateWorkerPrompt(response.injectedContext)).toEqual({
+      role: "remediation",
+      gateId,
+      round: 1,
+      retryBudget: 1,
+    });
+    expect(bridge.isPendingReviewGatePrompt("parent", response.injectedContext)).toBe(true);
+  });
+
+  it("runs a scoped repair and independent re-review before awaiting implementation authorization", async () => {
+    const { bridge, files } = createLockFixture();
+    const { gateId, response: initialResponse } = await runReview({
+      bridge,
+      parentSessionId: "parent",
+      retryBudget: 1,
+      findings: [
+        {
+          itemKey: "RG-001",
+          severity: "minor",
+          summary: "Clarify the verification sequence",
+          location: "Task 1",
+        },
+      ],
+    });
+    if (initialResponse.action !== "inject") throw new Error("Expected remediation prompt");
+    const remediationPrompt = extractReviewGateWorkerPrompt(initialResponse.injectedContext);
+    if (remediationPrompt === undefined) throw new Error("Remediation prompt is not marked");
+
+    const remediationCallId = "parent-remediation-call";
+    const remediationSessionId = "parent-remediation-worker";
+    const remediationClaim = await bridge.handlePlanReviewGatePreToolUse({
+      type: "PreToolUse",
+      sessionId: remediationSessionId,
+      callId: remediationCallId,
+      payload: {
+        toolName: "task",
+        callId: remediationCallId,
+        toolInput: {
+          prompt: initialResponse.injectedContext,
+          subagent_type: "caller-snake-route",
+          subagentType: "caller-camel-route",
+        },
+      },
+    });
+    expect(remediationClaim).toMatchObject({
+      action: "inject",
+      modifiedPayload: { args: { category: "writing", run_in_background: false } },
+    });
+    expect(remediationClaim).not.toHaveProperty("modifiedPayload.args.subagent_type");
+    expect(remediationClaim).not.toHaveProperty("modifiedPayload.args.subagentType");
+
+    files[PLAN_PATH] = `${PLAN_CONTENT}\n- [ ] Clarify verification order`;
+    const reReviewResponse = await bridge.handlePlanReviewGatePostToolUse({
+      type: "PostToolUse",
+      sessionId: remediationSessionId,
+      callId: remediationCallId,
+      payload: {
+        toolName: "task",
+        callId: remediationCallId,
+        toolResult: JSON.stringify({
+          schemaVersion: 1,
+          gateId,
+          round: 1,
+          complete: true,
+          summary: "Clarified verification order in the plan.",
+        }),
+        error: false,
+      },
+    });
+    if (reReviewResponse?.action !== "inject") throw new Error("Re-review was not scheduled");
+    const reReviewPrompt = extractReviewGateWorkerPrompt(reReviewResponse.injectedContext);
+    expect(reReviewPrompt).toEqual({ role: "review", gateId, round: 2, retryBudget: 1 });
+
+    const reReviewCallId = "parent-re-review-call";
+    const reReviewSessionId = "parent-re-review-worker";
+    await bridge.handlePlanReviewGatePreToolUse({
+      type: "PreToolUse",
+      sessionId: reReviewSessionId,
+      callId: reReviewCallId,
+      payload: {
+        toolName: "task",
+        callId: reReviewCallId,
+        toolInput: { prompt: reReviewResponse.injectedContext },
+      },
+    });
+    const clearResponse = await bridge.handlePlanReviewGatePostToolUse({
+      type: "PostToolUse",
+      sessionId: reReviewSessionId,
+      callId: reReviewCallId,
+      payload: {
+        toolName: "task",
+        callId: reReviewCallId,
+        toolResult: JSON.stringify({ schemaVersion: 1, gateId, complete: true, findings: [] }),
+        error: false,
+      },
+    });
+
+    expect(clearResponse).toMatchObject({
+      action: "inject",
+      injectedContext: expect.stringContaining(
+        `/justice-implement --plan ${PLAN_PATH} --approved`,
+      ),
+    });
+    expect(bridge.getReviewGateLock("parent")?.phase).toBe(
+      "awaiting_implementation_authorization",
+    );
+  });
+
+  it("includes structured Review Gate result with findings on clear", async () => {
+    const { bridge } = createLockFixture();
+    const { gateId, response } = await runReview({
+      bridge,
+      parentSessionId: "parent",
+      findings: [] as const,
+    });
+
+    expect(response.action).toBe("inject");
+    if (response.action !== "inject") throw new Error("Expected inject response");
+    expect(response.injectedContext).toContain("[JUSTICE: REVIEW GATE RESULT]");
+    const resultMatch = response.injectedContext.match(/\[JUSTICE: REVIEW GATE RESULT\]\s+(\{[\s\S]*?\})/);
+    expect(resultMatch).not.toBeNull();
+    if (resultMatch === null) throw new Error("Result line not found");
+    const result = JSON.parse(resultMatch[1]);
+    expect(result).toMatchObject({
+      schemaVersion: 1,
+      gateId,
+      complete: true,
+      findings: [],
+    });
+  });
+
+  it("forbids the remediation worker from changing the commit strategy section", async () => {
+    const { bridge } = createLockFixture();
+    const { response } = await runReview({
+      bridge,
+      parentSessionId: "parent",
+      retryBudget: 1,
+      findings: [
+        {
+          itemKey: "RG-001",
+          severity: "minor",
+          summary: "Clarify the verification sequence",
+          location: "Task 1",
+        },
+      ],
+    });
+
+    expect(response.action).toBe("inject");
+    if (response.action !== "inject") throw new Error("Expected remediation prompt");
+    expect(response.injectedContext).toContain("Do not modify the Commit Strategy section");
+    expect(response.injectedContext).toContain("Do not add conditional language such as 'only if explicitly requested'");
+    expect(response.injectedContext).toContain("Preserve the existing writing-plans skill format");
+  });
+
   it("keeps incomplete reviewer output locked in remediation", async () => {
     const { bridge } = createLockFixture();
-    await runReview(bridge, "parent", [], false);
+    await runReview({ bridge, parentSessionId: "parent", findings: [], complete: false });
 
     expect(bridge.getReviewGateLock("parent")?.phase).toBe("remediation");
     expect(
@@ -165,7 +355,7 @@ describe("PlanBridge Review Gate implementation lock", () => {
 
   it("retains implementation lock across user messages and repeated clear reviews", async () => {
     const { bridge } = createLockFixture();
-    await runReview(bridge, "parent", []);
+    await runReview({ bridge, parentSessionId: "parent", findings: [] });
     await bridge.handleMessage({
       type: "Message",
       sessionId: "parent",
@@ -175,7 +365,7 @@ describe("PlanBridge Review Gate implementation lock", () => {
     expect(bridge.getReviewGateLock("parent")?.phase).toBe(
       "awaiting_implementation_authorization",
     );
-    await runReview(bridge, "parent", []);
+    await runReview({ bridge, parentSessionId: "parent", findings: [] });
     expect(bridge.getReviewGateLock("parent")?.phase).toBe(
       "awaiting_implementation_authorization",
     );
@@ -184,7 +374,7 @@ describe("PlanBridge Review Gate implementation lock", () => {
 
   it("does not arm a clear Gate after a reviewed artifact digest changes", async () => {
     const { files, bridge } = createLockFixture();
-    await runReview(bridge, "parent", []);
+    await runReview({ bridge, parentSessionId: "parent", findings: [] });
     files[PLAN_PATH] = `${PLAN_CONTENT}\nChanged after review\n`;
 
     expect(
@@ -205,6 +395,7 @@ describe("PlanBridge Review Gate implementation lock", () => {
       source: "command",
       designPath: DESIGN_PATH,
       planPath: PLAN_PATH,
+      retryBudget: 0,
     });
 
     expect(bridge.getReviewGateLock("other-parent")).toBeUndefined();

@@ -62,6 +62,29 @@ describe("classifyReviewGateToolUse", () => {
     expect(decision).toEqual({ kind: "allow" });
   });
 
+  it.each(["filesystem_edit_file", "filesystem_write_file"])(
+    "allows %s for a reviewed plan during remediation",
+    (toolName) => {
+      const remediationLock = { ...clearLock, phase: "remediation" as const };
+      const decision = classifyReviewGateToolUse(
+        remediationLock,
+        reviewToolUse(toolName, { changedPaths: ["docs/plans/plan.md"] }),
+      );
+
+      expect(decision).toEqual({ kind: "allow" });
+    },
+  );
+
+  it("denies filesystem edit tools when they target a file outside the reviewed scope", () => {
+    const remediationLock = { ...clearLock, phase: "remediation" as const };
+    const decision = classifyReviewGateToolUse(
+      remediationLock,
+      reviewToolUse("filesystem_edit_file", { changedPaths: ["src/runtime/worker.ts"] }),
+    );
+
+    expect(decision).toEqual({ kind: "deny", reason: "review_scope_violation" });
+  });
+
   it("denies remediation writes that escape the reviewed artifact scope", () => {
     const remediationLock = { ...clearLock, phase: "remediation" as const };
     const decision = classifyReviewGateToolUse(
@@ -108,13 +131,21 @@ describe("classifyReviewGateToolUse", () => {
     ).toEqual({ kind: "deny", reason: "implementation_not_authorized" });
   });
 
-  it.each(["skill", "bash", "mcp_unknown", "unrecognized_tool"])(
+  it.each(["bash", "mcp_unknown", "unrecognized_tool"])(
     "denies implementation-capable or unknown tool %s",
     (toolName) => {
       expect(classifyReviewGateToolUse(clearLock, reviewToolUse(toolName))).toEqual({
         kind: "deny",
         reason: "implementation_not_authorized",
       });
+    },
+  );
+
+  it.each(["reviewing", "remediation", "awaiting_implementation_authorization"] as const)(
+    "allows skill loading during %s",
+    (phase) => {
+      const lock: ReviewGateLockSnapshot = { ...clearLock, phase };
+      expect(classifyReviewGateToolUse(lock, reviewToolUse("skill"))).toEqual({ kind: "allow" });
     },
   );
 

@@ -20,7 +20,14 @@ function mergeSkipResponses(
     return { action: "skip", reason: "review_artifact_write_rejected" };
   }
   const reason = uniqueReasons[0];
-  return reason === undefined ? { action: "skip" } : { action: "skip", reason };
+  const guidance = responses.flatMap((response) =>
+    response.action === "skip" && response.guidance !== undefined ? [response.guidance] : [],
+  );
+  return {
+    action: "skip",
+    ...(reason === undefined ? {} : { reason }),
+    ...(guidance.length === 0 ? {} : { guidance: [...new Set(guidance)].join("\n") }),
+  };
 }
 
 export function mergePreToolUseResponses(

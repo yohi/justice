@@ -11,6 +11,15 @@ describe("extractReviewGateToolPaths", () => {
     },
   );
 
+  it.each(["filesystem_edit_file", "filesystem_write_file"])(
+    "extracts the target of %s",
+    (toolName) => {
+      expect(extractReviewGateToolPaths(toolName, { path: "./docs/plans/plan.md" })).toEqual([
+        "docs/plans/plan.md",
+      ]);
+    },
+  );
+
   it("extracts every file touched by a multi-file patch", () => {
     const patch = [
       "*** Begin Patch",
