@@ -61,6 +61,11 @@ export interface OpenCodePluginInit {
 
 export interface OpenCodeAdapterOptions {
   /**
+   * Static default for Justice enforcement. Defaults to true. A session-level
+   * /justice-enable or /justice-disable command overrides this value.
+   */
+  readonly enabled?: boolean;
+  /**
    * When true, gate advisories are additionally appended to the visible tool
    * `output.output` (best-effort channel). Defaults to false: the C1 spike
    * (output.output visibility) was not empirically validated, so the notifier
@@ -133,7 +138,9 @@ export class OpenCodeAdapter {
   readonly #init: OpenCodePluginInit;
   readonly #noOp: boolean;
   readonly #workspaceRoot: string | null;
+  readonly #defaultEnabled: boolean;
   readonly #enableAdvisoryOutputAppend: boolean;
+  readonly #sessionEnabledOverrides = new Map<string, boolean>();
   #justice: JusticePlugin | null = null;
   #notifier: OpenCodeNotifier | null = null;
   #initPromise: Promise<void> | null = null;
@@ -184,7 +191,21 @@ export class OpenCodeAdapter {
     };
     this.#workspaceRoot = init.worktree ?? init.directory ?? this.#init.project.root ?? null;
     this.#noOp = this.#workspaceRoot === null;
+    this.#defaultEnabled = options.enabled ?? true;
     this.#enableAdvisoryOutputAppend = options.enableAdvisoryOutputAppend ?? false;
+  }
+
+  isSessionEnabled(sessionId: string): boolean {
+    const directOverride = this.#sessionEnabledOverrides.get(sessionId);
+    if (directOverride !== undefined) return directOverride;
+
+    const rootSessionId = this.resolveLockOwnerSession(sessionId);
+    if (rootSessionId !== undefined && rootSessionId !== sessionId) {
+      const inheritedOverride = this.#sessionEnabledOverrides.get(rootSessionId);
+      if (inheritedOverride !== undefined) return inheritedOverride;
+    }
+
+    return this.#defaultEnabled;
   }
 
   isNoOp(): boolean {
@@ -432,7 +453,7 @@ export class OpenCodeAdapter {
     const info = this.#readRecord(properties, "info");
     const sessionId =
       this.#readString(properties, "sessionID") || this.#readString(info, "sessionID");
-    if (!sessionId) return;
+    if (!sessionId || !this.isSessionEnabled(sessionId)) return;
 
     const role = this.#readString(info, "role");
     const content = this.#readString(info, "content");
@@ -508,7 +529,7 @@ export class OpenCodeAdapter {
     const part = this.#readRecord(properties, "part");
     const sessionId =
       this.#readString(properties, "sessionID") || this.#readString(part, "sessionID");
-    if (!sessionId) return;
+    if (!sessionId || !this.isSessionEnabled(sessionId)) return;
 
     const messageID =
       this.#readString(part, "messageID") || this.#readString(properties, "messageID");
@@ -541,7 +562,11 @@ export class OpenCodeAdapter {
     const content = this.#readString(message, "content");
     const isUserMessage = content.length > 0 && this.#readString(message, "role") === "user";
     const agentName = this.#resolveAgentName(properties, message);
-    if (sessionId.length === 0 || (!isUserMessage && agentName.length === 0)) return;
+    if (
+      sessionId.length === 0 ||
+      !this.isSessionEnabled(sessionId) ||
+      (!isUserMessage && agentName.length === 0)
+    ) return;
 
     await this.ensureInitialized();
     const justice = this.#justice;
@@ -600,7 +625,11 @@ export class OpenCodeAdapter {
   async #handleChatParams(properties: Record<string, unknown>): Promise<void> {
     const sessionId = this.#readString(properties, "sessionID");
     const agentName = this.#readString(properties, "agent");
-    if (sessionId.length === 0 || agentName.length === 0) return;
+    if (
+      sessionId.length === 0 ||
+      !this.isSessionEnabled(sessionId) ||
+      agentName.length === 0
+    ) return;
 
     await this.ensureInitialized();
     const justice = this.#justice;
@@ -616,7 +645,7 @@ export class OpenCodeAdapter {
     input: { readonly sessionID: string; readonly messageID: string; readonly partID: string },
     output: { readonly text: string },
   ): Promise<void> {
-    if (this.#noOp) return;
+    if (this.#noOp || !this.isSessionEnabled(input.sessionID)) return;
 
     try {
       await this.ensureInitialized();
@@ -644,7 +673,7 @@ export class OpenCodeAdapter {
    */
   async #handleSessionError(properties: Record<string, unknown>): Promise<void> {
     const sessionId = this.#readString(properties, "sessionID");
-    if (!sessionId) return;
+    if (!sessionId || !this.isSessionEnabled(sessionId)) return;
 
     const error = this.#readUnknown(properties, "error");
     const message = this.#extractErrorMessage(error);
@@ -687,7 +716,7 @@ export class OpenCodeAdapter {
   }
 
   async #handleSessionDeleted(sessionId: string): Promise<void> {
-    await this.ensureInitialized();
+    this.#sessionEnabledOverrides.delete(sessionId);
     const justice = this.#justice;
     if (!justice) return;
     await justice.destroySession(sessionId);
@@ -720,6 +749,7 @@ export class OpenCodeAdapter {
     input: { readonly tool: string; readonly sessionID: string; readonly callID: string },
     output: { args: Record<string, unknown> },
   ): Promise<HookResponse> {
+    if (!this.isSessionEnabled(input.sessionID)) return PROCEED;
     const isTask = input.tool === "task";
     const originalPrompt = typeof output.args.prompt === "string" ? output.args.prompt : "";
     let reviewGateLockActive = false;
@@ -928,7 +958,7 @@ export class OpenCodeAdapter {
     },
     output: { output: string; readonly metadata?: Record<string, unknown> },
   ): Promise<void> {
-    if (this.#noOp) return;
+    if (this.#noOp || !this.isSessionEnabled(input.sessionID)) return;
 
     try {
       if (input.tool === "task" && this.#isReviewGateControllerTask(input.args)) {
@@ -1142,7 +1172,7 @@ export class OpenCodeAdapter {
     }
   }
 
-  #clearChildRelationState(sessionId: string): void {
+  #clearPendingChildRelationState(sessionId: string): void {
     if (sessionId.length === 0) return;
     for (const [key, category] of this.#reviewCategoriesByCallId) {
       if (category.parentSessionId === sessionId) this.#reviewCategoriesByCallId.delete(key);
@@ -1153,6 +1183,11 @@ export class OpenCodeAdapter {
         this.#reviewCategoriesByCallId.delete(key);
       }
     }
+  }
+
+  #clearChildRelationState(sessionId: string): void {
+    if (sessionId.length === 0) return;
+    this.#clearPendingChildRelationState(sessionId);
     for (const [childSessionId, childEvent] of this.#childSessionEvents) {
       if (childSessionId === sessionId || childEvent.parentSessionId === sessionId) {
         this.#childSessionEvents.delete(childSessionId);
@@ -1215,6 +1250,50 @@ export class OpenCodeAdapter {
 
     try {
       await this.log("info", `[Justice] onCommandExecuteBefore: command=${input.command}`);
+
+      const normalizedCommand = input.command.trim().replace(/^\//u, "");
+      if (normalizedCommand === "justice-enable") {
+        this.#sessionEnabledOverrides.set(input.sessionID, true);
+        this.#replaceCommandPartsWithGuidance(
+          output,
+          input.sessionID,
+          "[JUSTICE: ENABLED] Justice workflow enforcement is enabled for this session. Previous workflow state is not restored.",
+        );
+        return;
+      }
+
+      if (normalizedCommand === "justice-disable") {
+        this.#sessionEnabledOverrides.set(input.sessionID, false);
+        this.#clearPendingChildRelationState(input.sessionID);
+        if (this.#justice !== null) {
+          try {
+            await this.#justice.destroySession(input.sessionID);
+          } catch (error) {
+            await this.log("warn", "[Justice] session cleanup failed while disabling", error);
+          }
+        }
+        this.#replaceCommandPartsWithGuidance(
+          output,
+          input.sessionID,
+          "[JUSTICE: DISABLED] Justice workflow enforcement is disabled for this session. Justice hooks now pass through until /justice-enable.",
+        );
+        return;
+      }
+
+      if (!this.isSessionEnabled(input.sessionID)) {
+        if (
+          isJusticeStartCommand(input.command) ||
+          isJusticeReviewGateCommand(input.command) ||
+          isJusticeImplementCommand(input.command)
+        ) {
+          this.#replaceCommandPartsWithGuidance(
+            output,
+            input.sessionID,
+            "[JUSTICE: DISABLED] Justice workflow enforcement is disabled for this session. Run /justice-enable to re-enable it.",
+          );
+        }
+        return;
+      }
 
       if (isJusticeStartCommand(input.command)) {
         await this.#handleWorkflowStart(input, output);
@@ -1409,7 +1488,7 @@ export class OpenCodeAdapter {
     input: { readonly sessionID: string },
     output: { context?: string[]; prompt?: string },
   ): Promise<void> {
-    if (this.#noOp) return;
+    if (this.#noOp || !this.isSessionEnabled(input.sessionID)) return;
 
     try {
       await this.ensureInitialized();

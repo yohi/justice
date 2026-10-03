@@ -8,6 +8,7 @@
 // 環境変数は追加しない。設定経路は OpenCode の PluginOptions 1 本に集約する。
 
 export type ValidatedPluginOptions = {
+  readonly enabled?: boolean;
   readonly enableAdvisoryOutputAppend?: boolean;
 };
 
@@ -31,7 +32,27 @@ export function validatePluginOptions(raw: unknown): PluginOptionsValidation {
   }
   const record = raw as Record<string, unknown>;
   const warnings: string[] = [];
-  const options: { enableAdvisoryOutputAppend?: boolean } = {};
+  const options: { enabled?: boolean; enableAdvisoryOutputAppend?: boolean } = {};
+
+  let enabled: unknown;
+  try {
+    enabled = record.enabled;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    warnings.push(
+      `[Justice] plugin option "enabled" could not be read: ${message}. Falling back to the default (true).`,
+    );
+  }
+  if (enabled !== undefined) {
+    if (typeof enabled === "boolean") {
+      options.enabled = enabled;
+    } else {
+      warnings.push(
+        `[Justice] plugin option "enabled" must be a boolean; received ${typeof enabled}. Falling back to the default (true).`,
+      );
+    }
+  }
+
   let value: unknown;
   try {
     value = record.enableAdvisoryOutputAppend;
