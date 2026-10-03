@@ -277,6 +277,9 @@ export function defineJusticeReviewTool(adapter: OpenCodeAdapter): ToolDefinitio
     },
     execute: async (args, context) => {
       try {
+        if (!adapter.isSessionEnabled(context.sessionID)) {
+          return formatError("Justice disabled for this session");
+        }
         await adapter.ensureInitialized();
         const justice = adapter.getJustice();
         if (justice === null) return formatError("Justice not initialized");

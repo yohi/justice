@@ -73,6 +73,14 @@ export const JUSTICE_REVIEW_WORKER_DEFINITION: Readonly<JusticeAgentRegistration
   });
 
 const justiceCommandDefinitions = {
+  "justice-enable": Object.freeze({
+    template: "$ARGUMENTS",
+    description: "Enable Justice for the current session",
+  }),
+  "justice-disable": Object.freeze({
+    template: "$ARGUMENTS",
+    description: "Disable Justice for the current session",
+  }),
   "justice-start": Object.freeze({
     template: "$ARGUMENTS",
     description: "Start a Justice-managed development workflow",

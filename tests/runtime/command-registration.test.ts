@@ -44,7 +44,10 @@ describe("registerJusticeCommands", () => {
     expect(config.agent?.[JUSTICE_REVIEW_CONTROLLER_AGENT]).not.toBe(
       JUSTICE_REVIEW_CONTROLLER_DEFINITION,
     );
-    expect(log).toHaveBeenCalledWith("info", "[Justice] Auto-registered Justice commands: justice-start, justice-implement, justice-review-gate.");
+    expect(log).toHaveBeenCalledWith(
+      "info",
+      "[Justice] Auto-registered Justice commands: justice-enable, justice-disable, justice-start, justice-implement, justice-review-gate.",
+    );
     expect(log).toHaveBeenCalledTimes(1);
   });
 
@@ -136,7 +139,7 @@ describe("registerJusticeCommands", () => {
     });
     expect(log).toHaveBeenCalledWith(
       "info",
-      "[Justice] Auto-registered Justice commands: justice-start, justice-implement, justice-review-gate.",
+      "[Justice] Auto-registered Justice commands: justice-start, justice-enable, justice-disable, justice-implement, justice-review-gate.",
     );
     expect(log).toHaveBeenCalledTimes(2);
   });
@@ -217,6 +220,8 @@ describe("registerJusticeCommands", () => {
 
   it("isolates registered commands from canonical definitions", async () => {
     expect(Object.keys(JUSTICE_COMMAND_DEFINITIONS)).toEqual([
+      "justice-enable",
+      "justice-disable",
       "justice-start",
       "justice-implement",
       "justice-review-gate",
@@ -324,7 +329,7 @@ describe("registerJusticeCommands logging", () => {
     expect(config.command?.["justice-review-gate"]).toBeDefined();
     expect(log).toHaveBeenCalledWith(
       "info",
-      "[Justice] Auto-registered Justice commands: justice-start, justice-implement, justice-review-gate.",
+      "[Justice] Auto-registered Justice commands: justice-enable, justice-disable, justice-start, justice-implement, justice-review-gate.",
     );
   });
 
@@ -342,7 +347,7 @@ describe("registerJusticeCommands logging", () => {
     );
     expect(log).toHaveBeenCalledWith(
       "info",
-      "[Justice] Auto-registered Justice commands: justice-implement, justice-start, justice-review-gate.",
+      "[Justice] Auto-registered Justice commands: justice-implement, justice-enable, justice-disable, justice-start, justice-review-gate.",
     );
   });
 });
