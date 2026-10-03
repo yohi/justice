@@ -114,6 +114,82 @@ describe("Justice workflow enable/disable controls", () => {
     expect(adapter.isSessionEnabled("child")).toBe(false);
   });
 
+  it("destroys Justice state for all known descendants when disabling a parent", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice();
+    if (justice === null) throw new Error("Justice failed to initialize");
+    const destroySession = vi.spyOn(justice, "destroySession");
+
+    for (const [id, parentID] of [
+      ["child", "parent"],
+      ["grandchild", "child"],
+    ]) {
+      await adapter.onEvent({
+        event: {
+          id: `${id}-created`,
+          type: "session.created",
+          properties: { info: { id, parentID } },
+        },
+      });
+    }
+
+    await adapter.onCommandExecuteBefore(
+      { command: "justice-disable", sessionID: "parent", arguments: "" },
+      { parts: [] },
+    );
+
+    expect(destroySession.mock.calls.map(([sessionId]) => sessionId)).toEqual([
+      "parent",
+      "child",
+      "grandchild",
+    ]);
+
+    await adapter.onCommandExecuteBefore(
+      { command: "justice-enable", sessionID: "parent", arguments: "" },
+      { parts: [] },
+    );
+    expect(adapter.isSessionEnabled("grandchild")).toBe(true);
+  });
+
+  it("continues descendant cleanup when a session cleanup fails and avoids cycles", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice();
+    if (justice === null) throw new Error("Justice failed to initialize");
+    const originalDestroySession = justice.destroySession.bind(justice);
+    const destroySession = vi
+      .spyOn(justice, "destroySession")
+      .mockImplementation(async (sessionId) => {
+        if (sessionId === "child") throw new Error("cleanup failed");
+        await originalDestroySession(sessionId);
+      });
+
+    for (const [id, parentID] of [
+      ["child", "parent"],
+      ["grandchild", "child"],
+      ["parent", "grandchild"],
+    ]) {
+      await adapter.onEvent({
+        event: {
+          id: `${id}-created`,
+          type: "session.created",
+          properties: { info: { id, parentID } },
+        },
+      });
+    }
+
+    await adapter.onCommandExecuteBefore(
+      { command: "justice-disable", sessionID: "parent", arguments: "" },
+      { parts: [] },
+    );
+
+    expect(destroySession).toHaveBeenCalledTimes(3);
+    expect(destroySession).toHaveBeenCalledWith("parent");
+    expect(destroySession).toHaveBeenCalledWith("child");
+    expect(destroySession).toHaveBeenCalledWith("grandchild");
+  });
+
   it("passes task calls through unchanged while the session is disabled", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.onCommandExecuteBefore(

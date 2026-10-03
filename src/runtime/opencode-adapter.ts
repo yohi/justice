@@ -1266,10 +1266,32 @@ export class OpenCodeAdapter {
         this.#sessionEnabledOverrides.set(input.sessionID, false);
         this.#clearPendingChildRelationState(input.sessionID);
         if (this.#justice !== null) {
-          try {
-            await this.#justice.destroySession(input.sessionID);
-          } catch (error) {
-            await this.log("warn", "[Justice] session cleanup failed while disabling", error);
+          const sessionsToDestroy = new Set([input.sessionID]);
+          const pendingSessions = [input.sessionID];
+          while (pendingSessions.length > 0) {
+            const parentSessionId = pendingSessions.shift();
+            if (parentSessionId === undefined) continue;
+            for (const [childSessionId, childEvent] of this.#childSessionEvents) {
+              if (
+                childEvent.parentSessionId === parentSessionId &&
+                !sessionsToDestroy.has(childSessionId)
+              ) {
+                sessionsToDestroy.add(childSessionId);
+                pendingSessions.push(childSessionId);
+              }
+            }
+          }
+
+          for (const sessionId of sessionsToDestroy) {
+            try {
+              await this.#justice.destroySession(sessionId);
+            } catch (error) {
+              await this.log(
+                "warn",
+                "[Justice] session cleanup failed while disabling",
+                error,
+              );
+            }
           }
         }
         this.#replaceCommandPartsWithGuidance(
