@@ -855,9 +855,11 @@ Scoped re-review must preserve:
 
 Review text alone is not authoritative. Trusted evidence requires task/revision/workflow provenance.
 
+For the Native baseline, trusted Superpowers origin MUST come from the JUS5-CAT-05 Native provenance contract: Task 1 proves the provenance profile, Task 6 produces the runtime provenance evidence, and review consumers may not replace that evidence with prompt/template/model inference.
+
 ### JUS5-REV-06 — Native review detection
 
-Justice must recognize an **existing model-issued OmO Native `task` call** as task-review / scoped-re-review / final-review only when Superpowers provenance and review intent are unambiguous.
+Justice must recognize an **existing model-issued OmO Native `task` call** as task-review / scoped-re-review / final-review only when Task 6 has produced trusted `TaskRoutingProvenance.kind = "superpowers"` evidence for the exact parent session/tool call and the review intent is unambiguous.
 
 The Native pre-execution authority is Senpi's `tool_call` event:
 
