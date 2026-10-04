@@ -980,17 +980,23 @@ implementation
 
 Justice does not dispatch an additional reviewer.
 
-A **versioned Superpowers ReviewDispatchProfile** recognizes an already-dispatched review. For the v6.4.2 profile, classification combines multiple signals rather than a single keyword:
+A **versioned Superpowers ReviewDispatchProfile** classifies review kind only after Native Superpowers origin is trusted.
 
-- active execution method and workflow phase;
-- task-tool `parentSessionId + parentCallId`;
-- the current Superpowers review-template structure;
-- concrete task/review-package inputs such as brief/report and reviewed base/head/diff references;
-- active artifact-chain/task identity.
+The trust boundary is two-stage:
 
-Task review, scoped re-review, and final review have distinct profiles.
+```text
+Task 1 NativeSuperpowersProvenanceProfile
+        ↓
+Task 6 NativeSuperpowersProvenanceResolver
+        ↓
+trusted TaskRoutingProvenance(superpowers)
+        ↓
+Task 7 ReviewDispatchProfile classifies task-review | scoped-re-review | final-review
+```
 
-If the signals are ambiguous, the execution may continue but the review is untrusted for Justice acceptance.
+The ReviewDispatchProfile may use active execution method/workflow phase, exact parent session/tool call, current Superpowers review-template structure, concrete brief/report/base/head/diff references, and active artifact-chain/task identity to determine **review kind**. Those signals MUST NOT independently manufacture Superpowers origin.
+
+Prompt wording, review-looking text, template similarity, or active-method state without Task 6 trusted provenance remain untrusted. Task review, scoped re-review, and final review have distinct profiles. Ambiguous review-kind classification may continue runtime execution but cannot produce Justice-trusted review evidence.
 
 ### 14.2 Native Conformance Contract delivery — J5D-REVIEW-02
 
