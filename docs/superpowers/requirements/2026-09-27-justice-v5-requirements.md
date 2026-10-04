@@ -486,8 +486,6 @@ If activation is unavailable, conflicting, stale after a boundary such as unprov
 
 ---
 
-## 9. Plan and task semantics---
-
 ## 9. Plan and task semantics
 
 ### JUS5-PLAN-01
@@ -743,7 +741,7 @@ For a new Native child:
 
 ---
 
-## 13. State ownership## 13. State ownership
+## 13. State ownership
 
 ### JUS5-STATE-01
 
@@ -1383,7 +1381,7 @@ Unknown authority must be reported as unknown/unverified rather than guessed. In
 
 ---
 
-## 21. Recovery## 21. Recovery
+## 21. Recovery
 
 ### JUS5-REC-01
 
