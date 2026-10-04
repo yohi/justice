@@ -321,6 +321,56 @@ Rules:
 
 Final new-child payloads must satisfy `category XOR subagent_type`. Justice must never use a runtime task id as semantic TaskIdentity.
 
+#### Native Superpowers provenance contract
+
+`TaskRoutingProvenance.kind = "superpowers"` is a trusted runtime claim and MUST NOT be inferred from prompt wording, task-body similarity, review-looking text, active-method state alone, or mere presence of the Native mapping appendix.
+
+Task 1 must establish one exact audited `NativeSuperpowersProvenanceProfile` for the pinned OmO Native / Senpi / Superpowers stack. That profile is the sole authority describing how a model-issued `task` call is causally bound to the active Superpowers workflow.
+
+The profile must record at least:
+
+```text
+profileId
+sourceKind
+requiredObservedFields[]
+parentSessionBinding
+parentToolCallBinding
+workflow/method binding
+restart/compaction validity
+rejection rules
+```
+
+Runtime provenance evidence must bind at least:
+
+```text
+profileId
+parentSessionId
+parentToolCallId
+role
+sourceEvidenceRefs[]
+observedAt
+```
+
+and MUST be produced by the Native adapter from Task-1-proven runtime observations before routing translation or trusted review recognition consumes it.
+
+Ownership is fixed:
+
+```text
+Task 1 evidence spike
+  → proves NativeSuperpowersProvenanceProfile
+
+Task 6 Native adapter
+  → produces runtime provenance evidence using that profile
+
+Task 7 review interop
+  → consumes trusted provenance for review recognition only
+
+Task 10 semantic routing
+  → consumes trusted provenance for implementation/review category translation
+```
+
+Unrelated model-issued `task` calls, task calls that only look like Superpowers work, and calls whose required provenance observations are missing/conflicting are `external` or `ambiguous`; they MUST NOT be upgraded to trusted Superpowers provenance.
+
 ### JUS5-CAT-06 — semantic execution classes
 
 Justice classifies recognized Superpowers work into exactly one semantic execution class when sufficient authoritative task/review semantics exist:
@@ -832,7 +882,7 @@ The selected contract must prove all of the following before production review i
 
 If v2026.10.8 lacks a public surface that can prove this contract, Native trusted review interop is blocked and the Design must be reconciled; Justice must not revive the OpenCode controller wrapper or invent a duplicate reviewer.
 
-### JUS5-REV-08### JUS5-REV-08 — Structured review result, current-dispatch finding continuity, and final evidence closure
+### JUS5-REV-08 — Structured review result, current-dispatch finding continuity, and final evidence closure
 
 Trusted semantic review evidence must carry a versioned result containing at least:
 
