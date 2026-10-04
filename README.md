@@ -256,13 +256,45 @@ Justice を使った開発は、**設計・計画 → 人間承認 → 実装委
 > [!NOTE]
 > Justice は PR の作成・承認・マージのいずれも代行しません。(2)(4) は既存の権限内で利用可能な機能を使い、常に人間が最終判断します。
 
+## Justice workflow の有効化・無効化
+
+Justice は既定で有効です。OpenCode の PluginOptions で静的な既定値を変更でき、さらにセッション単位で一時的に上書きできます。
+
+```jsonc
+{
+  "plugin": [
+    [
+      "@yohi/justice",
+      {
+        "enabled": false
+      }
+    ]
+  ]
+}
+```
+
+`enabled` は boolean のみ受理し、未指定時の既定値は `true` です。不正な型は fail-open で既定 `true` にフォールバックし、警告を出します。
+
+セッション単位の切り替えには次の user-invoked slash command を使います。
+
+```text
+/justice-disable
+/justice-enable
+```
+
+実効状態の優先順位は **session override → PluginOptions.enabled → default true** です。そのため、`enabled: false` のプロジェクトでも `/justice-enable` を実行したセッションだけ Justice を有効化できます。逆に既定が有効でも `/justice-disable` したセッションだけ無効化できます。
+
+`/justice-disable` はそのセッションの active plan、implementation authorization、Review Gate、workflow bootstrap などの Justice state を破棄します。disabled 中は task interception / enrichment、Observation、Review Gate enforcement、Justice system context injection を行わず、通常の OpenCode / OmO / Superpowers の処理へ pass-through します。`/justice-start`、`/justice-review-gate`、`/justice-implement` を disabled 中に実行しても workflow は開始されず、再有効化を案内する synthetic directive だけを返します。`justice_review` も disabled session では実行しません。
+
+`/justice-enable` はそのセッションの Justice enforcement を再有効化しますが、disable 前の workflow state は復元しません。必要な場合は改めて `/justice-start` から開始してください。
+
 ## `/justice-start` コマンド
 
 ワークフロー・ブートストラップを明示的に開始するコマンドです。設計・計画ファイルの状態を検査し、設計・計画の準備、`/justice-review-gate` の実行、人間による承認・マージ、実装タスクの委譲という段階別の synthetic 指示を注入します。`plan_review_required` に到達してもレビュー Skill を自動起動せず、Review Gate の開始は必ず `/justice-review-gate` という一意の入口を通ります。
 
 ### 有効化（OpenCode側の設定）
 
-`/justice-start`、`/justice-review-gate`、`/justice-implement` は、Justice プラグインの OpenCode v1 `config` hook により自動登録されます。同名の利用者定義は優先して保持します。ただし `/justice-start` の `agent` が現在の設定に存在しない場合は、その `agent` 指定だけを外し、現在の agent にフォールバックします。
+`/justice-enable`、`/justice-disable`、`/justice-start`、`/justice-review-gate`、`/justice-implement` は、Justice プラグインの OpenCode v1 `config` hook により自動登録されます。同名の利用者定義は優先して保持します。ただし `/justice-start` の `agent` が現在の設定に存在しない場合は、その `agent` 指定だけを外し、現在の agent にフォールバックします。
 
 この衝突優先の保証は、`config.command` に含まれる利用者定義を対象とします。`.opencode/commands/*.md` で定義したコマンドは OpenCode が別経路で読み込む可能性があり、`config` hook からその定義を確認できません。Markdown 定義との優先順位はサポート対象ホストでの opt-in E2E による確認が必要です。
 

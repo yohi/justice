@@ -60,6 +60,7 @@ export const OpenCodePlugin: Plugin = async (init, pluginOptions) => {
   }
   // core の返り値を runtime 側で OpenCodeAdapterOptions へ写す（不変条件 1 を維持）。
   const adapterOptions: OpenCodeAdapterOptions = {
+    ...(options.enabled === undefined ? {} : { enabled: options.enabled }),
     ...(options.enableAdvisoryOutputAppend === undefined
       ? {}
       : { enableAdvisoryOutputAppend: options.enableAdvisoryOutputAppend }),
@@ -101,8 +102,14 @@ export const OpenCodePlugin: Plugin = async (init, pluginOptions) => {
     "chat.params": async (input): Promise<void> => {
       await adapter.onChatParams(input);
     },
-    "experimental.chat.system.transform": async (_input, output): Promise<void> => {
+    "experimental.chat.system.transform": async (input, output): Promise<void> => {
       try {
+        const sessionId = input.sessionID;
+        if (sessionId === undefined) {
+          if (options.enabled === false) return;
+        } else if (!adapter.isSessionEnabled(sessionId)) {
+          return;
+        }
         if (!resolvedCommandConfig) return;
         const context = buildJusticeCommandSystemContext(resolvedCommandConfig);
         if (context !== undefined) output.system.push(context);
