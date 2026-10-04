@@ -1406,11 +1406,13 @@ Do not use LLM extraction as enumeration authority. Do not infer clauses by sear
 
 - [ ] **Step 4: Run GREEN tests and typecheck**
 
-Run:
-- focused tests above
-- `bun run typecheck`
+```bash
+bun run vitest run tests/core/superpowers-plan-parser.test.ts tests/core/conformance-projector.test.ts \
+  tests/core/conformance-contract.test.ts tests/core/conformance-contract-store.test.ts
+bun run typecheck
+```
 
-Expected: PASS.
+Expected: PASS; projection failures never become COMPLETE and immutable Conformance Contract persistence remains deterministic.
 
 - [ ] **Step 5: Commit**
 
@@ -1479,7 +1481,11 @@ Keep the existing exact task-body preservation/digest tests.
 
 - [ ] **Step 3: Run RED**
 
-`bun run vitest run tests/core/execution-correlation.test.ts tests/core/superpowers-dispatch-resolver.test.ts`
+```bash
+bun run vitest run tests/core/execution-correlation.test.ts tests/core/superpowers-dispatch-resolver.test.ts
+```
+
+Expected: FAIL because durable Native parent-session/tool-call correlation and Task-1-proven runtime task/child attachment do not yet exist.
 
 - [ ] **Step 4: Implement with AtomicPersistence and existing Plan canonicalization**
 
@@ -1671,6 +1677,8 @@ Run:
 ```bash
 bun run vitest run tests/core/review-interop.test.ts tests/core/review-result.test.ts tests/runtime/senpi-adapter-review-interop.test.ts
 ```
+
+Expected: FAIL because trusted Task-6 provenance consumption, Task-1-proven child delivery, and strict Native review parsing are not yet wired.
 
 - [ ] **Step 4: Implement review recognition/delivery/parser using only Task-1-proven Native seams**
 
