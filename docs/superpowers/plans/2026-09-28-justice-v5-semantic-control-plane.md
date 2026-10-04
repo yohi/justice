@@ -44,7 +44,7 @@
 - Every production-code task follows RED → GREEN → focused verification → full task test → commit.
 - Implementation starts from the master commit containing the approved artifact revision. Justice `v4.3.1` is not a merge/cherry-pick prerequisite.
 
-## Review Focus## Review Focus
+## Review Focus
 
 - **Post-review mutation:** a reviewer approves commit A, then HEAD changes to B; Task 9 must prove B cannot reuse A's review/conformance evidence.
 - **Projection omission:** a malformed or unsupported Plan section disappears from projection; Task 4 must prove projection becomes INCOMPLETE/INVALID rather than silently complete.
@@ -170,7 +170,7 @@ Not yet assumed from source inspection alone:
 
 Task 1 must prove those runtime facts. Its evidence becomes the only allowed implementation contract for Tasks 5–7 and 10. If runtime evidence differs from the Design, implementation stops for artifact reconciliation.
 
-## Canonical Cross-Task Interface Registry## Canonical Cross-Task Interface Registry
+## Canonical Cross-Task Interface Registry
 
 These definitions are binding for every producer/consumer task. A later task may not redefine them.
 
@@ -231,13 +231,58 @@ type SemanticClassificationResult =
       readonly details: readonly string[];
     };
 
+type SuperpowersRoutingRole =
+  | "implementation"
+  | "task-review"
+  | "scoped-re-review"
+  | "final-review";
+
+type NativeSuperpowersProvenanceProfile = {
+  readonly schemaVersion: "justice-native-superpowers-provenance-profile-v1";
+  readonly profileId: string;
+  readonly sourceKind: string;
+  readonly requiredObservedFields: readonly [string, ...string[]];
+  readonly parentSessionBinding: string;
+  readonly parentToolCallBinding: string;
+  readonly workflowMethodBinding: string;
+  readonly restartCompactionValidity: "same_session_only" | "task1_proven_persistent";
+  readonly rejectionRules: readonly [string, ...string[]];
+};
+
+type NativeSuperpowersProvenanceEvidence = {
+  readonly schemaVersion: "justice-native-superpowers-provenance-evidence-v1";
+  readonly profileId: string;
+  readonly parentSessionId: string;
+  readonly parentToolCallId: string;
+  readonly role: SuperpowersRoutingRole;
+  readonly sourceEvidenceRefs: readonly [string, ...string[]];
+  readonly observedAt: string;
+};
+
+type NativeSuperpowersProvenanceInput = {
+  readonly parentSessionId: string;
+  readonly parentToolCallId: string;
+  readonly taskArgs: Readonly<Record<string, unknown>>;
+  readonly executionMethod: SuperpowersExecutionMethod;
+  readonly activationEvidence?: WorkflowActivationEvidence;
+  readonly observedEvidenceRefs: readonly string[];
+};
+
 type TaskRoutingProvenance =
   | {
       readonly kind: "superpowers";
-      readonly role: "implementation" | "task-review" | "scoped-re-review" | "final-review";
+      readonly role: SuperpowersRoutingRole;
+      readonly evidence: NativeSuperpowersProvenanceEvidence;
     }
   | { readonly kind: "external" }
   | { readonly kind: "ambiguous"; readonly reasons: readonly [string, ...string[]] };
+
+interface NativeSuperpowersProvenanceResolver {
+  resolve(
+    input: NativeSuperpowersProvenanceInput,
+    profile: NativeSuperpowersProvenanceProfile,
+  ): TaskRoutingProvenance;
+}
 
 type SuperpowersRoutingTranslationResult =
   | {
@@ -787,14 +832,18 @@ type WorkflowMethodSelectionEvidence = {
   readonly selectedAt: string;
 };
 
+type WorkflowActivationEvidenceKind =
+  | "read_tool_result"
+  | "host_expanded_skill_input";
+
 type WorkflowActivationEvidence = {
   readonly schemaVersion: "justice-workflow-activation-v1";
   readonly authorizationId: string;
   readonly sessionId: string;
   readonly method: SuperpowersExecutionMethod;
-  readonly skillCallId: string;
+  readonly evidenceKind: WorkflowActivationEvidenceKind;
+  readonly observedCallOrInputId: string;
   readonly observedAt: string;
-  readonly source: "skill_tool_success";
 };
 
 type WorkflowActivationInput = {
@@ -803,7 +852,7 @@ type WorkflowActivationInput = {
   readonly selection: WorkflowMethodSelection;
   readonly currentSessionActivation?: WorkflowActivationEvidence;
   readonly capabilities: {
-    readonly nativeSkillInvocation: boolean;
+    readonly provenActivationEvidenceKinds: readonly WorkflowActivationEvidenceKind[];
     readonly subagentExecution: boolean;
   };
 };
@@ -826,7 +875,7 @@ type WorkflowActivationDecision =
   | {
       readonly kind: "unavailable";
       readonly selection: Extract<WorkflowMethodSelection, { readonly kind: "selected" }>;
-      readonly reason: "skill_invocation_unavailable" | "subagent_capability_unavailable" | "activation_state_unavailable";
+      readonly reason: "activation_channel_unavailable" | "subagent_capability_unavailable" | "activation_state_unavailable";
     }
   | {
       readonly kind: "conflict";
@@ -892,7 +941,7 @@ explicit current selection
 
 `WorkflowMethodSelectionEvidence` is one current record per authorization and may be recovered across sessions, but it restores only the selected method. A new explicit selection atomically replaces that record. It never proves current-session activation.
 
-`WorkflowActivationEvidence` is one current record per `authorizationId + sessionId`. A successful later activation atomically replaces that session record. It is trusted only when `authorizationId + sessionId + method` match the active selection, it originated from successful `tool.execute.after` observation of the native `skill` tool with `args.name === method` and `callID === skillCallId`, and `setActivation` returned `saved | idempotent`.
+`WorkflowActivationEvidence` is one current record per `authorizationId + sessionId`. A successful later activation atomically replaces that session record. It is trusted only when `authorizationId + sessionId + method` match the active selection, `evidenceKind` is one of `read_tool_result | host_expanded_skill_input` and was PROVEN by Task 1 for the pinned Native stack, `observedCallOrInputId` identifies the exact runtime-observed read/input event, and `setActivation` returned `saved | idempotent`. Task 10 MUST NOT add another activation evidence kind without artifact reconciliation.
 
 Decision rules are exact:
 
@@ -922,7 +971,7 @@ Cross-session recovery therefore has this exact flow:
 ```text
 recovered selection from prior session
 → needs_activation
-→ fresh current-session skill invocation
+→ fresh current-session Task-1-proven skill-loading observation
 → persisted current-session ActivationEvidence
 → already_active
 ```
@@ -1002,6 +1051,9 @@ Required tests:
 - `native_background_task_returns_runtime_id_without_becoming_task_identity`
 - `native_task_send_continuation_remains_omo_owned`
 - `superpowers_subagent_intent_reaches_existing_omo_task_without_justice_dispatch`
+- `native_superpowers_task_provenance_is_authoritatively_bound_without_prompt_inference`
+- `unrelated_model_issued_task_is_not_classified_as_superpowers`
+- `review_like_prompt_without_provenance_remains_untrusted`
 - `native_task_result_and_child_context_form_unique_parent_child_binding`
 - `native_review_appendix_reaches_exact_bound_child_before_trusted_output`
 - `unrelated_child_cannot_consume_pending_review_appendix`
@@ -1025,10 +1077,15 @@ Record:
 - exact event names/fields/order;
 - exact parent-call ↔ runtime-task ↔ child binding;
 - exact review appendix injection seam;
-- exact method activation evidence seam;
+- exact method activation evidence seam and which bounded `WorkflowActivationEvidenceKind` values are PROVEN;
+- exact Native Superpowers provenance source and a stable `profileId`;
+- exact session/call identity and correlation fields used by the provenance profile;
+- how the mapping appendix / active workflow intent is authoritatively bound to that exact task call;
+- how unrelated and merely review-looking model-issued task calls are rejected;
+- how restart and compaction affect provenance validity;
 - compaction activation result;
 - process vs in-process differences, if any;
-- package/import surface used by a Justice extension.
+- exact public package/import surface used by a Justice extension.
 
 If any result contradicts Requirements/Design, STOP for artifact reconciliation before Task 2.
 
@@ -1103,7 +1160,7 @@ Expected: PASS.
 
 ---
 
-### Task 3: Implement ApprovedArtifactChain Authorization### Task 3: Implement ApprovedArtifactChain Authorization and Non-Promoting v4 Authorization Migration
+### Task 3: Implement ApprovedArtifactChain Authorization and Non-Promoting v4 Authorization Migration
 
 **Requirements / Design:** JUS5-AUTH-01..09, JUS5-PERSIST-01..05, J5D-CHAIN-01..02, J5D-RULING-01, J5D-PERSIST-01.
 
@@ -1533,7 +1590,7 @@ Expected: PASS; the existing Superpowers reviewer dispatch count remains exactly
 
 ---
 
-### Task 8: Persist Review Evidence### Task 8: Persist Review Evidence and Resolve Metadata for the Current Superpowers Open Set
+### Task 8: Persist Review Evidence and Resolve Metadata for the Current Superpowers Open Set
 
 **Requirements / Design:** JUS5-REV-08..11, JUS5-QUALITY-01..03, JUS5-ACC-03, J5D-QUALITY-01, J5D-STORAGE-01, J5D-REVIEW-03..04.
 
@@ -1994,7 +2051,7 @@ Do not implement runtime recovery/retry/fallback.
 
 ---
 
-### Task 13: Implement v5 Recovery Diagnostics### Task 13: Implement v5 Recovery Diagnostics and Turn justice_review into a Control-Plane View
+### Task 13: Implement v5 Recovery Diagnostics and Turn justice_review into a Control-Plane View
 
 **Requirements / Design:** JUS5-STATE-01..04, JUS5-REC-01..03, JUS5-PERSIST-01..05, JUS5-REVIEW-01, J5D-PERSIST-01, J5D-REC-01.
 
