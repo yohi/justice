@@ -215,6 +215,21 @@ type SemanticExecutionClass =
   | "review"
   | "final-review";
 
+type SpCategory =
+  | "sp-mechanical"
+  | "sp-implementation"
+  | "sp-integration"
+  | "sp-deep"
+  | "sp-architecture"
+  | "sp-review"
+  | "sp-final-review";
+
+type TaskRoutingTarget =
+  | { readonly kind: "category"; readonly category: OmoCategoryName }
+  | { readonly kind: "subagent"; readonly subagentType: string }
+  | { readonly kind: "unrouted" }
+  | { readonly kind: "invalid_both"; readonly category: string; readonly subagentType: string };
+
 type SemanticClassificationResult =
   | {
       readonly kind: "classified";
@@ -1133,14 +1148,7 @@ Expected commit scope contains only the spike tests/fixtures/evidence note.
 **Interfaces:**
 - Produces registry-defined semantic types.
 - Known Native built-in diagnostic vocabulary includes `architect` in addition to visual-engineering, artistry, ultrabrain, deep-low, deep-high, quick, unspecified-low, unspecified-high, and writing.
-- `TaskRoutingTarget` for a **new-child task call** is exactly:
-  ```ts
-  type TaskRoutingTarget =
-    | { readonly kind: "category"; readonly category: OmoCategoryName }
-    | { readonly kind: "subagent"; readonly subagentType: string }
-    | { readonly kind: "unrouted" }
-    | { readonly kind: "invalid_both"; readonly category: string; readonly subagentType: string };
-  ```
+- `TaskRoutingTarget` is the canonical registry type above for a **new-child task call**.
 - `task_send` is parsed separately as OmO-owned runtime continuation; it never enters new-child category translation.
 - Task 2 provenance domain MUST NOT import, reference, or otherwise depend on Task 10-owned `WorkflowActivationEvidence`; `NativeSuperpowersProvenanceInput` is fully defined by Task 2-owned/runtime-observed fields.
 - `translateTaskRouting(input: TranslateTaskRoutingInput): SuperpowersRoutingTranslationResult` is the only pure routing translation contract.
@@ -2107,7 +2115,7 @@ Exact tests:
 - `recognized_superpowers_native_task_translates_to_justice_category`
 - `recognized_superpowers_native_task_never_emits_category_and_subagent_type_together`
 - `routing_requires_task6_trusted_superpowers_provenance`
-- `routing_translation_consumes_explicit_provenance_without_reinferring_origin`
+- `task10_passes_task6_provenance_into_pure_routing_translation`
 - `ambiguous_or_external_provenance_is_not_upgraded_by_prompt_shape`
 - `external_explicit_subagent_type_is_preserved`
 - `superpowers_specialized_subagent_type_is_preserved`
@@ -2169,7 +2177,7 @@ bun run test
 bun run typecheck
 ```
 
-Expected: PASS, including historical v4.3.1 ownership regressions, bounded Native activation evidence, and provenance-only routing translation.
+Expected: PASS, including `task10_passes_task6_provenance_into_pure_routing_translation`, historical v4.3.1 ownership regressions, bounded Native activation evidence, and provenance-only routing translation.
 
 - [ ] **Step 8: Commit exact Task 10 boundary**
 
@@ -2765,11 +2773,14 @@ Justice `v4.3.1` is consulted only as the historical regression corpus explicitl
 
 | Producer | Consumer | Contract to compare |
 |---|---|---|
-| Task 2 | Tasks 5–12, 14 | `TaskIdentity`, `ReviewFindingV5`, `SuperpowersExecutionMethod`, `OmoCategoryName`, known built-in `TaskCategory`, `SemanticExecutionClass`, `SemanticClassificationResult`, `NativeSuperpowersProvenanceProfile`, `NativeSuperpowersProvenanceInput`, `TaskRoutingProvenance`, `TrustedSuperpowersProvenance`, `TaskRoutingTarget`, `TranslateTaskRoutingInput`, `SuperpowersRoutingTranslationResult`, exact pure `translateTaskRouting(input)` signature; no Task 10 activation type is consumed by Task 2 |
+| Task 2 | Task 6 | `NativeSuperpowersProvenanceProfile`, activation-independent `NativeSuperpowersProvenanceInput`, `TaskRoutingProvenance`, and `NativeSuperpowersProvenanceResolver` interface; Task 2 consumes no Task 10 activation output |
+| Task 2 | Task 7 | `TrustedSuperpowersProvenance`, `TaskIdentity`, `ReviewFindingV5`, and shared review/routing vocabulary |
+| Task 2 | Task 10 | `TaskRoutingTarget`, `SemanticClassificationResult`, `TranslateTaskRoutingInput`, `SuperpowersRoutingTranslationResult`, and exact pure `translateTaskRouting(input)` signature |
+| Task 2 | Tasks 5, 8, 9, 11, 12, 14 | remaining shared semantic identity/category/quality vocabulary |
 | Task 3 | Tasks 4–14 | `ArtifactFingerprint`, `ApprovedArtifactChain`, `ApprovedPlanBinding.artifactChain`, `ApprovePlanInput` |
 | Task 4 | Tasks 7–10, 13–14 | `ParsedSuperpowersTask`, `ProjectionDiagnostic`, `ProjectionResult<T>`, `ClauseEvidenceScope`, `ClauseResult`, `ConformanceContract`, `ConformanceContractPersistenceResult` + immutable contract path/digest |
 | Task 5 | Tasks 6–10, 13 | `TaskIdentityResolution`, `CorrelationMutationResult`, `ExecutionCorrelation`, `ExecutionCorrelationKey` |
-| Task 6 | Task 7 | Task-1-proven Senpi parent tool-call observation, `NativeSuperpowersProvenanceResolver` output as `TrustedSuperpowersProvenance`, and exact OmO runtime task/child binding consumed directly by `ReviewDispatchInput.provenance` | 
+| Task 6 | Task 7 | Task-1-proven Senpi parent tool-call observation, `NativeSuperpowersProvenanceResolver` output narrowed to `TrustedSuperpowersProvenance`, and exact OmO runtime task/child binding consumed directly by `ReviewDispatchInput.provenance` |
 | Task 6 | Task 10 | `TaskRoutingProvenance` produced from the Task-1 profile and passed explicitly into Task 2-owned `translateTaskRouting(TranslateTaskRoutingInput)`; Task 10 does not re-infer origin |
 | Task 7 | Tasks 8–10, 13 | recognized review provenance/kind, `sp-review`/`sp-final-review` parent-call translation, current scoped `requestedFindingIds`, `ReviewFindingTarget`, `ReviewFindingContextProvider`, scoped `reservedFindingIds`, authoritative child binding, `JusticeReviewResult` |
 | Task 8 | runtime scoped-review coordination + Tasks 9, 13 | store-backed metadata resolution for current marker IDs, lineage-wide `reservedFindingIds`, historical-ID collision detection, Superpowers open-set consistency validation, trusted persisted review evidence |
@@ -2783,6 +2794,20 @@ Methodology persistence authority is exclusive: Task 10 selection/activation rec
 Historical regression evidence does not create a producer/consumer dependency on the v4.3.1 implementation. The referenced v4 commits are test/audit evidence only; Tasks 1/2/3/6/7/9/10/11/12/14 implement or prove the current Native v5 contracts above.
 
 Any mismatch is a Plan defect. Under the Justice v5 spec, a Ruling may record the conflict but MUST NOT silently change a normative interface; return to artifact reconciliation if the mismatch changes the Design contract.
+
+Focused provenance contract checks that must be executable before this graph is accepted:
+
+```text
+Task 2:
+task2_provenance_contract_does_not_depend_on_task10_activation_state
+routing_translation_consumes_explicit_provenance_without_reinferring_origin
+
+Task 7:
+review_dispatch_requires_task6_trusted_superpowers_provenance
+
+Task 10:
+task10_passes_task6_provenance_into_pure_routing_translation
+```
 
 ---
 
