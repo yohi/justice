@@ -2,54 +2,53 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Rebuild Justice as the fail-closed semantic nervous system between Superpowers v6.4.2 and OmO v5 OpenCode edition, with zero unresolved semantic drift at PlanComplete.
+**Goal:** Rebuild Justice as the fail-closed semantic nervous system between Superpowers v6.4.2 and OmO Native v5.1.17 / Senpi v2026.10.8, with zero unresolved semantic drift at PlanComplete.
 
 **Architecture:** Superpowers owns WHAT (method selection and workflow/review progression), Justice owns the activation bridge plus SEMANTIC HOW (execution classification, provenance-aware category translation, correlation/evidence/acceptance), and OmO owns CONCRETE HOW (agent/runtime/model/provider/reasoning/retry/fallback). Justice activates only an authoritative selected Superpowers method, translates recognized Superpowers generic workers into one semantic `sp-*` category, and never becomes either a scheduler or a concrete model/provider resolver.
 
-**Tech Stack:** TypeScript 6.x, Bun, Vitest 4.x, Effect, Zod, YAML, OpenCode plugin hooks, existing AtomicPersistence and Observation Log infrastructure.
+**Tech Stack:** TypeScript 6.x, Bun, Vitest 4.x, Effect, Zod, YAML, OmO Native/Senpi extension events, existing AtomicPersistence and Observation Log infrastructure.
 
 **Requirements:** `docs/superpowers/requirements/2026-09-27-justice-v5-requirements.md`
 
 **Spec:** `docs/superpowers/specs/2026-09-27-justice-v5-semantic-control-plane-design.md`
 
-**Implementation Baseline:** `master @ 080bcdb25b192962789ff5d67139e56487381de4`
+**Implementation Baseline:** current `master` containing this approved Requirements/Design/Plan revision. Production source/test/CI remains tree-equivalent to the historical production baseline `080bcdb25b192962789ff5d67139e56487381de4` until implementation begins.
 
 **Historical Compatibility Reference:** Justice `v4.3.1` is a side-branch historical regression corpus only. It is **not** the Justice v5 implementation base. Do not merge or wholesale cherry-pick `v4.3.1` before implementing this Plan. Carry forward only the harness-independent regression contracts explicitly incorporated below.
 
 ## Global Constraints
 
 - Superpowers owns execution-method selection, task selection, review scheduling, fix/re-review progression, ledger progression, and final whole-branch review. Justice MUST NOT duplicate that orchestration.
-- Justice owns activation of the authoritatively selected supported Superpowers execution method and semantic Superpowers→OmO category translation; activation does not grant progression ownership.
-- OmO owns concrete agent/runtime/category resolution, model/provider/reasoning selection, retry, fallback, and continuation `task_id=ses_...`. Justice MUST NOT seize those responsibilities.
-- Recognized Superpowers `subagent_type="general"` on a new worker is a compatibility marker and MUST be translated to exactly one authoritative Justice category; non-Superpowers explicit subagent routing and OmO continuations remain preserved.
-- Justice MUST NOT select a concrete model/provider. Ambiguous semantic classification is untrusted/`NOT_PROVEN`, not a reason to fabricate a category or model.
-- Justice semantic `TaskIdentity` MUST NOT be encoded into OmO `task_id`.
+- Justice owns selected-method activation evidence plus SEMANTIC HOW: classification, Native task-routing translation, correlation, evidence, conformance, and acceptance.
+- OmO Native/Senpi owns task creation/runtime, process vs in-process execution, task ids/names, `task_send` continuation, task recovery/revival, workpools/teams, model/provider/reasoning resolution, retry, and fallback.
+- The primary audited runtime is OmO Native v5.1.17 at tag `091728d274f20d62504b0b5e1edbc3970671dd8b` with Senpi v2026.10.8 at tag `d56e6a260d9468418a39bc9120945cf98e06b840`.
+- Superpowers v6.4.2 is a Pi package. Its Pi bootstrap does not define OmO's `task` tool. Justice may inject a **tool-mapping appendix** explaining “Superpowers subagent/reviewer dispatch → existing OmO Native `task`”, but the model/Superpowers workflow must issue the call; Justice MUST NOT call `task` to advance workflow.
+- Native new-child routing is exactly `category XOR subagent_type`. Category-routed calls MUST NOT receive a Justice-selected concrete `model`.
+- OmO Native background task ids (`st_...` when returned), task names, and `task_send(to=...)` targets are runtime identity only and MUST NOT encode Justice TaskIdentity.
+- Senpi `tool_call` is the primary pre-execution task observation seam: `toolCallId` + `ctx.sessionManager.getSessionId()`; `event.input` may be mutated in place for routing translation.
+- Task 1 is an **evidence spike and architecture gate**, not a regression replay of an assumed child API. It must prove the exact child/reviewer binding, context-delivery, Superpowers activation, and task-mapping seams against the audited runtime before Tasks 5–7/10 rely on them.
+- If Task 1 cannot prove a race-free Native reviewer-delivery contract, STOP and return to artifact reconciliation. Do not fall back to OpenCode `chat.message/client.session.get`, v4 `justice-review-controller`, duplicate reviewer dispatch, or Justice-owned scheduling.
 - Runtime execution may fail open where safe; Authorization / Accepted / Verified / Complete MUST fail closed when required proof is missing.
 - Human implementation approval binds one exact Requirements→Design→Plan `ApprovedArtifactChain`.
-- Required Conformance Contract clauses resolve only to `SATISFIED | VIOLATED | NOT_PROVEN`; `VIOLATED` and `NOT_PROVEN` both block acceptance.
+- Required Conformance Contract clauses resolve only to `SATISFIED | VIOLATED | NOT_PROVEN`; `VIOLATED` and `NOT_PROVEN` block acceptance.
 - Only `projectionStatus=COMPLETE` is acceptance-eligible.
 - A substantive Requirements/Design/Plan change invalidates downstream authority and requires artifact reconciliation plus required human re-approval.
 - Superpowers `Ruling:` may continue workflow execution but MUST NOT rewrite Justice semantic authority.
 - Justice never dispatches a duplicate task reviewer, scoped re-reviewer, or final reviewer.
-- Canonical v5 review severity is `critical | important | minor`; legacy `major` is migration-only and normalizes to `important`.
+- Canonical v5 review severity is `critical | important | minor`; legacy `major` is migration-only.
 - Open Critical/Important findings block Justice acceptance; parked/Ruling is not resolution.
-- OmO configured state means the effective user/project + harness/profile view, not one arbitrary `omo.jsonc`.
+- OmO configured state means the effective user/project + **[native]** harness/profile view, not one arbitrary `omo.jsonc`.
 - v4 durable authority is never silently promoted to v5 authority.
-- Final completion requires:
-  - `unresolved semantic drift == 0`
-  - `unauthorized semantic drift == 0`
-  - `missing required evidence == 0`
-  - `blocking quality findings == 0`
-- Do not manually set the package release version; the repository's release automation remains responsible for release versioning.
+- Final completion requires zero unresolved drift, zero unauthorized drift, zero missing required evidence, and zero blocking quality findings.
+- Do not manually set the package release version; release automation owns versioning.
 - Every production-code task follows RED → GREEN → focused verification → full task test → commit.
-- Task 1 is a regression gate for the already-established OpenCode 1.18.31 / Superpowers v6.4.2 review-interop contract. A failure is upstream compatibility drift: STOP the supported-stack implementation and report the drift; do not invent a Justice-owned review fallback.
-- All production implementation tasks start from `master @ 080bcdb25b192962789ff5d67139e56487381de4`. Justice `v4.3.1` is not a merge/cherry-pick prerequisite and does not replace this base.
+- Implementation starts from the master commit containing the approved artifact revision. Justice `v4.3.1` is not a merge/cherry-pick prerequisite.
 
-## Review Focus
+## Review Focus## Review Focus
 
 - **Post-review mutation:** a reviewer approves commit A, then HEAD changes to B; Task 9 must prove B cannot reuse A's review/conformance evidence.
 - **Projection omission:** a malformed or unsupported Plan section disappears from projection; Task 4 must prove projection becomes INCOMPLETE/INVALID rather than silently complete.
-- **Continuation collision:** an OmO `ses_...` continuation is unrelated to the current Justice task; Task 5/6 must prove it cannot rebind semantic identity without a trusted child relation.
+- **Runtime identity collision:** an unrelated OmO `st_...` task id/name or `task_send` target is observed; Task 5/6 must prove it cannot rebind semantic TaskIdentity without the Task-1-proven relation.
 - **Config precedence:** user, ancestor project, nearest project, harness, and profile layers disagree; Task 11 must prove doctor reports the exact effective value and its sources.
 - **Upgrade recovery:** v4 state and unknown/newer state coexist with v5 files; Task 13 must prove neither can silently satisfy v5 acceptance.
 
@@ -63,7 +62,7 @@ The previously recorded v4.2.0 contracts remain mandatory regression evidence:
 
 - `821343eba1223371ae0a7a20e02e7370db900306` — completed-plan final review must be recognized before implementation-task exhaustion / plan-completion cleanup can suppress the review path;
 - `4759d777aab9c80b897c55392bcc0f5833d79d7b` — task/scoped/final review workers must remain outside implementation semantics and implementation-worker enrichment;
-- `1781c7efae22ac1304fa8dc0d1f621c888943a1e` — recognized Superpowers review semantic routing must survive the OpenCode generic `subagent_type="general"` compatibility marker.
+- `1781c7efae22ac1304fa8dc0d1f621c888943a1e` — recognized Superpowers review semantic routing must preserve reviewer intent even when a harness presents only a generic worker shape; Native v5 re-proves the equivalent mapping through its own task contract rather than retaining the OpenCode marker.
 
 Earlier v4 compatibility fixes also remain evidence for existing v5 contracts:
 
@@ -99,7 +98,7 @@ The v4 implementations themselves are **not** normative. In particular, do not c
 
 Where historical v4 behavior conflicts with the current Superpowers=WHAT / Justice=SEMANTIC HOW / OmO=CONCRETE HOW architecture, this v5 Plan wins.
 
-The historical v4 review setting `run_in_background=false` is also non-normative. It may only appear as a bounded Task 1/7 compatibility assertion if current supported-runtime evidence proves it is required to preserve the Superpowers review lifecycle; it must not become a new Justice-owned review-scheduling policy.
+The historical v4 review setting `run_in_background=false` is non-normative. Native Task 1 may observe foreground/background behavior only to establish identity and delivery semantics; Justice must never turn that observation into a workflow-scheduling policy.
 
 Task ownership for the v4.3.1 corpus is explicit:
 
@@ -110,7 +109,7 @@ Task ownership for the v4.3.1 corpus is explicit:
 - Task 12 proves provider/runtime failure classification remains diagnostic-only and cannot initiate Justice retry/fallback, preserving OmO runtime ownership;
 - Task 14 closes Design §29 Scenario 50 (review evidence cannot manufacture human implementation authorization) and Scenario 51 (Superpowers progression ownership + OmO runtime ownership) end-to-end; Scenarios 48–49 are fully owned by their focused Task 7/9 tests and require no duplicate E2E case.
 
-Task 1 remains the OpenCode 1.18.31 / Superpowers v6.4.2 runtime review-interop regression gate. It is **not** a v4.3.1 behavior-compatibility gate.
+Task 1 is now the OmO Native v5.1.17 / Senpi v2026.10.8 / Superpowers v6.4.2 runtime evidence gate. It closes Native adapter architecture; it is **not** a v4.3.1 or OpenCode behavior-compatibility gate.
 
 ---
 
@@ -123,7 +122,10 @@ New focused modules:
 - `src/core/conformance-contract-store.ts` — immutable durable Conformance Contract persistence and reviewer-readable paths.
 - `src/core/superpowers-plan-parser.ts` — deterministic parser for the v6.4.2 plan structures Justice treats as normative.
 - `src/core/conformance-projector.ts` — Requirements/Design/Plan projection and completeness validation.
-- `src/core/execution-correlation.ts` — durable parent-session/call ↔ semantic task ↔ child-session sidecar state.
+- `src/core/execution-correlation.ts` — durable Senpi parent-session/tool-call ↔ semantic task ↔ observed OmO task/child sidecar state.
+- `src/senpi-extension.ts` — Justice Native extension entry point.
+- `src/runtime/senpi-adapter.ts` — Senpi event adapter for task observation/routing, activation evidence, and Task-1-proven child/reviewer binding.
+- `src/runtime/senpi-superpowers-mapping.ts` — non-scheduling Superpowers→OmO Native tool-mapping appendix.
 - `src/core/superpowers-dispatch-resolver.ts` — resolve implementation TaskIdentity from Superpowers task-brief artifacts.
 - `src/core/workflow-activation.ts` — resolve authoritative Superpowers execution-method activation intent without owning methodology progression.
 - `src/core/review-interop.ts` — versioned Superpowers reviewer recognition and prompt appendix construction.
@@ -136,94 +138,39 @@ New focused modules:
 
 Existing files retain their existing responsibility unless a task below explicitly changes it.
 
-## Verified Review-Interop Baseline
+## OmO Native / Senpi Evidence Baseline
 
-The architecture-critical review transport is fixed before implementation.
-
-### Exact OpenCode 1.18.31 ordering contract
-
-OpenCode v1.18.31 exposes:
-
-- awaited `tool.execute.before` / `tool.execute.after` hooks;
-- awaited `chat.message`;
-- asynchronous plugin `event` forwarding whose returned Promise is **not awaited**.
-
-Therefore Justice MUST NOT require its `session.created/session.updated` event handler to finish before the child reviewer's first `chat.message`.
-
-The relevant OpenCode files are byte-identical between v1.18.29 and v1.18.31:
-
-- `packages/opencode/src/session/prompt.ts`: `0f85d44f209ba792065aeb951f0bd2e12b59fae8`
-- `packages/opencode/src/tool/task.ts`: `d8ca640cfba9a52d97e5180fda0ffa719910592b`
-- `packages/plugin/src/index.ts`: `edfa0139dfcaf0e877ab906fabe8e0527afc3915`
-- v1.18.31 tag commit: `014614d35b397775e5d397a490fc72368c894ec2`
-
-OpenCode also exposes an authoritative awaited session lookup through the plugin client:
-
-```ts
-client.session.get({
-  path: {
-    id: childSessionId
-  }
-})
-```
-
-The successful Session contains `id` and optional `parentID`.
-
-### Selected review-delivery contract
-
-Justice uses:
+The primary architecture is pinned to:
 
 ```text
-parent tool.execute.before
-  → observe recognized Superpowers review
-  → persist PendingReviewCorrelation(parentSessionId + parentCallId)
-  → classify task/scoped review as review; final as final-review
-  → translate subagent_type="general" to category=sp-review/sp-final-review
-  → remove subagent_type; preserve XOR
+OmO Native: v5.1.17
+tag commit: 091728d274f20d62504b0b5e1edbc3970671dd8b
 
-TaskTool creates child session
+Senpi: v2026.10.8
+tag commit: d56e6a260d9468418a39bc9120945cf98e06b840
 
-child chat.message(input.sessionID)
-  → await client.session.get({ path: { id: input.sessionID } })
-  → require returned Session.id == input.sessionID
-  → read authoritative Session.parentID
-  → match exactly one pending review under that parent
-  → bind child ↔ pending parent review
-  → append one fully formed synthetic Justice TextPart to output.parts IN PLACE
-
-session.created/session.updated
-  → corroboration/cache/diagnostic only
-  → never a delivery-order prerequisite
-
-parent tool.execute.after
-  → corroborate same parent call / child metadata
-  → close review correlation
+Superpowers: v6.4.2
 ```
 
-Lookup failure, missing/mismatched parent, or zero/multiple pending matches means no injection and `NOT_PROVEN`.
+Source-level facts already established:
 
-The appended Part is fixed:
+- OmO Native packages its extension as `@code-yeongyu/omo-senpi` and contributes bundled skills through `resources_discover`.
+- Superpowers v6.4.2 is also a Pi package with its own extension and skills.
+- Senpi `tool_call` exposes `toolCallId`, current session through `ctx.sessionManager.getSessionId()`, and mutable `event.input`.
+- Native `task` requires exactly one of `category | subagent_type`; background calls return `st_...` task ids; continuation/steering uses `task_send(to=...)`.
+- Senpi exposes `tool_result`, `before_agent_start`, `context`, `session_start`, `session_compact`, and `session_shutdown`.
+- Superpowers' Pi bootstrap explicitly says Pi has no standard subagent tool and does not name OmO's `task`; therefore Native interop needs a thin tool-mapping appendix.
+- OmO owns task host/process selection, retry/fallback, child recovery, and lifecycle state.
 
-```text
-id        = "prt_justice_review_" + randomUUID()
-sessionID = output.message.sessionID
-messageID = output.message.id
-type      = "text"
-text      = rendered Justice review appendix
-synthetic = true
-```
+Not yet assumed from source inspection alone:
 
-`input.sessionID` must equal `output.message.sessionID`. The child `chat.message` appendix layer never removes/replaces original reviewer parts and never changes routing/model/provider/variant. Any recognized `general`→`sp-review` / `sp-final-review` translation already happened on the parent `tool.execute.before` routing layer.
+- which exact public Native surface proves one parent `task` call ↔ one child/reviewer session/run;
+- the exact event ordering that guarantees review appendix delivery before trusted reviewer output;
+- the exact method-specific Superpowers activation evidence that survives/requires refresh across compaction.
 
-### Before-hook mutation statement
+Task 1 must prove those runtime facts. Its evidence becomes the only allowed implementation contract for Tasks 5–7 and 10. If runtime evidence differs from the Design, implementation stops for artifact reconciliation.
 
-OpenCode executes the same `args/taskArgs` object after `tool.execute.before`, so an in-place property mutation can be observable by the executor. Justice v5 **does not use that path by design** for review delivery; it uses the awaited child `chat.message` + authoritative session lookup contract above. Do not describe before-hook in-place mutation as source-impossible.
-
-Superpowers v6.4.2 task review, scoped re-review, final whole-branch review, and ordinary SDD implementer templates use `Subagent (general-purpose)`; OpenCode V1 maps that to `task` with `subagent_type: "general"`. For recognized new-worker calls Justice treats this exact `general` value as the harness marker to be semantically translated, not as an explicit specialized subagent choice.
-
-Task 1 is a runtime regression/replay gate for this already-selected architecture. A failure is upstream/runtime compatibility drift, not permission to invent a different architecture.
-
-## Canonical Cross-Task Interface Registry
+## Canonical Cross-Task Interface Registry## Canonical Cross-Task Interface Registry
 
 These definitions are binding for every producer/consumer task. A later task may not redefine them.
 
@@ -300,7 +247,7 @@ type SuperpowersRoutingTranslationResult =
     }
   | { readonly kind: "preserve_explicit_category"; readonly category: OmoCategoryName }
   | { readonly kind: "preserve_explicit_subagent"; readonly subagentType: string }
-  | { readonly kind: "continuation"; readonly taskId: string }
+  | { readonly kind: "runtime_continuation"; readonly to: string }
   | { readonly kind: "unrouted" }
   | {
       readonly kind: "untrusted";
@@ -1028,95 +975,77 @@ type ResolveOmoEffectiveConfigInput = {
 
 ---
 
-### Task 1: Lock the Race-Free Review-Interop Contract as a Runtime Regression Gate
+### Task 1: Prove OmO Native / Senpi / Superpowers Interop Before Production Implementation
 
-**Requirements / Design:** JUS5-COMP-01..03, JUS5-REV-06..09, JUS5-CAT-05, JUS5-CORR-06, J5D-REVIEW-01..04, J5D-ROUTE-01.
+**Requirements / Design:** JUS5-COMP-01..04, JUS5-HARNESS-01..03, JUS5-CAT-05, JUS5-ACT-03, JUS5-CORR-02..06, JUS5-REV-06..07, J5D-ACT-01, J5D-CORR-02, J5D-ROUTE-01, J5D-REVIEW-02.
+
+**Scope:** evidence/tests/fixtures only. Do not modify Justice production source in this task.
 
 **Files:**
-- Create: `tests/integration/justice-v5-review-interop-host.test.ts`
-- Create: `tests/fixtures/superpowers-v6.4.2-review-prompts.ts`
-- Modify: `.github/workflows/ci.yml` only to pin this regression job to `opencode-ai@1.18.31`; this is test evidence, not a product allowlist.
-- Production source: **none**
+- Create: `tests/integration/omo-native-senpi-contract-spike.test.ts`
+- Create fixtures under: `tests/fixtures/omo-native-senpi/`
+- Create evidence note: `docs/reports/omo-native-v5.1.17-senpi-2026.10.8-contract-evidence.md`
 
-**Interfaces:**
-- Consumes the fixed Design §14.2 contract:
-  - parent `tool.execute.before` creates pending review correlation;
-  - child `chat.message` is awaited;
-  - the fixture plugin calls `client.session.get({ path: { id: input.sessionID } })` inside `chat.message` using default fields-response semantics;
-  - only `lookup.data` is treated as the authoritative Session; `lookup.error`, missing `data`, or thrown transport errors block injection;
-  - authoritative `lookup.data.parentID` selects exactly one pending parent review;
-  - `session.created/session.updated` may be arbitrarily delayed and are not required for injection;
-  - one fully formed synthetic text Part is appended in place;
-  - parent `tool.execute.after` corroborates the same review relation.
-- Produces runtime regression evidence only. It does not select/discover another architecture.
+**Pinned upstream:**
+- OmO Native v5.1.17 / `091728d274f20d62504b0b5e1edbc3970671dd8b`
+- Senpi v2026.10.8 / `d56e6a260d9468418a39bc9120945cf98e06b840`
+- Superpowers v6.4.2
 
-- [ ] **Step 1: Add the three exact Superpowers v6.4.2 reviewer fixtures**
+- [ ] **Step 1: Build a minimal probe extension and fixture session**
 
-Represent:
-- task review: brief/report/base/head/diff;
-- scoped re-review: original findings/fix-base/head/diff;
-- final whole-branch review: plan-or-requirements/base/head;
-- OpenCode V1 routing: `subagent_type: "general"`.
+The probe records only authoritative event fields/order needed by Justice:
+- session id from `ctx.sessionManager.getSessionId()`;
+- `tool_call` name/id/input and input mutation visibility;
+- `tool_result` id/result;
+- child `before_agent_start` / `context` session identity;
+- session lifecycle needed for restart/compaction;
+- input/read evidence needed for Superpowers method activation.
 
-- [ ] **Step 2: Add exact runtime regression cases**
+Do not add a Justice reviewer or scheduler.
 
-In `tests/integration/justice-v5-review-interop-host.test.ts`:
+- [ ] **Step 2: Write exact runtime evidence tests**
 
-- `task_review_uses_authoritative_child_session_lookup_and_injects_appendix`
-- `scoped_re_review_uses_authoritative_child_session_lookup_and_injects_appendix`
-- `final_review_uses_authoritative_child_session_lookup_and_injects_appendix`
-- `child_chat_message_can_bind_via_authoritative_session_lookup_without_waiting_for_event_hook`
-- `delayed_session_created_plugin_event_does_not_lose_review_appendix`
-- `session_lookup_parent_mismatch_blocks_injection`
-- `session_get_fields_response_uses_data_as_authoritative_session`
-- `session_get_error_response_blocks_injection`
-- `session_get_transport_failure_blocks_injection`
-- `review_interop_supports_same_call_general_to_category_translation_without_duplicate_dispatch`
-- `synthetic_review_part_uses_actual_child_message_identity`
-- `review_result_is_attributed_to_same_parent_call_and_child_session`
+Required tests:
 
-Assertions:
-- exactly one existing Superpowers reviewer dispatch occurs;
-- parent `sessionID + callID` are observed;
-- the `chat.message` hook can bind from awaited `session.get` even when no Justice event callback has completed;
-- delayed `session.created` handling does not change whether the appendix reaches the reviewer;
-- fields-response success reads `lookup.data`; SDK/HTTP error response, `data` absence, transport exception, parent mismatch, or zero/multiple pending matches produces no appendix and untrusted evidence;
-- synthetic Part has `prt_justice_review_<uuid>`, actual child `sessionID`, actual child user-message `messageID`, `type: "text"`, and `synthetic: true`;
-- original reviewer content remains present;
-- the fixture proves in-place parent-args translation can remove `subagent_type="general"`, add exactly one category, and reach the same executor call without creating another dispatch;
-- the translated payload never contains both category and subagent_type;
-- model/provider/variant are not rewritten;
-- parent after-hook/result and child session are attributable to the same review correlation;
-- no duplicate Justice reviewer is created.
+- `loads_omo_and_superpowers_pi_packages_together`
+- `superpowers_using_superpowers_bootstrap_is_present_in_native_context`
+- `native_task_tool_call_exposes_mutable_input_session_and_tool_call_id`
+- `native_task_enforces_category_subagent_type_xor`
+- `native_background_task_returns_runtime_id_without_becoming_task_identity`
+- `native_task_send_continuation_remains_omo_owned`
+- `superpowers_subagent_intent_reaches_existing_omo_task_without_justice_dispatch`
+- `native_task_result_and_child_context_form_unique_parent_child_binding`
+- `native_review_appendix_reaches_exact_bound_child_before_trusted_output`
+- `unrelated_child_cannot_consume_pending_review_appendix`
+- `native_method_skill_load_produces_current_session_activation_evidence`
+- `compaction_activation_survival_is_observed_not_assumed`
 
-- [ ] **Step 3: Pin and verify the host-test baseline**
+- [ ] **Step 3: Run the spike against the pinned Native stack**
 
-Change the existing CI host-test install to exactly:
+Run the repository integration command for this exact file using an isolated HOME/agent directory and the pinned OmO/Senpi/Superpowers packages.
 
-```text
-bun install --global opencode-ai@1.18.31
-```
+Expected: every required contract is either **PROVEN with captured event evidence** or the Task is BLOCKED. No “probably equivalent to OpenCode” result is acceptable.
 
-The regression file asserts `opencode --version == 1.18.31` for this baseline replay only. Task 11 remains capability-first.
+- [ ] **Step 4: Freeze the selected Native adapter contract in the evidence note**
 
-- [ ] **Step 4: Run the regression gate**
+Record:
+- exact event names/fields/order;
+- exact parent-call ↔ runtime-task ↔ child binding;
+- exact review appendix injection seam;
+- exact method activation evidence seam;
+- compaction activation result;
+- process vs in-process differences, if any;
+- package/import surface used by a Justice extension.
 
-Run: `bun run vitest run tests/integration/justice-v5-review-interop-host.test.ts`
+If any result contradicts Requirements/Design, STOP for artifact reconciliation before Task 2.
 
-Expected: all twelve cases PASS, including same-call generic-marker translation capability.
+- [ ] **Step 5: Commit evidence only**
 
-Failure means upstream/runtime compatibility drift. STOP implementation and return to Design review; do not add Justice-owned reviewers and do not make async session-event completion a delivery prerequisite.
-
-- [ ] **Step 5: Commit the regression evidence**
-
-```bash
-git add .github/workflows/ci.yml tests/integration/justice-v5-review-interop-host.test.ts tests/fixtures/superpowers-v6.4.2-review-prompts.ts
-git commit -m "test: lock Justice v5 review interop baseline"
-```
+Expected commit scope contains only the spike tests/fixtures/evidence note.
 
 ---
 
-### Task 2: Establish v5 Semantic Routing Types and Provenance-Aware OmO Wire Translation
+### Task 2: Establish Native Semantic Routing Types and Pure OmO Task Translation
 
 **Requirements / Design:** JUS5-CAT-01..05, JUS5-CAT-09, JUS5-CORR-01, JUS5-CORR-05..06, JUS5-TASK-03..04, J5D-CORR-01, J5D-ROUTE-01, J5D-CAT-01..02.
 
@@ -1128,76 +1057,38 @@ git commit -m "test: lock Justice v5 review interop baseline"
 - Test: `tests/core/omo-category-mapper-v5.test.ts`
 
 **Interfaces:**
-- Produces registry-defined `TaskIdentity`, `ReviewFindingV5`, `SuperpowersExecutionMethod`, `OmoCategoryName`, `SemanticExecutionClass`, `SemanticClassificationResult`, `TaskRoutingProvenance`, and `SuperpowersRoutingTranslationResult` in `src/core/types.ts`.
-- Produces:
+- Produces registry-defined semantic types.
+- Known Native built-in diagnostic vocabulary includes `architect` in addition to visual-engineering, artistry, ultrabrain, deep-low, deep-high, quick, unspecified-low, unspecified-high, and writing.
+- `TaskRoutingTarget` for a **new-child task call** is exactly:
   ```ts
-  type TaskCategory =
-    | "visual-engineering"
-    | "ultrabrain"
-    | "deep-low"
-    | "deep-high"
-    | "artistry"
-    | "quick"
-    | "unspecified-low"
-    | "unspecified-high"
-    | "writing";
-
   type TaskRoutingTarget =
     | { readonly kind: "category"; readonly category: OmoCategoryName }
     | { readonly kind: "subagent"; readonly subagentType: string }
-    | { readonly kind: "continuation"; readonly taskId: string }
     | { readonly kind: "unrouted" }
     | { readonly kind: "invalid_both"; readonly category: string; readonly subagentType: string };
-
-  function parseOmoCategoryName(value: unknown): OmoCategoryName | null;
-
-  function inspectTaskRoutingTarget(
-    input: Readonly<Record<string, unknown>>,
-  ): TaskRoutingTarget;
-
-  function translateTaskRouting(input: {
-    readonly target: TaskRoutingTarget;
-    readonly provenance: TaskRoutingProvenance;
-    readonly classification?: SemanticClassificationResult;
-  }): SuperpowersRoutingTranslationResult;
   ```
-- Translation precedence is exact:
-  1. legitimate `task_id=ses_...` continuation → `continuation`, no new category;
-  2. explicit non-empty category string → preserve byte-for-byte as `OmoCategoryName`; do not require membership in `TaskCategory` or `SpCategory`;
-  3. non-Superpowers explicit subagent → preserve;
-  4. recognized Superpowers non-generic specialized subagent (for example `explore`) → preserve;
-  5. recognized Superpowers new-worker `subagent_type="general"` + classified semantic intent → remove `subagent_type`, emit one mapped `sp-*` category;
-  6. recognized Superpowers new worker with no target + classified semantic intent → emit one mapped `sp-*` category;
-  7. invalid both-target / ambiguous provenance / ambiguous classification → `untrusted`.
-- `TaskCategory` is only the known/current built-in vocabulary for compatibility/doctor assertions; it is not the caller-owned wire namespace.
-- `parseOmoCategoryName` accepts every non-empty string and returns it unchanged; unknown-to-Justice names remain OmO-owned.
-- `translateTaskRouting` never chooses model/provider/reasoning/fallback and never mutates continuation `task_id`.
-- `normalizeTaskToolInput(InPlace)` preserves a legitimate OmO `task_id=ses_...`.
-- `enrichTaskToolInput` never serializes `TaskIdentity` into `task_id`.
+- `task_send` is parsed separately as OmO-owned runtime continuation; it never enters new-child category translation.
+- `translateTaskRouting` never chooses model/provider/reasoning/execution-mode/retry/fallback.
 
-- [ ] **Step 1: Write RED routing/domain tests**
+- [ ] **Step 1: Write RED Native routing tests**
 
-Exact tests in `tests/core/v5-task-routing-contract.test.ts`:
-- `preserves_omo_continuation_task_id`
-- `never_serializes_justice_task_identity_as_task_id`
+Exact tests:
+- `never_serializes_justice_task_identity_as_omo_runtime_task_id`
+- `preserves_task_send_runtime_continuation_target`
 - `reports_category_subagent_type_as_invalid_both`
+- `reports_missing_category_and_subagent_type_as_unrouted`
 - `preserves_non_superpowers_explicit_subagent_type_without_category_injection`
 - `preserves_superpowers_specialized_non_generic_subagent_type_without_category_injection`
 - `preserves_explicit_category_without_subagent_type_injection`
 - `preserves_user_defined_omo_category_without_translation`
-- `unknown_to_justice_but_caller_owned_category_is_not_rejected_by_static_union`
-- `explicit_custom_category_never_gains_subagent_type`
-- `justice_generated_semantic_category_remains_sp_category`
-- `recognized_superpowers_general_worker_translates_classified_intent_to_category`
-- `recognized_superpowers_general_worker_never_emits_category_and_subagent_type_together`
+- `recognized_superpowers_task_translates_classified_intent_to_one_sp_category`
+- `recognized_superpowers_task_never_emits_category_and_subagent_type_together`
 - `ambiguous_superpowers_semantic_classification_is_untrusted`
-- `does_not_inject_category_into_continuation`
-- `justice_category_is_the_only_semantic_routing_signal_to_omo`
 - `justice_does_not_select_concrete_model_or_provider`
 
-In `tests/core/omo-category-mapper-v5.test.ts`:
+Category tests:
 - `does_not_emit_legacy_deep`
-- `recognizes_deep_low_deep_high_artistry`
+- `recognizes_native_architect_deep_low_deep_high_artistry`
 - `custom_sp_categories_coexist_with_omo_v5_categories`
 - `maps_semantic_execution_classes_to_exact_sp_categories`
 
@@ -1205,32 +1096,21 @@ In `tests/core/omo-category-mapper-v5.test.ts`:
 
 Run: `bun run vitest run tests/core/v5-task-routing-contract.test.ts tests/core/omo-category-mapper-v5.test.ts`
 
-Expected: FAIL on legacy `deep`, semantic `task_id` enrichment, missing provenance-aware translation, and missing semantic-class domain types.
+Expected: FAIL on stale OpenCode continuation/general-marker assumptions and missing Native category vocabulary.
 
-- [ ] **Step 3: Implement exact routing domain + pure translation primitive**
+- [ ] **Step 3: Implement pure Native routing domain**
 
-Implement only the pure wire-boundary translation. Task 2 does **not** decide whether a dispatch is Superpowers-owned and does **not** classify implementation complexity; Task 7 supplies review provenance/classes and Task 10 supplies implementation activation/classification.
+Do not decide whether a call belongs to Superpowers here. Do not dispatch a task. Do not alter `task_send`.
 
-Do not select model/provider/reasoning/fallback. Do not normalize invalid/ambiguous routing into a trusted category.
-
-- [ ] **Step 4: Run GREEN tests and typecheck**
-
-Run:
-- `bun run vitest run tests/core/v5-task-routing-contract.test.ts tests/core/omo-category-mapper-v5.test.ts`
-- `bun run typecheck`
+- [ ] **Step 4: Run GREEN + typecheck**
 
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
-```bash
-git add src/core/types.ts src/core/task-packager.ts src/core/omo-category-mapper.ts \
-  tests/core/v5-task-routing-contract.test.ts tests/core/omo-category-mapper-v5.test.ts
-git commit -m "refactor: define Justice semantic routing boundary"
-```
-
 ---
-### Task 3: Implement ApprovedArtifactChain Authorization and Non-Promoting v4 Authorization Migration
+
+### Task 3: Implement ApprovedArtifactChain Authorization### Task 3: Implement ApprovedArtifactChain Authorization and Non-Promoting v4 Authorization Migration
 
 **Requirements / Design:** JUS5-AUTH-01..09, JUS5-PERSIST-01..05, J5D-CHAIN-01..02, J5D-RULING-01, J5D-PERSIST-01.
 
@@ -1483,7 +1363,7 @@ git commit -m "feat: project versioned conformance contracts"
 
 ---
 
-### Task 5: Add Durable ExecutionCorrelation and Task-Brief-Based Semantic Task Resolution
+### Task 5: Add Durable Native ExecutionCorrelation and Task-Brief-Based Semantic Resolution
 
 **Requirements / Design:** JUS5-CORR-02..05, JUS5-TASK-01..04, JUS5-REC-01..03, J5D-CORR-02, J5D-REC-01.
 
@@ -1494,401 +1374,173 @@ git commit -m "feat: project versioned conformance contracts"
 - Test: `tests/core/execution-correlation.test.ts`
 - Test: `tests/core/superpowers-dispatch-resolver.test.ts`
 
-**Interfaces:**
-- Consumes the registry-defined `TaskIdentity`.
-- Owns the registry-defined `TaskIdentityResolution` and `CorrelationMutationResult`.
-- Produces:
-  ```ts
-  type ExecutionCorrelation = {
-    readonly authorizationId: string;
-    readonly artifactChainId: string;
-    readonly planIdentity: string;
-    readonly taskIdentity: TaskIdentity;
-    readonly executionMethod: "subagent-driven-development" | "executing-plans";
-    readonly parentSessionId: string;
-    readonly parentCallId: string;
-    readonly childSessionId?: string;
-    readonly omoContinuationSessionId?: string;
-    readonly dispatchRevision: string;
-    readonly status: "pending" | "child_observed" | "terminal" | "untrusted";
-  };
+**Interface:**
+```ts
+type ExecutionCorrelation = {
+  readonly authorizationId: string;
+  readonly artifactChainId: string;
+  readonly planIdentity: string;
+  readonly taskIdentity: TaskIdentity;
+  readonly executionMethod: SuperpowersExecutionMethod;
+  readonly parentSessionId: string;
+  readonly parentToolCallId: string;
+  readonly omoTaskId?: string;
+  readonly childSessionId?: string;
+  readonly dispatchRevision: string;
+  readonly status: "pending" | "runtime_observed" | "child_observed" | "terminal" | "untrusted";
+};
 
-  type ExecutionCorrelationKey = {
-    readonly parentSessionId: string;
-    readonly parentCallId: string;
-  };
-  ```
-- Store path: `.justice/v5/execution-correlations.json`.
-- `ExecutionCorrelationStore` methods:
-  - `bindPending(input: BindPendingInput): Promise<CorrelationMutationResult>`
-  - `attachChild(key: ExecutionCorrelationKey, childSessionId: string): Promise<CorrelationMutationResult>`
-  - `attachContinuation(key: ExecutionCorrelationKey, sesId: string): Promise<CorrelationMutationResult>`
-  - `markTerminal(key: ExecutionCorrelationKey): Promise<CorrelationMutationResult>`
-  - `findByCall(key: ExecutionCorrelationKey): Promise<ExecutionCorrelation | null>`
-  - `findTrustedByChildSession(childSessionId: string): Promise<ExecutionCorrelation | null>`
-- `resolveSuperpowersImplementationTask(input: ResolveTaskIdentityInput): Promise<TaskIdentityResolution>`:
-  - extracts exactly one Superpowers task-brief reference;
-  - reads `task-N-brief.md`;
-  - canonicalizes the full task section with checkbox state normalized away;
-  - constructs the registry-defined `TaskIdentity`;
-  - matches `semanticDigest` against exactly one task in the active authorized Plan snapshot;
-  - task number/path alone is insufficient trust.
+type ExecutionCorrelationKey = {
+  readonly parentSessionId: string;
+  readonly parentToolCallId: string;
+};
+```
 
-- [ ] **Step 1: Write RED correlation-store tests**
+Store: `.justice/v5/execution-correlations.json`.
+
+Runtime task/child attachment methods must use only the exact identities/fields Task 1 proved. No `ses_...` or OpenCode parent lookup assumptions remain.
+
+- [ ] **Step 1: RED correlation tests**
 
 Cover:
-- same `parentSessionId+parentCallId` is idempotent;
-- conflicting semantic task for same call → `untrusted`;
-- child relation accepted only when parent relation agrees;
-- unrelated `ses_...` cannot rebind semantic task;
-- trusted child continuation can reattach;
+- same session + toolCallId idempotence;
+- conflicting semantic task for same call → untrusted;
+- unrelated `st_...` id/name cannot rebind semantic task;
+- runtime task id can attach only to the matching pending call;
+- child session can attach only through Task-1-proven relation;
 - persistence failure → `persistence_failed`;
-- recovery uses durable file, not an ephemeral map.
+- restart uses durable state;
+- TaskIdentity is never serialized into OmO task/task_send args.
 
-- [ ] **Step 2: Write RED task-brief/identity tests**
+- [ ] **Step 2: RED task-brief identity tests**
 
-Exact tests:
-- `task_identity_is_stable_for_checkbox_only_progress`
-- `task_identity_changes_for_substantive_task_body_change`
-- `valid_task_brief_resolves_one_authorized_task_identity`
-- `stale_task_brief_digest_is_untrusted`
-- `multiple_or_missing_task_brief_reference_is_untrusted`
-- `brief_from_other_plan_workspace_is_untrusted`
+Keep the existing exact task-body preservation/digest tests.
 
-- [ ] **Step 3: Run RED tests**
+- [ ] **Step 3: Run RED**
 
-Run: `bun run vitest run tests/core/execution-correlation.test.ts tests/core/superpowers-dispatch-resolver.test.ts`
+`bun run vitest run tests/core/execution-correlation.test.ts tests/core/superpowers-dispatch-resolver.test.ts`
 
-Expected: FAIL because stores/resolver do not exist.
+- [ ] **Step 4: Implement with AtomicPersistence and existing Plan canonicalization**
 
-- [ ] **Step 4: Implement store/resolver using AtomicPersistence and existing plan canonicalization**
-
-No semantic identity goes into OmO args.
-
-- [ ] **Step 5: Run GREEN tests + typecheck**
-
-Expected: PASS.
+- [ ] **Step 5: GREEN + typecheck**
 
 - [ ] **Step 6: Commit**
 
-```bash
-git add src/core/execution-correlation.ts src/core/superpowers-dispatch-resolver.ts src/core/types.ts \
-  tests/core/execution-correlation.test.ts tests/core/superpowers-dispatch-resolver.test.ts
-git commit -m "feat: persist Justice execution correlation"
-```
-
 ---
 
-### Task 6: Wire OpenCode Hooks to Durable Execution Correlation Without Restoring Orchestration
+### Task 6: Wire Senpi Events to Durable Execution Correlation Without Restoring Orchestration
 
-**Requirements / Design:** JUS5-CORR-02..06, JUS5-SDD-01..04, JUS5-INLINE-01..02, J5D-CORR-02, J5D-OWN-01.
+**Requirements / Design:** JUS5-HARNESS-01..03, JUS5-CORR-02..06, JUS5-SDD-01..04, JUS5-INLINE-01..02, J5D-CORR-02, J5D-OWN-01.
 
 **Files:**
-- Modify: `src/runtime/opencode-adapter.ts`
+- Create: `src/senpi-extension.ts`
+- Create: `src/runtime/senpi-adapter.ts`
 - Modify: `src/core/justice-plugin.ts`
-- Modify: `src/core/types.ts` only for hook payload/event types.
-- Test: `tests/runtime/opencode-adapter-execution-correlation.test.ts`
+- Modify: `src/core/types.ts` only for Native adapter payloads.
+- Modify: `package.json` / build config only as required to expose the audited Senpi extension entry.
+- Create: `tests/runtime/senpi-adapter-execution-correlation.test.ts`
 
 **Interfaces:**
-- Consumes: `ExecutionCorrelationStore`, `resolveSuperpowersImplementationTask`, active `ApprovedArtifactChain`.
-- Produces new/updated observation events with `parentSessionId`, `parentCallId`, optional `childSessionId`, and semantic correlation ID.
-- Existing adapter in-memory maps are caches only; recovery authority is the durable `ExecutionCorrelationStore`.
+- `tool_call(task)` is the pre-execution binding/routing seam.
+- `ctx.sessionManager.getSessionId()` + `event.toolCallId` create the pending correlation.
+- `event.input` may be mutated only for allowed semantic routing translation.
+- `tool_result(task)` and the exact Task-1-proven lifecycle surface attach runtime task/child identity.
+- OpenCode adapter code is not used as Native authority and is not deleted merely to implement Native.
 
-- [ ] **Step 1: Write RED adapter tests**
+- [ ] **Step 1: RED adapter tests**
 
-Exact required tests in `tests/runtime/opencode-adapter-execution-correlation.test.ts`:
-- `persists_execution_correlation_before_authorized_task_execution`
-- `attaches_child_session_from_post_tool_and_session_observation`
-- `conflicting_child_parent_observations_mark_correlation_untrusted`
-- `preserves_omo_continuation_session_id_in_task_args`
+Exact tests:
+- `persists_native_execution_correlation_before_task_execution`
+- `mutates_only_existing_model_issued_task_call`
+- `attaches_omo_task_and_child_from_proven_native_surface`
+- `conflicting_runtime_child_binding_marks_correlation_untrusted`
+- `task_send_continuation_is_not_rewritten_by_justice`
 - `invalid_both_target_routing_is_not_trusted`
 - `does_not_create_extra_task_or_reviewer_dispatch`
 - `correlation_persistence_failure_proceeds_runtime_but_not_evidence`
-- `recovers_task_call_from_durable_parent_session_parent_call_binding`
+- `recovers_native_task_call_from_durable_parent_session_tool_call_binding`
 
-The recovery test must instantiate a fresh adapter/plugin state with empty ephemeral relation maps and prove semantic resolution from the persisted `parentSessionId + parentCallId` binding.
+- [ ] **Step 2: Run RED**
 
-- [ ] **Step 2: Run RED tests**
+`bun run vitest run tests/runtime/senpi-adapter-execution-correlation.test.ts`
 
-Run: `bun run vitest run tests/runtime/opencode-adapter-execution-correlation.test.ts`
+- [ ] **Step 3: Implement exact Task-1-proven event wiring**
 
-Expected: FAIL on durable binding and `task_id` preservation.
+No polling/discovery race may become authority. No task/reviewer scheduling.
 
-- [ ] **Step 3: Wire the store/resolver into PreToolUse/PostToolUse/session events**
+- [ ] **Step 4: GREEN + Task 1 evidence replay + typecheck**
 
-Keep the existing fail-open hook exception boundary. Remove any use of semantic `task_id` as correlation authority.
-
-- [ ] **Step 4: Run GREEN tests + exact existing adapter regressions + typecheck**
-
-Run:
-```bash
-bun run vitest run \
-  tests/runtime/opencode-adapter-execution-correlation.test.ts \
-  tests/runtime/opencode-adapter.test.ts \
-  tests/runtime/opencode-adapter-capability.test.ts \
-  tests/runtime/opencode-adapter-v2.test.ts
-bun run typecheck
-```
-
-The three pre-existing adapter files are regression-run inputs only; Task 6 does not plan to modify them. Expected: PASS.
+Run the Native adapter tests and the Task 1 contract spike. Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
-```bash
-git add src/runtime/opencode-adapter.ts src/core/justice-plugin.ts src/core/types.ts \
-  tests/runtime/opencode-adapter-execution-correlation.test.ts
-git commit -m "feat: bind OpenCode calls to Justice task identity"
-```
-
 ---
 
-### Task 7: Implement Superpowers Open-Set Finding Transport, Exact SDK Child Lookup, and Strict Review Parsing
+### Task 7: Implement Native Superpowers Review Recognition, Child Delivery, Open-Set Finding Transport, and Strict Parsing
 
 **Requirements / Design:** JUS5-REV-01..09, JUS5-SDD-03, JUS5-CAT-05, JUS5-CAT-09, JUS5-CORR-06, J5D-REVIEW-01..04, J5D-ROUTE-01..02, J5D-CAT-02.
 
 **Files:**
 - Create: `src/core/review-interop.ts`
 - Create: `src/core/review-result.ts`
-- Modify: `src/runtime/opencode-adapter.ts`
+- Modify: `src/runtime/senpi-adapter.ts`
 - Modify: `src/core/types.ts`
 - Test: `tests/core/review-interop.test.ts`
 - Test: `tests/core/review-result.test.ts`
-- Test: `tests/runtime/opencode-adapter-review-interop.test.ts`
+- Create: `tests/runtime/senpi-adapter-review-interop.test.ts`
 
 **Interfaces:**
-- Consumes `FindingId`, `TaskIdentity`, `ReviewFindingV5`, `SemanticExecutionClass`, `TaskRoutingProvenance`, `SemanticClassificationResult`, and `translateTaskRouting` from Task 2 plus `ClauseResult` / `ClauseEvidenceScope` / `ConformanceContract` from Task 4.
-- Owns registry-defined `ReviewFindingTarget`, `ScopedFindingMarkerExtraction`, `ReviewFindingContextQuery`, `ReviewFindingContextResult`, `ReviewFindingContextProvider`, `RecognizedReviewDispatch`, `PendingReviewCorrelation`, `PreparePendingReviewResult`, `ReviewChildBindingResult`, and `ParseReviewResult`.
-- Changes `OpenCodePluginInit.client` to:
-  ```ts
-  type JusticePluginClient = Pick<PluginInput["client"], "app" | "session">;
-  ```
-- `chat.message` input/output types are derived directly from `Hooks["chat.message"]`.
-- Produces:
-  ```ts
-  type ReviewKindV5 = "task-review" | "scoped-re-review" | "final-review";
+- Preserve the existing `ReviewKindV5`, `ReviewResultExpectation`, `JusticeReviewResult`, finding marker `[[justice-finding:<id>]]`, scoped target extraction, lineage reservation, and strict parser contracts.
+- Review recognition occurs on the **existing model-issued `task` call** before execution.
+- recognized task/scoped review → `sp-review`; final review → `sp-final-review`.
+- Justice mutates only the existing Native `task` input; it does not dispatch the reviewer.
+- Child binding and appendix delivery use exactly the Task-1-proven Native surface. No `client.session.get`, OpenCode `chat.message`, synthetic OpenCode Part, or v4 controller wrapper is allowed.
+- transport/binding ambiguity → no trusted appendix/result → `NOT_PROVEN`.
 
-  type ReviewResultExpectation =
-    | {
-        readonly reviewCorrelationId: string;
-        readonly reviewKind: "task-review" | "final-review";
-        readonly artifactChainId: string;
-        readonly taskIdentity?: TaskIdentity;
-        readonly contractId: string;
-        readonly contractDigest: string;
-        readonly reviewedRange: { readonly base: string; readonly head: string };
-        readonly requiredClauseIds: readonly string[];
-        readonly expectedFindings?: never;
-        readonly reservedFindingIds?: never;
-      }
-    | {
-        readonly reviewCorrelationId: string;
-        readonly reviewKind: "scoped-re-review";
-        readonly artifactChainId: string;
-        readonly taskIdentity?: TaskIdentity;
-        readonly contractId: string;
-        readonly contractDigest: string;
-        readonly reviewedRange: { readonly base: string; readonly head: string };
-        readonly requiredClauseIds: readonly string[];
-        readonly expectedFindings: readonly ReviewFindingTarget[];
-        readonly reservedFindingIds: readonly FindingId[];
-      };
+- [ ] **Step 1: RED core marker/result tests**
 
-  type JusticeReviewResult = {
-    readonly schemaVersion: "justice-review-v1";
-    readonly reviewCorrelationId: string;
-    readonly reviewKind: ReviewKindV5;
-    readonly artifactChainId: string;
-    readonly taskIdentity?: TaskIdentity;
-    readonly contractId: string;
-    readonly contractDigest: string;
-    readonly reviewedRange: { readonly base: string; readonly head: string };
-    readonly quality: {
-      readonly verdict: "approved" | "needs_fixes";
-      readonly findings: readonly ReviewFindingV5[];
-    };
-    readonly clauses: readonly ClauseResult[];
-  };
-  ```
-- Exact marker:
-  ```text
-  [[justice-finding:<findingId>]]
-  ```
-  with runtime ID regex `^jf_[0-9a-f]{16}$`.
-- Exact signatures:
-  - `extractScopedFindingMarkerIds(prompt: string): ScopedFindingMarkerExtraction`
-  - `recognizeSuperpowersReviewDispatch(input: ReviewDispatchInput): RecognizedReviewDispatch`
-  - `preparePendingReviewCorrelation(review: Extract<RecognizedReviewDispatch, { readonly kind: "recognized" }>["review"], deps: { findingContextProvider: ReviewFindingContextProvider }): Promise<PreparePendingReviewResult>`
-  - `resolveReviewChildFromSession(input: ResolveReviewChildInput): Promise<ReviewChildBindingResult>`
-  - `buildJusticeReviewAppendix(input: ReviewAppendixInput): string`
-  - `buildJusticeReviewAppendixPart(input: BuildReviewAppendixPartInput): ChatMessageOutput["parts"][number]`
-  - `parseJusticeReviewResult(output: string, expected: ReviewResultExpectation): ParseReviewResult`
-  - `translateRecognizedReviewRouting(review: Extract<RecognizedReviewDispatch, { readonly kind: "recognized" }>, taskArgs: Record<string, unknown>): SuperpowersRoutingTranslationResult`
-
-**Review semantic-routing contract:**
-- review recognition happens before parent task execution and before child-session creation;
-- recognized `task-review` / `scoped-re-review` produces semantic class `review`; recognized `final-review` produces `final-review`;
-- provenance is `{ kind: "superpowers", role: <review kind> }`;
-- when raw routing is `subagent_type="general"` with no continuation, call `translateTaskRouting` and mutate the same parent task args in place to:
-  - task/scoped: `category="sp-review"` and no `subagent_type`;
-  - final: `category="sp-final-review"` and no `subagent_type`;
-- a recognized specialized non-generic subagent route is preserved;
-- continuation remains continuation-owned and receives no new review category;
-- ambiguous/untrusted review recognition is not category-translated as trusted routing;
-- the later child `chat.message` appendix path never changes routing.
-**Current scoped target extraction:**
-- for scoped re-review only, read `taskArgs.prompt` as a string;
-- take content strictly between exact headings `## The Findings Under Verification` and the next exact `## The Fix`;
-- extract only exact Justice markers from that section;
-- preserve first-appearance order;
-- duplicate/malformed marker → `RecognizedReviewDispatch.kind = "untrusted"`;
-- no markers → recognized scoped review with `requestedFindingIds = []`;
-- markers outside that section never enter the requested set.
-
-**Finding-context preparation:**
-- task/first-final review → no context lookup; `expectedFindings` absent;
-- scoped re-review → query `ReviewFindingContextProvider` with:
-  - exact artifact chain/scope/task identity;
-  - `precedingReviewedHead = review.reviewedRange.base`;
-  - exact `requestedFindingIds = review.requestedFindingIds` extracted from the current scoped dispatch;
-- `resolved(expectedFindings=[], reservedFindingIds=[...])` is valid and produces `kind: "ready"`;
-- copy both `expectedFindings` and `reservedFindingIds` into the scoped `PendingReviewCorrelation`;
-- missing/ambiguous/untrusted context, including `historical_finding_id_collision`, → no trusted pending correlation / no structured appendix / `NOT_PROVEN`.
-- Task 7 ships a fail-closed unavailable provider until Task 8 wires the production store-backed provider. Tests inject deterministic fakes.
-
-**Review appendix contract:**
-- task/final review:
-  - instruct every machine quality finding to use one fresh `jf_<16 lowercase hex>` ID;
-  - require the corresponding human-readable finding line to contain exactly `[[justice-finding:<same id>]]`.
-- scoped re-review:
-  - include the correlation's `expectedFindings` array even when empty;
-  - include `reservedFindingIds` as a collision-prevention namespace, explicitly stating that reserved non-target IDs are **not** verdict targets;
-  - require exact marker/ID/severity/summary/location echo for each expected target;
-  - `ADDRESSED → resolved`; `NOT ADDRESSED → open`;
-  - new breakage gets a fresh ID outside both current expected IDs and all `reservedFindingIds`, plus a matching marker.
-- `human_adjudicated` is forbidden reviewer output.
-- `expectedFindings=[]` still injects the Conformance Contract and requires clause results.
-
-**Structured-result parser contract:**
-- for every review kind, human quality-finding markers and machine `findingId` values must be one-to-one;
-- machine quality finding with no human marker → `missing_finding_marker`;
-- orphan/malformed human marker → invalid;
-- human marker ID != machine finding ID → `finding_marker_mismatch`;
-- duplicate ID → `duplicate_finding_id`;
-- scoped expected ID missing → `missing_expected_finding`;
-- scoped expected metadata mismatch → `expected_finding_mismatch`;
-- new breakage may not reuse a current expected ID;
-- every scoped `expectedFindings[].findingId` MUST belong to `reservedFindingIds`; otherwise the expectation/context is invalid;
-- new breakage may not reuse any historical `reservedFindingIds` ID, including deferred Minor or prior resolved IDs;
-- no summary/location/order fuzzy matching is permitted.
-- Serialization remains exactly one final fenced `justice-review-result-v1` JSON block.
-
-**RG-007 transport remains unchanged:**
-- fields-response `lookup.data` is the authoritative child Session;
-- transport/error/missing-data → no injection / `NOT_PROVEN`;
-- session events are corroboration only;
-- synthetic Part uses actual child session/message identity.
-
-- [ ] **Step 1: Write RED marker/open-set/adapter tests**
-
-In `tests/core/review-interop.test.ts`:
+Retain the current exact open-set/finding-ID/parser tests from the v5 Plan, including:
 - `superpowers_open_finding_marker_is_used_as_scoped_identity_authority`
-- `minor_finding_excluded_from_fix_loop_is_not_added_to_expected_findings`
-- `addressed_finding_is_not_reintroduced_in_next_fix_round`
-- `next_round_expected_findings_match_only_current_superpowers_open_finding_ids`
-- `current_expected_findings_remain_only_current_superpowers_targets`
-- `new_blocking_breakage_marker_survives_into_next_scoped_round`
 - `spec_only_scoped_rereview_allows_empty_expected_findings`
-- `unknown_requested_finding_id_is_untrusted`
-- `duplicate_requested_finding_id_is_untrusted`
+- `missing_or_malformed_review_result_is_rejected`
+- historical finding-ID collision/reservation cases.
 
-In `tests/runtime/opencode-adapter-review-interop.test.ts`:
+- [ ] **Step 2: RED Native adapter review tests**
+
+Exact tests:
 - `does_not_dispatch_duplicate_reviewer_for_recognized_superpowers_review`
-- `superpowers_task_review_maps_to_sp_review`
-- `superpowers_scoped_rereview_maps_to_sp_review`
-- `superpowers_final_review_maps_to_sp_final_review`
-- `recognized_superpowers_review_translation_preserves_category_subagent_xor`
-- `recognized_superpowers_review_semantic_routing_survives_generic_marker_translation`
-- `review_appendix_path_does_not_rewrite_semantic_routing`
-- `child_chat_message_resolves_parent_with_awaited_session_get_before_injection`
-- `delayed_session_event_does_not_block_or_enable_review_injection`
-- `session_lookup_parent_mismatch_blocks_review_injection`
-- `session_get_fields_response_uses_data_as_authoritative_session`
-- `session_get_error_response_blocks_injection`
-- `session_get_transport_failure_blocks_injection`
-- `injects_conformance_contract_into_authoritatively_bound_child_chat_message`
-- `synthetic_review_part_uses_output_message_session_and_message_ids`
-- `empty_expected_findings_still_injects_conformance_contract_for_clause_reproof`
+- `superpowers_task_review_maps_existing_native_task_to_sp_review`
+- `superpowers_scoped_rereview_maps_existing_native_task_to_sp_review`
+- `superpowers_final_review_maps_existing_native_task_to_sp_final_review`
+- `recognized_review_translation_preserves_native_category_subagent_xor`
+- `native_bound_child_receives_conformance_contract_before_trusted_output`
+- `unrelated_native_child_cannot_receive_review_appendix`
+- `binding_or_transport_failure_blocks_review_evidence`
+- `empty_expected_findings_still_deliver_clause_reproof_contract`
 - `ambiguous_review_like_action_is_not_trusted_without_recognized_superpowers_provenance`
 
-For `ambiguous_review_like_action_is_not_trusted_without_recognized_superpowers_provenance`, RED must demonstrate that a review-looking/model-inferred task lacking recognized Superpowers review provenance cannot create a trusted pending review correlation, cannot receive trusted review evidence status, and cannot satisfy review acceptance. Minimum GREEN behavior is `untrusted` / `NOT_PROVEN` with no fabricated review category or evidence producer identity.
+For the final test, a review-looking task lacking recognized Superpowers provenance must remain untrusted and cannot satisfy review acceptance.
 
-In `tests/core/review-result.test.ts`:
-- `initial_review_human_marker_matches_machine_finding_id`
-- `missing_required_clause_result_becomes_not_proven`
-- `missing_or_malformed_review_result_is_rejected`
-- `reviewer_cannot_assert_human_adjudicated_disposition`
-- `scoped_result_must_echo_expected_original_finding_id`
-- `missing_expected_original_finding_is_rejected`
-- `duplicate_original_finding_id_is_rejected`
-- `expected_finding_metadata_mismatch_is_rejected`
-- `new_breakage_cannot_reuse_current_expected_finding_id`
-- `new_breakage_cannot_reuse_deferred_minor_finding_id`
-- `new_breakage_cannot_reuse_resolved_prior_round_finding_id`
-- `historical_reserved_id_does_not_become_current_expected_target`
-- `orphan_or_malformed_human_finding_marker_is_rejected`
-
-Historical review-routing regression assertions for `recognized_superpowers_review_semantic_routing_survives_generic_marker_translation`:
-
-- use the existing Superpowers reviewer dispatch; Justice creates no additional reviewer;
-- recognized task/scoped review remains semantic `review → sp-review`;
-- recognized final review remains semantic `final-review → sp-final-review`;
-- the generic `subagent_type="general"` marker is removed and category/subagent_type XOR remains valid;
-- external/ambiguous both-target input remains a routing-contract violation; this regression does not legalize the v4.2.0 external both-target normalization behavior;
-- original Superpowers review prompt/content is preserved; only the existing Justice review appendix path may enrich reviewer content.
-
-- [ ] **Step 2: Run RED tests**
-
-Run: `bun run vitest run tests/core/review-interop.test.ts tests/core/review-result.test.ts tests/runtime/opencode-adapter-review-interop.test.ts`
-
-Expected: FAIL.
-
-- [ ] **Step 3: Implement current-dispatch marker transport and review parsing**
-
-Implement:
-1. recognize task/scoped/final Superpowers review provenance;
-2. translate the recognized parent `subagent_type="general"` marker to `sp-review` / `sp-final-review` through Task 2's pure translator;
-3. exact scoped section extraction;
-4. marker parsing/validation;
-5. current-dispatch `requestedFindingIds`;
-6. provider-backed metadata resolution;
-7. exact SDK child lookup;
-8. appendix generation for initial/final/scoped reviews without further routing mutation;
-9. human-marker ↔ machine-envelope parity validation.
-
-The review-interop module does not read persistence directly and never decides which findings Superpowers keeps open.
-
-- [ ] **Step 4: Run GREEN focused tests + Task 1 regression gate + typecheck**
+- [ ] **Step 3: Run RED**
 
 Run:
 ```bash
-bun run vitest run tests/core/review-interop.test.ts tests/core/review-result.test.ts tests/runtime/opencode-adapter-review-interop.test.ts
-bun run vitest run tests/integration/review-artifact-linux-host-e2e.test.ts
-bun run typecheck
+bun run vitest run tests/core/review-interop.test.ts tests/core/review-result.test.ts tests/runtime/senpi-adapter-review-interop.test.ts
 ```
 
-Expected: PASS, including `ambiguous_review_like_action_is_not_trusted_without_recognized_superpowers_provenance`; ambiguous/model-inferred review-like execution remains untrusted and cannot satisfy review evidence. Production scoped metadata lookup remains fail-closed until Task 8 wires the store-backed provider.
+- [ ] **Step 4: Implement review recognition/delivery/parser using only Task-1-proven Native seams**
 
-- [ ] **Step 5: Commit**
+Task 7 ships a fail-closed unavailable finding-context provider until Task 8 wires persistence.
 
-```bash
-git add src/core/review-interop.ts src/core/review-result.ts src/runtime/opencode-adapter.ts src/core/types.ts \
-  tests/core/review-interop.test.ts tests/core/review-result.test.ts tests/runtime/opencode-adapter-review-interop.test.ts
-git commit -m "feat: follow Superpowers open findings in review interop"
-```
+- [ ] **Step 5: GREEN + Task 1 evidence replay + typecheck**
+
+Expected: PASS; the existing Superpowers reviewer dispatch count remains exactly one.
+
+- [ ] **Step 6: Commit**
 
 ---
 
-### Task 8: Persist Review Evidence and Resolve Metadata for the Current Superpowers Open Set
+### Task 8: Persist Review Evidence### Task 8: Persist Review Evidence and Resolve Metadata for the Current Superpowers Open Set
 
 **Requirements / Design:** JUS5-REV-08..11, JUS5-QUALITY-01..03, JUS5-ACC-03, J5D-QUALITY-01, J5D-STORAGE-01, J5D-REVIEW-03..04.
 
@@ -2179,436 +1831,177 @@ git commit -m "feat: gate acceptance on type-safe final evidence"
 
 ---
 
-### Task 10: Activate Selected Superpowers Method, Classify Semantic Work, and Remove Justice Scheduling Authority
+### Task 10: Activate Selected Superpowers Method on Native, Classify Semantic Work, and Remove Justice Scheduling Authority
 
-**Requirements / Design:** JUS5-ACT-01..04, JUS5-SDD-01..04, JUS5-DEP-01..03, JUS5-TASK-01..04, JUS5-PLAN-01..05, JUS5-CAT-06..09, J5D-OWN-01, J5D-ACT-01, J5D-TASK-01, J5D-ROUTE-02, J5D-CAT-02, J5D-DEP-01.
+**Requirements / Design:** JUS5-ACT-01..04, JUS5-SDD-01..04, JUS5-DEP-01..03, JUS5-TASK-01..04, JUS5-PLAN-01..05, JUS5-CAT-05..09, J5D-OWN-01, J5D-ACT-01, J5D-TASK-01, J5D-ROUTE-01..02, J5D-CAT-02, J5D-DEP-01.
 
 **Files:**
 - Create: `src/core/workflow-activation.ts`
+- Create: `src/runtime/senpi-superpowers-mapping.ts`
+- Modify: `src/runtime/senpi-adapter.ts`
 - Modify: `src/core/workflow-directives.ts`
 - Modify: `src/core/types.ts`
 - Modify: `src/core/review-dispatch-state.ts`
 - Modify: `src/core/justice-plugin.ts`
-- Modify: `src/runtime/opencode-adapter.ts`
 - Modify: `src/hooks/plan-bridge.ts`
-- Modify: `src/core/plan-bridge-core.ts`
 - Modify: `src/core/dependency-analyzer.ts`
-- Modify: `src/core/plan-completion-detector.ts`
 - Modify: `src/core/execution-role-classifier.ts`
 - Modify: `src/core/category-classifier.ts`
 - Test: `tests/core/workflow-activation-v5.test.ts`
-- Test: `tests/runtime/opencode-adapter-semantic-routing.test.ts`
-- Test: `tests/core/review-dispatch-state.test.ts`
-- Test: `tests/core/review-dispatch-state-behavior.test.ts`
-- Test: `tests/core/plan-bridge-core.test.ts`
-- Test: `tests/core/dependency-analyzer.test.ts`
-- Test: `tests/unit/core/execution-role-classifier.test.ts`
-- Test: `tests/hooks/plan-bridge-authorization.test.ts`
-- Test: `tests/hooks/plan-bridge-implement.test.ts`
-- Test: `tests/hooks/plan-bridge-posttooluse.test.ts`
-- Test: `tests/hooks/plan-bridge.test.ts`
-- Test: `tests/integration/plan-bridge-fallback.test.ts`
-- Test: `tests/integration/plan-bridge-flow.test.ts`
-- Create: `tests/core/superpowers-ownership-v5.test.ts`
-- Create: `tests/core/plan-completion-detector-v5.test.ts`
+- Test: `tests/core/superpowers-ownership-v5.test.ts`
+- Create: `tests/runtime/senpi-adapter-semantic-routing.test.ts`
+- Test: existing PlanBridge/classifier regression suites.
 
-**Interfaces — activation bridge:**
-- Implement registry-defined `resolveWorkflowMethodSelection(input): WorkflowMethodSelection` and `resolveWorkflowActivation(input): WorkflowActivationDecision` in `workflow-activation.ts`.
-- `workflow-activation.ts` owns `.justice/v5/workflow-activation-state.json` through existing AtomicPersistence and implements the registry-defined `WorkflowActivationStateStore`. The file stores exactly one current selection per authorization and at most one current activation per authorization/session.
-- Extend `ImplementationArmRequest.action="approve"` with optional `executionMethod?: SuperpowersExecutionMethod` representing explicit user/command selection.
-- On explicit selection, atomically replace the authorization's selection record with `WorkflowMethodSelectionEvidence` containing current `authorizationId`, current controller `sessionId`, selected method, and selection time. `persistence_failed` makes activation state unavailable.
-- `findSelection(authorizationId)` may return the one current selection record from another session. That recovery avoids re-asking which method was selected, but never proves current-session activation. An `untrusted` lookup is not equivalent to no selection; surface activation state unavailable.
-- `findCurrentActivation(authorizationId, sessionId)` is the only persistence lookup that can satisfy `already_active` after restart, and only a `resolved` exact matching value is eligible.
-- Extend `ImplementationArmResult` with `selection: WorkflowMethodSelection` and `activation: WorkflowActivationDecision`.
-- Extend `CanonicalWorkflowSkill` with `subagent-driven-development | executing-plans`.
-- Extend `WorkflowDirectiveInput` with `activation?: WorkflowActivationDecision`.
-- Extend `WorkflowNextAction` with `continue_superpowers | await_method_selection | report_activation_blocked`.
-- Implementation/implementation-arm directive mapping is exact:
-  - `needs_activation` → `requiredSkills=[selected method]`, `nextAction="invoke_skill"`;
-  - `already_active` → `requiredSkills=[]`, `nextAction="continue_superpowers"`; do not invoke the skill again;
-  - `method_selection_required` → `requiredSkills=[]`, `nextAction="await_method_selection"`;
-  - `unavailable | conflict` → `requiredSkills=[]`, `nextAction="report_activation_blocked"`;
-  - implementation stages no longer use `delegate_task` as a Justice-owned progression action.
-- OpenCode activation observation is exact: successful controller `tool.execute.after` for tool `skill`, with `args.name === selected method`; use hook `sessionID` + `callID` plus active `authorizationId` to persist `WorkflowActivationEvidence`. The activation is trusted only after `setActivation` returns `saved | idempotent`; persistence failure is fail-closed for methodology evidence.
-- A worker call is trusted as selected-method execution only when `resolveWorkflowActivation` returns `already_active` for that same authorization/session/method.
-- Same-session persisted activation may satisfy `already_active` after restart; cross-session activation evidence is never reused.
-- Cross-session selection recovery flow is always: recovered selection → `needs_activation` → fresh current-session skill invocation → activation evidence.
-- Conflict policy:
-  - explicit current selection wins over stale recovered selection, but requires fresh activation if current activation is another method;
-  - recovered-only selection conflicting with current-session activation → `conflict` / untrusted;
-  - mismatched activation authorization/session → `conflict(activation_identity_mismatch)`.
-- OmO `task_id=ses_...` never counts as methodology selection or activation.
+**Activation contract:**
+- selection and activation remain separate.
+- implement `WorkflowActivationStateStore` as before, but Native ActivationEvidence is produced only by the exact Task-1-proven skill-loading channel.
+- package/bootstrap presence alone is not method activation.
+- child-only `load_skills` is not controller activation.
+- if Task 1 shows compaction does not preserve method-specific activation, `session_compact` invalidates current ActivationEvidence.
 
-**Selection / activation source model:**
-```text
-MethodSelection:
-explicit current selection
-> latest trusted persisted selection for same authorization
-> method_selection_required
+**Native tool-mapping appendix:**
+- explain to an active Superpowers workflow that a requested subagent/reviewer must be expressed with the existing OmO Native `task` tool;
+- do not issue the call;
+- do not prescribe model/provider;
+- Task 6/7/10 recognize and translate the model-issued call.
 
-ActivationEvidence:
-successful current-session skill(name=selected method)
-or exact persisted same authorization + same session + same method evidence
-```
+- [ ] **Step 1: RED activation/ownership tests**
 
-Justice does not infer SDD vs inline from task complexity. If selected SDD lacks subagent capability, return `unavailable`; do not silently switch to executing-plans. If native skill invocation is unavailable, return `unavailable`.
-**Interfaces — semantic classifier:**
-- Implement registry-defined `classifySemanticExecution(input): SemanticClassificationResult`.
-- Implementation input is the full Task 4 `ParsedSuperpowersTask` plus advisory cross-task dependency IDs; review input uses explicit `ReviewKindV5` semantics.
-- Exact precedence: `final-review > review > architecture > deep > integration > mechanical > implementation`.
-- Review rules:
-  - `final-review` review kind → `final-review`;
-  - task/scoped review kind → `review`.
-- Implementation rules are deterministic and structurally guarded:
-  - `architecture`: an explicit architecture/boundary/ownership/protocol/security/persistent-state decision obligation **and** a structured boundary surface (`interfaces/consumes/produces/signatures` non-empty or multiple affected components);
-  - `deep`: explicit investigation/root-cause/research/unknown-behavior obligation, unless architecture already matched;
-  - `integration`: at least two integration-surface signals among: 3+ files, non-empty Consumes/Produces, cross-task dependencies, explicit migration/state/concurrency/async/data-flow coordination;
-  - `mechanical`: at most 2 files, no Consumes/Produces, no cross-task dependencies, no architecture/deep/integration signal, and an exact bounded deterministic edit obligation such as rename/constant/field/config/boilerplate/test-only;
-  - otherwise `implementation`.
-- A bare token such as `api`, `module`, or `architecture` without the required structured/semantic guard cannot upgrade the class.
-- Missing parsed task semantics or mutually inconsistent authoritative metadata returns `ambiguous`; do not fabricate a category.
-- Classifier output contains semantic class/category only; it never contains model/provider/reasoning/fallback.
-
-**Interfaces — implementation routing:**
-- For an authorized SDD implementation task, `resolveSuperpowersImplementationTask` first proves TaskIdentity/provenance from the Superpowers task brief.
-- Task 10 then classifies that exact approved task and calls Task 2 `translateTaskRouting` on the existing parent task args.
-- Recognized new-worker `subagent_type="general"` becomes exactly one `sp-mechanical | sp-implementation | sp-integration | sp-deep | sp-architecture` category and removes `subagent_type`.
-- Recognized specialized non-generic subagent routing is preserved.
-- Ambiguous classification may run fail-open on original generic routing where safe, but correlation/acceptance is untrusted/`NOT_PROVEN`.
-- Justice never directly dispatches the implementer; it only translates the already-existing Superpowers dispatch.
-
-**Interfaces — orchestration removal:**
-- `review-dispatch-state.ts` remains only for recognizing/migrating historical v4 review-dispatch records; it no longer emits current reviewer directives.
-- `DependencyAnalyzer` exposes advisory diagnostics only: `analyzeDependencies(tasks) -> DependencyDiagnostic[]`; it cannot order/dispatch work.
-- `PlanBridge` preserves original Superpowers task semantics and does not reconstruct worker prompts or dispatch workers/reviewers.
-- `PlanCompletionDetector` recognizes current artifact paths/contracts and removes obsolete reviewer-persona markers as authority.
-
-**Historical review/implementation boundary regression contract:**
-- for every incoming Superpowers `task` call, Task 7 review recognition/classification runs **before** implementation task resolution, implementation semantic classification, and plan-completion cleanup;
-- if Task 7 recognizes `task-review | scoped-re-review | final-review`, PlanBridge returns through the review path and MUST NOT enter the implementation-worker enrichment pipeline;
-- final-review recognition is independent of whether any implementation task remains incomplete;
-- when all implementation tasks are already complete, a recognized whole-branch final reviewer is still correlated/routed as `final-review → sp-final-review` before any active-Plan completion cleanup can suppress recognition;
-- review workers never receive the approved implementation-task contract, implementation-only Justice context/markers, or implementation-only TDD/verification skill injection;
-- review workers never call the implementation-form `classifySemanticExecution({ kind: "implementation", ... })` or `resolveSuperpowersImplementationTask`;
-- PlanBridge never reconstructs a Superpowers review prompt as an implementation prompt; original review prompt/content remains intact, with Justice review appendix enrichment occurring only through Task 7's existing review-interop path;
-- recognized review routing uses the existing Superpowers reviewer dispatch exactly once; Justice never dispatches a replacement/duplicate reviewer;
-- these ordering/non-leakage assertions are historical v4.2.0 regression coverage only and do not restore v4 scheduling, prompt reconstruction, hardcoded SDD selection, or external both-target normalization.
-
-- [ ] **Step 1: Write RED activation/ownership tests**
-
-In `tests/core/workflow-activation-v5.test.ts`:
+Include:
 - `authorized_implementation_activates_selected_superpowers_execution_method`
-- `authorized_implementation_activates_superpowers_sdd`
-- `explicit_inline_execution_activates_superpowers_executing_plans`
-- `explicit_method_precedes_recovered_selection`
-- `same_authorization_recovery_restores_method_selection_without_reselection`
-- `observed_skill_activation_does_not_request_duplicate_skill_invocation`
-- `cross_session_recovered_method_requires_fresh_skill_activation`
-- `same_session_activation_evidence_can_be_reused_only_when_identity_matches`
-- `recovered_method_does_not_by_itself_prove_current_session_activation`
-- `conflicting_recovered_and_current_activation_is_fail_closed`
-- `explicit_selection_overrides_stale_recovery_but_requires_matching_activation`
-- `missing_authoritative_method_requires_method_selection`
-- `selected_method_capability_failure_does_not_silently_switch_method`
-- `superpowers_activation_failure_cannot_be_trusted_as_authorized_implementation`
-- `activation_state_persistence_failure_cannot_produce_already_active`
-- `activation_state_schema_failure_is_not_treated_as_missing_selection`
-
-In `tests/core/superpowers-ownership-v5.test.ts`:
+- `native_skill_load_is_required_for_method_activation`
+- `package_bootstrap_alone_does_not_prove_method_activation`
+- `child_load_skills_does_not_activate_controller_method`
+- `compaction_requires_fresh_activation_when_survival_is_unproven`
+- `cross_session_recovered_method_requires_fresh_native_activation`
 - `justice_activation_does_not_own_superpowers_task_progression`
 - `justice_does_not_directly_dispatch_implementation_tasks_instead_of_superpowers`
-- `implementation_completion_never_dispatches_sp_review`
-- `all_tasks_accepted_never_dispatches_sp_final_review`
-- `dependency_analyzer_cannot_reorder_or_dispatch_tasks`
 - `justice_does_not_schedule_remediation_or_rereview`
+- `dependency_analyzer_cannot_reorder_or_dispatch_tasks`
 
-For `justice_does_not_schedule_remediation_or_rereview`, RED must demonstrate that a blocking review result may block acceptance but cannot cause Justice to dispatch the fixer, schedule a scoped re-review, or advance the Superpowers fix loop. Minimum GREEN behavior is evidence/gate state only; Superpowers remains the sole fix/re-review progression owner.
+- [ ] **Step 2: RED semantic classifier / Native routing tests**
 
-In `tests/hooks/plan-bridge-implement.test.ts` add the historical boundary regressions:
-- `completed_plan_final_review_is_recognized_before_plan_completion_cleanup`
-- `task_review_never_enters_implementation_semantics`
-- `scoped_re_review_never_enters_implementation_semantics`
-- `final_review_never_enters_implementation_semantics`
-
-Exact assertions:
-- completed approved Plan + all implementation tasks complete + existing Superpowers whole-branch reviewer → recognized `final-review`, semantic `final-review`, `category="sp-final-review"`, no `subagent_type="general"`, no implementation task selection/classifier path, and no cleanup before review recognition/correlation;
-- task/scoped review → `sp-review`; final review → `sp-final-review`;
-- all three review kinds bypass implementation task-contract enrichment, implementation-only context/markers, implementation-only TDD/verification skill injection, and implementation prompt reconstruction;
-- original Superpowers review prompt/content is preserved, with Justice appendix enrichment only through Task 7 review interop;
-- the existing Superpowers reviewer dispatch count remains exactly one and Justice emits no reviewer dispatch.
-
-- [ ] **Step 2: Write RED semantic-classification/routing tests**
-
-In `tests/unit/core/execution-role-classifier.test.ts`:
-- `single_file_deterministic_change_classifies_mechanical`
-- `ordinary_feature_classifies_implementation`
-- `cross_module_state_coordination_classifies_integration`
-- `investigative_high_reasoning_task_classifies_deep`
-- `component_boundary_decision_classifies_architecture`
-- `task_review_classifies_review`
-- `whole_branch_review_classifies_final_review`
-- `architecture_precedes_generic_integration_signals`
-- `classifier_uses_full_plan_semantics_not_keyword_only`
-- `classifier_uses_full_plan_semantics_without_selecting_concrete_runtime`
-- `ambiguous_semantic_classification_does_not_select_concrete_model`
-
-In `tests/runtime/opencode-adapter-semantic-routing.test.ts`:
-- `recognized_superpowers_general_worker_translates_to_justice_category`
-- `recognized_superpowers_general_worker_never_emits_category_and_subagent_type_together`
+Keep the exact classifier semantics. Native adapter tests include:
+- `recognized_superpowers_native_task_translates_to_justice_category`
+- `recognized_superpowers_native_task_never_emits_category_and_subagent_type_together`
 - `external_explicit_subagent_type_is_preserved`
 - `superpowers_specialized_subagent_type_is_preserved`
-- `omo_continuation_does_not_receive_new_worker_category`
-- `missing_superpowers_skill_activation_makes_worker_routing_untrusted`
-- `justice_category_is_the_only_semantic_routing_signal_to_omo`
-- `justice_does_not_select_concrete_model_or_provider`
+- `task_send_continuation_does_not_receive_worker_category`
+- `missing_native_method_activation_makes_worker_routing_untrusted`
+- `justice_does_not_select_concrete_model_or_provider`.
 
-- [ ] **Step 3: Run RED focused tests and confirm expected failures**
+- [ ] **Step 3: Run RED focused set**
 
-Before modifying any production source, run the authoritative Task 10 RED set:
+Run Native activation/ownership/classifier/routing + historical review-before-implementation PlanBridge regressions.
 
-```bash
-bun run vitest run \
-  tests/core/workflow-activation-v5.test.ts \
-  tests/core/superpowers-ownership-v5.test.ts \
-  tests/hooks/plan-bridge-implement.test.ts \
-  tests/unit/core/execution-role-classifier.test.ts \
-  tests/runtime/opencode-adapter-semantic-routing.test.ts
-```
+- [ ] **Step 4: Remove active Justice scheduling authority**
 
-Expected: **FAIL before production changes** because the `master @ 080bcdb25b192962789ff5d67139e56487381de4` production baseline does not yet provide the v5 activation-state contract, Justice-without-progression ownership contract (including no remediation/re-review scheduling), review-before-implementation sequencing contract, semantic-classification contract, or provenance-aware v5 routing behavior.
+Migration readers may remain; current review/task dispatch directives must not.
 
-The RED run MUST exercise the Step 1 historical boundary regressions in `tests/hooks/plan-bridge-implement.test.ts`, including:
-- `completed_plan_final_review_is_recognized_before_plan_completion_cleanup`;
-- `task_review_never_enters_implementation_semantics`;
-- `scoped_re_review_never_enters_implementation_semantics`;
-- `final_review_never_enters_implementation_semantics`.
+- [ ] **Step 5: Implement Native activation observation and mapping appendix**
 
-Record the observed failure categories before starting Step 4. If any historical regression unexpectedly already passes on the master production baseline, inspect that test's contract/assertions and test seam to determine whether the baseline already satisfies that individual contract. A pre-existing PASS is not a reason to modify production merely to force RED. Production changes may begin only after the newly introduced v5 RED failures are understood and the historical regression tests are confirmed to exercise their intended paths.
+Use only Task-1-proven events/evidence. Persist current-session activation after durable save.
 
-- [ ] **Step 4: Remove active Justice scheduling authority and lock review-before-implementation sequencing**
+- [ ] **Step 6: Implement semantic classifier and in-place Native task translation**
 
-Remove v4 active review/task progression behavior while retaining migration readers. Do not delete types needed to read prior state.
+Translate only the already-issued task call. Preserve external/specialized routes and `task_send`.
 
-Wire PlanBridge so Task 7 review recognition/translation is evaluated before implementation-task resolution/classification and before Plan-completion cleanup. A recognized review returns through the review path immediately; only a non-review call may continue into implementation semantics.
+- [ ] **Step 7: GREEN focused set + full suite**
 
-- [ ] **Step 5: Implement activation bridge and activation observation**
-
-Implement the AtomicPersistence-backed selection/activation store, then wire `workflow-activation.ts`, `workflow-directives.ts`, PlanBridge, `justice-plugin.ts`, and OpenCode `tool.execute.after` observation for the native `skill` tool (`args.name`). Persist successful current-session activation by authorization/session/method/call identity. Do not dispatch tasks from the bridge.
-
-- [ ] **Step 6: Implement semantic classifier and implementation translation**
-
-Replace keyword-first `ExecutionRoleClassifier` authority with the exact structured rules above. Route only already-recognized Superpowers new-worker calls through Task 2's translator. Preserve explicit external/specialized routing and continuation.
-
-- [ ] **Step 7: Run GREEN focused tests + full suite**
-
-Run the complete Task 10 focused regression set:
-
-```bash
-bun run vitest run \
-  tests/core/workflow-activation-v5.test.ts \
-  tests/core/superpowers-ownership-v5.test.ts \
-  tests/hooks/plan-bridge-implement.test.ts \
-  tests/unit/core/execution-role-classifier.test.ts \
-  tests/runtime/opencode-adapter-semantic-routing.test.ts \
-  tests/core/review-dispatch-state.test.ts \
-  tests/core/review-dispatch-state-behavior.test.ts \
-  tests/core/plan-bridge-core.test.ts \
-  tests/core/dependency-analyzer.test.ts \
-  tests/hooks/plan-bridge-authorization.test.ts \
-  tests/hooks/plan-bridge-posttooluse.test.ts \
-  tests/hooks/plan-bridge.test.ts \
-  tests/integration/plan-bridge-fallback.test.ts \
-  tests/integration/plan-bridge-flow.test.ts \
-  tests/core/plan-completion-detector-v5.test.ts
-```
-
-Then run:
-
-```bash
-bun run typecheck
-bun run test
-```
-
-Expected: PASS. The focused GREEN run MUST include `justice_does_not_schedule_remediation_or_rereview`, the Step 1 historical PlanBridge regressions, and all Task 10 activation/ownership/semantic-routing tests before the full suite.
+Expected: PASS, including historical v4.3.1 ownership regressions.
 
 - [ ] **Step 8: Commit**
 
-```bash
-git add \
-  src/core/workflow-activation.ts src/core/workflow-directives.ts src/core/types.ts \
-  src/core/review-dispatch-state.ts src/core/justice-plugin.ts src/runtime/opencode-adapter.ts \
-  src/hooks/plan-bridge.ts src/core/plan-bridge-core.ts \
-  src/core/dependency-analyzer.ts src/core/plan-completion-detector.ts \
-  src/core/execution-role-classifier.ts src/core/category-classifier.ts \
-  tests/core/workflow-activation-v5.test.ts tests/runtime/opencode-adapter-semantic-routing.test.ts \
-  tests/core/review-dispatch-state.test.ts tests/core/review-dispatch-state-behavior.test.ts \
-  tests/core/plan-bridge-core.test.ts tests/core/dependency-analyzer.test.ts \
-  tests/unit/core/execution-role-classifier.test.ts tests/hooks/plan-bridge-authorization.test.ts \
-  tests/hooks/plan-bridge-implement.test.ts tests/hooks/plan-bridge-posttooluse.test.ts \
-  tests/hooks/plan-bridge.test.ts tests/integration/plan-bridge-fallback.test.ts \
-  tests/integration/plan-bridge-flow.test.ts tests/core/superpowers-ownership-v5.test.ts \
-  tests/core/plan-completion-detector-v5.test.ts
-git commit -m "feat: bridge Superpowers methodology to OmO semantic routing"
-```
-
 ---
-### Task 11: Implement OmO v5 Effective Configuration and Capability-First Doctor
 
-**Requirements / Design:** JUS5-COMP-01..04, JUS5-CONFIG-01..05, JUS5-DOC-01..04, J5D-CONFIG-01, J5D-DOCTOR-01.
+### Task 11: Implement OmO Native Effective Configuration and Capability-First Doctor
+
+**Requirements / Design:** JUS5-COMP-01..04, JUS5-HARNESS-01..03, JUS5-CONFIG-01..05, JUS5-DOC-01..04, J5D-CONFIG-01, J5D-DOCTOR-01.
 
 **Files:**
 - Create: `src/core/omo-effective-config.ts`
-- Modify: `src/core/doctor-config.ts`
-- Modify: `src/core/doctor-categories.ts`
-- Modify: `src/core/controller-routing.ts`
-- Modify: `src/runtime/doctor-cli.ts`
-- Modify: `src/runtime/doctor-cli-helpers.ts`
-- Test: `tests/core/omo-effective-config.test.ts`
-- Test: `tests/core/justice-doctor-config.test.ts`
-- Test: `tests/core/controller-routing.test.ts`
-- Test: `tests/runtime/doctor-cli.test.ts`
-- Create: `tests/runtime/doctor-v5.test.ts`
+- Modify: doctor/config/category/runtime diagnostic modules.
+- Create/modify: `tests/runtime/doctor-v5.test.ts`, effective-config and doctor core tests.
 
-**Interfaces:**
-- Produces:
-  ```ts
-  type OmoConfigSource = {
-    readonly path: string;
-    readonly layer: "user" | "project";
-    readonly precedence: number;
-    readonly format: "jsonc" | "json";
-  };
+**Effective config:**
+- user + ancestor project layers;
+- effective view `shared → [native] → profile → profile.[native]`;
+- `[senpi]` accepted only as legacy/deprecation input;
+- profile precedence matches audited v5.1.17 loader;
+- custom category namespace is open;
+- built-in diagnostic list includes `architect`.
 
-  type OmoEffectiveConfigResult =
-    | {
-        readonly kind: "resolved";
-        readonly sources: readonly OmoConfigSource[];
-        readonly profile?: string;
-        readonly config: Readonly<Record<string, unknown>>;
-        readonly diagnostics: readonly string[];
-      }
-    | { readonly kind: "unsupported"; readonly reason: string; readonly diagnostics: readonly string[] };
-  ```
-- `resolveOmoEffectiveConfig(input: ResolveOmoEffectiveConfigInput): Promise<OmoEffectiveConfigResult>`.
-- Doctor capability result reports OpenCode version metadata, required hook/call capabilities, native Superpowers `skill` invocation observability, review-interop support, child-session relation observability, secure review-artifact capability, and configured/applied/observed controller status separately.
-- Remove exact `SUPPORTED_OPENCODE_VERSION === "1.18.29"` authority. Version is metadata; capabilities are authority.
+**Doctor capability model must independently report:**
+- OmO Native/Senpi version metadata;
+- Justice Native extension loaded;
+- `task` and `task_send`;
+- `tool_call` mutable-input + `toolCallId` + session identity;
+- Task-1-proven child binding and review delivery;
+- Superpowers package/bootstrap;
+- method-specific activation evidence;
+- effective Native config / custom `sp-*` category resolution;
+- secure review evidence capability;
+- secondary OpenCode adapter if present.
 
-- [ ] **Step 1: Write RED effective-config tests**
+- [ ] **Step 1: RED effective config tests**
 
-In `tests/core/omo-effective-config.test.ts` include:
-- `resolves_user_project_harness_profile_precedence`
-- `jsonc_wins_over_same_layer_json_fallback`
-- `home_directory_is_not_double_counted_as_project_layer`
-- `invalid_source_produces_diagnostic_not_fabricated_config`
+Update precedence test to `[native]`; ensure legacy `[senpi]` is diagnostic/migration input.
 
-The precedence test must cover user → farthest ancestor → nearest project, shared base → `[opencode]` → selected profile base → selected profile `[opencode]`, and profile source order explicit → `OMO_PROFILE` → `OCX_PROFILE` → OpenCode profile-directory inference.
+- [ ] **Step 2: RED doctor tests**
 
-- [ ] **Step 2: Write RED doctor capability tests**
-
-In `tests/runtime/doctor-v5.test.ts`:
-- `compatible_patch_with_required_capabilities_is_supported`
-- `missing_required_host_capability_is_reported_unsupported`
+Exact key cases:
+- `compatible_native_patch_with_required_capabilities_is_supported`
+- `missing_native_task_or_child_binding_capability_is_unsupported`
+- `doctor_reports_superpowers_native_activation_capability_separately`
 - `doctor_separates_source_configured_applied_and_observed_values`
-- `secure_artifact_and_review_interop_capabilities_are_independent`
-- `doctor_reports_superpowers_skill_activation_capability_separately`
+- `doctor_does_not_treat_opencode_adapter_as_native_authority`.
 
-- [ ] **Step 3: Run RED tests**
+- [ ] **Step 3: RED run**
 
-Run: `bun run vitest run tests/core/omo-effective-config.test.ts tests/runtime/doctor-v5.test.ts`
+- [ ] **Step 4: Implement resolver + capability model**
 
-Expected: FAIL on exact 1.18.29 gate and single-file assumptions.
+Do not import a private upstream workspace package as an unsupported runtime dependency; reproduce the documented public configuration contract unless Task 1/compatibility evidence establishes a supported API.
 
-- [ ] **Step 4: Implement effective config resolver + doctor capability model**
-
-Implement the exact filesystem resolver above. Do not import or depend on `@oh-my-opencode/omo-config-core`: in the v5.0.1 baseline it is a private workspace package rather than a supported external runtime API. A future public effective-config API is upstream drift that requires a later compatibility decision, not an implementation-time choice in this Plan.
-
-- [ ] **Step 5: Run GREEN tests + build**
-
-Run:
-- `bun run vitest run tests/core/omo-effective-config.test.ts tests/runtime/doctor-v5.test.ts`
-- `bun run typecheck`
-- `bun run build`
-
-Expected: PASS.
+- [ ] **Step 5: GREEN + build**
 
 - [ ] **Step 6: Commit**
 
-```bash
-git add src/core/omo-effective-config.ts src/core/doctor-config.ts src/core/doctor-categories.ts \
-  src/core/controller-routing.ts src/runtime/doctor-cli.ts src/runtime/doctor-cli-helpers.ts \
-  tests/core/omo-effective-config.test.ts tests/core/justice-doctor-config.test.ts \
-  tests/core/controller-routing.test.ts tests/runtime/doctor-cli.test.ts tests/runtime/doctor-v5.test.ts
-git commit -m "feat: diagnose OmO v5 effective configuration"
-```
-
 ---
 
-### Task 12: Synchronize Remaining OmO v5 Mechanical Drift Without Taking Runtime Ownership
+### Task 12: Synchronize Remaining OmO Native v5.1.17 Drift Without Taking Runtime Ownership
 
 **Requirements / Design:** JUS5-CAT-01..04, JUS5-CTRL-01..03, JUS5-ERR-01..03, J5D-CAT-01, J5D-RUNTIME-01.
 
-**Files:**
-- Modify: `src/core/provider-error-patterns.ts`
-- Modify: `src/core/error-classifier.ts`
-- Modify: `src/core/workflow-router.ts`
-- Modify: `src/core/controller-routing.ts`
-- Modify: `src/core/types.ts`
-- Test: `tests/core/error-classifier.test.ts`
-- Test: `tests/core/provider-error-patterns.test.ts`
-- Create: `tests/core/omo-v5-upstream-drift.test.ts`
+**Files:** retain the existing error/provider/controller drift modules and tests.
 
-**Interfaces:**
-- Provider classification is terminal-diagnostic only; `ErrorClassifier.shouldRetry()` must not initiate provider retry/fallback for provider classes.
-- Current OmO v5 provider signals include quota/usage/capacity, 429/503/529, temporarily unavailable, model not supported, credential exhaustion, plus current Japanese/Chinese upstream patterns captured from the audited v5 model-core baseline.
-- Provider config remediation points to `omo.jsonc` / effective config, never `oh-my-opencode.jsonc`.
-- Desired controller mapping remains configuration expectation only. Actual applied/observed controller is never inferred from the map; unsupported/unverified remains explicit.
+**Current drift assertions:**
+- Native built-in vocabulary includes `architect` and no canonical legacy `deep`;
+- provider/runtime failure classification remains diagnostic-only;
+- Justice does not implement provider retry/fallback, task reconnect/revival, host handoff, lane reclaim, or process-mode recovery;
+- config remediation points to current `omo.json[c]` / `[native]`, never legacy OpenCode files;
+- runtime/provider signals align with the audited v5.1.17/Senpi v2026.10.8 behavior.
 
-- [ ] **Step 1: Write RED upstream-drift tests**
+- [ ] **Step 1: RED drift tests**
 
-Cover:
-- current OmO v5 retryable/config terminal patterns.
-- stale `oh-my-opencode.jsonc` remediation absent.
-- `provider_failure_classification_does_not_trigger_justice_retry_or_fallback`.
-- desired/configured/applied/observed controller states do not collapse.
-- current category union has no canonical `deep`.
+Include:
+- `native_category_vocabulary_includes_architect_and_excludes_legacy_deep`
+- `provider_failure_classification_does_not_trigger_justice_retry_or_fallback`
+- `task_transport_or_host_recovery_is_not_reimplemented_by_justice`
+- stale OpenCode config remediation absent.
 
-For `provider_failure_classification_does_not_trigger_justice_retry_or_fallback`, RED must prove that provider/runtime failure classification can describe terminal/diagnostic impact but cannot call or select a Justice retry, fallback model, fallback provider, or retry schedule. Minimum GREEN behavior is diagnostic classification only; OmO remains the exclusive runtime retry/fallback owner.
+- [ ] **Step 2: RED run**
 
-- [ ] **Step 2: Run RED tests**
+- [ ] **Step 3: Update diagnostics only**
 
-Run:
-```bash
-bun run vitest run tests/core/error-classifier.test.ts tests/core/provider-error-patterns.test.ts tests/core/omo-v5-upstream-drift.test.ts
-```
+Do not implement runtime recovery/retry/fallback.
 
-Expected: FAIL on stale pattern baseline/config message and on `provider_failure_classification_does_not_trigger_justice_retry_or_fallback` until the runtime-ownership boundary is explicit.
-
-- [ ] **Step 3: Update patterns/messages/controller semantics only**
-
-Do not implement OmO retry/fallback. `ErrorClassifier.shouldRetry()` may report/classify legacy diagnostic intent only where still required by callers; it must not initiate or schedule provider/model retry/fallback. No Justice component may choose a fallback model/provider from these classifications.
-
-- [ ] **Step 4: Run GREEN tests + typecheck**
-
-Run:
-```bash
-bun run vitest run tests/core/error-classifier.test.ts tests/core/provider-error-patterns.test.ts tests/core/omo-v5-upstream-drift.test.ts
-bun run typecheck
-```
-
-Expected: PASS, including `provider_failure_classification_does_not_trigger_justice_retry_or_fallback`.
+- [ ] **Step 4: GREEN + typecheck**
 
 - [ ] **Step 5: Commit**
 
-```bash
-git add src/core/provider-error-patterns.ts src/core/error-classifier.ts src/core/workflow-router.ts \
-  src/core/controller-routing.ts src/core/types.ts tests/core/error-classifier.test.ts \
-  tests/core/provider-error-patterns.test.ts tests/core/omo-v5-upstream-drift.test.ts
-git commit -m "chore: synchronize Justice with OmO v5 contracts"
-```
-
 ---
 
-### Task 13: Implement v5 Recovery Diagnostics and Turn justice_review into a Control-Plane View
+### Task 13: Implement v5 Recovery Diagnostics### Task 13: Implement v5 Recovery Diagnostics and Turn justice_review into a Control-Plane View
 
 **Requirements / Design:** JUS5-STATE-01..04, JUS5-REC-01..03, JUS5-PERSIST-01..05, JUS5-REVIEW-01, J5D-PERSIST-01, J5D-REC-01.
 
@@ -2691,34 +2084,30 @@ git commit -m "feat: expose Justice v5 recovery and gate state"
 
 ---
 
-### Task 14: Close Cross-Component E2E Coverage and Synchronize User/Upstream Documentation
+### Task 14: Close Native Cross-Component E2E Coverage and Synchronize User/Upstream Documentation
 
-**Requirements / Design:** all JUS5/J5D contracts; Design §29 required verification scenarios.
+**Requirements / Design:** all JUS5/J5D contracts; Design §29.
 
 **Files:**
 - Create: `tests/integration/justice-v5-semantic-control-plane.integration.test.ts`
-- Modify: `README.md`
-- Modify: `SPEC.md`
-- Modify: `docs/agents/upstream-drift.md`
-- Modify: `docs/reports/upstream-compatibility-audit.md`
-- No other tracked documentation is in Task 14 scope. If another stale contract is discovered, stop for artifact reconciliation before editing it.
+- Add the Task-1 Native contract evidence test to integration verification.
+- Modify: `README.md`, `SPEC.md`, `docs/agents/upstream-drift.md`, `docs/reports/upstream-compatibility-audit.md`.
 - No release-version edit.
 
-**Interfaces:**
-- Consumes every interface produced by Tasks 2–13.
-- Produces end-to-end evidence from `ApprovedArtifactChain` through execution/review evidence to `PlanComplete`.
-- Produces current documented stack:
-  - OmO v5 OpenCode edition;
-  - Superpowers v6.4.2;
-  - capability-first OpenCode support;
-  - effective `omo.jsonc` configuration;
-  - Superpowers owns WHAT: method selection + workflow/review progression;
-  - Justice owns activation bridge + SEMANTIC HOW: classification/category translation/correlation/evidence/acceptance;
-  - OmO owns CONCRETE HOW: agent/runtime/model/provider/reasoning/retry/fallback.
+**Documented stack:**
+- OmO Native v5.1.17;
+- Senpi v2026.10.8;
+- Superpowers v6.4.2 Pi package;
+- capability-first Native support;
+- effective `omo.json[c]` with `[native]`;
+- Superpowers owns WHAT;
+- Justice owns activation evidence + SEMANTIC HOW;
+- OmO owns CONCRETE HOW and runtime lifecycle;
+- OpenCode adapter is secondary compatibility only.
 
-- [ ] **Step 1: Write the missing cross-component E2E cases**
+- [ ] **Step 1: E2E cases**
 
-In `tests/integration/justice-v5-semantic-control-plane.integration.test.ts` implement exactly:
+Retain the existing v5 semantic-control-plane E2Es and add/ensure Native boundaries:
 - `sdd_task_reaches_acceptance_through_existing_superpowers_review`
 - `scoped_re_review_resolves_blocking_finding_and_allows_acceptance`
 - `executing_plans_requires_final_review_and_final_conformance`
@@ -2727,41 +2116,28 @@ In `tests/integration/justice-v5-semantic-control-plane.integration.test.ts` imp
 - `translated_superpowers_work_leaves_concrete_runtime_resolution_to_omo`
 - `clean_review_does_not_bypass_human_artifact_chain_authorization`
 - `superpowers_remediation_and_omo_retry_ownership_remain_separate`
+- `native_superpowers_task_review_uses_one_model_issued_omo_task_and_trusted_child_binding`
+- `native_task_runtime_identity_never_becomes_justice_task_identity`.
 
-Scenario 50 E2E must exercise a trusted clean review on an otherwise valid candidate without current explicit human approval for the exact artifact chain and prove implementation/acceptance remains blocked until that approval exists.
+- [ ] **Step 2: Run E2E + Task 1 Native evidence gate**
 
-Scenario 51 E2E must exercise both ownership halves in the integrated wiring: a blocking review/remediation condition must not cause Justice to schedule the fixer or re-review, and a provider/runtime failure classification must not cause Justice retry/fallback. The observed progression remains Superpowers-owned and runtime retry/fallback remains OmO-owned.
+- [ ] **Step 3: Smallest integration wiring only**
 
-Do not duplicate focused tests whose exact evidence is already named in the traceability table unless this Task explicitly names the cross-component E2E closure above.
+Architecture mismatch → STOP for artifact reconciliation.
 
-- [ ] **Step 2: Run the E2E file and verify RED for uncovered cross-component behavior**
+- [ ] **Step 4: Update docs**
 
-Run: `bun run vitest run tests/integration/justice-v5-semantic-control-plane.integration.test.ts`
+Required:
+- record exact OmO/Senpi/Superpowers tags and Task-1 evidence;
+- explain Superpowers Pi bootstrap + Justice Native mapping appendix;
+- explain Native task XOR, `st_...` runtime ids, and `task_send`;
+- remove primary OpenCode claims and old `task_id=ses_...` semantics;
+- document `[native]` effective config;
+- document OpenCode as secondary compatibility;
+- explain `justice_review` as inspection, not scheduler;
+- retain v4.3.1 regression corpus/migration explanation.
 
-Expected: remaining cross-component behavior fails explicitly until wiring is complete, including Scenario 50 authorization separation and the two-part Scenario 51 ownership boundary.
-
-- [ ] **Step 3: Make only the smallest integration/wiring changes required by those exact E2E cases**
-
-If a fix changes an architecture contract rather than wiring, STOP and return to artifact reconciliation instead of ruling around the Design.
-
-- [ ] **Step 4: Update user/upstream documentation**
-
-Required corrections:
-- Superpowers upstream: `obra/superpowers`.
-- OmO upstream: `code-yeongyu/oh-my-openagent`.
-- current OmO config: effective `omo.jsonc` system.
-- remove Justice-owned review/task scheduling language.
-- document the selected-method Superpowers activation bridge without implying Justice owns method-selection semantics.
-- document recognized Superpowers `general` → Justice semantic category translation and the preservation of specialized/external routing.
-- document OmO as the sole concrete model/provider/runtime resolver for translated work.
-- document caller-owned OmO custom categories as an open runtime/config namespace distinct from Justice-generated `SpCategory`.
-- explain `justice_review` as evidence/gate inspection.
-- record audited baselines and exact tags/SHAs in compatibility audit.
-- explain v4 persistent-state authority migration.
-- record the verified OpenCode 1.18.31 review-interop baseline evidence from Design §14.2.
-- do not claim OmO Native support.
-
-- [ ] **Step 5: Run Task 14 verification before committing**
+- [ ] **Step 5: Full verification**
 
 ```bash
 bun run typecheck
@@ -2772,31 +2148,17 @@ bun run build
 git diff --check
 ```
 
-Expected: all PASS and no new warnings attributable to v5.
+Expected: PASS plus Task-1 pinned Native contract evidence PASS.
 
-- [ ] **Step 6: Commit every Task 14 tracked change**
+- [ ] **Step 6: Commit**
 
-```bash
-git add tests/integration/justice-v5-semantic-control-plane.integration.test.ts \
-  README.md SPEC.md docs/agents/upstream-drift.md docs/reports/upstream-compatibility-audit.md
-git commit -m "docs: complete Justice v5 compatibility migration"
-```
+- [ ] **Step 7: Confirm clean candidate HEAD**
 
-If Step 3 required a directly related tracked wiring file, it MUST be explicitly added to Task 14's Files block by artifact reconciliation before implementation; the worker must not silently expand the commit scope.
-
-- [ ] **Step 7: Confirm committed candidate state**
-
-Run:
-```bash
-test -z "$(git status --porcelain)"
-git rev-parse HEAD
-```
-
-Expected: clean working tree and one recorded `CANDIDATE_HEAD`. Task 14 ends here. The implementer does not dispatch the final whole-branch reviewer.
+The implementer does not dispatch the final whole-branch reviewer.
 
 ---
 
-## Controller-Owned Finalization After Task 14
+## Controller-Owned Finalization## Controller-Owned Finalization After Task 14
 
 This phase belongs to the Superpowers controller, not the Task 14 implementer. It MUST follow Superpowers v6.4.2 final-review progression exactly; Justice observes/composes evidence and never schedules an additional reviewer.
 
