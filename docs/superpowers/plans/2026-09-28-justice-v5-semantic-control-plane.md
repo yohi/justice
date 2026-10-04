@@ -4,7 +4,7 @@
 
 **Goal:** Rebuild Justice as the fail-closed semantic nervous system between Superpowers v6.4.2 and OmO Native v5.1.17 / Senpi v2026.10.8, with zero unresolved semantic drift at PlanComplete.
 
-**Architecture:** Superpowers owns WHAT (method selection and workflow/review progression), Justice owns the activation bridge plus SEMANTIC HOW (execution classification, provenance-aware category translation, correlation/evidence/acceptance), and OmO owns CONCRETE HOW (agent/runtime/model/provider/reasoning/retry/fallback). Justice activates only an authoritative selected Superpowers method, translates recognized Superpowers generic workers into one semantic `sp-*` category, and never becomes either a scheduler or a concrete model/provider resolver.
+**Architecture:** Superpowers owns WHAT (method selection and workflow/review progression), Justice owns the activation bridge plus SEMANTIC HOW (execution classification, provenance-aware category translation, correlation/evidence/acceptance), and OmO owns CONCRETE HOW (agent/runtime/model/provider/reasoning/retry/fallback). Justice activates only an authoritative selected Superpowers method, consumes Task-1/Task-6-proven Superpowers provenance to translate an already-issued OmO Native `task` call into one semantic `sp-*` category, and never becomes either a scheduler or a concrete model/provider resolver.
 
 **Tech Stack:** TypeScript 6.x, Bun, Vitest 4.x, Effect, Zod, YAML, OmO Native/Senpi extension events, existing AtomicPersistence and Observation Log infrastructure.
 
@@ -1146,7 +1146,7 @@ Category tests:
 
 Run: `bun run vitest run tests/core/v5-task-routing-contract.test.ts tests/core/omo-category-mapper-v5.test.ts`
 
-Expected: FAIL on stale OpenCode continuation/general-marker assumptions and missing Native category vocabulary.
+Expected: FAIL on stale OpenCode continuation assumptions, missing Native category vocabulary, and any routing path that attempts to infer Superpowers origin without trusted provenance.
 
 - [ ] **Step 3: Implement pure Native routing domain**
 
@@ -2272,7 +2272,7 @@ git commit -m "feat: diagnose OmO Native effective configuration"
 - Test: `tests/core/controller-routing.test.ts`
 - Test: `tests/core/category-classifier.test.ts`
 - Test: `tests/unit/core/omo-category-mapper.test.ts`
-- Create/modify: `tests/core/omo-v5-upstream-drift.test.ts`
+- Create: `tests/core/omo-v5-upstream-drift.test.ts`
 
 **Current drift assertions:**
 - Native built-in vocabulary includes `architect` and no canonical legacy `deep`;
@@ -2727,7 +2727,7 @@ Justice `v4.3.1` is consulted only as the historical regression corpus explicitl
 | Task 3 | Tasks 4–14 | `ArtifactFingerprint`, `ApprovedArtifactChain`, `ApprovedPlanBinding.artifactChain`, `ApprovePlanInput` |
 | Task 4 | Tasks 7–10, 13–14 | `ParsedSuperpowersTask`, `ProjectionDiagnostic`, `ProjectionResult<T>`, `ClauseEvidenceScope`, `ClauseResult`, `ConformanceContract`, `ConformanceContractPersistenceResult` + immutable contract path/digest |
 | Task 5 | Tasks 6–10, 13 | `TaskIdentityResolution`, `CorrelationMutationResult`, `ExecutionCorrelation`, `ExecutionCorrelationKey` |
-| Task 6 | Task 7 | Task-1-proven Senpi parent tool-call observation plus exact OmO runtime task/child binding used by Native review delivery |
+| Task 6 | Tasks 7, 10 | Task-1-proven Senpi parent tool-call observation, `NativeSuperpowersProvenanceResolver` output, and exact OmO runtime task/child binding; Task 7 consumes it for review trust and Task 10 for semantic routing |
 | Task 7 | Tasks 8–10, 13 | recognized review provenance/kind, `sp-review`/`sp-final-review` parent-call translation, current scoped `requestedFindingIds`, `ReviewFindingTarget`, `ReviewFindingContextProvider`, scoped `reservedFindingIds`, authoritative child binding, `JusticeReviewResult` |
 | Task 8 | runtime scoped-review coordination + Tasks 9, 13 | store-backed metadata resolution for current marker IDs, lineage-wide `reservedFindingIds`, historical-ID collision detection, Superpowers open-set consistency validation, trusted persisted review evidence |
 | Task 9 | Tasks 13–14 | `RevisionDiffProvider`, resolved/failed fix-wave evidence, trusted `FinalReviewEvidenceClosure`, `BlockedFinalReviewEvidenceAttempt`, deterministic finding merge, gate reasons |
