@@ -79,7 +79,7 @@ The existing OpenCode adapter may remain as a secondary compatibility surface, b
 
 ---
 
-## 3. Architectural invariants## 3. Architectural invariants
+## 3. Architectural invariants
 
 ### INV-01 — Superpowers owns methodology
 
@@ -555,7 +555,7 @@ Native continuation is `task_send(to=<task id or name>)`; it is not passed throu
 
 ---
 
-## 8. Superpowers and Justice state ownership## 8. Superpowers and Justice state ownership
+## 8. Superpowers and Justice state ownership
 
 ### 8.1 Superpowers state
 
@@ -985,7 +985,7 @@ The delivered appendix still carries the same semantic payload:
 
 Routing translation and appendix delivery remain separate concerns: routing may mutate the existing parent `task` call; child delivery never selects a concrete model/provider/runtime.
 
-### 14.3 Structured result, finding continuity, and final evidence composition — J5D-REVIEW-03### 14.3 Structured result, finding continuity, and final evidence composition — J5D-REVIEW-03
+### 14.3 Structured result, finding continuity, and final evidence composition — J5D-REVIEW-03
 
 The reviewer result contains the normal human-readable report plus one machine-readable Justice envelope.
 
@@ -1701,7 +1701,7 @@ Justice may request the supported Native skill-loading action, but it never adva
 
 ---
 
-## 21. Worker semantic classification and category routing## 21. Worker semantic classification and category routing — J5D-ROUTE-02 / J5D-CAT-02
+## 21. Worker semantic classification and category routing — J5D-ROUTE-02 / J5D-CAT-02
 
 Justice classifies semantic execution intent; it does not select a concrete model/provider.
 
@@ -1957,7 +1957,7 @@ Compatibility is capability-first. A newer OmO/Senpi patch may remain supported 
 
 ---
 
-## 26. Recovery, persistence versioning, and v4 migration## 26. Recovery, persistence versioning, and v4 migration
+## 26. Recovery, persistence versioning, and v4 migration
 
 ### 26.1 v5 authoritative state — J5D-PERSIST-01
 
