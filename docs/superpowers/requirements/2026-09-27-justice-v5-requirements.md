@@ -512,6 +512,15 @@ observedCallOrInputId
 observedAt
 ```
 
+For this baseline, `evidenceKind` is a bounded union:
+
+```text
+read_tool_result
+host_expanded_skill_input
+```
+
+Task 1 must prove at least one member end-to-end and record which member(s) are supported by the pinned runtime. A new evidence channel requires artifact reconciliation; Task 10 may not invent a third activation kind during implementation.
+
 An exact same-session persisted activation may be reused after restart only when `authorizationId + sessionId + method` all match and the evidence channel remains valid for the audited harness. Cross-session state may recover method selection but never activation.
 
 Because Superpowers re-injects its bootstrap after `session_compact`, the Native evidence spike must determine whether method-specific activation survives compaction. Until proved otherwise, compaction invalidates method-specific ActivationEvidence and requires fresh observation before acceptance trusts subsequent method-specific work.
