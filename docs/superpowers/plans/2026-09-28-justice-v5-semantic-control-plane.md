@@ -264,7 +264,6 @@ type NativeSuperpowersProvenanceInput = {
   readonly parentToolCallId: string;
   readonly taskArgs: Readonly<Record<string, unknown>>;
   readonly executionMethod: SuperpowersExecutionMethod;
-  readonly activationEvidence?: WorkflowActivationEvidence;
   readonly observedEvidenceRefs: readonly string[];
 };
 
@@ -302,6 +301,30 @@ type SuperpowersRoutingTranslationResult =
         | "unexpected_superpowers_generic_shape";
       readonly details: readonly string[];
     };
+
+type TrustedSuperpowersProvenance =
+  Extract<TaskRoutingProvenance, { readonly kind: "superpowers" }>;
+
+type TranslateTaskRoutingInput =
+  | {
+      readonly target: TaskRoutingTarget;
+      readonly provenance: Extract<TaskRoutingProvenance, { readonly kind: "external" }>;
+      readonly classification?: never;
+    }
+  | {
+      readonly target: TaskRoutingTarget;
+      readonly provenance: Extract<TaskRoutingProvenance, { readonly kind: "ambiguous" }>;
+      readonly classification?: never;
+    }
+  | {
+      readonly target: TaskRoutingTarget;
+      readonly provenance: TrustedSuperpowersProvenance;
+      readonly classification: SemanticClassificationResult;
+    };
+
+declare function translateTaskRouting(
+  input: TranslateTaskRoutingInput,
+): SuperpowersRoutingTranslationResult;
 ```
 
 `FindingId` has the runtime canonical form `^jf_[0-9a-f]{16}$`; the template-literal type is only the static prefix guard, and every review parser/marker extractor MUST validate the full regex. `TaskIdentity` equality uses all six fields. `normalizedHeading` is exactly the existing `CanonicalTaskSnapshot.title` (the Task heading text after the existing trim). `semanticDigest` is exactly the matching existing `CanonicalTaskSnapshot.digest` (`sha256:<lowercase hex>`) produced by `buildCanonicalSnapshot`; Justice v5 does not invent a second task canonicalization algorithm. The existing canonical snapshot normalizes CRLF→LF and checkbox progress `[x]/[X] → [ ]` inside the uniquely matched approved task section while preserving substantive task text. Checkbox-only progress therefore preserves identity; any substantive task-body change that changes the canonical task body changes `semanticDigest`. A new approved artifact chain intentionally changes `artifactChainId` and therefore creates a new authority-scoped identity.
@@ -757,6 +780,7 @@ type ReviewDispatchInput = {
   readonly parentToolCallId: string;
   readonly taskArgs: Readonly<Record<string, unknown>>;
   readonly executionMethod: SuperpowersExecutionMethod;
+  readonly provenance: TrustedSuperpowersProvenance;
   readonly artifactChain: ApprovedArtifactChain;
   readonly executionCorrelation?: ExecutionCorrelation;
   readonly contract: ConformanceContract;
@@ -1118,7 +1142,12 @@ Expected commit scope contains only the spike tests/fixtures/evidence note.
     | { readonly kind: "invalid_both"; readonly category: string; readonly subagentType: string };
   ```
 - `task_send` is parsed separately as OmO-owned runtime continuation; it never enters new-child category translation.
-- `translateTaskRouting` never chooses model/provider/reasoning/execution-mode/retry/fallback.
+- Task 2 provenance domain MUST NOT import, reference, or otherwise depend on Task 10-owned `WorkflowActivationEvidence`; `NativeSuperpowersProvenanceInput` is fully defined by Task 2-owned/runtime-observed fields.
+- `translateTaskRouting(input: TranslateTaskRoutingInput): SuperpowersRoutingTranslationResult` is the only pure routing translation contract.
+- `external` provenance preserves the explicit caller route and accepts no semantic classification input.
+- `ambiguous` provenance cannot become trusted translation and accepts no semantic classification input.
+- `superpowers` provenance requires an explicit `SemanticClassificationResult`; classified work may become one `sp-*` category while ambiguous classification remains untrusted.
+- `translateTaskRouting` never re-infers origin and never chooses model/provider/reasoning/execution-mode/retry/fallback.
 
 - [ ] **Step 1: Write RED Native routing tests**
 
@@ -1135,6 +1164,8 @@ Exact tests:
 - `recognized_superpowers_task_never_emits_category_and_subagent_type_together`
 - `ambiguous_superpowers_semantic_classification_is_untrusted`
 - `justice_does_not_select_concrete_model_or_provider`
+- `task2_provenance_contract_does_not_depend_on_task10_activation_state`
+- `routing_translation_consumes_explicit_provenance_without_reinferring_origin`
 
 Category tests:
 - `does_not_emit_legacy_deep`
@@ -1146,7 +1177,7 @@ Category tests:
 
 Run: `bun run vitest run tests/core/v5-task-routing-contract.test.ts tests/core/omo-category-mapper-v5.test.ts`
 
-Expected: FAIL on stale OpenCode continuation assumptions, missing Native category vocabulary, and any routing path that attempts to infer Superpowers origin without trusted provenance.
+Expected: FAIL on stale OpenCode continuation assumptions, missing Native category vocabulary, any Task 2 provenance type that depends on Task 10 activation state, or any routing path that attempts to infer Superpowers origin instead of consuming explicit provenance.
 
 - [ ] **Step 3: Implement pure Native routing domain**
 
@@ -1668,6 +1699,7 @@ Exact tests:
 - `binding_or_transport_failure_blocks_review_evidence`
 - `empty_expected_findings_still_deliver_clause_reproof_contract`
 - `ambiguous_review_like_action_is_not_trusted_without_recognized_superpowers_provenance`
+- `review_dispatch_requires_task6_trusted_superpowers_provenance`
 
 For the final test, a review-looking task lacking recognized Superpowers provenance must remain untrusted and cannot satisfy review acceptance.
 
@@ -1682,7 +1714,7 @@ Expected: FAIL because trusted Task-6 provenance consumption, Task-1-proven chil
 
 - [ ] **Step 4: Implement review recognition/delivery/parser using only Task-1-proven Native seams**
 
-Task 7 ships a fail-closed unavailable finding-context provider until Task 8 wires persistence.
+Task 7 ships a fail-closed unavailable finding-context provider until Task 8 wires persistence. `ReviewDispatchInput.provenance` is required and typed as `TrustedSuperpowersProvenance`; Task 7 must not reconstruct provenance from adapter-local state, prompt/review text, execution method, or task shape.
 
 - [ ] **Step 5: Run GREEN + Task 1 evidence replay + typecheck**
 
@@ -1692,7 +1724,7 @@ bun run vitest run tests/core/review-interop.test.ts tests/core/review-result.te
 bun run typecheck
 ```
 
-Expected: PASS; the existing Superpowers reviewer dispatch count remains exactly one, and review-looking calls without Task 6 trusted provenance remain untrusted.
+Expected: PASS; `review_dispatch_requires_task6_trusted_superpowers_provenance` proves the canonical input rejects any review path without Task 6 trusted provenance, the existing Superpowers reviewer dispatch count remains exactly one, and review-looking calls without that provenance remain untrusted.
 
 - [ ] **Step 6: Commit**
 
@@ -2075,6 +2107,7 @@ Exact tests:
 - `recognized_superpowers_native_task_translates_to_justice_category`
 - `recognized_superpowers_native_task_never_emits_category_and_subagent_type_together`
 - `routing_requires_task6_trusted_superpowers_provenance`
+- `routing_translation_consumes_explicit_provenance_without_reinferring_origin`
 - `ambiguous_or_external_provenance_is_not_upgraded_by_prompt_shape`
 - `external_explicit_subagent_type_is_preserved`
 - `superpowers_specialized_subagent_type_is_preserved`
@@ -2114,7 +2147,8 @@ Minimum GREEN:
 - [ ] **Step 6: Implement semantic classifier and in-place Native task translation**
 
 Minimum GREEN:
-- consume only Task 6 trusted provenance;
+- call the Task 2-owned `translateTaskRouting(TranslateTaskRoutingInput)` contract with Task 6-produced provenance explicitly;
+- consume only Task 6 trusted provenance and never re-infer origin;
 - translate only the already-issued task call;
 - preserve external/specialized routes and `task_send`;
 - never select model/provider/retry/fallback.
@@ -2731,15 +2765,16 @@ Justice `v4.3.1` is consulted only as the historical regression corpus explicitl
 
 | Producer | Consumer | Contract to compare |
 |---|---|---|
-| Task 2 | Tasks 5–12, 14 | `TaskIdentity`, `ReviewFindingV5`, `SuperpowersExecutionMethod`, `OmoCategoryName`, known built-in `TaskCategory`, `SemanticExecutionClass`, `SemanticClassificationResult`, `TaskRoutingProvenance`, `TaskRoutingTarget`, `SuperpowersRoutingTranslationResult`, pure `translateTaskRouting` |
+| Task 2 | Tasks 5–12, 14 | `TaskIdentity`, `ReviewFindingV5`, `SuperpowersExecutionMethod`, `OmoCategoryName`, known built-in `TaskCategory`, `SemanticExecutionClass`, `SemanticClassificationResult`, `NativeSuperpowersProvenanceProfile`, `NativeSuperpowersProvenanceInput`, `TaskRoutingProvenance`, `TrustedSuperpowersProvenance`, `TaskRoutingTarget`, `TranslateTaskRoutingInput`, `SuperpowersRoutingTranslationResult`, exact pure `translateTaskRouting(input)` signature; no Task 10 activation type is consumed by Task 2 |
 | Task 3 | Tasks 4–14 | `ArtifactFingerprint`, `ApprovedArtifactChain`, `ApprovedPlanBinding.artifactChain`, `ApprovePlanInput` |
 | Task 4 | Tasks 7–10, 13–14 | `ParsedSuperpowersTask`, `ProjectionDiagnostic`, `ProjectionResult<T>`, `ClauseEvidenceScope`, `ClauseResult`, `ConformanceContract`, `ConformanceContractPersistenceResult` + immutable contract path/digest |
 | Task 5 | Tasks 6–10, 13 | `TaskIdentityResolution`, `CorrelationMutationResult`, `ExecutionCorrelation`, `ExecutionCorrelationKey` |
-| Task 6 | Tasks 7, 10 | Task-1-proven Senpi parent tool-call observation, `NativeSuperpowersProvenanceResolver` output, and exact OmO runtime task/child binding; Task 7 consumes it for review trust and Task 10 for semantic routing |
+| Task 6 | Task 7 | Task-1-proven Senpi parent tool-call observation, `NativeSuperpowersProvenanceResolver` output as `TrustedSuperpowersProvenance`, and exact OmO runtime task/child binding consumed directly by `ReviewDispatchInput.provenance` | 
+| Task 6 | Task 10 | `TaskRoutingProvenance` produced from the Task-1 profile and passed explicitly into Task 2-owned `translateTaskRouting(TranslateTaskRoutingInput)`; Task 10 does not re-infer origin |
 | Task 7 | Tasks 8–10, 13 | recognized review provenance/kind, `sp-review`/`sp-final-review` parent-call translation, current scoped `requestedFindingIds`, `ReviewFindingTarget`, `ReviewFindingContextProvider`, scoped `reservedFindingIds`, authoritative child binding, `JusticeReviewResult` |
 | Task 8 | runtime scoped-review coordination + Tasks 9, 13 | store-backed metadata resolution for current marker IDs, lineage-wide `reservedFindingIds`, historical-ID collision detection, Superpowers open-set consistency validation, trusted persisted review evidence |
 | Task 9 | Tasks 13–14 | `RevisionDiffProvider`, resolved/failed fix-wave evidence, trusted `FinalReviewEvidenceClosure`, `BlockedFinalReviewEvidenceAttempt`, deterministic finding merge, gate reasons |
-| Task 10 | Task 14 | `WorkflowMethodSelection`, persisted `WorkflowMethodSelectionEvidence`, current-session `WorkflowActivationEvidence`, `WorkflowActivationDecision`, `SemanticClassificationResult`, implementation semantic-category translation, Superpowers ownership invariants |
+| Task 10 | Task 14 | `WorkflowMethodSelection`, persisted `WorkflowMethodSelectionEvidence`, current-session `WorkflowActivationEvidence`, `WorkflowActivationDecision`, `SemanticClassificationResult`, Task-2 pure routing result produced from explicit Task-6 provenance, implementation semantic-category translation, Superpowers ownership invariants |
 | Task 11 | Tasks 12–14 | `OmoEffectiveConfigResult`, configured/applied/observed doctor vocabulary |
 | Task 13 | Task 14 | `JusticeReviewV5View`, recovery diagnostics, completion projection |
 
@@ -2764,7 +2799,12 @@ Before this Plan is approved for execution, the Superpowers Review Gate must ver
    - Scenario 50 has Task 3 focused authorization evidence plus Task 14 E2E closure;
    - Scenario 51 has Task 10 Superpowers-progression evidence, Task 12 OmO-runtime evidence, and Task 14 cross-component E2E closure.
 3. **Type/signature consistency**
-   - `ApprovedArtifactChain`, `TaskIdentity`, `SuperpowersExecutionMethod`, `OmoCategoryName`, `WorkflowMethodSelection`, `WorkflowMethodSelectionEvidence`, `WorkflowActivationEvidence`, `WorkflowActivationDecision`, `SemanticExecutionClass`, `SemanticClassificationResult`, `TaskRoutingProvenance`, `SuperpowersRoutingTranslationResult`, `ExecutionCorrelation`, `ConformanceContract`, `ScopedFindingMarkerExtraction`, `ReviewFindingTarget`, `ReviewFindingContextProvider`, `JusticeReviewResult`, `RevisionDiffProvider`, `FinalReviewEvidenceClosure`, `BlockedFinalReviewEvidenceAttempt`, `PlanConformanceInput`, and severity/finding-disposition vocabulary are identical at every producer/consumer boundary.
+   - `ApprovedArtifactChain`, `TaskIdentity`, `SuperpowersExecutionMethod`, `OmoCategoryName`, `WorkflowMethodSelection`, `WorkflowMethodSelectionEvidence`, `WorkflowActivationEvidence`, `WorkflowActivationDecision`, `SemanticExecutionClass`, `SemanticClassificationResult`, `NativeSuperpowersProvenanceProfile`, `NativeSuperpowersProvenanceInput`, `TaskRoutingProvenance`, `TrustedSuperpowersProvenance`, `TranslateTaskRoutingInput`, `SuperpowersRoutingTranslationResult`, `ExecutionCorrelation`, `ConformanceContract`, `ScopedFindingMarkerExtraction`, `ReviewFindingTarget`, `ReviewFindingContextProvider`, `JusticeReviewResult`, `RevisionDiffProvider`, `FinalReviewEvidenceClosure`, `BlockedFinalReviewEvidenceAttempt`, `PlanConformanceInput`, and severity/finding-disposition vocabulary are identical at every producer/consumer boundary;
+   - Task 2 provenance domain has no dependency on Task 10-owned activation types;
+   - Task 6 is the sole trusted runtime provenance producer;
+   - Task 7 consumes trusted provenance through `ReviewDispatchInput.provenance`;
+   - Task 10 consumes provenance only through the Task 2-owned `translateTaskRouting(TranslateTaskRoutingInput)` contract;
+   - the dependency direction is Task 1 → Task 2 → Task 6 → Task 7/Task 10 → Task 14 with no provenance/activation back-edge.
 4. **Ownership**
    - Superpowers remains the owner of execution-method selection and all task/review/fix/final progression;
    - Justice owns only selected-method activation plus semantic classification/category translation/correlation/evidence/acceptance;
