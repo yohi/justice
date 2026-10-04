@@ -1365,7 +1365,7 @@ bun run vitest run \
 bun run typecheck
 ```
 
-Expected: PASS.
+Expected: PASS, including `clean_review_evidence_does_not_create_human_authorization`; a clean trusted review remains non-authorizing until explicit human approval exists for the exact current artifact chain.
 
 - [ ] **Step 6: Commit the complete atomic migration**
 
@@ -1869,7 +1869,14 @@ The review-interop module does not read persistence directly and never decides w
 
 - [ ] **Step 4: Run GREEN focused tests + Task 1 regression gate + typecheck**
 
-Expected: PASS. Production scoped metadata lookup remains fail-closed until Task 8 wires the store-backed provider.
+Run:
+```bash
+bun run vitest run tests/core/review-interop.test.ts tests/core/review-result.test.ts tests/runtime/opencode-adapter-review-interop.test.ts
+bun run vitest run tests/integration/review-artifact-linux-host-e2e.test.ts
+bun run typecheck
+```
+
+Expected: PASS, including `ambiguous_review_like_action_is_not_trusted_without_recognized_superpowers_provenance`; ambiguous/model-inferred review-like execution remains untrusted and cannot satisfy review evidence. Production scoped metadata lookup remains fail-closed until Task 8 wires the store-backed provider.
 
 - [ ] **Step 5: Commit**
 
@@ -2151,7 +2158,14 @@ Provider produces exact-range `RevisionDiffResult` only; it never fabricates evi
 
 - [ ] **Step 5: Run GREEN focused suite + typecheck**
 
-Expected: PASS.
+Run:
+```bash
+bun run vitest run tests/core/conformance-gate.test.ts tests/core/plan-completion-v5.test.ts
+bun run vitest run tests/runtime/revision-diff-provider.test.ts
+bun run typecheck
+```
+
+Expected: PASS, including `artifact_or_revision_mutation_stales_review_evidence_before_acceptance`; evidence bound to an older artifact chain, scope, or reviewed revision remains stale/blocked and cannot construct trusted current-candidate completion evidence.
 
 - [ ] **Step 6: Commit**
 
@@ -2415,7 +2429,7 @@ bun run typecheck
 bun run test
 ```
 
-Expected: PASS. The focused GREEN run MUST include the Step 1 historical PlanBridge regressions and all Task 10 activation/ownership/semantic-routing tests before the full suite.
+Expected: PASS. The focused GREEN run MUST include `justice_does_not_schedule_remediation_or_rereview`, the Step 1 historical PlanBridge regressions, and all Task 10 activation/ownership/semantic-routing tests before the full suite.
 
 - [ ] **Step 8: Commit**
 
