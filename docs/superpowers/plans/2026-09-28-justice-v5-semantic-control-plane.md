@@ -2789,6 +2789,14 @@ Justice `v4.3.1` is consulted only as the historical regression corpus explicitl
 | Task 11 | Tasks 12–14 | `OmoEffectiveConfigResult`, configured/applied/observed doctor vocabulary |
 | Task 13 | Task 14 | `JusticeReviewV5View`, recovery diagnostics, completion projection |
 
+Provenance dependency invariant:
+
+```text
+Task 1 → Task 2 → Task 6 → Task 7 / Task 10 → Task 14
+```
+
+Task 2 and Task 6 MUST NOT consume Task 10 output, including `WorkflowActivationEvidence` or `WorkflowActivationDecision`. Task 10 is a downstream consumer of Task 6 provenance, never a provenance-domain producer for Task 2/6.
+
 Methodology persistence authority is exclusive: Task 10 selection/activation recovery uses `WorkflowActivationStateStore` only. `ExecutionCorrelation.executionMethod` may remain execution correlation/evidence, but neither `ExecutionCorrelation` nor its store is a methodology selection/activation recovery authority.
 
 Historical regression evidence does not create a producer/consumer dependency on the v4.3.1 implementation. The referenced v4 commits are test/audit evidence only; Tasks 1/2/3/6/7/9/10/11/12/14 implement or prove the current Native v5 contracts above.
