@@ -1,5 +1,16 @@
 # Changelog
 
+## [4.3.1](https://github.com/yohi/justice/compare/v4.3.0...v4.3.1) (2026-10-05)
+
+### Features
+
+* Justice workflow のセッション単位の有効化・無効化を追加
+
+### Bug Fixes
+
+* Review Gate の自動再試行と remediation 処理を強化
+* Review Gate 後の実装ロックと子孫セッションのクリーンアップを修正
+
 ## Unreleased
 
 ## [4.3.0](https://github.com/yohi/justice/compare/v4.2.3...v4.3.0) (2026-09-30)
