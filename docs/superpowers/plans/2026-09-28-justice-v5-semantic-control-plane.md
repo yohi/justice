@@ -1154,7 +1154,12 @@ Do not decide whether a call belongs to Superpowers here. Do not dispatch a task
 
 - [ ] **Step 4: Run GREEN + typecheck**
 
-Expected: PASS.
+```bash
+bun run vitest run tests/core/v5-task-routing-contract.test.ts tests/core/omo-category-mapper-v5.test.ts
+bun run typecheck
+```
+
+Expected: PASS, including Native category XOR, open caller category preservation, and no concrete model/provider selection.
 
 - [ ] **Step 5: Commit**
 
@@ -1478,7 +1483,14 @@ Keep the existing exact task-body preservation/digest tests.
 
 - [ ] **Step 4: Implement with AtomicPersistence and existing Plan canonicalization**
 
-- [ ] **Step 5: GREEN + typecheck**
+- [ ] **Step 5: Run GREEN + typecheck**
+
+```bash
+bun run vitest run tests/core/execution-correlation.test.ts tests/core/superpowers-dispatch-resolver.test.ts
+bun run typecheck
+```
+
+Expected: PASS; runtime task/child identities attach only through trusted correlation and never replace semantic TaskIdentity.
 
 - [ ] **Step 6: Commit**
 
@@ -1616,7 +1628,12 @@ git commit -m "feat: add Native Senpi correlation and provenance adapter"
 - Test: `tests/core/review-result.test.ts`
 - Create: `tests/runtime/senpi-adapter-review-interop.test.ts`
 
+**Consumes:**
+- Task 1 PROVEN child/reviewer delivery profile;
+- Task 6 trusted `TaskRoutingProvenance` and bound runtime child correlation.
+
 **Interfaces:**
+- Task 7 MUST NOT infer Superpowers provenance from prompt/review text; only `TaskRoutingProvenance.kind === "superpowers"` produced by Task 6 may enter trusted review recognition.
 - Preserve the existing `ReviewKindV5`, `ReviewResultExpectation`, `JusticeReviewResult`, finding marker `[[justice-finding:<id>]]`, scoped target extraction, lineage reservation, and strict parser contracts.
 - Review recognition occurs on the **existing model-issued `task` call** before execution.
 - recognized task/scoped review → `sp-review`; final review → `sp-final-review`.
@@ -1659,9 +1676,15 @@ bun run vitest run tests/core/review-interop.test.ts tests/core/review-result.te
 
 Task 7 ships a fail-closed unavailable finding-context provider until Task 8 wires persistence.
 
-- [ ] **Step 5: GREEN + Task 1 evidence replay + typecheck**
+- [ ] **Step 5: Run GREEN + Task 1 evidence replay + typecheck**
 
-Expected: PASS; the existing Superpowers reviewer dispatch count remains exactly one.
+```bash
+bun run vitest run tests/integration/omo-native-senpi-contract-spike.test.ts
+bun run vitest run tests/core/review-interop.test.ts tests/core/review-result.test.ts tests/runtime/senpi-adapter-review-interop.test.ts
+bun run typecheck
+```
+
+Expected: PASS; the existing Superpowers reviewer dispatch count remains exactly one, and review-looking calls without Task 6 trusted provenance remain untrusted.
 
 - [ ] **Step 6: Commit**
 
@@ -1800,7 +1823,14 @@ Wire the store-backed provider through `justice-plugin.ts` into Task 7 review in
 
 - [ ] **Step 4: Run GREEN tests + Task 7 marker/open-set regressions + typecheck**
 
-Expected: PASS, including multi-round behavior and spec-only empty-quality context.
+```bash
+bun run vitest run tests/core/review-evidence-store.test.ts tests/core/review-quality-v5.test.ts \
+  tests/core/v2/review-aggregator.test.ts tests/core/v2/state-projection-review.test.ts \
+  tests/runtime/senpi-adapter-review-interop.test.ts
+bun run typecheck
+```
+
+Expected: PASS, including multi-round behavior, lineage-reserved IDs, and spec-only empty-quality context.
 
 - [ ] **Step 5: Commit**
 
@@ -2384,7 +2414,13 @@ Do not mutate Superpowers ledger.
 
 - [ ] **Step 4: Run GREEN tests + full runtime suite**
 
-Expected: PASS.
+```bash
+bun run vitest run tests/core/v5-recovery.test.ts tests/runtime/justice-review-v5.test.ts
+bun run test:integration
+bun run typecheck
+```
+
+Expected: PASS; recovery preserves v5 authority boundaries, does not silently reconcile Superpowers conflicts, and `justice_review` remains inspection-only.
 
 - [ ] **Step 5: Commit**
 
@@ -2432,7 +2468,14 @@ Retain the existing v5 semantic-control-plane E2Es and add/ensure Native boundar
 - `native_superpowers_task_review_uses_one_model_issued_omo_task_and_trusted_child_binding`
 - `native_task_runtime_identity_never_becomes_justice_task_identity`.
 
-- [ ] **Step 2: Run E2E + Task 1 Native evidence gate**
+- [ ] **Step 2: Run RED E2E + Task 1 Native evidence gate**
+
+```bash
+bun run vitest run tests/integration/omo-native-senpi-contract-spike.test.ts
+bun run vitest run tests/integration/justice-v5-semantic-control-plane.integration.test.ts
+```
+
+Expected: the pinned Task 1 contract remains PASS; cross-component Native E2Es fail only on missing final integration wiring, never because the adapter contract is reinterpreted.
 
 - [ ] **Step 3: Smallest integration wiring only**
 
@@ -2450,9 +2493,12 @@ Required:
 - explain `justice_review` as inspection, not scheduler;
 - retain v4.3.1 regression corpus/migration explanation.
 
-- [ ] **Step 5: Full verification**
+- [ ] **Step 5: Run GREEN E2E + full verification**
 
 ```bash
+bun run vitest run tests/integration/omo-native-senpi-contract-spike.test.ts
+bun run vitest run tests/integration/justice-v5-semantic-control-plane.integration.test.ts
+
 bun run typecheck
 bun run lint
 bun run test
@@ -2461,7 +2507,7 @@ bun run build
 git diff --check
 ```
 
-Expected: PASS plus Task-1 pinned Native contract evidence PASS.
+Expected: PASS for both exact integration files, then PASS for typecheck/lint/unit/integration/build/diff checks; Task-1 pinned Native contract evidence remains unchanged and PROVEN.
 
 - [ ] **Step 6: Commit**
 
