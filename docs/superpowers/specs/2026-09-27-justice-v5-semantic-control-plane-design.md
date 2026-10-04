@@ -212,6 +212,31 @@ Other prose in this Design explains or elaborates these contracts. It is not ind
 
 A registry ID is stable within a Design source revision. Changing the obligation text changes the Design fingerprint and invalidates evidence bound to the prior revision.
 
+### 3.8 Historical regression corpus — Justice v4.3.1
+
+Justice `v4.3.1` is evidence about failure modes, not a source implementation for v5. This section is explanatory: the normative Design surface remains exactly INV-01..INV-06 plus the J5D registry above.
+
+The v4.2.0→v4.3.1 maintenance line established the following reusable lessons:
+
+| Historical evidence | Observed failure mode | Retained v5 design contract | Non-retained implementation detail |
+|---|---|---|---|
+| `de2ca2a0e2c23ed0a71808b7de246a292c0c00d8`, `54e240ffc5415443dfa5d3dc243945e16d9d2631`, `8c8f8fd400b06d9228ceb7e30ab9c94a2acfcc72` | task meaning, routing ownership, or continuation identity was damaged by lossy reconstruction/normalization | J5D-TASK-01, J5D-CORR-01, J5D-ROUTE-01 | v4 PlanBridge/task-wire normalization |
+| `821343eba1223371ae0a7a20e02e7370db900306`, `4759d777aab9c80b897c55392bcc0f5833d79d7b`, `1781c7efae22ac1304fa8dc0d1f621c888943a1e` | review/final-review work was confused with implementation or lost its semantic route | J5D-REVIEW-01, J5D-ROUTE-01/02 | v4 SDD-specific routing hooks |
+| `aba390a983fd8eaea791785727aef39599b9d6aa`, `4688a96982355fff87e2d37e1a775b2456c6904f` | the model selected a review-looking executor that was not the intended trusted evidence producer | J5D-REVIEW-01/03/04 | dedicated OpenCode `justice-review-controller`, native TaskTool wrapper, exact OmO v4 envelope parser |
+| `19ebb1c5ae9994e8b43a48b5b0ab0a43a6b006de`, `7ad4b6649a492049467d622dbc57d8b7dda94344` | unreadable/stale/mutated scope could otherwise be mistaken for valid review completion | J5D-CHAIN-01/02, J5D-REVIEW-04 | v4 Gate ID/session maps and OpenCode-specific cancellation path |
+| `96d088398680c6ec04f65f809384e8d6fe6d5c80`, `faae0834c0c3e7bc2adb90cbf7de9cac36506dca`, `bef5f3437d8f3827ea13cdab06267740360a0ca9` | review-clear was able to drift toward implementation continuation unless authorization was separately enforced | J5D-GATE-01, J5D-CHAIN-01/02 | v4 session-scoped implementation lock mechanics |
+| `05277cfdffb16ec135ea13ce1b4e978228e35a3a`, `7ad4b6649a492049467d622dbc57d8b7dda94344` | remediation needs fresh evidence, but Justice-owned retry progression conflates assurance with methodology/runtime ownership | J5D-OWN-01/02, J5D-REVIEW-03/04, J5D-RUNTIME-01 | Justice-owned auto-retry/remediation loop |
+| `7f88e28c620ff74568691bedb88f93a1e723a1be`, `ac548a1a61eeb726f5bfe53c77ea6bab22a5300d` | operators benefit from an escape hatch that returns to the underlying harness without reviving stale Justice state | no new normative J5D contract in this baseline | adapter-specific enable/disable implementation; reconsider per target harness |
+| `eea681d879ee848ba57ac51a69284392b9834544`, `368632bddda72f83fb36e58b50dd30df5fbe7e72` | OpenCode slash-command visibility/execution semantics differed from LLM assumptions | no cross-harness contract | OpenCode command discovery, `@path`, prompt-template rewriting |
+
+The short-lived bootstrap-bound Gate from `efec7a3ec5e0ae38b1b3f09e44112526ea97ee77` was superseded by later v4 work that made the Gate an explicit standalone authority boundary. The bootstrap dependency therefore must not be revived as a v5 invariant.
+
+The design rule extracted from the corpus is:
+
+> Port **proof obligations and failure invariants**, not v4 harness mechanics.
+
+In particular, a future harness adapter may establish trusted review provenance differently, but model inference alone never upgrades an ambiguous review-like action into trusted evidence; a clean review never creates human authorization; and remediation can only contribute fresh evidence without transferring Superpowers/OmO progression ownership to Justice.
+
 ---
 
 ## 4. Responsibility model
@@ -2297,6 +2322,8 @@ The tool should explain:
 
 ## 28. v4 → v5 subsystem treatment
 
+The treatment below applies to the full historical `v4.3.1` regression corpus. v4 source code is not an implementation predecessor for v5: only the harness-independent contracts identified in §3.8 are carried forward.
+
 ### Keep and strengthen
 
 - plan authorization;
@@ -2411,6 +2438,13 @@ The v5 implementation plan must include E2E coverage for at least the following 
 45. Justice semantic classification uses task/review semantics and complexity without selecting a concrete model/provider.
 46. OmO remains the only concrete model/provider/runtime resolver for translated Superpowers work.
 47. a caller-owned OmO custom category outside Justice's static built-in vocabulary is preserved without translation and remains OmO-resolved.
+
+### Historical v4.3.1 regression closure
+
+48. an acceptance-critical review-like action with ambiguous/model-inferred producer provenance remains untrusted and cannot satisfy review evidence.
+49. review evidence whose bound artifact chain, scope, or reviewed revision changes before acceptance becomes stale and cannot authorize the current candidate.
+50. a clean/complete review result cannot create implementation authorization without the required explicit human approval for the exact current artifact chain.
+51. remediation/re-review can contribute fresh evidence, but Justice does not schedule the fix/re-review loop and does not take ownership of OmO retry/fallback.
 
 ---
 

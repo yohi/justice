@@ -14,7 +14,7 @@
 
 **Implementation Baseline:** `master @ 080bcdb25b192962789ff5d67139e56487381de4`
 
-**Historical Compatibility Reference:** Justice `v4.2.0` is a side-branch historical compatibility/regression reference only. It is **not** the Justice v5 implementation base. Do not merge or wholesale cherry-pick `v4.2.0` before implementing this Plan. Carry forward only regression contracts explicitly incorporated below.
+**Historical Compatibility Reference:** Justice `v4.3.1` is a side-branch historical regression corpus only. It is **not** the Justice v5 implementation base. Do not merge or wholesale cherry-pick `v4.3.1` before implementing this Plan. Carry forward only the harness-independent regression contracts explicitly incorporated below.
 
 ## Global Constraints
 
@@ -43,7 +43,7 @@
 - Do not manually set the package release version; the repository's release automation remains responsible for release versioning.
 - Every production-code task follows RED → GREEN → focused verification → full task test → commit.
 - Task 1 is a regression gate for the already-established OpenCode 1.18.31 / Superpowers v6.4.2 review-interop contract. A failure is upstream compatibility drift: STOP the supported-stack implementation and report the drift; do not invent a Justice-owned review fallback.
-- All production implementation tasks start from `master @ 080bcdb25b192962789ff5d67139e56487381de4`. Justice `v4.2.0` is not a merge/cherry-pick prerequisite and does not replace this base.
+- All production implementation tasks start from `master @ 080bcdb25b192962789ff5d67139e56487381de4`. Justice `v4.3.1` is not a merge/cherry-pick prerequisite and does not replace this base.
 
 ## Review Focus
 
@@ -53,13 +53,36 @@
 - **Config precedence:** user, ancestor project, nearest project, harness, and profile layers disagree; Task 11 must prove doctor reports the exact effective value and its sources.
 - **Upgrade recovery:** v4 state and unknown/newer state coexist with v5 files; Task 13 must prove neither can silently satisfy v5 acceptance.
 
-## Historical Regression Evidence — Justice v4.2.0
+## Historical Regression Evidence — Justice v4.3.1
 
-Justice `v4.2.0` was released from the v4 side branch and is **not** the v5 implementation base. Its implementation is non-normative for v5; only explicitly named regression contracts are retained:
+Justice `v4.3.1` was released from the v4 side branch and is **not** the v5 implementation base. The full v4 implementation is non-normative for v5. It is retained as a regression corpus: production failures are translated into harness-independent proof obligations, while OpenCode/OmO-v4 mechanics are discarded unless current supported-runtime evidence independently requires them.
+
+### Retained v4.2.0 regression contracts
+
+The previously recorded v4.2.0 contracts remain mandatory regression evidence:
 
 - `821343eba1223371ae0a7a20e02e7370db900306` — completed-plan final review must be recognized before implementation-task exhaustion / plan-completion cleanup can suppress the review path;
 - `4759d777aab9c80b897c55392bcc0f5833d79d7b` — task/scoped/final review workers must remain outside implementation semantics and implementation-worker enrichment;
 - `1781c7efae22ac1304fa8dc0d1f621c888943a1e` — recognized Superpowers review semantic routing must survive the OpenCode generic `subagent_type="general"` compatibility marker.
+
+Earlier v4 compatibility fixes also remain evidence for existing v5 contracts:
+
+- `de2ca2a0e2c23ed0a71808b7de246a292c0c00d8` — preserve approved task bodies instead of reconstructing them lossily;
+- `54e240ffc5415443dfa5d3dc243945e16d9d2631` — separate Justice semantic normalization from OmO runtime/wire ownership;
+- `8c8f8fd400b06d9228ceb7e30ab9c94a2acfcc72` — preserve OmO continuation/session identity instead of overloading it with Justice task identity.
+
+### Additional v4.2.1–v4.3.1 lessons
+
+| Historical evidence | Regression lesson retained by v5 | v5 owner / verification target | v4 implementation disposition |
+|---|---|---|---|
+| `aba390a983fd8eaea791785727aef39599b9d6aa`, `4688a96982355fff87e2d37e1a775b2456c6904f` | a review-looking action is not trusted evidence unless its producer/provenance is unambiguous and recognized | Task 7 / review provenance | **REDESIGN** — do not port the dedicated OpenCode controller/native-TaskTool wrapper as architecture |
+| `19ebb1c5ae9994e8b43a48b5b0ab0a43a6b006de`, `7ad4b6649a492049467d622dbc57d8b7dda94344` | unreadable, stale, wrong-scope, or artifact-mutated review evidence fails closed | Tasks 7–9 / stale evidence and final closure | **PORT AS CONTRACT** |
+| `96d088398680c6ec04f65f809384e8d6fe6d5c80`, `faae0834c0c3e7bc2adb90cbf7de9cac36506dca`, `bef5f3437d8f3827ea13cdab06267740360a0ca9` | `review_clear` / clean review evidence is not implementation authorization; human authorization remains a separate exact-artifact-chain boundary | Task 3 + Task 14 E2E | **PORT AS CONTRACT**, redesign enforcement for the target harness |
+| `05277cfdffb16ec135ea13ce1b4e978228e35a3a`, `7ad4b6649a492049467d622dbc57d8b7dda94344` | remediation must produce fresh review evidence, but Justice must not own fix/re-review progression or runtime retry | Task 10 Superpowers progression ownership + Task 12 OmO retry/fallback boundary + Tasks 7–9 evidence + Task 14 cross-component closure | **PORT AS CONTRACT / DROP orchestration** |
+| `7f88e28c620ff74568691bedb88f93a1e723a1be`, `ac548a1a61eeb726f5bfe53c77ea6bab22a5300d` | a per-session Justice bypass is operationally useful and must not revive stale authority when re-enabled | future adapter capability review | **KEEP CONCEPT**, not a v5 acceptance requirement in this baseline |
+| `eea681d879ee848ba57ac51a69284392b9834544`, `368632bddda72f83fb36e58b50dd30df5fbe7e72` | OpenCode command visibility, `@path`, and prompt-template execution are harness quirks, not semantic-control-plane contracts | none cross-harness | **DROP from core**; re-evaluate only in an OpenCode adapter |
+
+The temporary same-session bootstrap dependency from `efec7a3ec5e0ae38b1b3f09e44112526ea97ee77` was superseded later on the v4 line by the standalone Review Gate architecture and is not retained.
 
 The v4 implementations themselves are **not** normative. In particular, do not carry forward:
 
@@ -68,13 +91,26 @@ The v4 implementations themselves are **not** normative. In particular, do not c
 - PlanBridge reconstruction of worker prompts from Plan task bodies;
 - hardcoded SDD methodology selection;
 - `justice_task_id` / semantic identity overloading of OmO `task_id`;
-- external both-target normalization as a general caller contract.
+- external both-target normalization as a general caller contract;
+- the OpenCode-specific `justice-review-controller` wrapper, custom-command prompt rewriting, or native TaskTool indirection;
+- the OmO v4 synchronous completion-envelope parser as a general review evidence contract;
+- Justice-owned Review Gate auto-retry/remediation scheduling;
+- OpenCode-specific session cleanup as the portable implementation of a future enable/disable capability.
 
 Where historical v4 behavior conflicts with the current Superpowers=WHAT / Justice=SEMANTIC HOW / OmO=CONCRETE HOW architecture, this v5 Plan wins.
 
-The v4.2.0 review setting `run_in_background=false` is also non-normative. It may only appear as a bounded Task 1/7 compatibility assertion if current supported-runtime evidence proves it is required to preserve the Superpowers review lifecycle; it must not become a new Justice-owned review-scheduling policy.
+The historical v4 review setting `run_in_background=false` is also non-normative. It may only appear as a bounded Task 1/7 compatibility assertion if current supported-runtime evidence proves it is required to preserve the Superpowers review lifecycle; it must not become a new Justice-owned review-scheduling policy.
 
-Task 1 remains the OpenCode 1.18.31 / Superpowers v6.4.2 runtime review-interop regression gate. It is **not** a v4.2.0 behavior-compatibility gate.
+Task ownership for the v4.3.1 corpus is explicit:
+
+- Task 3 proves that review evidence never manufactures human implementation authorization and that artifact mutation invalidates the exact approved chain;
+- Task 7 proves trusted review producer/provenance recognition and strict rejection of ambiguous/malformed/stale results;
+- Task 9 proves reviewed-candidate freshness through final evidence closure;
+- Task 10 proves remediation/re-review progression remains Superpowers-owned and Justice does not schedule fix/re-review work;
+- Task 12 proves provider/runtime failure classification remains diagnostic-only and cannot initiate Justice retry/fallback, preserving OmO runtime ownership;
+- Task 14 closes Design §29 Scenario 50 (review evidence cannot manufacture human implementation authorization) and Scenario 51 (Superpowers progression ownership + OmO runtime ownership) end-to-end; Scenarios 48–49 are fully owned by their focused Task 7/9 tests and require no duplicate E2E case.
+
+Task 1 remains the OpenCode 1.18.31 / Superpowers v6.4.2 runtime review-interop regression gate. It is **not** a v4.3.1 behavior-compatibility gate.
 
 ---
 
@@ -1279,6 +1315,7 @@ Exact required tests:
 - `design_plan_mismatch_stales_downstream_authority`
 - `requirements_change_stales_design_and_plan_authority`
 - `reapproval_creates_new_artifact_chain_id`
+- `clean_review_evidence_does_not_create_human_authorization`
 - `v4_plan_authorization_is_not_promoted_to_v5_authority`
 - `unknown_or_newer_authoritative_state_is_preserved_not_rewritten`
 - `resolves_requirements_design_plan_chain_from_declared_metadata`
@@ -1288,11 +1325,13 @@ Exact required tests:
 
 Run: `bun run vitest run tests/core/artifact-chain.test.ts tests/core/plan-authorization.test.ts tests/core/v5-persistence.test.ts`
 
-Expected: FAIL because current authorization is plan-only and reads the v4 file as authority.
+Expected: FAIL because current authorization is plan-only and reads the v4 file as authority. `clean_review_evidence_does_not_create_human_authorization` must specifically fail until a trusted clean review remains non-authorizing unless the exact current Requirements→Design→Plan chain has explicit human approval.
 
 - [ ] **Step 3: Implement artifact-chain and v5 authorization persistence**
 
 Reuse `AtomicPersistence`. Preserve the existing authorization review boundary/locking semantics. Do not fabricate Requirements/Design lineage during migration.
+
+Minimum GREEN behavior for the v4.3.1 authorization regression: review/conformance evidence may be attached to the current chain, but it must never create, replace, or upgrade human implementation authorization. Only explicit approval of the exact current `ApprovedArtifactChain` can authorize implementation.
 
 - [ ] **Step 4: Mechanically migrate every baseline direct consumer**
 
@@ -1326,7 +1365,7 @@ bun run vitest run \
 bun run typecheck
 ```
 
-Expected: PASS.
+Expected: PASS, including `clean_review_evidence_does_not_create_human_authorization`; a clean trusted review remains non-authorizing until explicit human approval exists for the exact current artifact chain.
 
 - [ ] **Step 6: Commit the complete atomic migration**
 
@@ -1779,6 +1818,9 @@ In `tests/runtime/opencode-adapter-review-interop.test.ts`:
 - `injects_conformance_contract_into_authoritatively_bound_child_chat_message`
 - `synthetic_review_part_uses_output_message_session_and_message_ids`
 - `empty_expected_findings_still_injects_conformance_contract_for_clause_reproof`
+- `ambiguous_review_like_action_is_not_trusted_without_recognized_superpowers_provenance`
+
+For `ambiguous_review_like_action_is_not_trusted_without_recognized_superpowers_provenance`, RED must demonstrate that a review-looking/model-inferred task lacking recognized Superpowers review provenance cannot create a trusted pending review correlation, cannot receive trusted review evidence status, and cannot satisfy review acceptance. Minimum GREEN behavior is `untrusted` / `NOT_PROVEN` with no fabricated review category or evidence producer identity.
 
 In `tests/core/review-result.test.ts`:
 - `initial_review_human_marker_matches_machine_finding_id`
@@ -1827,7 +1869,14 @@ The review-interop module does not read persistence directly and never decides w
 
 - [ ] **Step 4: Run GREEN focused tests + Task 1 regression gate + typecheck**
 
-Expected: PASS. Production scoped metadata lookup remains fail-closed until Task 8 wires the store-backed provider.
+Run:
+```bash
+bun run vitest run tests/core/review-interop.test.ts tests/core/review-result.test.ts tests/runtime/opencode-adapter-review-interop.test.ts
+bun run vitest run tests/integration/review-artifact-linux-host-e2e.test.ts
+bun run typecheck
+```
+
+Expected: PASS, including `ambiguous_review_like_action_is_not_trusted_without_recognized_superpowers_provenance`; ambiguous/model-inferred review-like execution remains untrusted and cannot satisfy review evidence. Production scoped metadata lookup remains fail-closed until Task 8 wires the store-backed provider.
 
 - [ ] **Step 5: Commit**
 
@@ -2082,6 +2131,9 @@ In `tests/core/plan-completion-v5.test.ts` include:
 - `new_blocking_finding_from_scoped_rereview_blocks_completion`
 - `final_review_can_prove_inline_semantic_clauses`
 - `zero_drift_zero_missing_evidence_zero_blocking_quality_allows_completion`
+- `artifact_or_revision_mutation_stales_review_evidence_before_acceptance`
+
+For `artifact_or_revision_mutation_stales_review_evidence_before_acceptance`, RED must bind trusted review evidence to Candidate A, then mutate the approved artifact chain, scope, or reviewed revision before acceptance and prove that Candidate B cannot reuse Candidate A's evidence. Minimum GREEN behavior is a blocked/stale result with the affected proof becoming `NOT_PROVEN`; no stale closure may be coerced into `PlanConformanceInput`.
 
 - [ ] **Step 2: Run RED tests**
 
@@ -2091,7 +2143,7 @@ bun run vitest run tests/core/conformance-gate.test.ts tests/core/plan-completio
 bun run vitest run tests/runtime/revision-diff-provider.test.ts
 ```
 
-Expected: FAIL because current acceptance has no type-safe v5 final evidence build.
+Expected: FAIL because current acceptance has no type-safe v5 final evidence build and does not yet enforce the Scenario 49 artifact/scope/revision freshness regression.
 
 - [ ] **Step 3: Implement runtime diff provider**
 
@@ -2106,7 +2158,14 @@ Provider produces exact-range `RevisionDiffResult` only; it never fabricates evi
 
 - [ ] **Step 5: Run GREEN focused suite + typecheck**
 
-Expected: PASS.
+Run:
+```bash
+bun run vitest run tests/core/conformance-gate.test.ts tests/core/plan-completion-v5.test.ts
+bun run vitest run tests/runtime/revision-diff-provider.test.ts
+bun run typecheck
+```
+
+Expected: PASS, including `artifact_or_revision_mutation_stales_review_evidence_before_acceptance`; evidence bound to an older artifact chain, scope, or reviewed revision remains stale/blocked and cannot construct trusted current-candidate completion evidence.
 
 - [ ] **Step 6: Commit**
 
@@ -2261,6 +2320,9 @@ In `tests/core/superpowers-ownership-v5.test.ts`:
 - `implementation_completion_never_dispatches_sp_review`
 - `all_tasks_accepted_never_dispatches_sp_final_review`
 - `dependency_analyzer_cannot_reorder_or_dispatch_tasks`
+- `justice_does_not_schedule_remediation_or_rereview`
+
+For `justice_does_not_schedule_remediation_or_rereview`, RED must demonstrate that a blocking review result may block acceptance but cannot cause Justice to dispatch the fixer, schedule a scoped re-review, or advance the Superpowers fix loop. Minimum GREEN behavior is evidence/gate state only; Superpowers remains the sole fix/re-review progression owner.
 
 In `tests/hooks/plan-bridge-implement.test.ts` add the historical boundary regressions:
 - `completed_plan_final_review_is_recognized_before_plan_completion_cleanup`
@@ -2313,7 +2375,7 @@ bun run vitest run \
   tests/runtime/opencode-adapter-semantic-routing.test.ts
 ```
 
-Expected: **FAIL before production changes** because the `master @ 080bcdb25b192962789ff5d67139e56487381de4` production baseline does not yet provide the v5 activation-state contract, Justice-without-progression ownership contract, review-before-implementation sequencing contract, semantic-classification contract, or provenance-aware v5 routing behavior.
+Expected: **FAIL before production changes** because the `master @ 080bcdb25b192962789ff5d67139e56487381de4` production baseline does not yet provide the v5 activation-state contract, Justice-without-progression ownership contract (including no remediation/re-review scheduling), review-before-implementation sequencing contract, semantic-classification contract, or provenance-aware v5 routing behavior.
 
 The RED run MUST exercise the Step 1 historical boundary regressions in `tests/hooks/plan-bridge-implement.test.ts`, including:
 - `completed_plan_final_review_is_recognized_before_plan_completion_cleanup`;
@@ -2367,7 +2429,7 @@ bun run typecheck
 bun run test
 ```
 
-Expected: PASS. The focused GREEN run MUST include the Step 1 historical PlanBridge regressions and all Task 10 activation/ownership/semantic-routing tests before the full suite.
+Expected: PASS. The focused GREEN run MUST include `justice_does_not_schedule_remediation_or_rereview`, the Step 1 historical PlanBridge regressions, and all Task 10 activation/ownership/semantic-routing tests before the full suite.
 
 - [ ] **Step 8: Commit**
 
@@ -2506,21 +2568,34 @@ git commit -m "feat: diagnose OmO v5 effective configuration"
 Cover:
 - current OmO v5 retryable/config terminal patterns.
 - stale `oh-my-opencode.jsonc` remediation absent.
-- provider failure classification does not cause Justice provider fallback.
+- `provider_failure_classification_does_not_trigger_justice_retry_or_fallback`.
 - desired/configured/applied/observed controller states do not collapse.
 - current category union has no canonical `deep`.
 
+For `provider_failure_classification_does_not_trigger_justice_retry_or_fallback`, RED must prove that provider/runtime failure classification can describe terminal/diagnostic impact but cannot call or select a Justice retry, fallback model, fallback provider, or retry schedule. Minimum GREEN behavior is diagnostic classification only; OmO remains the exclusive runtime retry/fallback owner.
+
 - [ ] **Step 2: Run RED tests**
 
-Expected: FAIL on stale pattern baseline/config message.
+Run:
+```bash
+bun run vitest run tests/core/error-classifier.test.ts tests/core/provider-error-patterns.test.ts tests/core/omo-v5-upstream-drift.test.ts
+```
+
+Expected: FAIL on stale pattern baseline/config message and on `provider_failure_classification_does_not_trigger_justice_retry_or_fallback` until the runtime-ownership boundary is explicit.
 
 - [ ] **Step 3: Update patterns/messages/controller semantics only**
 
-Do not implement OmO retry/fallback.
+Do not implement OmO retry/fallback. `ErrorClassifier.shouldRetry()` may report/classify legacy diagnostic intent only where still required by callers; it must not initiate or schedule provider/model retry/fallback. No Justice component may choose a fallback model/provider from these classifications.
 
 - [ ] **Step 4: Run GREEN tests + typecheck**
 
-Expected: PASS.
+Run:
+```bash
+bun run vitest run tests/core/error-classifier.test.ts tests/core/provider-error-patterns.test.ts tests/core/omo-v5-upstream-drift.test.ts
+bun run typecheck
+```
+
+Expected: PASS, including `provider_failure_classification_does_not_trigger_justice_retry_or_fallback`.
 
 - [ ] **Step 5: Commit**
 
@@ -2650,14 +2725,20 @@ In `tests/integration/justice-v5-semantic-control-plane.integration.test.ts` imp
 - `implementation_discovered_design_change_requires_reconciliation_before_resume`
 - `complete_evidence_allows_plan_complete`
 - `translated_superpowers_work_leaves_concrete_runtime_resolution_to_omo`
+- `clean_review_does_not_bypass_human_artifact_chain_authorization`
+- `superpowers_remediation_and_omo_retry_ownership_remain_separate`
 
-Do not duplicate focused tests whose exact evidence is already named in the traceability table.
+Scenario 50 E2E must exercise a trusted clean review on an otherwise valid candidate without current explicit human approval for the exact artifact chain and prove implementation/acceptance remains blocked until that approval exists.
+
+Scenario 51 E2E must exercise both ownership halves in the integrated wiring: a blocking review/remediation condition must not cause Justice to schedule the fixer or re-review, and a provider/runtime failure classification must not cause Justice retry/fallback. The observed progression remains Superpowers-owned and runtime retry/fallback remains OmO-owned.
+
+Do not duplicate focused tests whose exact evidence is already named in the traceability table unless this Task explicitly names the cross-component E2E closure above.
 
 - [ ] **Step 2: Run the E2E file and verify RED for uncovered cross-component behavior**
 
 Run: `bun run vitest run tests/integration/justice-v5-semantic-control-plane.integration.test.ts`
 
-Expected: remaining cross-component behavior fails explicitly until wiring is complete.
+Expected: remaining cross-component behavior fails explicitly until wiring is complete, including Scenario 50 authorization separation and the two-part Scenario 51 ownership boundary.
 
 - [ ] **Step 3: Make only the smallest integration/wiring changes required by those exact E2E cases**
 
@@ -2891,6 +2972,10 @@ The numbering below is Design §29. Every row fixes the owning task, exact test 
 | 45 | semantic classification uses task semantics/complexity without selecting concrete runtime | 10 | `tests/unit/core/execution-role-classifier.test.ts` | `classifier_uses_full_plan_semantics_without_selecting_concrete_runtime` | unit |
 | 46 | OmO remains concrete model/provider/runtime resolver for translated Superpowers work | 14 | `tests/integration/justice-v5-semantic-control-plane.integration.test.ts` | `translated_superpowers_work_leaves_concrete_runtime_resolution_to_omo` | E2E |
 | 47 | caller-owned OmO custom category outside Justice built-in vocabulary is preserved | 2 | `tests/core/v5-task-routing-contract.test.ts` | `preserves_user_defined_omo_category_without_translation` | unit |
+| 48 | ambiguous/model-inferred review-like producer provenance remains untrusted | 7 | `tests/runtime/opencode-adapter-review-interop.test.ts` | `ambiguous_review_like_action_is_not_trusted_without_recognized_superpowers_provenance` | integration |
+| 49 | artifact/scope/revision mutation stales review evidence before acceptance | 9 | `tests/core/plan-completion-v5.test.ts` | `artifact_or_revision_mutation_stales_review_evidence_before_acceptance` | unit |
+| 50 | clean review evidence does not create human implementation authorization | 14 | `tests/integration/justice-v5-semantic-control-plane.integration.test.ts` | `clean_review_does_not_bypass_human_artifact_chain_authorization` | E2E |
+| 51 | Justice does not schedule remediation/re-review or own runtime retry/fallback | 14 | `tests/integration/justice-v5-semantic-control-plane.integration.test.ts` | `superpowers_remediation_and_omo_retry_ownership_remain_separate` | E2E |
 
 ---
 
@@ -2904,10 +2989,10 @@ Implementation checkout precondition:
 git merge-base HEAD master == 080bcdb25b192962789ff5d67139e56487381de4
 production source/test/CI baseline before execution == master @ 080bcdb25b192962789ff5d67139e56487381de4
 pre-execution branch differences are the approved Requirements / Design / Plan documents only
-v4.2.0 merge/cherry-pick prerequisite == false
+v4.3.1 merge/cherry-pick prerequisite == false
 ```
 
-Justice `v4.2.0` is consulted only for the historical regression contracts explicitly listed in this Plan:
+Justice `v4.3.1` is consulted only as the historical regression corpus explicitly listed in this Plan:
 
 | Producer | Consumer | Contract to compare |
 |---|---|---|
@@ -2925,7 +3010,7 @@ Justice `v4.2.0` is consulted only for the historical regression contracts expli
 
 Methodology persistence authority is exclusive: Task 10 selection/activation recovery uses `WorkflowActivationStateStore` only. `ExecutionCorrelation.executionMethod` may remain execution correlation/evidence, but neither `ExecutionCorrelation` nor its store is a methodology selection/activation recovery authority.
 
-Historical regression evidence does not create a producer/consumer dependency on the v4.2.0 implementation. The three referenced v4.2.0 commits are test/audit evidence only; Task 7/10 implement the current v5 contracts above.
+Historical regression evidence does not create a producer/consumer dependency on the v4.3.1 implementation. The referenced v4 commits are test/audit evidence only; Tasks 2/3/7/9/10/12/14 implement the current v5 contracts above.
 
 Any mismatch is a Plan defect. Under the Justice v5 spec, a Ruling may record the conflict but MUST NOT silently change a normative interface; return to artifact reconciliation if the mismatch changes the Design contract.
 
@@ -2938,8 +3023,11 @@ Before this Plan is approved for execution, the Superpowers Review Gate must ver
 1. **Requirements → Design → Plan coverage**
    - every JUS5 requirement family maps to at least one task above;
    - every J5D registry contract maps to at least one task above.
-2. **47 scenarios**
-   - every Design §29 scenario has an owning task/test in the traceability table.
+2. **51 scenarios**
+   - every Design §29 scenario has an owning task/test in the traceability table;
+   - Scenarios 48–49 appear in their focused owning Task 7/9 RED→GREEN procedures;
+   - Scenario 50 has Task 3 focused authorization evidence plus Task 14 E2E closure;
+   - Scenario 51 has Task 10 Superpowers-progression evidence, Task 12 OmO-runtime evidence, and Task 14 cross-component E2E closure.
 3. **Type/signature consistency**
    - `ApprovedArtifactChain`, `TaskIdentity`, `SuperpowersExecutionMethod`, `OmoCategoryName`, `WorkflowMethodSelection`, `WorkflowMethodSelectionEvidence`, `WorkflowActivationEvidence`, `WorkflowActivationDecision`, `SemanticExecutionClass`, `SemanticClassificationResult`, `TaskRoutingProvenance`, `SuperpowersRoutingTranslationResult`, `ExecutionCorrelation`, `ConformanceContract`, `ScopedFindingMarkerExtraction`, `ReviewFindingTarget`, `ReviewFindingContextProvider`, `JusticeReviewResult`, `RevisionDiffProvider`, `FinalReviewEvidenceClosure`, `BlockedFinalReviewEvidenceAttempt`, `PlanConformanceInput`, and severity/finding-disposition vocabulary are identical at every producer/consumer boundary.
 4. **Ownership**
