@@ -14,7 +14,7 @@
 
 **Implementation Baseline:** `master @ 080bcdb25b192962789ff5d67139e56487381de4`
 
-**Historical Compatibility Reference:** Justice `v4.2.0` is a side-branch historical compatibility/regression reference only. It is **not** the Justice v5 implementation base. Do not merge or wholesale cherry-pick `v4.2.0` before implementing this Plan. Carry forward only regression contracts explicitly incorporated below.
+**Historical Compatibility Reference:** Justice `v4.3.1` is a side-branch historical regression corpus only. It is **not** the Justice v5 implementation base. Do not merge or wholesale cherry-pick `v4.3.1` before implementing this Plan. Carry forward only the harness-independent regression contracts explicitly incorporated below.
 
 ## Global Constraints
 
@@ -43,7 +43,7 @@
 - Do not manually set the package release version; the repository's release automation remains responsible for release versioning.
 - Every production-code task follows RED → GREEN → focused verification → full task test → commit.
 - Task 1 is a regression gate for the already-established OpenCode 1.18.31 / Superpowers v6.4.2 review-interop contract. A failure is upstream compatibility drift: STOP the supported-stack implementation and report the drift; do not invent a Justice-owned review fallback.
-- All production implementation tasks start from `master @ 080bcdb25b192962789ff5d67139e56487381de4`. Justice `v4.2.0` is not a merge/cherry-pick prerequisite and does not replace this base.
+- All production implementation tasks start from `master @ 080bcdb25b192962789ff5d67139e56487381de4`. Justice `v4.3.1` is not a merge/cherry-pick prerequisite and does not replace this base.
 
 ## Review Focus
 
@@ -53,13 +53,36 @@
 - **Config precedence:** user, ancestor project, nearest project, harness, and profile layers disagree; Task 11 must prove doctor reports the exact effective value and its sources.
 - **Upgrade recovery:** v4 state and unknown/newer state coexist with v5 files; Task 13 must prove neither can silently satisfy v5 acceptance.
 
-## Historical Regression Evidence — Justice v4.2.0
+## Historical Regression Evidence — Justice v4.3.1
 
-Justice `v4.2.0` was released from the v4 side branch and is **not** the v5 implementation base. Its implementation is non-normative for v5; only explicitly named regression contracts are retained:
+Justice `v4.3.1` was released from the v4 side branch and is **not** the v5 implementation base. The full v4 implementation is non-normative for v5. It is retained as a regression corpus: production failures are translated into harness-independent proof obligations, while OpenCode/OmO-v4 mechanics are discarded unless current supported-runtime evidence independently requires them.
+
+### Retained v4.2.0 regression contracts
+
+The previously recorded v4.2.0 contracts remain mandatory regression evidence:
 
 - `821343eba1223371ae0a7a20e02e7370db900306` — completed-plan final review must be recognized before implementation-task exhaustion / plan-completion cleanup can suppress the review path;
 - `4759d777aab9c80b897c55392bcc0f5833d79d7b` — task/scoped/final review workers must remain outside implementation semantics and implementation-worker enrichment;
 - `1781c7efae22ac1304fa8dc0d1f621c888943a1e` — recognized Superpowers review semantic routing must survive the OpenCode generic `subagent_type="general"` compatibility marker.
+
+Earlier v4 compatibility fixes also remain evidence for existing v5 contracts:
+
+- `de2ca2a0e2c23ed0a71808b7de246a292c0c00d8` — preserve approved task bodies instead of reconstructing them lossily;
+- `54e240ffc5415443dfa5d3dc243945e16d9d2631` — separate Justice semantic normalization from OmO runtime/wire ownership;
+- `8c8f8fd400b06d9228ceb7e30ab9c94a2acfcc72` — preserve OmO continuation/session identity instead of overloading it with Justice task identity.
+
+### Additional v4.2.1–v4.3.1 lessons
+
+| Historical evidence | Regression lesson retained by v5 | v5 owner / verification target | v4 implementation disposition |
+|---|---|---|---|
+| `aba390a983fd8eaea791785727aef39599b9d6aa`, `4688a96982355fff87e2d37e1a775b2456c6904f` | a review-looking action is not trusted evidence unless its producer/provenance is unambiguous and recognized | Task 7 / review provenance | **REDESIGN** — do not port the dedicated OpenCode controller/native-TaskTool wrapper as architecture |
+| `19ebb1c5ae9994e8b43a48b5b0ab0a43a6b006de`, `7ad4b6649a492049467d622dbc57d8b7dda94344` | unreadable, stale, wrong-scope, or artifact-mutated review evidence fails closed | Tasks 7–9 / stale evidence and final closure | **PORT AS CONTRACT** |
+| `96d088398680c6ec04f65f809384e8d6fe6d5c80`, `faae0834c0c3e7bc2adb90cbf7de9cac36506dca`, `bef5f3437d8f3827ea13cdab06267740360a0ca9` | `review_clear` / clean review evidence is not implementation authorization; human authorization remains a separate exact-artifact-chain boundary | Task 3 + Task 14 E2E | **PORT AS CONTRACT**, redesign enforcement for the target harness |
+| `05277cfdffb16ec135ea13ce1b4e978228e35a3a`, `7ad4b6649a492049467d622dbc57d8b7dda94344` | remediation must produce fresh review evidence, but Justice must not own fix/re-review progression or runtime retry | Task 10 ownership + Tasks 7–9 evidence | **PORT AS CONTRACT / DROP orchestration** |
+| `7f88e28c620ff74568691bedb88f93a1e723a1be`, `ac548a1a61eeb726f5bfe53c77ea6bab22a5300d` | a per-session Justice bypass is operationally useful and must not revive stale authority when re-enabled | future adapter capability review | **KEEP CONCEPT**, not a v5 acceptance requirement in this baseline |
+| `eea681d879ee848ba57ac51a69284392b9834544`, `368632bddda72f83fb36e58b50dd30df5fbe7e72` | OpenCode command visibility, `@path`, and prompt-template execution are harness quirks, not semantic-control-plane contracts | none cross-harness | **DROP from core**; re-evaluate only in an OpenCode adapter |
+
+The temporary same-session bootstrap dependency from `efec7a3ec5e0ae38b1b3f09e44112526ea97ee77` was superseded later on the v4 line by the standalone Review Gate architecture and is not retained.
 
 The v4 implementations themselves are **not** normative. In particular, do not carry forward:
 
@@ -68,13 +91,25 @@ The v4 implementations themselves are **not** normative. In particular, do not c
 - PlanBridge reconstruction of worker prompts from Plan task bodies;
 - hardcoded SDD methodology selection;
 - `justice_task_id` / semantic identity overloading of OmO `task_id`;
-- external both-target normalization as a general caller contract.
+- external both-target normalization as a general caller contract;
+- the OpenCode-specific `justice-review-controller` wrapper, custom-command prompt rewriting, or native TaskTool indirection;
+- the OmO v4 synchronous completion-envelope parser as a general review evidence contract;
+- Justice-owned Review Gate auto-retry/remediation scheduling;
+- OpenCode-specific session cleanup as the portable implementation of a future enable/disable capability.
 
 Where historical v4 behavior conflicts with the current Superpowers=WHAT / Justice=SEMANTIC HOW / OmO=CONCRETE HOW architecture, this v5 Plan wins.
 
-The v4.2.0 review setting `run_in_background=false` is also non-normative. It may only appear as a bounded Task 1/7 compatibility assertion if current supported-runtime evidence proves it is required to preserve the Superpowers review lifecycle; it must not become a new Justice-owned review-scheduling policy.
+The historical v4 review setting `run_in_background=false` is also non-normative. It may only appear as a bounded Task 1/7 compatibility assertion if current supported-runtime evidence proves it is required to preserve the Superpowers review lifecycle; it must not become a new Justice-owned review-scheduling policy.
 
-Task 1 remains the OpenCode 1.18.31 / Superpowers v6.4.2 runtime review-interop regression gate. It is **not** a v4.2.0 behavior-compatibility gate.
+Task ownership for the v4.3.1 corpus is explicit:
+
+- Task 3 proves that review evidence never manufactures human implementation authorization and that artifact mutation invalidates the exact approved chain;
+- Task 7 proves trusted review producer/provenance recognition and strict rejection of ambiguous/malformed/stale results;
+- Task 9 proves reviewed-candidate freshness through final evidence closure;
+- Task 10 proves remediation/re-review progression remains Superpowers-owned and runtime retry/fallback remains OmO-owned;
+- Task 14 closes Design §29 scenarios 48–51 end-to-end where an E2E boundary is required.
+
+Task 1 remains the OpenCode 1.18.31 / Superpowers v6.4.2 runtime review-interop regression gate. It is **not** a v4.3.1 behavior-compatibility gate.
 
 ---
 
@@ -2891,6 +2926,10 @@ The numbering below is Design §29. Every row fixes the owning task, exact test 
 | 45 | semantic classification uses task semantics/complexity without selecting concrete runtime | 10 | `tests/unit/core/execution-role-classifier.test.ts` | `classifier_uses_full_plan_semantics_without_selecting_concrete_runtime` | unit |
 | 46 | OmO remains concrete model/provider/runtime resolver for translated Superpowers work | 14 | `tests/integration/justice-v5-semantic-control-plane.integration.test.ts` | `translated_superpowers_work_leaves_concrete_runtime_resolution_to_omo` | E2E |
 | 47 | caller-owned OmO custom category outside Justice built-in vocabulary is preserved | 2 | `tests/core/v5-task-routing-contract.test.ts` | `preserves_user_defined_omo_category_without_translation` | unit |
+| 48 | ambiguous/model-inferred review-like producer provenance remains untrusted | 7 | `tests/runtime/opencode-adapter-review-interop.test.ts` | `ambiguous_review_like_action_is_not_trusted_without_recognized_superpowers_provenance` | integration |
+| 49 | artifact/scope/revision mutation stales review evidence before acceptance | 9 | `tests/core/plan-completion-v5.test.ts` | `artifact_or_revision_mutation_stales_review_evidence_before_acceptance` | unit |
+| 50 | clean review evidence does not create human implementation authorization | 3 | `tests/core/artifact-chain.test.ts` | `clean_review_evidence_does_not_create_human_authorization` | unit |
+| 51 | Justice does not schedule remediation/re-review or own runtime retry/fallback | 10 | `tests/core/superpowers-ownership-v5.test.ts` | `justice_does_not_schedule_remediation_or_own_runtime_retry` | unit |
 
 ---
 
@@ -2904,10 +2943,10 @@ Implementation checkout precondition:
 git merge-base HEAD master == 080bcdb25b192962789ff5d67139e56487381de4
 production source/test/CI baseline before execution == master @ 080bcdb25b192962789ff5d67139e56487381de4
 pre-execution branch differences are the approved Requirements / Design / Plan documents only
-v4.2.0 merge/cherry-pick prerequisite == false
+v4.3.1 merge/cherry-pick prerequisite == false
 ```
 
-Justice `v4.2.0` is consulted only for the historical regression contracts explicitly listed in this Plan:
+Justice `v4.3.1` is consulted only as the historical regression corpus explicitly listed in this Plan:
 
 | Producer | Consumer | Contract to compare |
 |---|---|---|
@@ -2925,7 +2964,7 @@ Justice `v4.2.0` is consulted only for the historical regression contracts expli
 
 Methodology persistence authority is exclusive: Task 10 selection/activation recovery uses `WorkflowActivationStateStore` only. `ExecutionCorrelation.executionMethod` may remain execution correlation/evidence, but neither `ExecutionCorrelation` nor its store is a methodology selection/activation recovery authority.
 
-Historical regression evidence does not create a producer/consumer dependency on the v4.2.0 implementation. The three referenced v4.2.0 commits are test/audit evidence only; Task 7/10 implement the current v5 contracts above.
+Historical regression evidence does not create a producer/consumer dependency on the v4.3.1 implementation. The referenced v4 commits are test/audit evidence only; Tasks 2/3/7/9/10/14 implement the current v5 contracts above.
 
 Any mismatch is a Plan defect. Under the Justice v5 spec, a Ruling may record the conflict but MUST NOT silently change a normative interface; return to artifact reconciliation if the mismatch changes the Design contract.
 
@@ -2938,7 +2977,7 @@ Before this Plan is approved for execution, the Superpowers Review Gate must ver
 1. **Requirements → Design → Plan coverage**
    - every JUS5 requirement family maps to at least one task above;
    - every J5D registry contract maps to at least one task above.
-2. **47 scenarios**
+2. **51 scenarios**
    - every Design §29 scenario has an owning task/test in the traceability table.
 3. **Type/signature consistency**
    - `ApprovedArtifactChain`, `TaskIdentity`, `SuperpowersExecutionMethod`, `OmoCategoryName`, `WorkflowMethodSelection`, `WorkflowMethodSelectionEvidence`, `WorkflowActivationEvidence`, `WorkflowActivationDecision`, `SemanticExecutionClass`, `SemanticClassificationResult`, `TaskRoutingProvenance`, `SuperpowersRoutingTranslationResult`, `ExecutionCorrelation`, `ConformanceContract`, `ScopedFindingMarkerExtraction`, `ReviewFindingTarget`, `ReviewFindingContextProvider`, `JusticeReviewResult`, `RevisionDiffProvider`, `FinalReviewEvidenceClosure`, `BlockedFinalReviewEvidenceAttempt`, `PlanConformanceInput`, and severity/finding-disposition vocabulary are identical at every producer/consumer boundary.
