@@ -101,6 +101,23 @@ Justice v5 remains primarily an OpenCode plugin.
 
 Direct OmO Native / Senpi integration is out of initial v5 scope and must be treated as a separate harness adapter if added later.
 
+### Historical regression source policy — Justice v4.3.1
+
+Justice `v4.3.1` is a historical regression corpus, **not** the Justice v5 implementation base. This subsection adds no independent normative requirement IDs; it records which existing `JUS5-*` contracts were earned from v4 production failures so later harness work does not accidentally reintroduce them.
+
+| v4 evidence | Failure class learned from v4 | Canonical v5 requirement mapping | Portability decision |
+|---|---|---|---|
+| `de2ca2a0e2c23ed0a71808b7de246a292c0c00d8`, `54e240ffc5415443dfa5d3dc243945e16d9d2631`, `8c8f8fd400b06d9228ceb7e30ab9c94a2acfcc72` | approved task semantics, caller-owned routing, or OmO continuation identity can be lost by reconstruction/normalization | JUS5-PLAN-04/05, JUS5-CORR-05/06 | retain the semantic contracts; do not port the v4 normalization implementation |
+| `821343eba1223371ae0a7a20e02e7370db900306`, `4759d777aab9c80b897c55392bcc0f5833d79d7b`, `1781c7efae22ac1304fa8dc0d1f621c888943a1e` | final/task/scoped review roles can be misclassified as implementation or lose their semantic route | JUS5-REV-02/06, JUS5-CAT-05/06 | retain as regression contracts |
+| `aba390a983fd8eaea791785727aef39599b9d6aa`, `4688a96982355fff87e2d37e1a775b2456c6904f` | model inference can choose the wrong review executor/route, so a review-looking action is not by itself trusted review provenance | JUS5-REV-05/06 | require unambiguous observed provenance; the OpenCode controller wrapper is non-normative |
+| `19ebb1c5ae9994e8b43a48b5b0ab0a43a6b006de`, `7ad4b6649a492049467d622dbc57d8b7dda94344` | unreadable, stale, scope-mismatched, or mutated review inputs/results must fail closed | JUS5-AUTH-02/04, JUS5-REV-09 | retain freshness/scope/fail-closed semantics |
+| `96d088398680c6ec04f65f809384e8d6fe6d5c80`, `faae0834c0c3e7bc2adb90cbf7de9cac36506dca`, `bef5f3437d8f3827ea13cdab06267740360a0ca9` | a clean review result is not implementation authorization | JUS5-AUTH-01/02/06, JUS5-ACC-01 | retain the authorization separation; do not port the OpenCode-specific lock implementation verbatim |
+| `05277cfdffb16ec135ea13ce1b4e978228e35a3a`, `7ad4b6649a492049467d622dbc57d8b7dda94344` | remediation requires fresh evidence, but owning the fix/re-review loop in Justice duplicates Superpowers methodology | JUS5-OWN-01, JUS5-REV-04/09/10, JUS5-ERR-01 | retain evidence freshness; Superpowers owns remediation/re-review progression and OmO owns runtime retry/fallback |
+| `7f88e28c620ff74568691bedb88f93a1e723a1be`, `ac548a1a61eeb726f5bfe53c77ea6bab22a5300d` | an operational Justice bypass is useful for recovery/A-B diagnosis | none in this baseline | keep as an adapter-level capability candidate; it is not promoted here to a v5 acceptance requirement |
+| `eea681d879ee848ba57ac51a69284392b9834544`, `368632bddda72f83fb36e58b50dd30df5fbe7e72` | OpenCode command visibility and prompt-template semantics can differ from model assumptions | harness-specific only | do not make OpenCode command mechanics a cross-harness Justice contract |
+
+The temporary same-session bootstrap binding introduced by `efec7a3ec5e0ae38b1b3f09e44112526ea97ee77` was superseded on the v4 line by the later standalone Gate architecture; it is **not** retained as a v5 invariant.
+
 ---
 
 ## 5. Ownership invariants
@@ -1472,3 +1489,7 @@ Justice v5 is acceptable only if E2E evidence proves at least:
 18. compaction preserves correlation and does not reuse stale evidence.
 19. final completion has zero unresolved/unauthorized semantic drift.
 20. final completion has zero missing required evidence and zero blocking quality findings.
+21. ambiguous or model-inferred review executor provenance cannot satisfy trusted review evidence.
+22. review evidence bound to an older or mutated artifact/revision cannot authorize the current candidate.
+23. clean review evidence cannot create implementation authorization without the required explicit human approval for the exact artifact chain.
+24. remediation/re-review may produce fresh evidence, but Justice must not become the owner of Superpowers fix/re-review progression or OmO runtime retry/fallback.
