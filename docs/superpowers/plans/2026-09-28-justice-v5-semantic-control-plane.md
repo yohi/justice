@@ -1158,6 +1158,12 @@ Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
+```bash
+git add src/core/types.ts src/core/task-packager.ts src/core/omo-category-mapper.ts \
+  tests/core/v5-task-routing-contract.test.ts tests/core/omo-category-mapper-v5.test.ts
+git commit -m "feat: define Native semantic routing contracts"
+```
+
 ---
 
 ### Task 3: Implement ApprovedArtifactChain Authorization and Non-Promoting v4 Authorization Migration
@@ -1476,53 +1482,124 @@ Keep the existing exact task-body preservation/digest tests.
 
 - [ ] **Step 6: Commit**
 
+```bash
+git add src/core/execution-correlation.ts src/core/superpowers-dispatch-resolver.ts src/core/types.ts \
+  tests/core/execution-correlation.test.ts tests/core/superpowers-dispatch-resolver.test.ts
+git commit -m "feat: persist Native execution correlation"
+```
+
 ---
 
-### Task 6: Wire Senpi Events to Durable Execution Correlation Without Restoring Orchestration
+### Task 6: Wire Senpi Events to Durable Execution Correlation and Produce Native Superpowers Provenance
 
-**Requirements / Design:** JUS5-HARNESS-01..03, JUS5-CORR-02..06, JUS5-SDD-01..04, JUS5-INLINE-01..02, J5D-CORR-02, J5D-OWN-01.
+**Requirements / Design:** JUS5-HARNESS-01..03, JUS5-CAT-05, JUS5-CORR-02..06, JUS5-SDD-01..04, JUS5-INLINE-01..02, J5D-CORR-02, J5D-ROUTE-01, J5D-OWN-01.
+
+**Consumes:**
+- Task 1 evidence note, including the exact public Senpi package/import surface and the PROVEN `NativeSuperpowersProvenanceProfile`;
+- Task 2 `TaskRoutingProvenance`, `NativeSuperpowersProvenanceInput`, `NativeSuperpowersProvenanceProfile`, `NativeSuperpowersProvenanceResolver`;
+- Task 5 `ExecutionCorrelation` / `ExecutionCorrelationKey`.
+
+**Produces:**
+- Justice Senpi/Pi extension entrypoint;
+- runtime `NativeSuperpowersProvenanceResolver`;
+- runtime provenance evidence bound to `parentSessionId + parentToolCallId`;
+- durable runtime task/child correlation updates.
 
 **Files:**
 - Create: `src/senpi-extension.ts`
 - Create: `src/runtime/senpi-adapter.ts`
 - Modify: `src/core/justice-plugin.ts`
 - Modify: `src/core/types.ts` only for Native adapter payloads.
-- Modify: `package.json` / build config only as required to expose the audited Senpi extension entry.
+- Modify: `package.json`
 - Create: `tests/runtime/senpi-adapter-execution-correlation.test.ts`
+- Create: `tests/runtime/senpi-adapter-provenance.test.ts`
+
+**Package/build contract:**
+- `src/senpi-extension.ts` is the Native extension entrypoint and imports `ExtensionAPI` from the exact public module specifier proven by Task 1; the audited expected specifier is `@code-yeongyu/senpi`.
+- Task 1 MUST prove that this specifier is resolvable for the repository build. If it is not, STOP for artifact reconciliation; Task 6 must not choose an alternative SDK/package ad hoc.
+- `package.json` adds an exact `./senpi` export:
+  ```json
+  {
+    "./senpi": {
+      "import": "./dist/senpi-extension.js",
+      "types": "./dist/senpi-extension.d.ts"
+    }
+  }
+  ```
+- Add `@code-yeongyu/senpi` version `2026.10.8` as a **devDependency only** for TypeScript extension API types; do not add Senpi as a Justice runtime dependency and do not bundle Senpi into Justice.
+- Existing `tsc` emission is the build authority for `dist/senpi-extension.js/.d.ts`; the OpenCode bundle command remains unchanged.
 
 **Interfaces:**
 - `tool_call(task)` is the pre-execution binding/routing seam.
-- `ctx.sessionManager.getSessionId()` + `event.toolCallId` create the pending correlation.
-- `event.input` may be mutated only for allowed semantic routing translation.
+- `ctx.sessionManager.getSessionId() + event.toolCallId` create the pending correlation.
+- `event.input` may be mutated only after trusted provenance/classification permits translation.
 - `tool_result(task)` and the exact Task-1-proven lifecycle surface attach runtime task/child identity.
+- `resolveNativeSuperpowersProvenance(input, profile)` is the only runtime producer of trusted `TaskRoutingProvenance.kind === "superpowers"`.
+- prompt wording, active method alone, task-body similarity, review-looking text, and mapping-appendix presence alone are rejected as provenance authority.
 - OpenCode adapter code is not used as Native authority and is not deleted merely to implement Native.
 
-- [ ] **Step 1: RED adapter tests**
+- [ ] **Step 1: Write RED correlation and provenance tests**
 
-Exact tests:
+Correlation:
 - `persists_native_execution_correlation_before_task_execution`
-- `mutates_only_existing_model_issued_task_call`
 - `attaches_omo_task_and_child_from_proven_native_surface`
 - `conflicting_runtime_child_binding_marks_correlation_untrusted`
 - `task_send_continuation_is_not_rewritten_by_justice`
-- `invalid_both_target_routing_is_not_trusted`
-- `does_not_create_extra_task_or_reviewer_dispatch`
 - `correlation_persistence_failure_proceeds_runtime_but_not_evidence`
 - `recovers_native_task_call_from_durable_parent_session_tool_call_binding`
 
+Provenance:
+- `task1_proven_profile_produces_superpowers_provenance_for_exact_bound_call`
+- `unrelated_model_issued_task_resolves_external`
+- `review_like_prompt_without_required_runtime_evidence_resolves_ambiguous`
+- `restart_or_compaction_invalidates_provenance_when_profile_does_not_allow_reuse`
+- `provenance_evidence_binds_parent_session_and_tool_call_id`
+- `mutates_only_existing_model_issued_task_call`
+- `invalid_both_target_routing_is_not_trusted`
+- `does_not_create_extra_task_or_reviewer_dispatch`
+
 - [ ] **Step 2: Run RED**
 
-`bun run vitest run tests/runtime/senpi-adapter-execution-correlation.test.ts`
+```bash
+bun run vitest run \
+  tests/runtime/senpi-adapter-execution-correlation.test.ts \
+  tests/runtime/senpi-adapter-provenance.test.ts
+```
 
-- [ ] **Step 3: Implement exact Task-1-proven event wiring**
+Expected: FAIL because the Native adapter, package export, and authoritative provenance resolver do not yet exist.
 
-No polling/discovery race may become authority. No task/reviewer scheduling.
+- [ ] **Step 3: Implement the exact Task-1-proven Native event/profile wiring**
 
-- [ ] **Step 4: GREEN + Task 1 evidence replay + typecheck**
+Minimum GREEN:
+- persist pending correlation before execution;
+- apply only the Task-1-proven provenance profile;
+- resolve unrelated task calls to `external` and missing/conflicting evidence to `ambiguous`;
+- produce trusted Superpowers provenance only with non-empty evidence refs bound to the exact parent session/tool call;
+- attach runtime task/child identity only through the proven Native surface;
+- never dispatch a task/reviewer or rewrite `task_send`.
 
-Run the Native adapter tests and the Task 1 contract spike. Expected: PASS.
+- [ ] **Step 4: Run GREEN + Task 1 evidence replay + typecheck/build**
 
-- [ ] **Step 5: Commit**
+```bash
+bun run vitest run tests/integration/omo-native-senpi-contract-spike.test.ts
+bun run vitest run \
+  tests/runtime/senpi-adapter-execution-correlation.test.ts \
+  tests/runtime/senpi-adapter-provenance.test.ts
+bun run typecheck
+bun run build
+```
+
+Expected: PASS, including `task1_proven_profile_produces_superpowers_provenance_for_exact_bound_call`; `dist/senpi-extension.js` and `dist/senpi-extension.d.ts` are emitted without bundling Senpi.
+
+- [ ] **Step 5: Commit exact Task 6 boundary**
+
+```bash
+git add package.json src/senpi-extension.ts src/runtime/senpi-adapter.ts \
+  src/core/justice-plugin.ts src/core/types.ts \
+  tests/runtime/senpi-adapter-execution-correlation.test.ts \
+  tests/runtime/senpi-adapter-provenance.test.ts
+git commit -m "feat: add Native Senpi correlation and provenance adapter"
+```
 
 ---
 
@@ -1587,6 +1664,13 @@ Task 7 ships a fail-closed unavailable finding-context provider until Task 8 wir
 Expected: PASS; the existing Superpowers reviewer dispatch count remains exactly one.
 
 - [ ] **Step 6: Commit**
+
+```bash
+git add src/core/review-interop.ts src/core/review-result.ts src/runtime/senpi-adapter.ts src/core/types.ts \
+  tests/core/review-interop.test.ts tests/core/review-result.test.ts \
+  tests/runtime/senpi-adapter-review-interop.test.ts
+git commit -m "feat: bind trusted Native Superpowers review evidence"
+```
 
 ---
 
@@ -1881,9 +1965,19 @@ git commit -m "feat: gate acceptance on type-safe final evidence"
 
 ---
 
-### Task 10: Activate Selected Superpowers Method on Native, Classify Semantic Work, and Remove Justice Scheduling Authority
+### Task 10: Activate Selected Superpowers Method on Native, Consume Provenance, Classify Semantic Work, and Remove Justice Scheduling Authority
 
 **Requirements / Design:** JUS5-ACT-01..04, JUS5-SDD-01..04, JUS5-DEP-01..03, JUS5-TASK-01..04, JUS5-PLAN-01..05, JUS5-CAT-05..09, J5D-OWN-01, J5D-ACT-01, J5D-TASK-01, J5D-ROUTE-01..02, J5D-CAT-02, J5D-DEP-01.
+
+**Consumes:**
+- Task 1 PROVEN activation evidence kind(s);
+- Task 2 semantic routing/provenance types;
+- Task 6 trusted `TaskRoutingProvenance`; Task 10 MUST NOT independently infer Superpowers origin.
+
+**Produces:**
+- `WorkflowActivationEvidence` using only `read_tool_result | host_expanded_skill_input` members proven by Task 1;
+- semantic classification and in-place routing translation for already-issued trusted Superpowers task calls;
+- explicit Superpowers ownership / no-Justice-scheduling behavior.
 
 **Files:**
 - Create: `src/core/workflow-activation.ts`
@@ -1900,26 +1994,34 @@ git commit -m "feat: gate acceptance on type-safe final evidence"
 - Test: `tests/core/workflow-activation-v5.test.ts`
 - Test: `tests/core/superpowers-ownership-v5.test.ts`
 - Create: `tests/runtime/senpi-adapter-semantic-routing.test.ts`
-- Test: existing PlanBridge/classifier regression suites.
+- Test: `tests/core/dependency-analyzer.test.ts`
+- Test: `tests/core/category-classifier.test.ts`
+- Test: `tests/unit/core/execution-role-classifier.test.ts`
+- Test: `tests/hooks/plan-bridge-implement.test.ts`
+- Test: `tests/core/review-dispatch-state.test.ts`
 
 **Activation contract:**
-- selection and activation remain separate.
-- implement `WorkflowActivationStateStore` as before, but Native ActivationEvidence is produced only by the exact Task-1-proven skill-loading channel.
-- package/bootstrap presence alone is not method activation.
-- child-only `load_skills` is not controller activation.
-- if Task 1 shows compaction does not preserve method-specific activation, `session_compact` invalidates current ActivationEvidence.
+- selection and activation remain separate;
+- `WorkflowActivationEvidence.evidenceKind` is exactly `read_tool_result | host_expanded_skill_input`;
+- Task 10 accepts only member(s) marked PROVEN in the Task 1 evidence note;
+- `observedCallOrInputId` binds the exact observed read/input event;
+- package/bootstrap presence and child-only `load_skills` do not prove controller activation;
+- if Task 1 shows compaction does not preserve method-specific activation, `session_compact` invalidates current ActivationEvidence;
+- any third evidence kind is an artifact change, not an implementation choice.
 
 **Native tool-mapping appendix:**
-- explain to an active Superpowers workflow that a requested subagent/reviewer must be expressed with the existing OmO Native `task` tool;
-- do not issue the call;
-- do not prescribe model/provider;
-- Task 6/7/10 recognize and translate the model-issued call.
+- instruct the active Superpowers workflow to express requested subagent/reviewer work via the existing OmO Native `task`;
+- never issue the call;
+- never prescribe model/provider;
+- Task 6 supplies provenance; Task 10 only consumes it and performs semantic translation.
 
-- [ ] **Step 1: RED activation/ownership tests**
+- [ ] **Step 1: Write RED activation/ownership tests**
 
-Include:
+Exact tests:
 - `authorized_implementation_activates_selected_superpowers_execution_method`
-- `native_skill_load_is_required_for_method_activation`
+- `read_tool_result_activation_evidence_uses_observed_call_or_input_id`
+- `host_expanded_skill_input_activation_evidence_uses_observed_call_or_input_id`
+- `unproven_activation_evidence_kind_is_rejected`
 - `package_bootstrap_alone_does_not_prove_method_activation`
 - `child_load_skills_does_not_activate_controller_method`
 - `compaction_requires_fresh_activation_when_survival_is_unproven`
@@ -1929,38 +2031,87 @@ Include:
 - `justice_does_not_schedule_remediation_or_rereview`
 - `dependency_analyzer_cannot_reorder_or_dispatch_tasks`
 
-- [ ] **Step 2: RED semantic classifier / Native routing tests**
+- [ ] **Step 2: Write RED semantic/provenance routing tests**
 
-Keep the exact classifier semantics. Native adapter tests include:
+Exact tests:
 - `recognized_superpowers_native_task_translates_to_justice_category`
 - `recognized_superpowers_native_task_never_emits_category_and_subagent_type_together`
+- `routing_requires_task6_trusted_superpowers_provenance`
+- `ambiguous_or_external_provenance_is_not_upgraded_by_prompt_shape`
 - `external_explicit_subagent_type_is_preserved`
 - `superpowers_specialized_subagent_type_is_preserved`
 - `task_send_continuation_does_not_receive_worker_category`
 - `missing_native_method_activation_makes_worker_routing_untrusted`
-- `justice_does_not_select_concrete_model_or_provider`.
+- `justice_does_not_select_concrete_model_or_provider`
+- existing full-task semantic classifier regressions.
 
 - [ ] **Step 3: Run RED focused set**
 
-Run Native activation/ownership/classifier/routing + historical review-before-implementation PlanBridge regressions.
+```bash
+bun run vitest run \
+  tests/core/workflow-activation-v5.test.ts \
+  tests/core/superpowers-ownership-v5.test.ts \
+  tests/runtime/senpi-adapter-semantic-routing.test.ts \
+  tests/core/dependency-analyzer.test.ts \
+  tests/core/category-classifier.test.ts \
+  tests/unit/core/execution-role-classifier.test.ts \
+  tests/hooks/plan-bridge-implement.test.ts \
+  tests/core/review-dispatch-state.test.ts
+```
+
+Expected: FAIL on stale activation shape, missing Task-6 provenance consumption, and remaining Justice-owned progression.
 
 - [ ] **Step 4: Remove active Justice scheduling authority**
 
-Migration readers may remain; current review/task dispatch directives must not.
+Migration readers may remain; current review/task/fix dispatch directives must not.
 
 - [ ] **Step 5: Implement Native activation observation and mapping appendix**
 
-Use only Task-1-proven events/evidence. Persist current-session activation after durable save.
+Minimum GREEN:
+- activation evidence uses the canonical bounded evidence type;
+- unsupported/unproven channel → `unavailable / NOT_PROVEN`;
+- same-session recovery requires matching authorization/session/method/evidence kind;
+- compaction invalidation follows Task 1 evidence exactly.
 
 - [ ] **Step 6: Implement semantic classifier and in-place Native task translation**
 
-Translate only the already-issued task call. Preserve external/specialized routes and `task_send`.
+Minimum GREEN:
+- consume only Task 6 trusted provenance;
+- translate only the already-issued task call;
+- preserve external/specialized routes and `task_send`;
+- never select model/provider/retry/fallback.
 
-- [ ] **Step 7: GREEN focused set + full suite**
+- [ ] **Step 7: Run GREEN focused set + full suite**
 
-Expected: PASS, including historical v4.3.1 ownership regressions.
+```bash
+bun run vitest run \
+  tests/core/workflow-activation-v5.test.ts \
+  tests/core/superpowers-ownership-v5.test.ts \
+  tests/runtime/senpi-adapter-semantic-routing.test.ts \
+  tests/core/dependency-analyzer.test.ts \
+  tests/core/category-classifier.test.ts \
+  tests/unit/core/execution-role-classifier.test.ts \
+  tests/hooks/plan-bridge-implement.test.ts \
+  tests/core/review-dispatch-state.test.ts
+bun run test
+bun run typecheck
+```
 
-- [ ] **Step 8: Commit**
+Expected: PASS, including historical v4.3.1 ownership regressions, bounded Native activation evidence, and provenance-only routing translation.
+
+- [ ] **Step 8: Commit exact Task 10 boundary**
+
+```bash
+git add src/core/workflow-activation.ts src/runtime/senpi-superpowers-mapping.ts \
+  src/runtime/senpi-adapter.ts src/core/workflow-directives.ts src/core/types.ts \
+  src/core/review-dispatch-state.ts src/core/justice-plugin.ts src/hooks/plan-bridge.ts \
+  src/core/dependency-analyzer.ts src/core/execution-role-classifier.ts src/core/category-classifier.ts \
+  tests/core/workflow-activation-v5.test.ts tests/core/superpowers-ownership-v5.test.ts \
+  tests/runtime/senpi-adapter-semantic-routing.test.ts tests/core/dependency-analyzer.test.ts \
+  tests/core/category-classifier.test.ts tests/unit/core/execution-role-classifier.test.ts \
+  tests/hooks/plan-bridge-implement.test.ts tests/core/review-dispatch-state.test.ts
+git commit -m "feat: activate Superpowers and translate trusted Native intent"
+```
 
 ---
 
@@ -1970,51 +2121,107 @@ Expected: PASS, including historical v4.3.1 ownership regressions.
 
 **Files:**
 - Create: `src/core/omo-effective-config.ts`
-- Modify: doctor/config/category/runtime diagnostic modules.
-- Create/modify: `tests/runtime/doctor-v5.test.ts`, effective-config and doctor core tests.
+- Modify: `src/core/doctor-config.ts`
+- Modify: `src/core/doctor-categories.ts`
+- Modify: `src/core/doctor-specifier.ts`
+- Modify: `src/core/controller-routing.ts`
+- Modify: `src/runtime/doctor-cli.ts`
+- Modify: `src/runtime/doctor-cli-helpers.ts`
+- Create: `tests/core/omo-effective-config.test.ts`
+- Modify: `tests/core/justice-doctor-config.test.ts`
+- Modify: `tests/core/doctor-categories.test.ts`
+- Modify: `tests/core/doctor-specifier.test.ts`
+- Modify: `tests/core/controller-routing.test.ts`
+- Create: `tests/runtime/doctor-v5.test.ts`
+- Modify: `tests/runtime/doctor-cli.test.ts`
+
+**Consumes:**
+- Task 1 capability/evidence profile;
+- Task 2 current category vocabulary;
+- Task 6 Native extension/correlation capability;
+- Task 10 activation capability.
+
+**Produces:**
+- `OmoEffectiveConfigResult`;
+- configured/applied/observed Native doctor capability model.
 
 **Effective config:**
 - user + ancestor project layers;
 - effective view `shared → [native] → profile → profile.[native]`;
-- `[senpi]` accepted only as legacy/deprecation input;
+- `[senpi]` is legacy/deprecation input only;
 - profile precedence matches audited v5.1.17 loader;
 - custom category namespace is open;
 - built-in diagnostic list includes `architect`.
 
-**Doctor capability model must independently report:**
-- OmO Native/Senpi version metadata;
-- Justice Native extension loaded;
-- `task` and `task_send`;
-- `tool_call` mutable-input + `toolCallId` + session identity;
-- Task-1-proven child binding and review delivery;
-- Superpowers package/bootstrap;
-- method-specific activation evidence;
-- effective Native config / custom `sp-*` category resolution;
-- secure review evidence capability;
-- secondary OpenCode adapter if present.
+- [ ] **Step 1: Write RED effective-config/doctor tests**
 
-- [ ] **Step 1: RED effective config tests**
+Exact config tests:
+- `resolves_user_project_harness_profile_precedence`
+- `native_section_overrides_shared_base`
+- `selected_profile_native_overrides_selected_profile_base`
+- `legacy_senpi_section_is_reported_as_migration_input_not_canonical_output`
+- `invalid_config_layer_is_reported_not_silently_ignored`
 
-Update precedence test to `[native]`; ensure legacy `[senpi]` is diagnostic/migration input.
-
-- [ ] **Step 2: RED doctor tests**
-
-Exact key cases:
+Exact doctor tests:
 - `compatible_native_patch_with_required_capabilities_is_supported`
 - `missing_native_task_or_child_binding_capability_is_unsupported`
 - `doctor_reports_superpowers_native_activation_capability_separately`
+- `doctor_reports_provenance_profile_capability_separately`
 - `doctor_separates_source_configured_applied_and_observed_values`
-- `doctor_does_not_treat_opencode_adapter_as_native_authority`.
+- `doctor_does_not_treat_opencode_adapter_as_native_authority`
 
-- [ ] **Step 3: RED run**
+- [ ] **Step 2: Run RED**
 
-- [ ] **Step 4: Implement resolver + capability model**
+```bash
+bun run vitest run \
+  tests/core/omo-effective-config.test.ts \
+  tests/core/justice-doctor-config.test.ts \
+  tests/core/doctor-categories.test.ts \
+  tests/core/doctor-specifier.test.ts \
+  tests/core/controller-routing.test.ts \
+  tests/runtime/doctor-v5.test.ts \
+  tests/runtime/doctor-cli.test.ts
+```
 
-Do not import a private upstream workspace package as an unsupported runtime dependency; reproduce the documented public configuration contract unless Task 1/compatibility evidence establishes a supported API.
+Expected: FAIL because current doctor/config paths model OpenCode/single-file state and do not expose Native provenance/activation capability separately.
 
-- [ ] **Step 5: GREEN + build**
+- [ ] **Step 3: Implement resolver + capability model**
 
-- [ ] **Step 6: Commit**
+Minimum GREEN:
+- reproduce current documented file/profile precedence;
+- use `[native]` as canonical harness key;
+- surface Task-1/Task-6 provenance and child-binding capability independently;
+- distinguish source/configured/applied/observed values;
+- do not import an unsupported private upstream config workspace package.
+
+- [ ] **Step 4: Run GREEN + build**
+
+```bash
+bun run vitest run \
+  tests/core/omo-effective-config.test.ts \
+  tests/core/justice-doctor-config.test.ts \
+  tests/core/doctor-categories.test.ts \
+  tests/core/doctor-specifier.test.ts \
+  tests/core/controller-routing.test.ts \
+  tests/runtime/doctor-v5.test.ts \
+  tests/runtime/doctor-cli.test.ts
+bun run typecheck
+bun run build
+```
+
+Expected: PASS with the effective Native configured value and all required proof capabilities reported independently.
+
+- [ ] **Step 5: Commit exact Task 11 boundary**
+
+```bash
+git add src/core/omo-effective-config.ts src/core/doctor-config.ts src/core/doctor-categories.ts \
+  src/core/doctor-specifier.ts src/core/controller-routing.ts src/runtime/doctor-cli.ts \
+  src/runtime/doctor-cli-helpers.ts tests/core/omo-effective-config.test.ts \
+  tests/core/justice-doctor-config.test.ts tests/core/doctor-categories.test.ts \
+  tests/core/doctor-specifier.test.ts tests/core/controller-routing.test.ts \
+  tests/runtime/doctor-v5.test.ts tests/runtime/doctor-cli.test.ts
+git commit -m "feat: diagnose OmO Native effective configuration"
+```
 
 ---
 
@@ -2022,32 +2229,88 @@ Do not import a private upstream workspace package as an unsupported runtime dep
 
 **Requirements / Design:** JUS5-CAT-01..04, JUS5-CTRL-01..03, JUS5-ERR-01..03, J5D-CAT-01, J5D-RUNTIME-01.
 
-**Files:** retain the existing error/provider/controller drift modules and tests.
+**Files:**
+- Modify: `src/core/provider-error-patterns.ts`
+- Modify: `src/core/error-classifier.ts`
+- Modify: `src/core/workflow-router.ts`
+- Modify: `src/core/controller-routing.ts`
+- Modify: `src/core/category-classifier.ts`
+- Modify: `src/core/omo-category-mapper.ts`
+- Test: `tests/core/provider-error-patterns.test.ts`
+- Test: `tests/core/error-classifier.test.ts`
+- Test: `tests/unit/core/workflow-router.test.ts`
+- Test: `tests/core/controller-routing.test.ts`
+- Test: `tests/core/category-classifier.test.ts`
+- Test: `tests/unit/core/omo-category-mapper.test.ts`
+- Create/modify: `tests/core/omo-v5-upstream-drift.test.ts`
 
 **Current drift assertions:**
 - Native built-in vocabulary includes `architect` and no canonical legacy `deep`;
 - provider/runtime failure classification remains diagnostic-only;
 - Justice does not implement provider retry/fallback, task reconnect/revival, host handoff, lane reclaim, or process-mode recovery;
 - config remediation points to current `omo.json[c]` / `[native]`, never legacy OpenCode files;
-- runtime/provider signals align with the audited v5.1.17/Senpi v2026.10.8 behavior.
+- runtime/provider signals align with audited v5.1.17/Senpi v2026.10.8 behavior.
 
-- [ ] **Step 1: RED drift tests**
+- [ ] **Step 1: Write RED drift tests**
 
-Include:
+Exact tests:
 - `native_category_vocabulary_includes_architect_and_excludes_legacy_deep`
 - `provider_failure_classification_does_not_trigger_justice_retry_or_fallback`
 - `task_transport_or_host_recovery_is_not_reimplemented_by_justice`
-- stale OpenCode config remediation absent.
+- `native_config_remediation_does_not_point_to_legacy_opencode_files`
+- `controller_routing_does_not_restore_sisyphus_atlas_authority`
 
-- [ ] **Step 2: RED run**
+- [ ] **Step 2: Run RED**
+
+```bash
+bun run vitest run \
+  tests/core/provider-error-patterns.test.ts \
+  tests/core/error-classifier.test.ts \
+  tests/unit/core/workflow-router.test.ts \
+  tests/core/controller-routing.test.ts \
+  tests/core/category-classifier.test.ts \
+  tests/unit/core/omo-category-mapper.test.ts \
+  tests/core/omo-v5-upstream-drift.test.ts
+```
+
+Expected: FAIL on stale category/config/controller/runtime diagnostics.
 
 - [ ] **Step 3: Update diagnostics only**
 
-Do not implement runtime recovery/retry/fallback.
+Minimum GREEN:
+- synchronize patterns/vocabulary/messages to v5.1.17/Senpi v2026.10.8;
+- keep `ErrorClassifier.shouldRetry()` diagnostic-only;
+- no Justice provider/model retry/fallback;
+- no task reconnect/revival/host handoff/lane reclaim/process-mode recovery;
+- no legacy OpenCode config remediation as canonical guidance.
 
-- [ ] **Step 4: GREEN + typecheck**
+- [ ] **Step 4: Run GREEN + typecheck**
 
-- [ ] **Step 5: Commit**
+```bash
+bun run vitest run \
+  tests/core/provider-error-patterns.test.ts \
+  tests/core/error-classifier.test.ts \
+  tests/unit/core/workflow-router.test.ts \
+  tests/core/controller-routing.test.ts \
+  tests/core/category-classifier.test.ts \
+  tests/unit/core/omo-category-mapper.test.ts \
+  tests/core/omo-v5-upstream-drift.test.ts
+bun run typecheck
+```
+
+Expected: PASS including `provider_failure_classification_does_not_trigger_justice_retry_or_fallback`.
+
+- [ ] **Step 5: Commit exact Task 12 boundary**
+
+```bash
+git add src/core/provider-error-patterns.ts src/core/error-classifier.ts src/core/workflow-router.ts \
+  src/core/controller-routing.ts src/core/category-classifier.ts src/core/omo-category-mapper.ts \
+  tests/core/provider-error-patterns.test.ts tests/core/error-classifier.test.ts \
+  tests/unit/core/workflow-router.test.ts tests/core/controller-routing.test.ts \
+  tests/core/category-classifier.test.ts tests/unit/core/omo-category-mapper.test.ts \
+  tests/core/omo-v5-upstream-drift.test.ts
+git commit -m "fix: synchronize OmO Native runtime diagnostics"
+```
 
 ---
 
@@ -2201,6 +2464,12 @@ git diff --check
 Expected: PASS plus Task-1 pinned Native contract evidence PASS.
 
 - [ ] **Step 6: Commit**
+
+```bash
+git add tests/integration/justice-v5-semantic-control-plane.integration.test.ts \
+  README.md SPEC.md docs/agents/upstream-drift.md docs/reports/upstream-compatibility-audit.md
+git commit -m "docs: finalize Justice v5 Native integration evidence"
+```
 
 - [ ] **Step 7: Confirm clean candidate HEAD**
 
