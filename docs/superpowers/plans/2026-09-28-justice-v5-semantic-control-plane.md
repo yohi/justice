@@ -693,7 +693,6 @@ type BindPendingInput = {
   readonly executionMethod: "subagent-driven-development" | "executing-plans";
   readonly parentSessionId: string;
   readonly parentToolCallId: string;
-  readonly omoTaskId?: string;
   readonly dispatchRevision: string;
 };
 
@@ -1011,7 +1010,12 @@ Required tests:
 
 - [ ] **Step 3: Run the spike against the pinned Native stack**
 
-Run the repository integration command for this exact file using an isolated HOME/agent directory and the pinned OmO/Senpi/Superpowers packages.
+Run:
+```bash
+bun run vitest run tests/integration/omo-native-senpi-contract-spike.test.ts
+```
+
+The test fixture MUST create its own isolated HOME/agent directory and refuse to run against versions other than the pinned OmO/Senpi/Superpowers baseline.
 
 Expected: every required contract is either **PROVEN with captured event evidence** or the Task is BLOCKED. No “probably equivalent to OpenCode” result is acceptable.
 
