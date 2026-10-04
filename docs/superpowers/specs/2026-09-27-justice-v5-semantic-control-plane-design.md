@@ -553,6 +553,54 @@ final review       → final-review → sp-final-review
 
 Native continuation is `task_send(to=<task id or name>)`; it is not passed through new-child category translation.
 
+### 7.5 Native Superpowers provenance — J5D-ROUTE-01
+
+Trusted Superpowers provenance is a runtime evidence product, not a prompt classification.
+
+Task 1 produces an audited `NativeSuperpowersProvenanceProfile` for the pinned stack:
+
+```text
+NativeSuperpowersProvenanceProfile
+├─ profileId
+├─ sourceKind
+├─ requiredObservedFields[]
+├─ parentSessionBinding
+├─ parentToolCallBinding
+├─ workflowMethodBinding
+├─ restartCompactionValidity
+└─ rejectionRules[]
+```
+
+Task 6 is the sole runtime producer. It applies the proven profile to one observed Native `tool_call(task)` and produces:
+
+```text
+NativeSuperpowersProvenanceEvidence
+├─ profileId
+├─ parentSessionId
+├─ parentToolCallId
+├─ role
+├─ sourceEvidenceRefs[]
+└─ observedAt
+```
+
+The resolver result is:
+
+```text
+superpowers(evidence)
+external
+ambiguous(reasons)
+```
+
+False-positive prevention is normative:
+
+- prompt wording, task body similarity, review-looking text, method activation alone, and mapping-appendix presence alone are insufficient;
+- unrelated model-issued `task` calls must resolve to `external`;
+- missing/conflicting required observations resolve to `ambiguous`;
+- restart/compaction may reuse provenance only when the Task-1 profile explicitly proves the binding survives that boundary;
+- Tasks 7 and 10 consume the result but do not re-infer provenance.
+
+If Task 1 cannot prove an authoritative source/binding, Native semantic translation and trusted Native review evidence are blocked for artifact reconciliation.
+
 ---
 
 ## 8. Superpowers and Justice state ownership
@@ -1683,6 +1731,16 @@ evidenceKind
 observedCallOrInputId
 observedAt
 ```
+
+For this baseline:
+
+```text
+evidenceKind
+= read_tool_result
+| host_expanded_skill_input
+```
+
+Task 1 must prove at least one member end-to-end. Task 10 consumes only the proven member(s); any third channel is an architecture change requiring artifact reconciliation.
 
 Cross-session recovery restores selection only. Same-session activation may survive restart only with exact identity/evidence validation.
 
