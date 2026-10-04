@@ -2147,7 +2147,7 @@ The implementer does not dispatch the final whole-branch reviewer.
 
 ---
 
-## Controller-Owned Finalization## Controller-Owned Finalization After Task 14
+## Controller-Owned Finalization After Task 14
 
 This phase belongs to the Superpowers controller, not the Task 14 implementer. It MUST follow Superpowers v6.4.2 final-review progression exactly; Justice observes/composes evidence and never schedules an additional reviewer.
 
