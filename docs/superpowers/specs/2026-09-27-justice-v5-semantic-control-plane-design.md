@@ -1,7 +1,10 @@
 # Justice v5 Semantic Control Plane Design
 
+<!-- markdownlint-disable MD013 MD029 -->
+<!-- Exact contracts use soft wrapping; scenario numbers are stable IDs. -->
+
 **Date:** 2026-09-27
-**Status:** DRAFT — awaiting human review
+**Status:** Task 1 BLOCKED reconciliation — Fresh Superpowers Review Gate required
 **Authorization:** NOT SELF-AUTHORIZING
 **Target:** Justice v5.x
 **Baseline:** Justice master @ 080bcdb25b192962789ff5d67139e56487381de4
@@ -44,6 +47,14 @@ PlanComplete = true
 ---
 
 ## 2. Scope
+
+### Evidence checkpoint and authorization
+
+Approved Gate: Justice `53d4abcc7b1a887f18860c0f3ba013aae0c2fbf3`. Evidence commit `e2a1662794927f3be11c3e58b688cbfb482bb3f0`: BLOCKED, 15 contracts, 9 PROVEN, 6 BLOCKED. Pins: OmO 5.1.17 / `091728d274f20d62504b0b5e1edbc3970671dd8b`, Senpi 2026.10.8 / `d56e6a260d9468418a39bc9120945cf98e06b840`, Superpowers 6.4.2 / `8ca22dba9a94f28898bbce59f2537ff4d87c747d`.
+
+Preserve PROVEN: normal isolated startup/exit; real model-issued OmO task; observable tool_call/tool_result and pre-execution mutation; valid type-only ExtensionAPI import; parent runtime task identity; unique child storage binding in tested host-session path; current-session read_tool_result activation; no Justice production source required. Native exact semantic provenance and review appendix delivery remain BLOCKED. Host-expanded activation, compaction survival, and identical cross-mode physical binding remain NOT_PROVEN. New protocol decisions below are not new runtime proof.
+
+Tasks 2–14 remain NOT AUTHORIZED. Fresh Superpowers Review Gate READY authorizes only revised Task 1. Revised A–K evidence must be PROVEN before production authorization is reconsidered.
 
 ### 2.1 In scope
 
@@ -179,10 +190,10 @@ For Conformance Contract projection, the canonical normative Design surface is e
 Other prose in this Design explains or elaborates these contracts. It is not independently enumerated by searching for words such as `MUST`.
 
 | ID | Normative design obligation |
-|---|---|
+| --- | --- |
 | J5D-OWN-01 | Superpowers owns execution-method selection and workflow/review progression; Justice may activate the selected supported methodology but must not duplicate progression. |
 | J5D-OWN-02 | OmO owns concrete agent/runtime/model/provider/reasoning/retry/fallback routing. |
-| J5D-ACT-01 | Justice keeps methodology MethodSelection separate from Native current-session ActivationEvidence: only audited runtime-observed Superpowers skill loading/invocation may prove activation; cross-session recovery may restore selection but never activation, and unproven compaction survival invalidates activation for acceptance. |
+| J5D-ACT-01 | MethodSelection is separate from ActivationEvidence; required activation is exact installed method read_tool_result. Activation/capability are memory-only and invalidated by shutdown, restart, accepted compaction, authorization or method replacement; fresh method read is required. Task 2 owns domain contracts and Task 6 owns observation/state, with no Task 10 back-edge. |
 | J5D-GATE-01 | Justice owns fail-closed authorization/evidence/conformance acceptance. |
 | J5D-TASK-01 | Superpowers task semantics must be preserved without lossy prompt reconstruction. |
 | J5D-CHAIN-01 | Human authorization binds an exact Requirements→Design→Plan artifact chain. |
@@ -197,7 +208,9 @@ Other prose in this Design explains or elaborates these contracts. It is not ind
 | J5D-PROJ-02 | Projection has COMPLETE/INCOMPLETE/INVALID state; only COMPLETE may pass acceptance. |
 | J5D-PROJ-03 | Projection schema/version is bound to artifact-chain and evidence identity. |
 | J5D-REVIEW-01 | Justice observes an existing Superpowers review dispatch and never creates a duplicate review. |
-| J5D-REVIEW-02 | Native review interop binds an existing Superpowers-originated `tool_call(task)` to exactly one reviewer child/run and delivers the Conformance Contract through a race-free Senpi/OmO Native context seam proven by the runtime evidence spike; uncertainty yields no trusted evidence and Justice never duplicate-dispatches a reviewer. |
+| J5D-REVIEW-02 | Exact-call capability validation precedes stripping and serialized Conformance Contract augmentation of the existing task prompt before spawn. No pending appendix queue exists. Normalized exact-call/runtime-task/child correlation must be proven per supported mode; mutation/ordering uncertainty yields NOT_PROVEN. |
+| J5D-CAP-01 | Justice-owned NativeSuperpowersTaskCapability follows §7.5: cryptographic session/authorization/method-bound issuance after PROVEN read, exact description envelope, strict decode/restore/strip, no prompt-origin inference, batch isolation, and same_session_only validity. |
+| J5D-HARNESS-01 | Revised Task 1 proves A–K in fixtures only with allowlisted child env, pinned deterministic mock provider, no external fallback, non-mock rejection, and secret/capability-safe raw evidence; failure stops for reconciliation. |
 | J5D-REVIEW-03 | Trusted review evidence uses versioned structured results; the current Superpowers scoped dispatch supplies exact marker IDs for its current target set, while persisted trusted lineage evidence separately supplies metadata and a lineage-wide reserved finding-ID set so historical identities cannot be reused by new breakage; empty target sets remain valid for clause-only re-proof. |
 | J5D-REVIEW-04 | Missing, malformed, stale, wrong-scope, untrusted, identity-inconsistent, diff-failed, or incompletely covered final-review evidence fails closed; failed final-evidence attempts never masquerade as trusted closures. |
 | J5D-QUALITY-01 | Critical/Important findings block; Minor is deferred-visible; parked/Ruling is not resolution. |
@@ -220,7 +233,7 @@ Justice `v4.3.1` is evidence about failure modes, not a source implementation fo
 The v4.2.0→v4.3.1 maintenance line established the following reusable lessons:
 
 | Historical evidence | Observed failure mode | Retained v5 design contract | Non-retained implementation detail |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `de2ca2a0e2c23ed0a71808b7de246a292c0c00d8`, `54e240ffc5415443dfa5d3dc243945e16d9d2631`, `8c8f8fd400b06d9228ceb7e30ab9c94a2acfcc72` | task meaning, routing ownership, or continuation identity was damaged by lossy reconstruction/normalization | J5D-TASK-01, J5D-CORR-01, J5D-ROUTE-01 | v4 PlanBridge/task-wire normalization |
 | `821343eba1223371ae0a7a20e02e7370db900306`, `4759d777aab9c80b897c55392bcc0f5833d79d7b`, `1781c7efae22ac1304fa8dc0d1f621c888943a1e` | review/final-review work was confused with implementation or lost its semantic route | J5D-REVIEW-01, J5D-ROUTE-01/02 | v4 SDD-specific routing hooks |
 | `aba390a983fd8eaea791785727aef39599b9d6aa`, `4688a96982355fff87e2d37e1a775b2456c6904f` | the model selected a review-looking executor that was not the intended trusted evidence producer | J5D-REVIEW-01/03/04 | dedicated OpenCode `justice-review-controller`, native TaskTool wrapper, exact OmO v4 envelope parser |
@@ -292,6 +305,7 @@ The boundary is intentionally asymmetric:
 - Justice semantic classification does not make Justice the concrete runtime resolver.
 
 Justice is authoritative at activation-validation, semantic translation, authorization, and acceptance boundaries, but not at Superpowers progression or OmO concrete runtime selection.
+
 ---
 
 ## 5. Plan and artifact authority
@@ -488,6 +502,10 @@ parentToolCallId = tool_call.toolCallId
 
 Senpi v2026.10.8 guarantees that `tool_call` runs before execution and that `event.input` is mutable in place. Justice persists the semantic binding before trusting later execution evidence.
 
+For supported batches, extend ExecutionCallKey / ExecutionCorrelationKey, BindPendingInput, ExecutionCorrelation, and PendingReviewCorrelation with optional batchItemIndex (zero-based and required for an item). Single-call records omit it. Task 5 owns this additive correlation change; Tasks 6/7 consume the same index. The pair identifies the outer invocation, not a unique child in fanout.
+
+BindPendingInput additionally carries dispatchShape=`single | batch_item`, derived by Task 6 from actual task prompt/tasks shape. single requires absent index; batch_item requires integer 0–15. Invalid shape/index → untrusted CorrelationMutationResult. This validates fanout without borrowing a sibling identity.
+
 ```text
 ExecutionCorrelation
 ├─ authorizationId
@@ -553,53 +571,82 @@ final review       → final-review → sp-final-review
 
 Native continuation is `task_send(to=<task id or name>)`; it is not passed through new-child category translation.
 
-### 7.5 Native Superpowers provenance — J5D-ROUTE-01
+### 7.5 Justice-owned capability provenance — J5D-CAP-01 / J5D-ROUTE-01
 
-Trusted Superpowers provenance is a runtime evidence product, not a prompt classification.
+Pinned upstream exposes session/call identity, not a proven semantic-origin field. NativeSuperpowersProvenanceProfile is removed from the implementation contract. Task 2 owns domain contracts; Task 6 alone issues/validates capabilities and produces exact-call provenance. Review role is a separate Task 7 classification, never proof of origin.
 
-Task 1 produces an audited `NativeSuperpowersProvenanceProfile` for the pinned stack:
-
-```text
-NativeSuperpowersProvenanceProfile
-├─ profileId
-├─ sourceKind
-├─ requiredObservedFields[]
-├─ parentSessionBinding
-├─ parentToolCallBinding
-├─ workflowMethodBinding
-├─ restartCompactionValidity
-└─ rejectionRules[]
+```ts
+type NativeSuperpowersTaskCapability = {
+  readonly schemaVersion: "justice-native-superpowers-task-capability-v1";
+  readonly capabilityId: string;
+  readonly authorizationId: string;
+  readonly sessionId: string;
+  readonly method: SuperpowersExecutionMethod;
+  readonly issuedFromReadToolCallId: string;
+};
+type NativeSuperpowersProvenanceEvidence = {
+  readonly schemaVersion: "justice-native-superpowers-provenance-evidence-v1";
+  readonly protocolId: "justice-native-superpowers-task-capability-v1";
+  readonly capabilityDigest: string;
+  readonly authorizationId: string;
+  readonly method: SuperpowersExecutionMethod;
+  readonly issuedFromReadToolCallId: string;
+  readonly parentSessionId: string;
+  readonly parentToolCallId: string;
+  readonly batchItemIndex?: number;
+  readonly sourceEvidenceRefs: readonly [string, ...string[]];
+  readonly observedAt: string;
+};
+type TaskRoutingProvenance =
+  | { readonly kind: "superpowers"; readonly evidence: NativeSuperpowersProvenanceEvidence }
+  | { readonly kind: "external" }
+  | { readonly kind: "ambiguous"; readonly reasons: readonly [string, ...string[]] };
+type NativeSuperpowersProvenanceInput = {
+  readonly authorizationId: string;
+  readonly parentSessionId: string;
+  readonly parentToolCallId: string;
+  readonly batchItemIndex?: number;
+  readonly taskArgs: Readonly<Record<string, unknown>>;
+  readonly executionMethod: SuperpowersExecutionMethod;
+  readonly observedEvidenceRefs: readonly string[];
+};
+type CapabilityEnvelopeDecodeResult =
+  | { readonly kind: "absent" }
+  | { readonly kind: "decoded"; readonly capabilityId: string; readonly originalDescription: string | null }
+  | { readonly kind: "invalid"; readonly reason: "malformed_capability" | "duplicate_capability" };
+type NativeCapabilityValidationResult = {
+  readonly provenance: TaskRoutingProvenance;
+  readonly restoredDescription: string | null;
+  readonly stripRequired: boolean;
+};
+interface NativeSuperpowersProvenanceResolver {
+  resolve(input: NativeSuperpowersProvenanceInput): NativeCapabilityValidationResult;
+}
+declare function encodeTaskCapabilityEnvelope(capabilityId: string, originalDescription: string | null): string;
+declare function decodeTaskCapabilityEnvelope(description: unknown): CapabilityEnvelopeDecodeResult;
 ```
 
-Task 6 is the sole runtime producer. It applies the proven profile to one observed Native `tool_call(task)` and produces:
+**Issuance:** Only successful read_tool_result for the exact installed selected method SKILL.md, matching current authorization/session/method/read call, records activation and mints a token. Use `randomBytes(32).toString("base64url")`: 43 unpadded characters, 256-bit entropy. Live registry metadata is authority; model-provided metadata is not. New successful method read replaces the prior capability. Original skill content stays byte-for-byte intact; append a separate result text block with an English mapping directive and exact description-envelope example for the parent model. Issuance failure → capability_unavailable, no token/directive, NOT_PROVEN. Tokens never enter logs, persisted state, review contracts, or child prompts; evidence stores sha256 capabilityDigest. Package/bootstrap, child load_skills, or prompt wording never mint one.
 
-```text
-NativeSuperpowersProvenanceEvidence
-├─ profileId
-├─ parentSessionId
-├─ parentToolCallId
-├─ role
-├─ sourceEvidenceRefs[]
-└─ observedAt
-```
+**Exact transport:** Use only optional `description`, declared unrestricted string for single task and batch items in pinned `packages/senpi-task/src/tools/task/params.ts`. task_summary has an 80-character limit and is not used. Encode ASCII prefix `[[justice-capability-v1]]` immediately followed by compact `JSON.stringify({capabilityId,originalDescription})`, keys in that order. originalDescription is exact caller string (including empty) or null for absent property. Limit: 8,192 UTF-8 bytes; larger caller label cannot use the capability envelope and remains original/untrusted without truncation.
 
-The resolver result is:
+Decode requires prefix at byte zero, exactly two unique JSON keys, no duplicate keys, token regex `^[A-Za-z0-9_-]{43}$`, string/null originalDescription, complete JSON consumption, and byte limit. Unknown keys, trailing text, nested reserved prefix, or malformed/oversize marker → malformed_capability; repeated prefix or duplicate keys → duplicate_capability. No reserved marker anywhere → absent/external; a reserved prefix elsewhere is invalid. Never search prompt wording for authority.
 
-```text
-superpowers(evidence)
-external
-ambiguous(reasons)
-```
+**Validation/restoration:** At exact model-issued tool_call check live activation, registry, authorization, session, method and non-empty observed call/evidence identity. On success record toolCallId and optional batchItemIndex; restore exact original description or delete the property for null, then read back the stripped input before producing trusted evidence. A valid envelope with invalid capability still restores originalDescription. Malformed/duplicate envelopes delete description because no original is trustworthy. Unmarked descriptions/other fields remain intact. Mutate the same event.input object. Stripping failure blocks the token-bearing invocation with Senpi `{block:true,reason:"justice_capability_strip_failed"}`; this narrowly scoped secret-containment exception is not scheduling authority.
 
-False-positive prevention is normative:
+After restoration scan the candidate wire input (including original label, prompt and batch sibling fields) for the decoded token and any current registry token. A token copied outside the envelope must not reach a child: block that invocation with `{block:true,reason:"justice_capability_token_leak"}`, produce no trusted provenance, and emit only a redacted token-leak reason. Do not silently delete caller prompt text to hide the leak. The same scan follows review augmentation/routing before return.
 
-- prompt wording, task body similarity, review-looking text, method activation alone, and mapping-appendix presence alone are insufficient;
-- unrelated model-issued `task` calls must resolve to `external`;
-- missing/conflicting required observations resolve to `ambiguous`;
-- restart/compaction may reuse provenance only when the Task-1 profile explicitly proves the binding survives that boundary;
-- Tasks 7 and 10 consume the result but do not re-infer provenance.
+No activation, wrong_session, expired_capability, post_compaction_capability, wrong_authorization, wrong_method, malformed_capability, duplicate_capability, unsupported_nested, or missing call/evidence identity → ambiguous reasons, no translation/appendix, NOT_PROVEN. No marker → external, including review-looking calls. Exact-call capability-origin evidence is distinct from mode-bound execution/review acceptance; the latter additionally requires §14.2's supported runtime binding.
 
-If Task 1 cannot prove an authoritative source/binding, Native semantic translation and trusted Native review evidence are blocked for artifact reconciliation.
+**Lifetime:** restartCompactionValidity is fixed to same_session_only. Activation/capability are process-memory-only; shutdown, restart even with identical session ID, accepted session_compact, authorization invalidation/replacement, or method replacement invalidates both. Only selection may recover durably. Valid capability may serve multiple calls in one live epoch. Duplicate session/toolCallId/item validation is idempotent only for identical stripped input digest; conflicting reuse → call_identity_conflict. Never reinsert a stripped token.
+
+Within a live instance retain only revoked capability digests with invalidation reason to distinguish post_compaction_capability from expired_capability; discard even those on shutdown/restart. Unknown tokens after restart are expired_capability, not recovered authority. Non-string description (except absent undefined) is invalid task input and produces ambiguous malformed_capability without fabricating a restoration value; no reserved token string means no stripping is needed.
+
+**Batch:** Support exactly one of prompt or tasks (1–16 items). Every batch item carries its own description envelope, with no top-level inheritance. Same valid token across distinct items is allowed; one marker maximum per item. Validate/strip all items before execution; valid/invalid items retain separate trusted/untrusted provenance. Reserved top-level batch description is stripped and makes the batch ambiguous (batch_top_level_capability). Any strip failure blocks the invocation. Provenance key includes zero-based batchItemIndex; single call index is absent. Runtime result slots/task IDs must prove exact item binding. Each trusted recognized review mutates only its own prompt, preserving scheduling and effective routing XOR; do not overwrite item routes with top-level targets.
+
+**Ownership:** Task 1 host primitives → Task 2 capability/provenance/activation types and pure decisions → Task 6 live activation state, read observation, mapping directive, registry/validation/stripping/evidence → Task 7 review recognition/pre-spawn augmentation and Task 10 semantic routing → Task 14. Task 6 consumes no Task 10 output.
+
+Task 6 exact production interfaces: `NativeTaskCapabilityRegistry` implements NativeSuperpowersProvenanceResolver; constructor consumes WorkflowActivationStateStore, injected `randomBytes(size: number): Uint8Array`, and `now(): string`. `issue(evidence: WorkflowActivationEvidence): NativeSuperpowersTaskCapability | null` validates live activation; `invalidateSession(sessionId: string, reason: "session_shutdown" | "restart" | "session_compact" | "authorization_changed" | "method_changed"): void` invalidates live state/receipts. `observeMethodReadResult(input: {readonly authorizationId:string;readonly sessionId:string;readonly method:SuperpowersExecutionMethod;readonly toolCallId:string;readonly canonicalSkillPath:string;readonly successful:boolean}): Promise<WorkflowActivationEvidence | null>` and `formatNativeCapabilityDirective(capability: NativeSuperpowersTaskCapability): string` belong to Task 6. Resolver inputs authorization/session/method are read from trusted current adapter/authorization state, never from model text. The adapter publishes candidate provenance only after successful stripping/read-back.
 
 ---
 
@@ -783,20 +830,20 @@ Justice may additionally classify non-normative observations, but they cannot su
 
 The projection surface is deterministic.
 
-**Requirements**
+#### Requirements
 
 - Every `JUS5-*` block is a canonical requirement source.
 - The prose obligation in the block is suffix `/0`.
 - Ordered independent bullet/list obligations are suffixes `/1`, `/2`, ... within that Requirements source revision.
 - Because source revision/fingerprint participates in evidence identity, inserting/reordering obligations invalidates old clause evidence rather than aliasing it.
 
-**Design**
+#### Design
 
 - Canonical Design clauses are `INV-01..INV-06` and the `J5D-*` registry IDs in §3.7.
 - Free prose is explanatory unless incorporated by a registry contract.
 - A simple search for `MUST` is never the enumeration authority.
 
-**Plan**
+#### Plan
 
 The Superpowers v6 plan projector enumerates normative structural units from at least:
 
@@ -985,9 +1032,9 @@ A **versioned Superpowers ReviewDispatchProfile** classifies review kind only af
 The trust boundary is two-stage:
 
 ```text
-Task 1 NativeSuperpowersProvenanceProfile
+Task 1 PROVEN host primitives for Justice capability protocol
         ↓
-Task 6 NativeSuperpowersProvenanceResolver
+Task 2 domain contracts → Task 6 NativeSuperpowersProvenanceResolver
         ↓
 trusted TaskRoutingProvenance(superpowers)
         ↓
@@ -1011,33 +1058,21 @@ event.input                 # mutable in place
 ctx.sessionManager.getSessionId()
 ```
 
-The primary Native child/context capabilities available for evaluation include `before_agent_start`, `context`, session lifecycle events, and OmO's own task lifecycle/state surfaces.
+Task 7 consumes Task 6 trusted exact-call provenance, recognizes review kind, and augments the **existing task prompt before OmO executes/spawns**. There is no post-spawn delivery transport or pending appendix queue.
 
-Because source-level capability does not by itself prove child binding or event ordering, **Task 1 is an architecture-closing runtime evidence spike**. Before Task 6/7 production adapter work begins, the spike must select and prove one exact delivery contract that satisfies:
+Exact appendix bytes are two LF characters, `[JUSTICE-CONFORMANCE-V1]`, LF, compact canonical JSON, LF, `[/JUSTICE-CONFORMANCE-V1]`. Canonical JSON follows Task 4's recursively sorted keys/array-order-preserving algorithm. JSON contains exactly schemaVersion (`justice-review-appendix-v1`), reviewCorrelationId, parentSessionId, parentToolCallId, optional batchItemIndex, artifactChainId, optional taskIdentity, reviewKind, reviewedRange, contract (the complete serialized ConformanceContract), contractPath (safe immutable repo-relative path), and resultInstructions; scoped reviews additionally contain expectedFindings and reservedFindingIds. Never include capabilityId. The original task prompt is an exact prefix, not reconstructed. resultInstructions is exactly: `Return the normal Superpowers human report and exactly one justice-review-v1 machine result for this correlation, range, and contract. Report every required clause as SATISFIED, VIOLATED, or NOT_PROVEN; omissions are NOT_PROVEN. Preserve justice-finding markers and finding identities; never emit human_adjudicated.`
 
-1. the parent Superpowers review task call is observed before execution;
-2. one parent session/tool-call pair binds to exactly one reviewer child/run;
-3. unrelated children cannot consume the pending review appendix;
-4. the Conformance Contract reaches the bound reviewer before trusted reviewer output is produced;
-5. no asynchronous discovery race is required for correctness;
-6. task/process mode differences do not silently alter identity semantics;
-7. missing/ambiguous/transport-failed binding produces no trusted result and therefore `NOT_PROVEN`;
-8. Justice does not create a second reviewer.
+Limit the entire appended suffix to 65,536 UTF-8 bytes. Before mutation validate COMPLETE projection, current chain/revision/range, exact contractId/digest recomputed by Task 4 canonical hashing, JSON-only schema, and safe contractPath. Invalid contract → malformed_contract; excess size → appendix_too_large; neither truncates, replaces original prompt, or trusts review evidence. A single byte-identical terminal appendix is idempotent only when an adapter-owned exact-call augmentation receipt already exists. Caller-authored markers cannot manufacture that receipt. Multiple markers, mismatched JSON, nonterminal envelope, or any caller marker without receipt → duplicate_appendix / malformed_appendix, no new injection, NOT_PROVEN.
 
-The implementation plan may use `tool_result(task)`, OmO task state, child `before_agent_start`, child `context`, or another public v5.1.17/v2026.10.8 surface **only if the spike demonstrates it** and records the exact observed fields/order.
+Task 7 builds a candidate suffix then applies the mutation synchronously within the awaited tool_call handler and read-back-verifies exact prompt bytes. Mutation failure → mutation_unproven; no trusted review evidence. Restore original prompt if safe, otherwise runtime may proceed under fail-open with an untrusted receipt; token stripping failure follows §7.5's block rule. category/subagent_type and model/provider/mode fields are untouched by augmentation; routing translation is a separate Task 10 concern and must preserve XOR. For a batch, every item is independent; augment only that item's trusted recognized review prompt after all capability envelopes have been stripped. Preserve top-level and item scheduling/target semantics.
 
-If the spike cannot prove a supported contract, implementation stops for artifact reconciliation. Justice must not revive the v4/OpenCode `justice-review-controller`, native TaskTool indirection, synchronous v4 envelope parser, or a duplicate reviewer as fallback.
+Task 7 exact interfaces: `recognizeReviewDispatch(input: ReviewDispatchInput): RecognizedReviewDispatch`, `buildReviewAppendix(input: ReviewAppendixInput): string`, `augmentReviewTaskInput(args: Record<string, unknown>, input: ReviewAppendixInput): ReviewAppendixMutationResult`, `resolveReviewChild(input: ResolveReviewChildInput): ReviewChildBindingResult`, and `parseReviewResult(raw: string, expectation: ReviewResultExpectation): ParseReviewResult`. ReviewAppendixInput contains pending correlation (not a child-bound delivery queue), full contract and contractPath. ReviewResultExpectation contains correlation, requiredClauseIds and candidateRevision. buildReviewAppendix schema/size errors are caught by augmentReviewTaskInput and converted to the exact untrusted reasons; nothing escapes the adapter. The Plan registry copies these types/signatures and the exact resultInstructions literal; scoped-only fields must be present for scoped re-review and absent otherwise.
 
-The delivered appendix still carries the same semantic payload:
+`ReviewAppendixMutationResult` is `augmented(receipt) | idempotent(receipt) | untrusted(reason,details)`; reasons are malformed_contract, appendix_too_large, duplicate_appendix, malformed_appendix, mutation_unproven, unsupported_mode, and finding_context_unavailable. A receipt contains exact parent session/call/item, reviewCorrelationId, contractDigest and mutatedPromptDigest; it does not itself prove delivery. Trust later output only after runtime evidence binds that exact augmented invocation to its child and proves appendix presence before first child output. No unrelated child can fetch another call's suffix because it is part of the pre-spawn invocation, never a queued message.
 
-- review correlation id;
-- artifact-chain id;
-- task identity when applicable;
-- reviewed range/candidate revision;
-- immutable Conformance Contract path/digest;
-- strict structured-result instructions.
+Normalized binding is parentSessionId + parentToolCallId + omoTaskId → exactly one NativeReviewChildContext (add batchItemIndex for fanout). Mode-specific physical storage/events may differ. Initial trusted execution/review evidence support is **top-level process execution with runner_kind=host-session only**, and remains BLOCKED until revised Task 1 proves appendix ordering in that mode. The pre-spawn capability/appendix transformations are mode-neutral and do not choose/force OmO mode. Mode is established from observed task result/state before accepting execution/review output: details.execution_mode must equal process and task record runner_kind must equal host-session, with exact runtime ID/child binding. No pre-spawn mode API is assumed. In-process, detached/PID, and unknown modes may run the transformed call, but their output remains unsupported_mode/NOT_PROVEN; their capability-origin evidence alone never makes execution/review evidence trusted. Nested/codemode calls are stripped for token safety but not augmented and remain unsupported_nested. Adding another evidence mode requires artifact reconciliation and A–K proof. Physical parity is never required.
 
-Routing translation and appendix delivery remain separate concerns: routing may mutate the existing parent `task` call; child delivery never selects a concrete model/provider/runtime.
+The proven host-session relation is parent result task ID → task-state record keyed by task_id → unique session header under `children/<taskId>/sessions/<taskId>/`. Preserve that proof; normalized runtime correlation still requires matching exact invocation/result/item. Failed/ambiguous binding → NOT_PROVEN, never another reviewer. Revised Task 1 fixtures prove the protocol end-to-end without Justice production source; any A–K failure returns to reconciliation.
 
 ### 14.3 Structured result, finding continuity, and final evidence composition — J5D-REVIEW-03
 
@@ -1541,7 +1576,7 @@ Semantic evidence is produced only inside the existing Superpowers-owned review 
 
 ### 15.1 Canonical evidence transport
 
-The Conformance Contract is durable Justice sidecar state. The reviewer receives only a read-only reference plus correlation metadata.
+The Conformance Contract is immutable durable Justice sidecar state. The exact task prompt receives its serialized contract, immutable read-only reference, and correlation metadata before spawn under §14.2.
 
 The structured reviewer result is captured from the **same observed reviewer call** and persisted into Justice evidence state. This call-bound output is the canonical semantic-review transport; a reviewer-authored file is not required for trust.
 
@@ -1712,17 +1747,12 @@ explicit current selection
 
 The Native Superpowers package itself injects `using-superpowers` via its Pi `context` handler. Justice coexists with that bootstrap; bootstrap presence proves Superpowers availability but does not by itself prove that `subagent-driven-development` or `executing-plans` was loaded.
 
-Method-specific activation uses runtime-observed Native skill evidence. Task 1 must lock the exact accepted channels. The compatibility profile may accept only channels that prove the skill content was actually loaded, such as:
+Method-specific activation requires the PROVEN read_tool_result channel:
 
 ```text
 successful read tool_result
   path → trusted installed Superpowers skills/<method>/SKILL.md
 
-or
-
-host-expanded /skill:<method> input
-  → <skill name="<method>">...
-  when event/source authenticity is proven
 ```
 
 A model assertion, extension-injected text, child-only `load_skills`, runtime task id, or mere package presence is not activation evidence.
@@ -1743,14 +1773,13 @@ For this baseline:
 ```text
 evidenceKind
 = read_tool_result
-| host_expanded_skill_input
 ```
 
-Task 1 must prove at least one member end-to-end. Task 10 consumes only the proven member(s); any third channel is an architecture change requiring artifact reconciliation.
+host_expanded_skill_input remains NOT_PROVEN and is not an accepted activation kind or implementation requirement. A new channel requires artifact reconciliation.
 
-Cross-session recovery restores selection only. Same-session activation may survive restart only with exact identity/evidence validation.
+Task 2 owns WorkflowMethodSelection, WorkflowMethodSelectionEvidence, WorkflowActivationEvidence, WorkflowActivationDecision, WorkflowActivationStateStore interfaces and pure resolveWorkflowMethodSelection/resolveWorkflowActivation. Task 6 owns installed skill identity validation, live read observation, state implementation, capability issuance/directive, and invalidation. Task 10 consumes those contracts for guidance/routing only. Selection is durably recoverable; activation is memory-only and cannot survive restart even with the same session ID. Accepted session_compact, shutdown, authorization/method replacement invalidate activation and capability unconditionally. A compaction request without session_compact does not prove acceptance; revised Task 1 must observe accepted compaction rather than assume survival.
 
-Superpowers resets its bootstrap on `session_compact`. Until Task 1 proves method-specific skill activation survives compaction without reloading, compaction invalidates method ActivationEvidence for acceptance and the selected method must be observed again.
+WorkflowActivationStateStore persists selection only at `.justice/v5/workflow-selections.json` using AtomicPersistence. Its exact Task 2 interface is `setSelection(WorkflowMethodSelectionEvidence) → Promise<WorkflowActivationStateMutationResult>`, `setActivation(WorkflowActivationEvidence) → Promise<WorkflowActivationStateMutationResult>` (memory only), `findSelection(authorizationId: string) → Promise<WorkflowActivationStateLookupResult<WorkflowMethodSelectionEvidence>>`, `findCurrentActivation(authorizationId: string, sessionId: string) → Promise<WorkflowActivationStateLookupResult<WorkflowActivationEvidence>>`, `getCurrentActivation(authorizationId: string, sessionId: string) → WorkflowActivationEvidence | null` (synchronous live snapshot for validation), and `invalidateSession(sessionId: string, reason: session_shutdown | restart | session_compact | authorization_changed | method_changed) → void`. saved/idempotent live writes do not imply persistence; failed state writes/lookups remain activation_state_unavailable/NOT_PROVEN. Implement in Task 6, never Task 10.
 
 Decision state:
 
@@ -1904,6 +1933,7 @@ actual agent/model/provider/reasoning/execution-mode/retry/fallback
 Justice never writes a concrete model/provider into category-routed task translation. Superpowers Pi's lack of an OmO-specific subagent tool mapping is handled by the Native mapping appendix; it is not permission for Justice to schedule a worker itself.
 
 If future supported upstream introduces a concrete model field as authoritative wire input, Justice must update the compatibility profile explicitly; it must not silently choose precedence between category and concrete model fields.
+
 ---
 
 ## 22. Dependency analysis
@@ -2062,15 +2092,15 @@ human review resolution:
 
 A recognized v4 record is still subject to the authority rules below. Recognition never means automatic v5 trust.
 
-**v4 plan authorization**
+#### v4 plan authorization
 
 A v4 binding such as `justice-plan-v1` proves only the old plan-level contract. It is not automatically promoted to a v5 artifact-chain authorization. It remains historical until the current Requirements, Design, and Plan are reconciled and explicitly re-approved.
 
-**v4 review dispatch/scheduling state**
+#### v4 review dispatch/scheduling state
 
 Old Justice-owned review scheduling/dispatch records are historical only. v5 never resumes review orchestration from them and they cannot satisfy v5 review gates.
 
-**v4 observations/evidence**
+#### v4 observations/evidence
 
 Raw observations may be retained/imported as historical or untrusted inputs. Evidence without v5 artifact-chain ID, execution correlation, projection schema, and canonical clause IDs cannot satisfy v5 acceptance.
 
@@ -2233,7 +2263,7 @@ The v5 implementation plan must include E2E coverage for at least the following 
 31. Requirements change stales Design + Plan chain authority.
 32. a substantive Superpowers Ruling can continue execution but cannot authorize acceptance.
 33. clause projection with duplicate/missing/ambiguous source becomes INCOMPLETE/INVALID and blocks.
-34. the v6.4.2 reviewer receives the Conformance Contract through the Task-1-proven Native child/context delivery path without duplicate dispatch.
+34. the v6.4.2 reviewer receives the serialized Conformance Contract in its exact pre-spawn task prompt, with normalized proven child binding and no duplicate dispatch.
 35. missing/malformed structured review result blocks acceptance.
 36. parked Important/Critical remains blocking until trusted later disposition/human quality adjudication.
 37. OmO effective config resolution honors user/project plus harness/profile precedence.
@@ -2243,7 +2273,7 @@ The v5 implementation plan must include E2E coverage for at least the following 
 
 ### Activation and semantic bridge
 
-41. authorized implementation intent produces runtime-observed Native activation evidence for the selected Superpowers execution method; unproven compaction survival requires fresh activation.
+41. authorized implementation intent produces current-session read_tool_result activation; accepted compaction/restart invalidates activation and capability and requires fresh read.
 42. Justice activation does not take ownership of Superpowers task/review progression.
 43. a recognized Superpowers Native worker intent becomes one model-issued OmO `task` call whose existing input is translated to one Justice semantic category while preserving XOR.
 44. a non-Superpowers explicit `subagent_type` remains caller-owned and is not translated.
@@ -2257,6 +2287,14 @@ The v5 implementation plan must include E2E coverage for at least the following 
 49. review evidence whose bound artifact chain, scope, or reviewed revision changes before acceptance becomes stale and cannot authorize the current candidate.
 50. a clean/complete review result cannot create implementation authorization without the required explicit human approval for the exact current artifact chain.
 51. remediation/re-review can contribute fresh evidence, but Justice does not schedule the fix/re-review loop and does not take ownership of OmO retry/fallback.
+
+### Capability and harness reconciliation scenarios
+
+52. exact valid capability is stripped/restored before execution and binds exact session/toolCallId/item provenance; unmarked review-looking/unrelated calls remain external.
+53. wrong session/authorization/method, expired/post-compaction, malformed/duplicate capability, and conflicting call replay cannot produce trusted provenance or leak token to child.
+54. pre-spawn appendix size/schema/digest/duplicate/mutation failure leaves review NOT_PROVEN; supported host-session batch items cannot consume one another's contracts.
+55. fixture credential/provider env is allowlisted, non-mock selection fails closed, and raw evidence never contains credential or capability values.
+56. unsupported execution modes/nested calls never borrow host-session proof; normalized contract does not require identical physical implementations.
 
 ---
 
