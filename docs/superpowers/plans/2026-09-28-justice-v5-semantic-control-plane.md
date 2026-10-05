@@ -18,6 +18,8 @@
 
 **Reconciliation checkpoint:** approved Gate `53d4abcc7b1a887f18860c0f3ba013aae0c2fbf3`; evidence `e2a1662794927f3be11c3e58b688cbfb482bb3f0` is BLOCKED (15 total / 9 PROVEN / 6 BLOCKED). This repair changes only Requirements/Design/Plan; Task 1 fixture edits below are future work. Fresh Superpowers Review Gate READY authorizes revised Task 1 only. Tasks 2–14 remain NOT AUTHORIZED; production authorization is reconsidered only after revised A–K evidence is PROVEN.
 
+**Fresh Gate repair:** head `01d81970ac4558a65aefb6ef5cb2832b83a5a077` was BLOCKED by RG-005/006. RG-001..004 remain resolved. Revised Task 1 is currently NOT AUTHORIZED and must not run during this document repair. Another Fresh Gate READY authorizes the spike only; Tasks 2–14 remain NOT AUTHORIZED. The request-local/outbound sanitation contract below has pinned-source support but no new runtime PROVEN status.
+
 **Historical Compatibility Reference:** Justice `v4.3.1` is a side-branch historical regression corpus only. It is **not** the Justice v5 implementation base. Do not merge or wholesale cherry-pick `v4.3.1` before implementing this Plan. Carry forward only the harness-independent regression contracts explicitly incorporated below.
 
 ## Global Constraints
@@ -50,6 +52,8 @@
 - Required activation is read_tool_result only. host_expanded_skill_input remains NOT_PROVEN and is not required or accepted.
 - Activation/capability are memory-only; accepted compaction, shutdown, same-ID restart, authorization or method replacement invalidates both. restartCompactionValidity is fixed to same_session_only.
 - Capability transport is description only under Design §7.5: strict 8,192-byte envelope, exact original string restoration/delete absent, stripping before execution, no token in child/evidence.
+- Capability delivery is request-local context-copy augmentation after unchanged method read. Task 6 message_end sanitizes assistant ToolCall arguments before persistence and captures a memory-only outbound receipt; exact tool_call validates that receipt and strips any preprepared raw args. Raw token is forbidden in authoritative Senpi session history, not merely exported evidence.
+- `encodeCapabilityId(bytes: Uint8Array): string` accepts exactly 32 bytes, returns RFC 4648 base64url without padding (43 ASCII chars), and throws TypeError("capability_byte_length") for other lengths. Issuance uses encodeCapabilityId(randomBytes(32)), not Uint8Array.toString.
 - Review augmentation is the exact 65,536-byte maximum serialized-contract prompt suffix in Design §14.2, inserted before spawn without a pending appendix queue.
 - Initial trusted execution/review evidence support is top-level process execution with runner_kind=host-session, including 1–16 batch items. Capability/appendix transforms are mode-neutral; accept output only after supported mode/task/child is observed. In-process/detached/unknown output remains NOT_PROVEN; nested/codemode calls are stripped but not augmented. Never choose/force mode or assume pre-spawn mode authority.
 - Task 1 env is exact-allowlist-only with pinned mock provider, disabled external fallback, non-mock rejection, and secret/capability-safe evidence.
@@ -140,6 +144,7 @@ New focused modules:
 - `src/core/workflow-activation.ts` — resolve authoritative Superpowers execution-method activation intent without owning methodology progression.
 - `src/core/native-task-capability.ts` — Task 2 pure envelope encoding/decoding and capability domain contracts.
 - `src/runtime/native-task-capability-registry.ts` — Task 6 volatile issuance/invalidation/validation and stripped-call receipts.
+- `src/runtime/native-capability-transcript.ts` — Task 6 request-local context delivery, pre-persistence message_end sanitation/fallback and private outbound capture; no storage monkeypatch.
 - `src/runtime/workflow-activation-state.ts` — Task 6 durable selection and memory-only activation implementation.
 - `src/core/review-interop.ts` — versioned Superpowers reviewer recognition and prompt appendix construction.
 - `src/core/review-result.ts` — strict JusticeReviewResult parsing and stale/scope validation.
@@ -311,9 +316,31 @@ type NativeCapabilityValidationResult = {
   readonly restoredDescription: string | null;
   readonly stripRequired: boolean;
 };
+type NativeCapabilityOutboundReceipt = {
+  readonly schemaVersion: "justice-capability-outbound-receipt-v1";
+  readonly authorizationId: string;
+  readonly method: SuperpowersExecutionMethod;
+  readonly issuedFromReadToolCallId: string;
+  readonly parentSessionId: string;
+  readonly parentToolCallId: string;
+  readonly batchItemIndex?: number;
+  readonly capabilityDigest: string;
+  readonly strippedTaskArgsDigest: string;
+};
+type NativeCapabilityOutboundRecord =
+  | { readonly kind: "captured"; readonly receipt: NativeCapabilityOutboundReceipt }
+  | {
+      readonly kind: "rejected";
+      readonly parentSessionId: string;
+      readonly parentToolCallId: string;
+      readonly batchItemIndex?: number;
+      readonly strippedTaskArgsDigest: string;
+      readonly reasons: readonly [string, ...string[]];
+    };
 interface NativeSuperpowersProvenanceResolver {
   resolve(input: NativeSuperpowersProvenanceInput): NativeCapabilityValidationResult;
 }
+declare function encodeCapabilityId(bytes: Uint8Array): string;
 declare function encodeTaskCapabilityEnvelope(capabilityId: string, originalDescription: string | null): string;
 declare function decodeTaskCapabilityEnvelope(description: unknown): CapabilityEnvelopeDecodeResult;
 
@@ -1146,12 +1173,15 @@ type ResolveOmoEffectiveConfigInput = {
 - Modify evidence-branch fixture: `tests/integration/omo-native-senpi-contract-spike.test.ts`
 - Modify: `tests/fixtures/omo-native-senpi/native-session-harness.ts`, `tests/fixtures/omo-native-senpi/probe-extension.ts`, `tests/fixtures/omo-native-senpi/task1-runtime-cases.ts`, `tests/fixtures/omo-native-senpi/task-e2e-mock-provider.ts`
 - Create: `tests/fixtures/omo-native-senpi/capability-probe.ts`, `tests/fixtures/omo-native-senpi/capability-runtime-cases.ts`
+- Create: `tests/fixtures/omo-native-senpi/capability-session-storage.ts` — actual isolated Senpi JSONL/history/log scanning without copying/redacting storage first.
 - Modify: `docs/reports/omo-native-v5.1.17-senpi-2026.10.8-contract-evidence.md`
 - Add redacted raw captures only under `tests/fixtures/omo-native-senpi/raw/`.
 
 **Consumes:** evidence commit e2a1662's 9 PROVEN host contracts; pinned fixtures, QA onboarding marker, package/source locks; Design §7.5/§14.2 exact protocol. Reconcile documentation with the evidence branch before execution; do not merge/cherry-pick production changes.
 
-**Produces:** redacted A–K observations and per-contract PROVEN/BLOCKED report, exact normalized host-session single/batch binding and result/state mode evidence. Fixture-only `issueFixtureCapability(read: {sessionId:string;toolCallId:string;method:SuperpowersExecutionMethod;authorizationId:string}): NativeSuperpowersTaskCapability`, `validateFixtureCapability(input: NativeSuperpowersProvenanceInput): NativeCapabilityValidationResult`, and `runCapabilityRuntimeCase(name: string): Promise<{readonly status:"PROVEN"|"BLOCKED";readonly evidenceRefs:readonly string[]}>` implement no production interfaces. Tokens stay in memory; raw capture records digest/presence/validation booleans.
+**Produces:** A–K observations plus authoritative no-token session-storage proof and per-contract PROVEN/BLOCKED report. Fixture-only issueFixtureCapability/validateFixtureCapability/runCapabilityRuntimeCase retain their exact signatures below and implement no production API. `inspectCapabilitySessionStorage(input: {readonly isolatedRoot:string;readonly sessionFiles:readonly string[];readonly capabilityIds:readonly string[]}): Promise<{readonly tokenFound:boolean;readonly filesChecked:number;readonly entriesChecked:number;readonly unsafeStorage:boolean}>` reads real parent/child session files, all entries/branches and logs; paths/tokens remain private and result reports booleans/counts only. Tokens, context delivery and outbound receipts stay in memory; persisted captures contain digest/presence/order booleans only.
+
+Fixture signatures: `issueFixtureCapability(read: {sessionId:string;toolCallId:string;method:SuperpowersExecutionMethod;authorizationId:string}): NativeSuperpowersTaskCapability`, `validateFixtureCapability(input: NativeSuperpowersProvenanceInput): NativeCapabilityValidationResult`, `runCapabilityRuntimeCase(name: string): Promise<{readonly status:"PROVEN"|"BLOCKED";readonly evidenceRefs:readonly string[]}>`.
 
 **Pinned upstream:**
 
@@ -1167,10 +1197,10 @@ Keep exact existing PROVEN tests for co-loading/bootstrap, event/mutation, XOR, 
 | --- | --- | --- |
 | A | `loads_omo_and_superpowers_pi_packages_together` | exact package/source pins, exit 0, no startup error |
 | B | `native_method_skill_load_produces_current_session_activation_evidence` | both selected methods tested independently; installed canonical read path + same session/call result |
-| C | `task1_method_read_result_carries_fixture_capability_directive` | original read content preserved, additional parent directive contains issued envelope |
+| C | `task1_context_copy_delivers_fixture_capability_after_method_read` | persisted read content unchanged/token-free; only request-local context copy carries directive/envelope |
 | D | `task1_model_transports_capability_in_description` | deterministic model emits legal description envelope, caller label retained |
-| E | `task1_tool_call_binds_capability_session_and_call` | exact session/toolCallId/item + digest observed, never prompt-inferred |
-| F | `task1_probe_strips_capability_before_omo_execution` | absent/string/empty original label restored, no token reaches child |
+| E | `task1_tool_call_binds_capability_session_and_call` | observed assistant message_end captures exact session/ToolCall.id/item; matching private receipt validated at tool_call |
+| F | `task1_probe_strips_capability_before_omo_execution` | assistant args sanitized before append; preprepared raw tool args stripped before execution; exact absent/empty/string label restored |
 | G | `task1_host_session_child_receives_pre_spawn_contract_before_output` | actual child initial prompt contains full suffix before first child output; exact parent/runtime/child |
 | H | `task1_unrelated_and_review_like_tasks_without_capability_are_external` | both calls observed, fixture validator external, no appendix |
 | I | `task1_wrong_session_capability_is_rejected` | observed call in second live session rejected; token stripped |
@@ -1179,23 +1209,35 @@ Keep exact existing PROVEN tests for co-loading/bootstrap, event/mutation, XOR, 
 
 Additional RED tests: `task1_wrong_authorization_and_method_capabilities_are_rejected`, `task1_expired_malformed_and_duplicate_capabilities_are_rejected`, `task1_result_state_mode_is_verified_before_review_acceptance`, `task1_unsupported_in_process_and_nested_calls_remain_untrusted`, `task1_fixture_does_not_inherit_external_provider_credentials`, `task1_fixture_fails_closed_on_non_mock_provider_selection`, `task1_raw_evidence_redacts_credentials_and_capabilities`.
 
+RG-005 mandatory runtime tests:
+
+- `task1_capability_never_enters_persisted_session_history` — after method read, context delivery, model task, message_end, tool_call strip, execution and agent_settled, read authoritative isolated parent/child session files and SessionManager.getEntries() (all branches) plus actual logs; no raw issued/retired capability anywhere. Read getSessionFile() targets directly; never scan only exported raw evidence.
+- `task1_capability_is_removed_before_assistant_tool_call_persistence` — fixture SDK AgentSession.subscribe observes each entry_appended, immediately reads the underlying session JSONL and appended assistant ToolCall; raw description has already become the exact original label or absent property. Trace order is message_end capture/sanitize → append → tool_call (queue drained) → token-free execute. No disk write/rewrite or delayed evidence redaction can make the assertion pass.
+- `task1_message_end_fallback_prevents_token_persistence_on_error` — inject a processing failure after capture/sanitation; actual persisted assistant is the same-role minimal error fallback, no raw exception/token/log, no valid outbound receipt or executed trusted task.
+- `task1_batch_echo_and_stale_transcripts_cannot_restore_capability` — test two batch items, token echo in text/thinking/non-task args, malformed/duplicate descriptions, accepted-compaction late response, shutdown/reopen same session ID and replay of sanitized history. Echo/rejected/fallback calls cannot trust; no storage token and no new capability from history.
+- `task1_unverified_transcript_guard_profile_does_not_issue_capability` — incompatible assembled handler/recording profile produces capability_unavailable before any token is delivered.
+
+Storage scanner checks both raw UTF-8 bytes and recursively decoded JSON string fields, every branch entry, session/child/task-state/log tree, and fail-closed on unreadable/missing storage. Use private live token values for comparison; assertions expose tokenFound/unsafeStorage booleans, never the token or raw contents in failure output. Repeat scanning at every persisted append and the listed milestones so rewriting after leakage is not accepted. Raw-evidence redaction remains a separate check.
+
 The two credential tests inject synthetic sentinel environment values in the parent only and assert none appear in child env/raw output. Force mock selection; deliberately attempt non-mock selection and assert fixture aborts before external request. Compaction J must use a live RPC session with observed accepted compact event; ctx.compact request + print-mode shutdown is BLOCKED, not a passing invalidation test. No fake compact event can prove the host lifecycle contract.
 
 - [ ] **Step 2: Run exact RED command inside devcontainer**
 
 Run: `bun run vitest run tests/integration/omo-native-senpi-contract-spike.test.ts`
 
-Expected RED: preserved 9 proofs pass; new protocol controls fail with absent fixture directive/validation, missing accepted compact evidence, or missing exact child prompt/order/mode proof. Dependency/type/startup failure is a harness blocker, not a successful RED.
+Expected RED: preserved 9 proofs pass; new controls fail on missing context-only delivery/outbound receipt, capability-bearing persisted read/assistant history, lack of safe fallback, or missing actual compact/child proof. Finding a token in real storage fails RG-005 even if exported evidence is redacted. Dependency/type/startup failure is a harness blocker, not a successful RED.
 
 - [ ] **Step 3: Minimum GREEN fixture/probe only**
 
-Implement the exact Design §7.5 description codec, ephemeral registry, lifecycle invalidation, and §14.2 suffix in the fixture probe. Deterministic model copies the opaque capability from the added read-result directive into a later actual tool call; do not directly call task from the probe. Strip before execution; assert raw capture is redacted before writing. Replay pinned QA onboarding in isolated HOME/agent/XDG/project/session dirs. Allowlist only PATH plus fixture-created HOME/USERPROFILE/XDG paths, PI_CODING_AGENT_DIR, OMO_SENPI_QA=1, PI_OFFLINE=1, and individually named fixture mock/session/runtime settings from the harness; no OMO_/SENPI_ wildcard inheritance. Every provider and model must be omo-mock/mock-1, including task category/agent overrides and fallback lists; reject any other resolved selection before request. Public type-only ExtensionAPI remains pinned.
+Implement Design §7.5 pure encoder/description codec, context-copy delivery, synchronous message_end capture/restore/redaction plus token-free fallback, private receipt lookup at exact tool_call, raw-copy strip, lifecycle invalidation and §14.2 suffix in fixture/probe only. Deterministic model copies the envelope from request-local context; persisted read result remains unchanged. Do not issue task directly, replace SessionManager, monkeypatch appendMessage, rewrite session files, or disable host session persistence. Fixture type import includes public ContextEvent/Result and MessageEndEvent/Result as well as ExtensionAPI. Fault-injection proves the fallback despite Senpi's handler exceptions being fail-open. Disable mock-provider request/response dumps and persistent stream/RPC recordings; verify audited assembled guard ordering and no token resurrection.
+
+Keep isolated HOME/agent/XDG/project/session dirs and pinned onboarding. Allowlist only PATH plus fixture-created HOME/USERPROFILE/XDG paths, PI_CODING_AGENT_DIR, OMO_SENPI_QA=1, PI_OFFLINE=1, and individually named fixture mock/session/runtime settings, never wildcard inheritance. All provider/model resolutions remain omo-mock/mock-1 with external fallback disabled. Record hashes/booleans, not raw provider contexts, assistant messages, storage contents, or token-valued failure output.
 
 - [ ] **Step 4: GREEN command and evidence freeze**
 
 Run: `bun run vitest run tests/integration/omo-native-senpi-contract-spike.test.ts`
 
-Expected GREEN: all required runtime/negative-control tests pass, A–K each PROVEN with real redacted observations; host-session single/batch pre-spawn order and result/state mode source captured. Record exact fields/order, prompt digest/child observation, parent call/result slot→task state→unique child, rejections, accepted compaction/restart, env/provider controls and unsupported modes. Missing A–K → Task1_RESULT BLOCKED, STOP → reconciliation; never broaden support by physical parity assumption.
+Expected GREEN: A–K and every RG-005 storage/outbound/fallback proof pass against actual pinned runtime. Persisted read result and assistant ToolCall history contain no raw live/retired token; tool receives no token; exact source ordering and normalized digest/receipt match are observed. Record storage roots as redacted refs plus files/entries checked and tokenFound=false, alongside child/order/lifecycle/env proofs. Missing any proof → Task1_RESULT BLOCKED, STOP → reconciliation; exported redaction cannot substitute for session storage inspection.
 
 REFACTOR: split codec/cases from probe only if needed to keep responsibilities focused; rerun the identical GREEN command after refactor. Preserve historical BLOCKED report and append revised results with their own revision/refs.
 
@@ -1229,7 +1271,7 @@ Only fixture/probe/tests/raw evidence/report are staged; no Justice production, 
 **Interfaces:**
 
 - Consumes: revised Task 1 PROVEN A–K report and existing canonical core identity/routing contracts; no Task 6/10 output.
-- Produces: registry NativeSuperpowersTaskCapability, NativeSuperpowersProvenanceEvidence/Input/Resolver, NativeCapabilityValidationResult, CapabilityEnvelopeDecodeResult, WorkflowMethodSelection/Evidence, WorkflowActivationEvidence/Decision/StateStore, and exact `resolveWorkflowMethodSelection(input): WorkflowMethodSelection`, `resolveWorkflowActivation(input: WorkflowActivationInput): WorkflowActivationDecision`, `encodeTaskCapabilityEnvelope(capabilityId: string, originalDescription: string | null): string`, `decodeTaskCapabilityEnvelope(description: unknown): CapabilityEnvelopeDecodeResult` signatures above. Pure method/activation decisions and codec live in their listed core modules; runtime issuance/store/validation belongs to Task 6.
+- Produces: registry NativeSuperpowersTaskCapability, NativeSuperpowersProvenanceEvidence/Input/Resolver, NativeCapabilityValidationResult, NativeCapabilityOutboundReceipt/Record, CapabilityEnvelopeDecodeResult, WorkflowMethodSelection/Evidence, WorkflowActivationEvidence/Decision/StateStore, and exact `resolveWorkflowMethodSelection(input): WorkflowMethodSelection`, `resolveWorkflowActivation(input: WorkflowActivationInput): WorkflowActivationDecision`, `encodeCapabilityId(bytes: Uint8Array): string`, `encodeTaskCapabilityEnvelope(capabilityId: string, originalDescription: string | null): string`, `decodeTaskCapabilityEnvelope(description: unknown): CapabilityEnvelopeDecodeResult` signatures. Runtime capture/state/validation and Senpi message imports belong to Task 6; Task 2 defines only pure encoder/domain shapes.
 - Produces registry-defined semantic types.
 - Known Native built-in diagnostic vocabulary includes `architect` in addition to visual-engineering, artistry, ultrabrain, deep-low, deep-high, quick, unspecified-low, unspecified-high, and writing.
 - `TaskRoutingTarget` is the canonical registry type above for a **new-child task call**.
@@ -1266,6 +1308,10 @@ Exact tests:
 - `read_tool_result_is_the_only_accepted_activation_kind`
 - `restart_and_accepted_compaction_require_fresh_activation`
 - `explicit_method_selection_precedes_recovered_selection_without_implying_activation`
+- `capability_id_encodes_32_bytes_as_43_base64url_characters` — input length 32, output length 43 and exact regex `^[A-Za-z0-9_-]{43}$`.
+- `capability_id_encoding_has_no_padding` — zero and all-255 vectors contain no `=` and no `+` or `/`.
+- `capability_id_encoding_rejects_invalid_byte_length` — lengths 0, 31 and 33 throw TypeError("capability_byte_length").
+- `capability_id_encoding_matches_known_vector_without_mutating_input` — bytes 0..31 encode to `AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8`; 32 zero bytes encode to 43 `A`; original bytes unchanged.
 
 Category tests:
 
@@ -1285,6 +1331,8 @@ Expected: FAIL on stale OpenCode continuation assumptions, missing Native catego
 Do not decide whether a call belongs to Superpowers here. Do not dispatch a task. Do not alter `task_send`.
 
 Minimum GREEN codec: description = ASCII `[[justice-capability-v1]]` + compact JSON `{capabilityId,originalDescription}` in that exact order; 43-character base64url token; exact string/null original label; 8,192-byte maximum. Strict duplicate-key-aware full JSON decode; unknown/trailing/nested/oversized input → malformed_capability, repeated marker/keys → duplicate_capability, no marker → absent. Encoder rejects invalid inputs rather than truncates. Task 6 restores string or deletes absent before OmO. Pure activation accepts only read_tool_result and current live evidence; selection may recover, activation/capability cannot. Copy exact Design §7.5 normative rules, not alternative fields/encodings.
+
+RG-006 minimum GREEN: implement encodeCapabilityId in src/core/native-task-capability.ts with exactly 32 Uint8Array bytes, RFC 4648 URL-safe alphabet, zero final unused bits, no padding, no input mutation. Invalid length throws the exact TypeError above. No Node Buffer method is assumed on Uint8Array. Existing RED command includes this file's encoder tests and fails until function/vector/error contract exists; the identical GREEN command must pass all four named tests plus typecheck.
 
 - [ ] **Step 4: Run GREEN + typecheck**
 
@@ -1689,13 +1737,14 @@ git commit -m "feat: persist Native execution correlation"
 - runtime `NativeSuperpowersProvenanceResolver`;
 - runtime provenance evidence bound to `parentSessionId + parentToolCallId`;
 - durable runtime task/child correlation updates.
-- live WorkflowActivationStateStore implementation, successful method-read observation, cryptographic capability issuance, read-result mapping directive, invalidation/stripping, and exact-call receipts.
+- live WorkflowActivationStateStore, unchanged method-read observation, pure-encoder-backed cryptographic issuance, request-local context directive, pre-persistence message_end sanitation/fallback and private outbound receipts; tool_call validates exact receipt/input and strips executable copies.
 
 **Files:**
 
 - Create: `src/senpi-extension.ts`
 - Create: `src/runtime/senpi-adapter.ts`
 - Create: `src/runtime/native-task-capability-registry.ts`
+- Create: `src/runtime/native-capability-transcript.ts`
 - Create: `src/runtime/workflow-activation-state.ts`
 - Create: `src/runtime/senpi-superpowers-mapping.ts`
 - Modify: `src/core/justice-plugin.ts`
@@ -1704,6 +1753,7 @@ git commit -m "feat: persist Native execution correlation"
 - Create: `tests/runtime/senpi-adapter-execution-correlation.test.ts`
 - Create: `tests/runtime/senpi-adapter-provenance.test.ts`
 - Create: `tests/runtime/senpi-adapter-activation-capability.test.ts`
+- Create: `tests/runtime/senpi-adapter-capability-transcript.test.ts`
 
 **Package/build contract:**
 
@@ -1729,10 +1779,10 @@ git commit -m "feat: persist Native execution correlation"
 - `ctx.sessionManager.getSessionId() + event.toolCallId` create the pending correlation.
 - `event.input` may be mutated only after trusted provenance/classification permits translation.
 - `tool_result(task)` and the exact Task-1-proven lifecycle surface attach runtime task/child identity.
-- `NativeTaskCapabilityRegistry` implements `NativeSuperpowersProvenanceResolver.resolve(input: NativeSuperpowersProvenanceInput): NativeCapabilityValidationResult`; constructor takes Task 2 WorkflowActivationStateStore and injected `randomBytes: (size: number) => Uint8Array` / `now: () => string`. `issue(evidence: WorkflowActivationEvidence): NativeSuperpowersTaskCapability | null` requires valid exact-current activation; `invalidateSession(sessionId: string, reason: "session_shutdown" | "restart" | "session_compact" | "authorization_changed" | "method_changed"): void` clears capabilities and call receipts. Never persist tokens.
+- NativeTaskCapabilityRegistry implements `resolve(input: NativeSuperpowersProvenanceInput): NativeCapabilityValidationResult`; constructor consumes WorkflowActivationStateStore, `randomBytes: (size: number) => Uint8Array`, `now: () => string`, and `transcriptGuardReady: () => boolean`. `issue(evidence: WorkflowActivationEvidence): NativeSuperpowersTaskCapability | null` requires current activation and audited guard/profile readiness, uses Task 2 encodeCapabilityId(randomBytes(32)), and returns null without readiness. `captureOutboundTask(input: NativeSuperpowersProvenanceInput): NativeCapabilityOutboundRecord | null` stores only an observed assistant message_end candidate; no public/model API can supply a receipt. `invalidateSession(sessionId: string, reason: "session_shutdown" | "restart" | "session_compact" | "authorization_changed" | "method_changed"): void` clears validity/receipts. Private retired-token sanitation set cannot validate or deliver. No token/receipt persistence.
 - `observeMethodReadResult(input: {readonly authorizationId:string;readonly sessionId:string;readonly method:SuperpowersExecutionMethod;readonly toolCallId:string;readonly canonicalSkillPath:string;readonly successful:boolean}): Promise<WorkflowActivationEvidence | null>` verifies exact installed method identity/selected method and registers live activation before issuing a capability. Failed read/package/bootstrap/child skill never activate.
-- `formatNativeCapabilityDirective(capability: NativeSuperpowersTaskCapability): string` appends a separate read-result text block with the exact legal description envelope and instructions to copy it into each model-issued task/item; no category/model/provider/mode selection, task invocation, or workflow progression.
-- `resolve(input)` returns a candidate result; adapter restores/deletes description in place and read-back verifies it before publishing trusted provenance. Strip failure returns `{block:true,reason:"justice_capability_strip_failed"}`. Task 6 stores original→stripped digest/idempotence receipts per session/call/item, never raw token.
+- `formatNativeCapabilityDirective(capability: NativeSuperpowersTaskCapability): string` creates only Design §7.5's exact request-local directive literal/envelope. `onNativeCapabilityContext(event: ContextEvent, sessionId: string): ContextEventResult` adds it only to the deep-copy successful method-read message matching issuedFromReadToolCallId; persisted ToolResult is unchanged. `onNativeCapabilityMessageEnd(event: MessageEndEvent, sessionId: string): MessageEndEventResult` synchronously captures/strips assistant ToolCall descriptions, sanitizes echo/metadata and returns the same-role token-free message before host append. In-place safe update + same-role fallback is mandatory; host exceptions are fail-open, never a redaction veto. No async I/O/logging precedes sanitation and no raw exception text is emitted.
+- `resolve(input)` requires the exact private outbound receipt, live capability/activation/authorization/method/session and stripped argument digest. tool_call runs after Senpi queue-drained message_end/append but may still receive a preprepared raw argument copy; strip/restore that copy and compare canonical digest. Missing/mismatched/rejected receipt → external or ambiguous under Design §7.5, NOT_PROVEN; never reconstruct receipt from history. Strip failure blocks with justice_capability_strip_failed. Task 7 receives no raw token/outbound state.
 - prompt wording, active method alone, task-body similarity, review-looking text, and mapping-appendix presence alone are rejected as provenance authority.
 - OpenCode adapter code is not used as Native authority and is not deleted merely to implement Native.
 
@@ -1761,7 +1811,15 @@ Provenance:
 - `batch_capabilities_are_validated_and_stripped_per_item`
 - `unsupported_mode_or_nested_call_never_borrows_host_session_evidence`
 - `conflicting_exact_call_replay_is_untrusted`
-- `read_result_activates_method_and_issues_parent_only_capability_directive`
+- `method_read_activates_but_never_mutates_persisted_result`
+- `context_copy_alone_delivers_live_capability_directive`
+- `message_end_restores_assistant_description_before_host_append`
+- `message_end_echo_and_malformed_marker_sanitation_is_token_free`
+- `message_end_failure_returns_same_role_token_free_fallback`
+- `tool_call_requires_exact_private_outbound_receipt`
+- `preprepared_raw_args_are_stripped_after_message_end_sanitation`
+- `persisted_transcript_or_digest_cannot_recreate_outbound_receipt`
+- `guard_profile_unavailable_prevents_capability_issuance`
 - `accepted_compaction_shutdown_and_restart_clear_activation_and_capabilities`
 - `selection_recovers_but_activation_and_token_never_persist`
 - `provenance_evidence_binds_parent_session_and_tool_call_id`
@@ -1775,21 +1833,24 @@ Provenance:
 bun run vitest run \
   tests/runtime/senpi-adapter-execution-correlation.test.ts \
   tests/runtime/senpi-adapter-provenance.test.ts \
-  tests/runtime/senpi-adapter-activation-capability.test.ts
+  tests/runtime/senpi-adapter-activation-capability.test.ts \
+  tests/runtime/senpi-adapter-capability-transcript.test.ts
 ```
 
-Expected: FAIL because the Native adapter, package export, and authoritative provenance resolver do not yet exist.
+Expected: FAIL because the Native adapter, context-copy delivery/message_end sanitation/fallback, private outbound capture/consumption and exact-call resolver do not exist. Unit event mocks alone cannot prove no-token storage; that prerequisite is revised Task 1's actual Senpi session proof.
 
 - [ ] **Step 3: Implement exact Task-1-proven events and Justice capability validation**
 
 Minimum GREEN:
 
 - persist pending correlation before execution;
-- successful installed method read → live activation → 32-byte random capability → parent read-result directive;
-- apply strict Design §7.5 description decoding, validation, restoration/stripping and batch rules before provenance publication;
+- unchanged successful method read → live activation/guard readiness → encodeCapabilityId(randomBytes(32)) → request-local context-copy directive;
+- require the unchanged method read entry to have persisted before context delivery; failure → capability_unavailable/NOT_PROVEN, no fallback message delivery. Suppress delivery during session_before_compact until accepted/failed outcome; only accepted compaction invalidates activation/capability/receipts;
+- actual assistant message_end → strict envelope capture/restore, recursive echo sanitation, in-place same-role replacement before persistence; error → token-free minimal fallback, invalidate capability/receipts and only static diagnostic;
+- queue-drained exact tool_call → private captured record lookup, live identity/digest check and stripping of any raw executable copy; no raw marker/record/digest in persisted history can create authority;
 - after restoration/augmentation/routing scan all candidate args for decoded/live tokens; copied prompt/label token → `{block:true,reason:"justice_capability_token_leak"}`, redacted diagnostic, no trusted evidence; never rewrite caller prompt to conceal it;
 - same-session-only validity; clear activation and capability on every accepted compaction/shutdown/restart/authorization/method boundary, never deserialize activation;
-- synchronous validation uses getCurrentActivation live snapshot. Retain revoked capability digests/reasons only in the running instance for expired/post-compaction diagnostics; restart discards them, unknown old token → expired_capability. Non-string description is ambiguous malformed_capability without invented restoration or stripping when no token string exists;
+- synchronous validation uses getCurrentActivation. Retired tokens remain only in a private sanitation-only set until outstanding responses settle; revoked digests/reasons explain rejection, never validity. Accepted compaction invalidates activation/receipts immediately; late responses are still sanitized. Shutdown/restart clears all memory; replay of sanitized history is non-authoritative;
 - resolve unrelated task calls to `external` and missing/conflicting evidence to `ambiguous`;
 - produce exact-call origin provenance only after valid capability/current activation/authorization/session/method, successful strip/read-back and non-empty refs; execution/review acceptance separately requires observed details.execution_mode=process and task-state runner_kind=host-session with normalized binding;
 - attach runtime task/child identity only through the proven Native surface;
@@ -1802,21 +1863,23 @@ bun run vitest run tests/integration/omo-native-senpi-contract-spike.test.ts
 bun run vitest run \
   tests/runtime/senpi-adapter-execution-correlation.test.ts \
   tests/runtime/senpi-adapter-provenance.test.ts \
-  tests/runtime/senpi-adapter-activation-capability.test.ts
+  tests/runtime/senpi-adapter-activation-capability.test.ts \
+  tests/runtime/senpi-adapter-capability-transcript.test.ts
 bun run typecheck
 bun run build
 ```
 
-Expected: PASS, including `valid_live_capability_produces_provenance_for_exact_bound_call`, all rejection/strip/lifecycle controls, and revised A–K replay; dist Senpi entrypoint JS/types emit without bundling Senpi. REFACTOR: keep registry and activation state separate from adapter; rerun identical GREEN commands after refactor.
+Expected: PASS for exact-call live receipt validation, context-only delivery, same-role pre-persistence sanitation/fallback, raw executable-copy stripping, all rejection/lifecycle controls and revised Task 1 actual storage/outbound proofs; Senpi dist JS/types emit without bundling Senpi. REFACTOR: keep transcript guard separate from registry/activation; no I/O in synchronous sanitation, no Task 10 back-edge. Rerun identical GREEN commands after refactor.
 
 - [ ] **Step 5: Commit exact Task 6 boundary**
 
 ```bash
 git add package.json src/senpi-extension.ts src/runtime/senpi-adapter.ts \
-  src/runtime/native-task-capability-registry.ts src/runtime/workflow-activation-state.ts src/runtime/senpi-superpowers-mapping.ts \
+  src/runtime/native-task-capability-registry.ts src/runtime/native-capability-transcript.ts src/runtime/workflow-activation-state.ts src/runtime/senpi-superpowers-mapping.ts \
   src/core/justice-plugin.ts src/core/types.ts \
   tests/runtime/senpi-adapter-execution-correlation.test.ts \
-  tests/runtime/senpi-adapter-provenance.test.ts tests/runtime/senpi-adapter-activation-capability.test.ts
+  tests/runtime/senpi-adapter-provenance.test.ts tests/runtime/senpi-adapter-activation-capability.test.ts \
+  tests/runtime/senpi-adapter-capability-transcript.test.ts
 git commit -m "feat: Native activation と capability 検証を接続"
 ```
 
@@ -2294,7 +2357,7 @@ git commit -m "feat: gate acceptance on type-safe final evidence"
 
 **Native tool-mapping appendix:**
 
-- Task 6 owns issuance/read-result mapping directive; Task 10 must not create another token or mapping transport.
+- Task 6 owns context-only capability directive and pre-persistence outbound sanitation/receipt; Task 10 never changes persisted read result or creates another token/transport.
 - instruct the active Superpowers workflow to express requested subagent/reviewer work via the existing OmO Native `task`;
 - never issue the call;
 - never prescribe model/provider;
@@ -2758,6 +2821,8 @@ Retain the existing v5 semantic-control-plane E2Es and add/ensure Native boundar
 - `native_accepted_compaction_and_restart_require_fresh_method_read` — selection recoverable; activation/token cannot recover; new read required.
 - `native_host_session_batch_contracts_do_not_cross_bind` — two item prompts/contracts/runtime IDs uniquely bind children by index.
 - `unsupported_native_modes_do_not_inherit_host_session_acceptance` — in-process/nested/detached/unknown modes remain untrusted without forcing mode.
+- `native_capability_context_to_sanitized_history_to_exact_tool_call_is_closed` — Task 6 private message_end receipt matches exact post-sanitation tool_call/input, with token-free mocked persistence/child/log output and Task 1 actual session-storage proof attached; no persisted digest/marker recovery path.
+- `native_capability_outbound_failure_blocks_trusted_acceptance` — message_end fallback/echo/missing or conflicting receipt cannot satisfy execution/review acceptance or trigger duplicate reviewer dispatch.
 
 - [ ] **Step 2: Run RED E2E + Task 1 Native evidence gate**
 
@@ -3006,10 +3071,10 @@ The numbering below is Design §29. Every row fixes the owning task, exact test 
 | 49 | artifact/scope/revision mutation stales review evidence before acceptance | 9 | `tests/core/plan-completion-v5.test.ts` | `artifact_or_revision_mutation_stales_review_evidence_before_acceptance` | unit |
 | 50 | clean review evidence does not create human implementation authorization | 14 | `tests/integration/justice-v5-semantic-control-plane.integration.test.ts` | `clean_review_does_not_bypass_human_artifact_chain_authorization` | E2E |
 | 51 | Justice does not schedule remediation/re-review or own runtime retry/fallback | 14 | `tests/integration/justice-v5-semantic-control-plane.integration.test.ts` | `superpowers_remediation_and_omo_retry_ownership_remain_separate` | E2E |
-| 52 | valid capability stripped/restored and exact call provenance | 6 | `tests/runtime/senpi-adapter-provenance.test.ts` | `valid_live_capability_produces_provenance_for_exact_bound_call` | integration |
+| 52 | context-only delivery + pre-persistence sanitation + exact-call receipt provenance | 6 | `tests/runtime/senpi-adapter-provenance.test.ts` | `valid_live_capability_produces_provenance_for_exact_bound_call` | integration |
 | 53 | invalid capabilities never trust or leak to child | 14 | `tests/integration/justice-v5-semantic-control-plane.integration.test.ts` | `native_capability_negative_controls_never_produce_acceptance` | E2E |
 | 54 | pre-spawn appendix failure/batch isolation | 7 | `tests/runtime/senpi-adapter-review-interop.test.ts` | `batch_review_appendices_bind_exact_items_without_cross_consumption` | integration |
-| 55 | fixture env/provider isolation and redaction | 1 | `tests/integration/omo-native-senpi-contract-spike.test.ts` | `task1_fixture_does_not_inherit_external_provider_credentials` | runtime spike |
+| 55 | fixture isolation plus authoritative storage token absence | 1 | `tests/integration/omo-native-senpi-contract-spike.test.ts` | `task1_fixture_does_not_inherit_external_provider_credentials`; `task1_capability_never_enters_persisted_session_history`; `task1_capability_is_removed_before_assistant_tool_call_persistence` | runtime spike |
 | 56 | unsupported modes do not borrow host-session proof | 14 | `tests/integration/justice-v5-semantic-control-plane.integration.test.ts` | `unsupported_native_modes_do_not_inherit_host_session_acceptance` | E2E |
 
 ---
@@ -3032,7 +3097,7 @@ Justice `v4.3.1` is consulted only as the historical regression corpus explicitl
 | Producer | Consumer | Contract to compare |
 | --- | --- | --- |
 | Task 1 | Task 2 / Task 6 | PROVEN host primitive A–K evidence, exact description/pre-spawn/mode/child/lifecycle contract; no upstream semantic-origin profile |
-| Task 2 | Task 6 | NativeSuperpowersTaskCapability, NativeSuperpowersProvenanceInput/Evidence/Resolver, NativeCapabilityValidationResult, codec, WorkflowActivationEvidence/StateStore/decisions; Task 2 consumes no Task 10 output |
+| Task 2 | Task 6 | NativeSuperpowersTaskCapability, NativeSuperpowersProvenanceInput/Evidence/Resolver, NativeCapabilityOutboundReceipt/Record, NativeCapabilityValidationResult, encodeCapabilityId/codec, activation interfaces/decisions; no Task 10 input |
 | Task 2 | Task 7 | `TrustedSuperpowersProvenance`, `TaskIdentity`, `ReviewFindingV5`, and shared review/routing vocabulary |
 | Task 2 | Task 10 | `TaskRoutingTarget`, `SemanticClassificationResult`, `TranslateTaskRoutingInput`, `SuperpowersRoutingTranslationResult`, and exact pure `translateTaskRouting(input)` signature |
 | Task 2 | Tasks 5, 8, 9, 11, 12, 14 | remaining shared semantic identity/category/quality vocabulary |
@@ -3063,6 +3128,15 @@ Historical regression evidence does not create a producer/consumer dependency on
 Any mismatch is a Plan defect. Under the Justice v5 spec, a Ruling may record the conflict but MUST NOT silently change a normative interface; return to artifact reconciliation if the mismatch changes the Design contract.
 
 Focused provenance contract checks that must be executable before this graph is accepted:
+
+RG-005/006 focused traceability (within existing scenarios 52/53/55; no new requirement/registry/scenario IDs):
+
+| Finding | Owner | File | Exact tests |
+| --- | --- | --- | --- |
+| RG-005 host security proof | Task 1 | `tests/integration/omo-native-senpi-contract-spike.test.ts` | `task1_capability_never_enters_persisted_session_history`, `task1_capability_is_removed_before_assistant_tool_call_persistence`, `task1_message_end_fallback_prevents_token_persistence_on_error`, `task1_batch_echo_and_stale_transcripts_cannot_restore_capability` |
+| RG-005 production boundary | Task 6 | `tests/runtime/senpi-adapter-capability-transcript.test.ts` | `context_copy_alone_delivers_live_capability_directive`, `message_end_restores_assistant_description_before_host_append`, `message_end_failure_returns_same_role_token_free_fallback` |
+| RG-005 cross-component closure | Task 14 | `tests/integration/justice-v5-semantic-control-plane.integration.test.ts` | `native_capability_context_to_sanitized_history_to_exact_tool_call_is_closed`, `native_capability_outbound_failure_blocks_trusted_acceptance` |
+| RG-006 pure encoder | Task 2 | `tests/core/native-task-capability.test.ts` | `capability_id_encodes_32_bytes_as_43_base64url_characters`, `capability_id_encoding_has_no_padding`, `capability_id_encoding_rejects_invalid_byte_length`, `capability_id_encoding_matches_known_vector_without_mutating_input` |
 
 ```text
 Task 2:
