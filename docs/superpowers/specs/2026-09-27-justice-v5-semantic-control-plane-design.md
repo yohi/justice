@@ -1,12 +1,15 @@
 # Justice v5 Semantic Control Plane Design
 
+<!-- markdownlint-disable MD013 MD029 -->
+<!-- Exact contracts use soft wrapping; scenario numbers are stable IDs. -->
+
 **Date:** 2026-09-27
-**Status:** DRAFT — awaiting human review
+**Status:** Task 1 BLOCKED reconciliation — Fresh Superpowers Review Gate required
 **Authorization:** NOT SELF-AUTHORIZING
 **Target:** Justice v5.x
 **Baseline:** Justice master @ 080bcdb25b192962789ff5d67139e56487381de4
 **Requirements:** `docs/superpowers/requirements/2026-09-27-justice-v5-requirements.md`
-**Upstream baselines:** Oh My OpenAgent v5.0.1 (OpenCode edition), Superpowers v6.4.2
+**Upstream baselines:** Oh My OpenAgent v5.1.17 (OmO Native), Senpi v2026.10.8, Superpowers v6.4.2
 
 ---
 
@@ -45,12 +48,26 @@ PlanComplete = true
 
 ## 2. Scope
 
+### Evidence checkpoint and authorization
+
+Approved Gate: Justice `53d4abcc7b1a887f18860c0f3ba013aae0c2fbf3`. Evidence commit `e2a1662794927f3be11c3e58b688cbfb482bb3f0`: BLOCKED, 15 contracts, 9 PROVEN, 6 BLOCKED. Pins: OmO 5.1.17 / `091728d274f20d62504b0b5e1edbc3970671dd8b`, Senpi 2026.10.8 / `d56e6a260d9468418a39bc9120945cf98e06b840`, Superpowers 6.4.2 / `8ca22dba9a94f28898bbce59f2537ff4d87c747d`.
+
+Preserve PROVEN: normal isolated startup/exit; real model-issued OmO task; observable tool_call/tool_result and pre-execution mutation; valid type-only ExtensionAPI import; parent runtime task identity; unique child storage binding in tested host-session path; current-session read_tool_result activation; no Justice production source required. Native exact semantic provenance and review appendix delivery remain BLOCKED. Host-expanded activation, compaction survival, and identical cross-mode physical binding remain NOT_PROVEN. New protocol decisions below are not new runtime proof.
+
+Tasks 2–14 remain NOT AUTHORIZED. Fresh Superpowers Review Gate READY authorizes only revised Task 1. Revised A–K evidence must be PROVEN before production authorization is reconsidered.
+
+Head `01d81970ac4558a65aefb6ef5cb2832b83a5a077` received a BLOCKED Fresh Gate for RG-005/006. RG-001..004 remain resolved. Revised Task 1 is also currently NOT AUTHORIZED. This repair fixes token delivery/persistence and byte encoding; another Fresh Gate is required before any revised runtime spike. Pinned-source capability below is not runtime proof.
+
+Current repair input `c685bcfde9559a8e691f22596d9dfc8f00063786` has RG-005 partially resolved and RG-006 resolved. Accepted request-local delivery/assistant sanitation and encoder contracts remain intact; this repair adds all-tool executable-copy containment and synthetic toolResult sanitation, without new runtime PROVEN status or task authorization.
+
 ### 2.1 In scope
 
 Justice v5 covers:
 
-- OmO v5 OpenCode edition compatibility.
-- Superpowers v6.4.2 workflow compatibility.
+- OmO Native v5.1.17 / Senpi v2026.10.8 as the primary runtime harness.
+- Superpowers v6.4.2 as a co-loaded Pi package and methodology authority.
+- a Native Justice extension adapter that observes/mutates supported Senpi events without taking workflow/runtime ownership.
+- an executable Native evidence spike that locks task correlation, skill activation, and reviewer context-delivery seams before production adapter implementation.
 - plan-scoped human authorization.
 - semantic task/category correlation.
 - execution and review provenance.
@@ -58,23 +75,22 @@ Justice v5 covers:
 - semantic drift detection and reconciliation gates.
 - task-level and final conformance gates.
 - evidence-based quality gates.
-- compaction/recovery.
+- compaction/restart recovery.
 - capability-based doctor diagnostics.
-- migration away from stale v4 orchestration responsibilities.
+- migration away from stale v4/OpenCode orchestration responsibilities.
 
 ### 2.2 Out of scope
 
-The initial v5 scope does not include:
+The initial Native-first v5 scope does not include:
 
-- direct OmO Native / Senpi integration.
-- reimplementation of Superpowers SDD.
-- reimplementation of OmO model/provider/fallback behavior.
+- reimplementation of Superpowers SDD/review/fix progression.
+- reimplementation of OmO task lifecycle, process/host choice, task revival, retry, model/provider fallback, workpool/team scheduling, or isolation.
+- using the OmO OpenCode edition as the architecture authority for Native behavior.
 - permanent behavioral compatibility with OmO v4.
-- permanent compatibility with obsolete Superpowers reviewer contracts.
 - automatic replacement of human plan approval.
 - GitHub PR merge/approval automation.
 
-Future OmO Native support must be a separate harness adapter over the same Justice core contracts.
+The existing OpenCode adapter may remain as a secondary compatibility surface, but Native semantics are specified independently. OpenCode-specific `chat.message`, `client.session.get`, command-template rewriting, or controller wrappers are never implicit Native contracts.
 
 ---
 
@@ -178,36 +194,38 @@ For Conformance Contract projection, the canonical normative Design surface is e
 Other prose in this Design explains or elaborates these contracts. It is not independently enumerated by searching for words such as `MUST`.
 
 | ID | Normative design obligation |
-|---|---|
+| --- | --- |
 | J5D-OWN-01 | Superpowers owns execution-method selection and workflow/review progression; Justice may activate the selected supported methodology but must not duplicate progression. |
 | J5D-OWN-02 | OmO owns concrete agent/runtime/model/provider/reasoning/retry/fallback routing. |
-| J5D-ACT-01 | Justice keeps methodology MethodSelection separate from current-session ActivationEvidence: cross-session recovery may restore selection but never activation, matching same-session activation suppresses duplicate invocation, and conflicts fail closed. |
+| J5D-ACT-01 | MethodSelection is separate from ActivationEvidence; required activation is exact installed method read_tool_result. Activation/capability are memory-only and invalidated by shutdown, restart, accepted compaction, authorization or method replacement; fresh method read is required. Task 2 owns domain contracts and Task 6 owns observation/state, with no Task 10 back-edge. |
 | J5D-GATE-01 | Justice owns fail-closed authorization/evidence/conformance acceptance. |
 | J5D-TASK-01 | Superpowers task semantics must be preserved without lossy prompt reconstruction. |
 | J5D-CHAIN-01 | Human authorization binds an exact Requirements→Design→Plan artifact chain. |
 | J5D-CHAIN-02 | Requirements or Design substantive changes invalidate downstream authority. |
 | J5D-RULING-01 | Superpowers Rulings may guide execution but cannot rewrite approved Justice authority. |
-| J5D-CORR-01 | OmO `task_id` is continuation-session state and never Justice TaskIdentity. |
-| J5D-CORR-02 | Runtime execution is correlated by durable `parentSessionId + parentCallId` sidecar binding, extended with observed child session. |
-| J5D-ROUTE-01 | Justice obeys category/subagent_type XOR with provenance-aware translation: recognized Superpowers generic `general` is a compatibility marker translated to one Justice category, while non-Superpowers explicit routing and OmO continuation remain caller/runtime-owned. |
+| J5D-CORR-01 | OmO Native runtime task identity (`st_...`/task name and task_send target) is runtime state and never Justice TaskIdentity. |
+| J5D-CORR-02 | Native execution is correlated by durable Senpi `parentSessionId + parentToolCallId` binding from `tool_call`, extended only with runtime task/child identity proven by the audited Native evidence contract. |
+| J5D-ROUTE-01 | Justice obeys OmO Native `category XOR subagent_type`: a Native mapping appendix teaches Superpowers to use the existing `task` tool, Justice may translate only an already-issued recognized Superpowers task call, explicit specialized/caller routing remains caller-owned, and `task_send` continuation remains OmO-owned. |
 | J5D-ROUTE-02 | Semantic execution classification is deterministic from structured task/review semantics with precedence final-review > review > architecture > deep > integration > mechanical > implementation; ambiguity never fabricates a category. |
 | J5D-CAT-02 | Justice categories are semantic routing inputs only; OmO effective configuration resolves them to concrete runtime/model/provider, and Justice never selects a concrete model/provider. |
 | J5D-PROJ-01 | Requirements/Design/Plan normative sources are deterministically enumerable. |
 | J5D-PROJ-02 | Projection has COMPLETE/INCOMPLETE/INVALID state; only COMPLETE may pass acceptance. |
 | J5D-PROJ-03 | Projection schema/version is bound to artifact-chain and evidence identity. |
 | J5D-REVIEW-01 | Justice observes an existing Superpowers review dispatch and never creates a duplicate review. |
-| J5D-REVIEW-02 | Justice observes the existing parent review call; during the awaited child `chat.message` hook it resolves the child Session authoritatively with `client.session.get`, matches `parentID` to exactly one pending review, then injects one fully formed synthetic text Part. Session events are corroboration only. |
+| J5D-REVIEW-02 | Exact-call capability validation precedes stripping and serialized Conformance Contract augmentation of the existing task prompt before spawn. No pending appendix queue exists. Normalized exact-call/runtime-task/child correlation must be proven per supported mode; mutation/ordering uncertainty yields NOT_PROVEN. |
+| J5D-CAP-01 | §7.5 fixes pure encoding, process-only capabilities/receipts/vetoes, context-copy delivery, assistant/toolResult pre-persistence sanitation, all-tool non-task terminating leak guard before task-only exact-call validation, token-free execution/history/logs/child, batch isolation and same_session_only validity; generic secret containment never creates provenance. |
+| J5D-HARNESS-01 | Revised Task 1 proves A–K in fixtures only with allowlisted child env, pinned deterministic mock provider, no external fallback, non-mock rejection, and secret/capability-safe raw evidence; failure stops for reconciliation. |
 | J5D-REVIEW-03 | Trusted review evidence uses versioned structured results; the current Superpowers scoped dispatch supplies exact marker IDs for its current target set, while persisted trusted lineage evidence separately supplies metadata and a lineage-wide reserved finding-ID set so historical identities cannot be reused by new breakage; empty target sets remain valid for clause-only re-proof. |
 | J5D-REVIEW-04 | Missing, malformed, stale, wrong-scope, untrusted, identity-inconsistent, diff-failed, or incompletely covered final-review evidence fails closed; failed final-evidence attempts never masquerade as trusted closures. |
 | J5D-QUALITY-01 | Critical/Important findings block; Minor is deferred-visible; parked/Ruling is not resolution. |
 | J5D-STORAGE-01 | Directly observed structured review results are canonical; insecure file fallback never becomes trusted evidence. |
-| J5D-CONFIG-01 | Doctor/config verification uses OmO effective configuration precedence, not a single config file. |
+| J5D-CONFIG-01 | Doctor/config verification uses OmO effective configuration precedence with the `[native]` harness view, not a single config file or legacy `[senpi]` spelling. |
 | J5D-PERSIST-01 | v4 durable authority is not auto-promoted to v5 authority; incompatible state fails acceptance closed. |
 | J5D-REC-01 | Recovery reconstructs semantic correlation from durable v5 bindings and surfaces state conflicts. |
 | J5D-CAT-01 | Justice emits current OmO categories and never canonical legacy `deep`. |
 | J5D-DEP-01 | DependencyAnalyzer is not a scheduling authority. |
 | J5D-RUNTIME-01 | OmO owns retry/fallback; Justice classifies terminal outcome only. |
-| J5D-DOCTOR-01 | Doctor separates source/configured/applied/observed state and reports unsupported evidence capabilities. |
+| J5D-DOCTOR-01 | Doctor separates source/configured/applied/observed state and reports OmO Native/Senpi task, correlation, Superpowers activation, and reviewer-delivery capabilities independently. |
 | J5D-COMPLETE-01 | PlanComplete requires zero unresolved/unauthorized semantic drift, zero missing required evidence, and zero blocking quality findings. |
 
 A registry ID is stable within a Design source revision. Changing the obligation text changes the Design fingerprint and invalidates evidence bound to the prior revision.
@@ -219,7 +237,7 @@ Justice `v4.3.1` is evidence about failure modes, not a source implementation fo
 The v4.2.0→v4.3.1 maintenance line established the following reusable lessons:
 
 | Historical evidence | Observed failure mode | Retained v5 design contract | Non-retained implementation detail |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `de2ca2a0e2c23ed0a71808b7de246a292c0c00d8`, `54e240ffc5415443dfa5d3dc243945e16d9d2631`, `8c8f8fd400b06d9228ceb7e30ab9c94a2acfcc72` | task meaning, routing ownership, or continuation identity was damaged by lossy reconstruction/normalization | J5D-TASK-01, J5D-CORR-01, J5D-ROUTE-01 | v4 PlanBridge/task-wire normalization |
 | `821343eba1223371ae0a7a20e02e7370db900306`, `4759d777aab9c80b897c55392bcc0f5833d79d7b`, `1781c7efae22ac1304fa8dc0d1f621c888943a1e` | review/final-review work was confused with implementation or lost its semantic route | J5D-REVIEW-01, J5D-ROUTE-01/02 | v4 SDD-specific routing hooks |
 | `aba390a983fd8eaea791785727aef39599b9d6aa`, `4688a96982355fff87e2d37e1a775b2456c6904f` | the model selected a review-looking executor that was not the intended trusted evidence producer | J5D-REVIEW-01/03/04 | dedicated OpenCode `justice-review-controller`, native TaskTool wrapper, exact OmO v4 envelope parser |
@@ -291,6 +309,7 @@ The boundary is intentionally asymmetric:
 - Justice semantic classification does not make Justice the concrete runtime resolver.
 
 Justice is authoritative at activation-validation, semantic translation, authorization, and acceptance boundaries, but not at Superpowers progression or OmO concrete runtime selection.
+
 ---
 
 ## 5. Plan and artifact authority
@@ -451,55 +470,45 @@ Justice MUST NOT delete or summarize away normative task content.
 
 ## 7. Task identity and execution correlation
 
-Justice must correlate four independently evolving records:
+Justice correlates independently evolving semantic and runtime records:
 
-- approved plan/task;
-- Superpowers ledger entry;
-- OmO/OpenCode execution;
+- approved artifact/TaskIdentity;
+- Superpowers workflow/task/reviewer intent;
+- Senpi parent session + tool call;
+- OmO Native runtime task/child identity;
 - review/evidence artifacts.
 
 ### 7.1 Semantic TaskIdentity
 
-Task identity MUST NOT depend only on a mutable array index.
+TaskIdentity remains artifact-chain/plan/task-semantic identity and MUST NOT depend on a runtime task id or mutable array index.
 
-The identity model combines stable plan scope with task semantics, conceptually:
+### 7.2 OmO Native runtime identity ownership — J5D-CORR-01
 
-```text
-TaskIdentity
-├─ artifactChainId
-├─ plan identity
-├─ task ordinal within approved revision
-├─ normalized task heading
-└─ task semantic fingerprint
-```
+OmO Native background task ids such as `st_...`, session-local task names, process/in-process execution mode, and `task_send(to=...)` continuation targets are runtime state.
 
-The exact hash format is implementation detail. The required property is that Justice can distinguish:
+Justice never encodes semantic TaskIdentity into those values and never rewrites them to control runtime continuation.
 
-- same task, progress-only update;
-- modified task under same heading;
-- task from another plan;
-- review for another task;
-- stale review for an older implementation revision.
+### 7.3 Canonical Native sidecar binding — J5D-CORR-02
 
-### 7.2 OmO task_id ownership — J5D-CORR-01
-
-OmO v5 OpenCode `task_id` is a continuation-session identifier (`ses_...`).
-
-Justice semantic `TaskIdentity` is never encoded into that field.
-
-A legitimate incoming OmO `task_id` is preserved unchanged. Justice may record it as `omoContinuationSessionId`, but it is runtime metadata rather than semantic proof.
-
-### 7.3 Canonical sidecar binding — J5D-CORR-02
-
-The canonical execution-call key is:
+The primary execution-call key is:
 
 ```text
-ExecutionCallKey = parentSessionId + parentCallId
+ExecutionCallKey
+= parentSessionId + parentToolCallId
 ```
 
-Both values are observed by the OpenCode `tool.execute.before` hook already used by the adapter.
+with:
 
-Justice persists a sidecar binding before relying on execution evidence:
+```text
+parentSessionId = ctx.sessionManager.getSessionId()
+parentToolCallId = tool_call.toolCallId
+```
+
+Senpi v2026.10.8 guarantees that `tool_call` runs before execution and that `event.input` is mutable in place. Justice persists the semantic binding before trusting later execution evidence.
+
+For supported batches, extend ExecutionCallKey / ExecutionCorrelationKey, BindPendingInput, ExecutionCorrelation, and PendingReviewCorrelation with optional batchItemIndex (zero-based and required for an item). Single-call records omit it. Task 5 owns this additive correlation change; Tasks 6/7 consume the same index. The pair identifies the outer invocation, not a unique child in fanout.
+
+BindPendingInput additionally carries dispatchShape=`single | batch_item`, derived by Task 6 from actual task prompt/tasks shape. single requires absent index; batch_item requires integer 0–15. Invalid shape/index → untrusted CorrelationMutationResult. This validates fanout without borrowing a sibling identity.
 
 ```text
 ExecutionCorrelation
@@ -509,101 +518,210 @@ ExecutionCorrelation
 ├─ taskIdentity
 ├─ executionMethod
 ├─ parentSessionId
-├─ parentCallId
+├─ parentToolCallId
+├─ omoTaskId?
 ├─ childSessionId?
-├─ omoContinuationSessionId?
 ├─ dispatchRevision
 └─ status
 ```
 
-The in-memory relation maps used by an adapter are caches only; durable `.justice/` state is the recovery authority.
+`omoTaskId` / `childSessionId` are attached only through the exact runtime-observed surface established by the Native evidence spike. The Design does not fabricate an OpenCode-style child lookup API.
+
+Nested/codemode-issued calls expose `parentToolCallId`; the initial compatibility profile supports them only if Task 1 proves an unambiguous correlation contract.
 
 Lifecycle:
 
 ```text
-tool.execute.before(task)
-  → persist PENDING correlation for (parentSessionId, parentCallId)
+tool_call(task)
+  → persist pending semantic correlation
+  → optionally mutate the same task input for semantic routing
 
-task post-tool metadata and/or observed session.created/session.updated
-  → attach childSessionId when parent/child evidence agrees
+tool_result(task) / audited OmO task lifecycle
+  → attach runtime task identity and child identity if proven
 
-post-tool / review / verification
-  → resolve semantic evidence through that correlation
+bound child context + structured result
+  → produce trusted evidence
 
-recovery
-  → reconstruct from durable bindings
+session_start/restart
+  → recover durable Justice binding
 ```
 
-If child metadata and session-event parentage disagree, the relation is untrusted.
+Missing/ambiguous binding may remain fail-open for execution but is `NOT_PROVEN` for acceptance.
 
-For a continuation, an incoming `ses_...` can reattach to semantic identity only if it matches a previously trusted child-session relation. Otherwise it remains unverified runtime metadata.
+### 7.4 Native task routing — J5D-ROUTE-01 / J5D-ROUTE-02
 
-Correlation persistence failure does not have to abort OmO execution, but the affected execution cannot become trusted acceptance evidence.
-
-### 7.4 category / subagent_type and semantic translation — J5D-ROUTE-01 / J5D-ROUTE-02
-
-Justice follows the OmO public XOR contract; it never intentionally emits both `category` and `subagent_type`.
-
-Routing decisions are provenance-aware.
-
-#### Non-Superpowers / explicit caller routing
-
-- explicit `subagent_type` from a non-Superpowers caller is preserved;
-- recognized Superpowers explicit specialized non-generic `subagent_type` (for example `explore`) is also preserved and is not category-translated;
-- explicit `category` is accepted as a caller-owned non-empty OmO category name and preserved byte-for-byte; Justice does not require membership in its static built-in category vocabulary;
-- external both-target input is a routing-contract violation;
-- Justice does not invent precedence between explicit external targets.
-
-#### Recognized Superpowers new-worker routing
-
-Superpowers v6.4.2 OpenCode V1 renders its generic worker template as:
+New child calls obey:
 
 ```text
-Subagent (general-purpose)
-→ task(subagent_type="general")
+task(prompt, exactly one of category | subagent_type)
 ```
 
-For a recognized Superpowers **new-worker** dispatch, `general` is a harness compatibility marker, not a semantic execution-class choice.
+Routing is provenance-aware:
 
-Justice therefore performs:
+- explicit non-Superpowers `category` / `subagent_type` stays caller-owned;
+- custom category names are open and preserved;
+- explicitly specialized named agents remain caller-owned unless a compatibility profile explicitly maps that role;
+- Superpowers v6.4.2's Pi bootstrap does not define OmO's task tool, so Justice contributes only a Native tool-mapping appendix that tells the active workflow to express a subagent/reviewer dispatch through the existing OmO `task` tool;
+- the model still issues that `task` call; Justice does not dispatch it;
+- for a recognized Superpowers call, Justice classifies semantics and mutates that same `tool_call.event.input` to exactly one Justice `sp-*` category when appropriate;
+- ambiguous provenance/classification does not fabricate routing.
+
+Deterministic review mapping remains:
 
 ```text
-recognized Superpowers dispatch
-+ subagent_type="general"
-+ no task_id continuation
-        ↓
-semantic execution classification
-        ↓
-remove subagent_type
-set category = exactly one Justice sp-* category
-        ↓
-OmO
+task/scoped review → review       → sp-review
+final review       → final-review → sp-final-review
 ```
 
-The final payload still satisfies XOR.
+Native continuation is `task_send(to=<task id or name>)`; it is not passed through new-child category translation.
 
-Deterministic review mapping is:
+### 7.5 Justice-owned capability provenance — J5D-CAP-01 / J5D-ROUTE-01
 
-```text
-task review / scoped re-review → review       → sp-review
-final whole-branch review      → final-review → sp-final-review
+Pinned upstream exposes session/call identity, not a proven semantic-origin field. NativeSuperpowersProvenanceProfile is removed from the implementation contract. Task 2 owns domain contracts; Task 6 alone issues/validates capabilities and validates exact-call binding, and may produce trusted provenance only with independent workflow-origin evidence. A capability proves only authorized capability presentation and exact-call binding; it does not prove that the call originated from a Superpowers workflow dispatch. `workflowOriginEvidenceRefs` must identify independent, observed evidence of that exact dispatch, distinct from capability issuance/read, context delivery, the capability envelope, and outbound receipt/exact-call validation. If the pinned runtime cannot provide and Task 1 cannot verify such evidence, resolve the call as ambiguous/NOT_PROVEN and do not emit `kind: "superpowers"`. Review role is a separate Task 7 classification, never proof of origin.
+
+```ts
+type NativeSuperpowersTaskCapability = {
+  readonly schemaVersion: "justice-native-superpowers-task-capability-v1";
+  readonly capabilityId: string;
+  readonly authorizationId: string;
+  readonly sessionId: string;
+  readonly method: SuperpowersExecutionMethod;
+  readonly issuedFromReadToolCallId: string;
+};
+type NativeSuperpowersProvenanceEvidence = {
+  readonly schemaVersion: "justice-native-superpowers-provenance-evidence-v1";
+  readonly protocolId: "justice-native-superpowers-task-capability-v1";
+  readonly capabilityDigest: string;
+  readonly authorizationId: string;
+  readonly method: SuperpowersExecutionMethod;
+  readonly issuedFromReadToolCallId: string;
+  readonly parentSessionId: string;
+  readonly parentToolCallId: string;
+  readonly batchItemIndex?: number;
+  readonly sourceEvidenceRefs: readonly [string, ...string[]];
+  readonly workflowOriginEvidenceRefs: readonly [string, ...string[]];
+  readonly observedAt: string;
+};
+type TaskRoutingProvenance =
+  | { readonly kind: "superpowers"; readonly evidence: NativeSuperpowersProvenanceEvidence }
+  | { readonly kind: "external" }
+  | { readonly kind: "ambiguous"; readonly reasons: readonly [string, ...string[]] };
+type NativeSuperpowersProvenanceInput = {
+  readonly authorizationId: string;
+  readonly parentSessionId: string;
+  readonly parentToolCallId: string;
+  readonly batchItemIndex?: number;
+  readonly taskArgs: Readonly<Record<string, unknown>>;
+  readonly executionMethod: SuperpowersExecutionMethod;
+  readonly observedEvidenceRefs: readonly string[];
+  readonly observedWorkflowOriginEvidenceRefs: readonly string[];
+};
+type CapabilityEnvelopeDecodeResult =
+  | { readonly kind: "absent" }
+  | { readonly kind: "decoded"; readonly capabilityId: string; readonly originalDescription: string | null }
+  | { readonly kind: "invalid"; readonly reason: "malformed_capability" | "duplicate_capability" };
+type NativeCapabilityValidationResult = {
+  readonly provenance: TaskRoutingProvenance;
+  readonly restoredDescription: string | null;
+  readonly stripRequired: boolean;
+};
+type NativeCapabilityOutboundReceipt = {
+  readonly schemaVersion: "justice-capability-outbound-receipt-v1";
+  readonly authorizationId: string;
+  readonly method: SuperpowersExecutionMethod;
+  readonly issuedFromReadToolCallId: string;
+  readonly parentSessionId: string;
+  readonly parentToolCallId: string;
+  readonly batchItemIndex?: number;
+  readonly capabilityDigest: string;
+  readonly strippedTaskArgsDigest: string;
+};
+type NativeCapabilityOutboundRecord =
+  | { readonly kind: "captured"; readonly receipt: NativeCapabilityOutboundReceipt }
+  | {
+      readonly kind: "rejected";
+      readonly parentSessionId: string;
+      readonly parentToolCallId: string;
+      readonly batchItemIndex?: number;
+      readonly strippedTaskArgsDigest: string;
+      readonly reasons: readonly [string, ...string[]];
+    };
+type NativeCapabilityToolCallGuardInput = {
+  readonly toolName: string;
+  readonly args: Readonly<Record<string, unknown>>;
+  readonly sessionId: string;
+  readonly parentToolCallId: string;
+};
+type NativeCapabilityToolCallGuardResult =
+  | { readonly kind: "continue" }
+  | {
+      readonly kind: "block";
+      readonly reason: "justice_capability_token_leak";
+      readonly terminate: true;
+    };
+interface NativeSuperpowersProvenanceResolver {
+  resolve(input: NativeSuperpowersProvenanceInput): NativeCapabilityValidationResult;
+}
+declare function encodeCapabilityId(bytes: Uint8Array): string;
+declare function encodeTaskCapabilityEnvelope(capabilityId: string, originalDescription: string | null): string;
+declare function decodeTaskCapabilityEnvelope(description: unknown): CapabilityEnvelopeDecodeResult;
+declare function guardCapabilityToolCall(input: NativeCapabilityToolCallGuardInput): NativeCapabilityToolCallGuardResult;
 ```
 
-Implementation dispatches use the semantic classifier in §21.
+Task 2 owns NativeCapabilityToolCallGuardInput/Result as shared data vocabulary only. The guard signature above names a Task 6-owned runtime closure, not a Task 2 pure function or dependency on runtime secret state. Task 6 owns its registry/token/veto access; Tasks 7/10 consume only the separately validated task provenance.
 
-#### Continuation
+**Issuance and pure encoding:** Only successful read_tool_result for the exact installed selected method SKILL.md, matching current authorization/session/method/read call, records activation and mints a token in live memory. The read result is never augmented with a token. `encodeCapabilityId(bytes: Uint8Array): string` requires exactly 32 bytes, does not mutate input, and encodes RFC 4648 base64 with alphabet `ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_`, zero-fill final unused bits, and no `=` padding. Output is exactly 43 ASCII characters matching `^[A-Za-z0-9_-]{43}$`; other lengths throw `TypeError("capability_byte_length")`. Issuance is exactly `encodeCapabilityId(randomBytes(32))`, with 256-bit cryptographic entropy from the injected generator; Uint8Array.toString is not an encoder. Vectors: 32 zero bytes → 43 `A` characters; bytes 0 through 31 → `AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8`. New successful method read replaces the prior capability and its unused receipts. Package/bootstrap/child load_skills/prompt wording never mint one; failure → capability_unavailable, no delivery, NOT_PROVEN.
 
-A legitimate `task_id=ses_...` is OmO continuation authority. Justice does not inject or replace a new worker category on that call.
+**Selected delivery/redaction architecture (RG-005):** Keep the strict no-raw-token persistence invariant. Task 6's `context` handler locates the deep-copied successful read ToolResultMessage by issuedFromReadToolCallId, current session and live activation, and appends exactly one request-local text block to that copy. Never mutate the original ToolResultMessage or use sendMessage/sendUserMessage/appendEntry/appendContextEdit for token delivery. Request-local block is `[JUSTICE-CAPABILITY-DIRECTIVE-V1]\n` + `Use this envelope only in the existing optional task description field (or each batch item description). Keep the capabilityId unchanged; set originalDescription to your intended exact label or null. Never copy the token into prompt, text, reasoning, logs, or child content.\n` + `encodeTaskCapabilityEnvelope(capability.capabilityId, null)` + `\n[/JUSTICE-CAPABILITY-DIRECTIVE-V1]`. Return only the request-local messages; persist neither block nor delivery receipt. A context without the exact trusted read message receives no token. Every later request may receive the current live envelope, but sanitized historical messages are never scanned to mint/recover capabilities.
 
-#### Ambiguous recognition/classification
+Task 6 also registers a synchronous assistant `message_end` guard. Before any notifier, persistence, optional I/O or asynchronous work, inspect actual model-issued task ToolCall blocks and capture process-private NativeCapabilityOutboundRecord keyed by exact current parent session + ToolCall.id + optional batchItemIndex. Decode the raw description, compute capabilityDigest and the canonical strippedTaskArgsDigest (Task 4 canonical JSON + sha256 semantics), restore exact originalDescription/delete null, and replace that ToolCall's arguments with the token-free arguments. Capture is a candidate, not trusted provenance. Missing/wrong/malformed/duplicate/expired markers store rejected records rather than trust; no marker stores no record. Recursively remove live/revoked token occurrences from all other assistant string fields, including text/thinking/diagnostics/error metadata, using literal `[JUSTICE-CAPABILITY-REDACTED]`; any token outside the legal envelope rejects all affected task records. This exceptional transcript sanitation does not silently make a modified brief trusted. No raw token or raw message is logged or written during capture. Return `{message}` with the same role; source ToolCall IDs/names and non-secret prompt/arguments remain unchanged on the normal path.
 
-If Superpowers provenance or semantic classification is not authoritative:
+Before redacting a non-task assistant ToolCall containing a live/retired token, remember its exact session/ToolCall.id in a private non-task secret-veto set. This is **not** NativeCapabilityOutboundRecord, a receipt, workflow classification or provenance. It survives sanitation of the canonical call and is checked by the global executable guard so even an already-redacted prepared argument copy cannot execute a deliberately leaking non-task call. Keep vetoes memory-only/idempotent until shutdown/restart; never recover them from history. No toolResult creates these vetoes or any provenance state.
 
-- Justice does not fabricate an `sp-*` category;
-- runtime may remain fail-open on the original generic route where safe;
-- the routing/evidence path is untrusted and required acceptance evidence remains `NOT_PROVEN`.
+**Pinned source ordering and safety boundary:** At Senpi `d56e6a260d9468418a39bc9120945cf98e06b840`, `packages/coding-agent/src/core/extensions/runner.ts::emitContext` starts from cloneJsonValue(messages), making returned context request-local. `docs/extensions.md` documents deep-copy context and same-role message_end replacement; `docs/session-format.md` says SessionMessageEntry stores ToolResult/Assistant content. `agent-session.ts::_processAgentEvent` awaits `_emitExtensionEvent` first; `_emitExtensionEvent` awaits emitMessageEnd and applies `_replaceMessageInPlace` to the canonical agent/event message; listeners run next, then appendMessage(event.message). `preflightToolCall` awaits `_agentEventQueue` before emitToolCall. `packages/agent/src/agent-loop.ts::prepareResolvedToolCall` prepares/validates an argument copy before beforeToolCall, so tool_call may still receive a preprepared raw description even though the persisted assistant is sanitized. Task 6 must strip that copy too; never assume transcript mutation and executable args are the same object. No host append hook, storage monkeypatch, SDK private method call, transcript rewrite, or provider wrapper is introduced.
 
-OmO v5.0.1 currently normalizes some invalid both-target inputs defensively. Justice does not rely on that implementation detail as its contract.
+The same copy boundary applies to every tool: pinned `packages/agent/src/tool-arguments.ts::prepareToolArguments` clones before mutable shims; `packages/ai/src/utils/validation.ts::validateToolArguments` clones again and can include original arguments/tool name in an error. `agent-loop.ts::prepareToolCall` handles incomplete/unknown calls without a normal beforeToolCall, and validation errors also become immediate synthetic tool results. Therefore assistant sanitation is not an executable-copy guard, and a tool_result hook alone does not cover every synthetic ToolResultMessage.
+
+Exact intended sequence: successful method read tool_result → live activation/issuance without result mutation → unchanged read message_end/persistence → subsequent context-copy directive → model raw assistant ToolCall → message_end capture/restore/redaction → canonical same-role replacement → token-free assistant appendMessage → queue-drained exact tool_call receipt lookup/validation and raw-copy strip → Task 7 pre-spawn appendix + Task 10 routing → token-free OmO execution → result/message_end/settlement. The source's finishTurn boundary awaits exact message-end persistence before turn continuation; source establishes available seams, while Task 1 must prove actual order/digest/storage for the pinned stack. A read-result persistence failure prevents delivery and remains NOT_PROVEN, not an excuse to put the token in a fallback message.
+
+Delivery additionally requires the exact token-free read entry in current SessionManager entries and no pending compaction. Task 6 sets a private suppression flag at session_before_compact, clears it on session_compact/session_compact_failed, and invalidates activation/capability/receipts only on accepted compaction. No capability directive is sent to a compaction request; the resulting compaction entry/summary is included in Task 1's authoritative storage scan. Recovered read entries without live activation/issuance still cannot deliver tokens.
+
+The supported profile consists of the audited pinned extension/provider chain with raw provider request/response dumps and persistent stream/RPC/UI recording disabled. Live provider requests, response events and private memory necessarily carry tokens; those are trusted transient boundaries, never logs. Arbitrary hostile providers/extensions with memory access are outside this threat model. Task 1 audits the actual assembled chain and records handler ordering/recording settings as non-secret evidence: no handler persists raw context/stream messages or reintroduces a token after the guard. Task 6 owns `transcriptGuardReady(): boolean`, initially false; it becomes true only for the installed/healthy guard and the same runtime profile proven by Task 1, and resets on shutdown/reload/profile mismatch or sanitation failure. Unknown ordering/recording profile → capability_unavailable before issuance/delivery. This is a compatibility precondition and an adapter-owned readiness flag, not an invented public API for inspecting private handler lists.
+
+Pre-sanitization provider stream events, tool_execution_start (which can carry prepared raw arguments), and other host-local ephemeral event objects are inside this trusted transient memory boundary only. None may be persistently recorded. Task 1 scans actual host/event logs and fails if the assembled profile writes any raw token/event; sanitized exported evidence cannot mask that failure.
+
+Senpi emitMessageEnd catches handler exceptions and continues, so throwing is NOT a persistence veto. The Justice guard must catch its own errors and synchronously replace the canonical assistant with a token-free same-role minimal fallback: content=[], stopReason=error, errorMessage=`justice_capability_outbound_sanitize_failed`, catalog-derived api/provider/model, original numeric timestamp, zero-valued usage/cost; remove all optional model-origin fields. Also clear candidate receipts and invalidate current capability. Apply this fallback in place to event.message before returning it so an optional later handler failure cannot restore the raw original. Call ctx.abort only after sanitation; abort alone is not redaction. Never format raw exceptions/messages into diagnostics. The normal path likewise updates the event.message in place before returning the same-role result. Guard/fallback inability or incompatible host chain is BLOCKED/unsupported; do not issue tokens in that profile. Fault injection after capture/sanitation must prove the fallback actually reaches authoritative storage without the token, not just that acceptance was denied.
+
+**ToolResult persistence backstop:** The same message_end guard also handles role=toolResult, including immediate unknown/incomplete/validation-error results. Recursively replace each literal full live/retired token in string keys/values, content, details and metadata with `[JUSTICE-CAPABILITY-REDACTED]`; preserve role, toolCallId/toolName non-secret identity and non-secret result semantics. A secret-bearing identifier substring is redacted using the same literal; unsafe/colliding key replacement falls back instead of persisting the original. Do not create outbound receipts/vetoes/provenance or log the raw result. On sanitation failure return/in-place-apply the exact same-role minimal toolResult fallback: role=toolResult, token-redacted toolCallId/toolName, content=[{type:text,text:justice_capability_outbound_sanitize_failed}], isError=true, original numeric timestamp, no optional details/usage/metadata; invalidate capability/receipts and emit only the fixed error code. This does not require a preceding tool_call or tool_result hook. Task 1 must inspect the actual persisted synthetic result.
+
+**Global executable secret guard (Task 6):** Invoke guardCapabilityToolCall on every Senpi tool_call before routing enable/arm checks or any tool-specific Justice code, including custom/nested tools and retained retired tokens. Input maps toolName=event.toolName, args=event.input, sessionId=current cached session, parentToolCallId=event.toolCallId (the exact guarded call, never the nested ancestor). Task 6 creates this named closure with `createCapabilityToolCallGuard(registry: NativeTaskCapabilityRegistry): (input: NativeCapabilityToolCallGuardInput) => NativeCapabilityToolCallGuardResult`; it reads only registry-private secret inventory/vetoes, never semantic task input or Task 10 output.
+
+For toolName=task return continue into the unchanged task-only capability protocol; this is **not** a trusted verdict or a legal-envelope exemption from that resolver's final scan. For toolName!=task recursively inspect every own key and string value, through objects/arrays, for a case-sensitive substring equal to the complete value of any live or sanitation-retained retired token, using a visited set for cyclic data. A match or remembered exact-call non-task secret veto → block. Non-JSON/uninspectable input or inspection/invalidation failure also → the same block; never throw a raw error through Senpi's handler logger. No match/veto → continue without creating a receipt, classification or TaskRoutingProvenance. Never substitute redacted commands/content/path and execute the non-task tool.
+
+On block, move the current session capability to the sanitation-only retired set, invalidate validity/related receipts and require a fresh successful method read before issuance (cached activation cannot reissue it). Preserve selection. Retain leak-veto retired tokens and exact-call vetoes until shutdown/restart, not merely current-turn settlement, so later new-call-ID retries are still blocked; neither retained state grants authority. The helper returns `{kind:"block",reason:"justice_capability_token_leak",terminate:true}`; adapter returns exactly `{block:true,reason:"justice_capability_token_leak",terminate:true}`. No raw token/args/exception is emitted. terminate=true stops this tool batch/turn; OmO/Senpi still own later retry/turn control and Superpowers owns progression. This narrow veto never schedules work.
+
+Task 6 internal methods are `getSanitationTokens(): readonly string[]` (live+retained retired snapshot, never exposed beyond Task 6), `rememberNonTaskLeak(sessionId: string, parentToolCallId: string): void`, `hasNonTaskLeak(sessionId: string, parentToolCallId: string): boolean`, and `invalidateCapabilityForLeak(sessionId: string): void`. They are runtime-only/private-boundary interfaces, not public tools or durable state. Order is global guard → task-only receipt/activation/authorization/session/method/exact-call resolver → restore/strip + scan/read-back → Task 7 pre-spawn augmentation → Task 10 routing → OmO execution. Non-task calls leave the Justice semantic pipeline immediately after guard continue/block.
+
+**Exact transport:** Use only optional `description`, declared unrestricted string for single task and batch items in pinned `packages/senpi-task/src/tools/task/params.ts`. task_summary has an 80-character limit and is not used. Encode ASCII prefix `[[justice-capability-v1]]` immediately followed by compact `JSON.stringify({capabilityId,originalDescription})`, keys in that order. originalDescription is exact caller string (including empty) or null for absent property. Limit: 8,192 UTF-8 bytes; larger caller label cannot use the capability envelope and remains original/untrusted without truncation.
+
+Decode requires prefix at byte zero, exactly two unique JSON keys, no duplicate keys, token regex `^[A-Za-z0-9_-]{43}$`, string/null originalDescription, complete JSON consumption, and byte limit. Unknown keys, trailing text, nested reserved prefix, or malformed/oversize marker → malformed_capability; repeated prefix or duplicate keys → duplicate_capability. No reserved marker anywhere → absent/external; a reserved prefix elsewhere is invalid. Never search prompt wording for authority.
+
+**Exact tool_call validation/restoration:** Look up the memory-only outbound record for parentSessionId + event.toolCallId + optional item. A captured receipt must match current authorization/session/method/issued read and live capabilityDigest. Normalize actual event.input by strict envelope restoration if a preprepared raw copy still carries it; otherwise it must already equal the receipt's stripped digest. Validate exact canonical strippedTaskArgsDigest/non-empty observed refs and read-back token-free input before accepting capability presentation and exact-call binding. Separately require non-empty `observedWorkflowOriginEvidenceRefs` whose references resolve to independently observed evidence of the exact Superpowers workflow dispatch; capability issuance/read, context delivery, envelope, outbound receipt, and exact-call validation cannot satisfy this requirement. Never reconstruct a receipt or workflow-origin evidence from persisted transcript/label/digest/model field. Missing receipt + no marker → external; marker without receipt → ambiguous(outbound_receipt_missing); missing workflow-origin evidence → ambiguous(workflow_origin_unproven), NOT_PROVEN; conflicting ID/input or rejected record → ambiguous, NOT_PROVEN. A rejected capability_outside_envelope record additionally blocks execution with justice_capability_token_leak even when transcript sanitation already removed its echo. Wrong identity/revoked capability stays rejected; direct calls without observed assistant outbound record cannot claim model origin. Valid-but-untrusted envelope still restores originalDescription/delete null; malformed/duplicate descriptions are deleted and untrusted. Strip failure blocks with `{block:true,reason:"justice_capability_strip_failed"}`.
+
+After restoration scan the candidate wire input (including original label, prompt and batch sibling fields) for the decoded token and any current registry token. A token copied outside the envelope must not reach a child: block that invocation with `{block:true,reason:"justice_capability_token_leak"}`, produce no trusted provenance, and emit only a redacted token-leak reason. Do not silently delete caller prompt text to hide the leak. The same scan follows review augmentation/routing before return.
+
+No activation, wrong_session, expired_capability, post_compaction_capability, wrong_authorization, wrong_method, malformed_capability, duplicate_capability, unsupported_nested, outbound_receipt_missing, outbound_input_mismatch, capability_outside_envelope, missing call/evidence identity, or missing independently observed workflow-origin evidence → ambiguous, no translation/appendix, NOT_PROVEN. An unmarked call is external unless its exact memory-only outbound receipt proves the marker was sanitized before persistence; that receipt proves only capability presentation and exact-call binding, not Superpowers workflow origin. Trusted origin, mode-bound execution, review, and acceptance require their respective independent evidence and remain separate decisions.
+
+**Lifetime/replay:** restartCompactionValidity remains same_session_only. Activation, capability, context delivery state and outbound records are process-memory-only and cleared on shutdown/restart even with identical session ID, accepted session_compact, authorization/method replacement, and sanitation fallback. Each captured outbound receipt is consumed once for its exact call/item; duplicate delivery is idempotent only for the same stripped digest, while another assistant reusing the ID conflicts. A live capability may serve distinct calls in the active epoch; no persisted receipt/marker/digest recreates authority. Only selection recovers. Ordinary retired tokens remain in a private sanitation-only set until outstanding responses settle; leak-veto retired tokens remain until shutdown/restart to block later retries. Neither may validate/deliver/reactivate; all raw-token sets are erased on shutdown. Late compaction/method-replacement responses remain protected. Restarted sanitized history contains no token; unknown stale markers are rejected, never minted.
+
+Revoked digests/reasons distinguish post_compaction_capability from expired_capability within the live instance; sanitation-only retired tokens never become validity state or durable records. Unknown markers after restart are expired_capability. Non-string description (except absent undefined) is malformed task input with no fabricated original value. All reserved capability envelopes, even unknown/malformed/duplicate ones, must be removed from assistant ToolCall descriptions before persistence; echo of a known live/retired token anywhere else is redacted and rejected.
+
+**Batch:** Support exactly one of prompt or tasks (1–16 items). Each item carries one description envelope, never inherited from top level. message_end captures/restores each item independently under the same ToolCall.id plus zero-based batchItemIndex, before assistant persistence; shared live token across distinct items is allowed. tool_call validates all matching receipts and strips all raw argument copies before execution. Top-level batch marker is removed and makes the whole batch ambiguous (batch_top_level_capability). Sanitation fallback clears all records for that message; no valid item borrows another receipt. Any strip/token-leak failure blocks the invocation. Each trusted recognized review augments only its own prompt with unchanged scheduling/routing ownership.
+
+**Ownership:** Task 1 host primitives and an independently verifiable workflow-dispatch origin signal (if the pinned runtime exposes one) → Task 2 capability/provenance/activation types and pure decisions → Task 6 live activation state, read observation, mapping directive, registry/capability validation/stripping and independent origin-evidence validation → Task 7 review recognition/pre-spawn augmentation and Task 10 semantic routing → Task 14. If Task 1 cannot prove an origin signal, Task 6 must leave calls ambiguous/NOT_PROVEN; capability validation alone cannot produce trusted provenance. Task 6 consumes no Task 10 output.
+
+Task 6 interfaces: NativeTaskCapabilityRegistry implements NativeSuperpowersProvenanceResolver; constructor consumes WorkflowActivationStateStore, `randomBytes(size: number): Uint8Array`, `now(): string`, and `transcriptGuardReady(): boolean`. `issue(evidence: WorkflowActivationEvidence): NativeSuperpowersTaskCapability | null` checks readiness/current activation and uses Task 2 encodeCapabilityId. `captureOutboundTask(input: NativeSuperpowersProvenanceInput): NativeCapabilityOutboundRecord | null` is invoked only by observed assistant message_end, never a public/model tool; `resolve(input): NativeCapabilityValidationResult` consumes its private record at exact tool_call. `invalidateSession(sessionId: string, reason: "session_shutdown" | "restart" | "session_compact" | "authorization_changed" | "method_changed"): void` clears validity/receipts. `observeMethodReadResult(input: {readonly authorizationId:string;readonly sessionId:string;readonly method:SuperpowersExecutionMethod;readonly toolCallId:string;readonly canonicalSkillPath:string;readonly successful:boolean}): Promise<WorkflowActivationEvidence | null>` never modifies persisted result. `formatNativeCapabilityDirective(capability: NativeSuperpowersTaskCapability): string`, `onNativeCapabilityContext(event: ContextEvent, sessionId: string): ContextEventResult`, and `onNativeCapabilityMessageEnd(event: MessageEndEvent, sessionId: string): MessageEndEventResult` belong to Task 6. Guard uses cached current session/catalog identity initialized at session_start, avoiding context getter/I/O before sanitation. Public Senpi event/result imports require fixture type coverage. Identity comes from trusted adapter state; durable provenance contains digest/refs only after strip/read-back. Task 7/10 never receive token/outbound map.
+
 ---
 
 ## 8. Superpowers and Justice state ownership
@@ -786,20 +904,20 @@ Justice may additionally classify non-normative observations, but they cannot su
 
 The projection surface is deterministic.
 
-**Requirements**
+#### Requirements
 
 - Every `JUS5-*` block is a canonical requirement source.
 - The prose obligation in the block is suffix `/0`.
 - Ordered independent bullet/list obligations are suffixes `/1`, `/2`, ... within that Requirements source revision.
 - Because source revision/fingerprint participates in evidence identity, inserting/reordering obligations invalidates old clause evidence rather than aliasing it.
 
-**Design**
+#### Design
 
 - Canonical Design clauses are `INV-01..INV-06` and the `J5D-*` registry IDs in §3.7.
 - Free prose is explanatory unless incorporated by a registry contract.
 - A simple search for `MUST` is never the enumeration authority.
 
-**Plan**
+#### Plan
 
 The Superpowers v6 plan projector enumerates normative structural units from at least:
 
@@ -983,196 +1101,52 @@ implementation
 
 Justice does not dispatch an additional reviewer.
 
-A **versioned Superpowers ReviewDispatchProfile** recognizes an already-dispatched review. For the v6.4.2 profile, classification combines multiple signals rather than a single keyword:
+A **versioned Superpowers ReviewDispatchProfile** classifies review kind only after Native Superpowers origin is trusted.
 
-- active execution method and workflow phase;
-- task-tool `parentSessionId + parentCallId`;
-- the current Superpowers review-template structure;
-- concrete task/review-package inputs such as brief/report and reviewed base/head/diff references;
-- active artifact-chain/task identity.
-
-Task review, scoped re-review, and final review have distinct profiles.
-
-If the signals are ambiguous, the execution may continue but the review is untrusted for Justice acceptance.
-
-### 14.2 Conformance Contract delivery — J5D-REVIEW-02
-
-Justice does not depend on asynchronous plugin `event` handler completion to bind a reviewer child before prompt delivery.
-
-OpenCode v1.18.31 establishes two different execution semantics:
-
-- `event` forwarding invokes plugin handlers without awaiting their returned Promise;
-- `chat.message` runs through `Plugin.trigger()`, which awaits each hook.
-
-Therefore a published `session.created` event is useful evidence, but its Justice handler is **not** an ordering barrier before the child's first `chat.message`.
-
-#### Supported baseline delivery contract
-
-The v5 review path is:
+The trust boundary is two-stage:
 
 ```text
-Superpowers v6.4.2 dispatches existing reviewer
+Task 1 PROVEN host primitives for Justice capability protocol
         ↓
-OpenCode task(subagent_type="general")
+Task 2 domain contracts → Task 6 NativeSuperpowersProvenanceResolver
         ↓
-tool.execute.before(parent sessionID, callID)
+trusted TaskRoutingProvenance(superpowers)
         ↓
-Justice recognizes review kind
-+ records PendingReviewCorrelation
-+ translates generic compatibility marker:
-  task/scoped → category=sp-review
-  final       → category=sp-final-review
-  subagent_type removed
-        ↓
-        ↓
-TaskTool creates child session
-        ↓
-chat.message(child sessionID, output.message, output.parts)
-        ↓ awaited Justice hook
-await client.session.get({ path: { id: childSessionId } })
-        ↓
-inspect fields response lookup.data
-        ↓
-authoritative child Session.parentID
-        ↓
-match exactly one pending review under that parent
-        ↓
-append one synthetic Justice text Part to output.parts IN PLACE
-        ↓
-reviewer executes
-        ↓
-session.created/session.updated
-        ↓ corroboration/cache/diagnostic only
-        ↓
-tool.execute.after(parent sessionID, same callID)
-        ↓
-corroborate result/child metadata
+Task 7 ReviewDispatchProfile classifies task-review | scoped-re-review | final-review
 ```
 
-#### Exact SDK fields-response contract
+The ReviewDispatchProfile may use active execution method/workflow phase, exact parent session/tool call, current Superpowers review-template structure, concrete brief/report/base/head/diff references, and active artifact-chain/task identity to determine **review kind**. Those signals MUST NOT independently manufacture Superpowers origin.
 
-The current Justice lock (`@opencode-ai/sdk@1.14.21`) and the supported v1.18.31 baseline use the generated default:
+Prompt wording, review-looking text, template similarity, or active-method state without Task 6 trusted provenance remain untrusted. Task review, scoped re-review, and final review have distinct profiles. Ambiguous review-kind classification may continue runtime execution but cannot produce Justice-trusted review evidence.
+
+### 14.2 Native Conformance Contract delivery — J5D-REVIEW-02
+
+The old OpenCode delivery path (`tool.execute.before → child chat.message → client.session.get`) is historical adapter behavior, not a Native invariant.
+
+The primary Native parent observation seam is Senpi v2026.10.8 `tool_call`:
 
 ```text
-responseStyle = "fields"
-throwOnError  = false
+event.toolName == "task"
+event.toolCallId
+event.input                 # mutable in place
+ctx.sessionManager.getSessionId()
 ```
 
-Therefore `session.get()` does **not** return a raw Session. Its relevant conceptual result is:
+Task 7 consumes Task 6 trusted exact-call provenance, recognizes review kind, and augments the **existing task prompt before OmO executes/spawns**. There is no post-spawn delivery transport or pending appendix queue.
 
-```ts
-type SessionLookup =
-  | {
-      data: Session;
-      error: undefined;
-      request: Request;
-      response: Response;
-    }
-  | {
-      data: undefined;
-      error: unknown;
-      request: Request;
-      response: Response;
-    };
-```
+Exact appendix bytes are two LF characters, `[JUSTICE-CONFORMANCE-V1]`, LF, compact canonical JSON, LF, `[/JUSTICE-CONFORMANCE-V1]`. Canonical JSON follows Task 4's recursively sorted keys/array-order-preserving algorithm. JSON contains exactly schemaVersion (`justice-review-appendix-v1`), reviewCorrelationId, parentSessionId, parentToolCallId, optional batchItemIndex, artifactChainId, optional taskIdentity, reviewKind, reviewedRange, contract (the complete serialized ConformanceContract), contractPath (safe immutable repo-relative path), and resultInstructions; scoped reviews additionally contain expectedFindings and reservedFindingIds. Never include capabilityId. The original task prompt is an exact prefix, not reconstructed. resultInstructions is exactly: `Return the normal Superpowers human report and exactly one justice-review-v1 machine result for this correlation, range, and contract. Report every required clause as SATISFIED, VIOLATED, or NOT_PROVEN; omissions are NOT_PROVEN. Preserve justice-finding markers and finding identities; never emit human_adjudicated.`
 
-The authoritative algorithm is:
+Limit the entire appended suffix to 65,536 UTF-8 bytes. Before mutation validate COMPLETE projection, current chain/revision/range, exact contractId/digest recomputed by Task 4 canonical hashing, JSON-only schema, and safe contractPath. Invalid contract → malformed_contract; excess size → appendix_too_large; neither truncates, replaces original prompt, or trusts review evidence. A single byte-identical terminal appendix is idempotent only when an adapter-owned exact-call augmentation receipt already exists. Caller-authored markers cannot manufacture that receipt. Multiple markers, mismatched JSON, nonterminal envelope, or any caller marker without receipt → duplicate_appendix / malformed_appendix, no new injection, NOT_PROVEN.
 
-```ts
-let lookup;
-try {
-  lookup = await client.session.get({
-    path: {
-      id: childSessionId,
-    },
-  });
-} catch {
-  return lookup_failed("transport_error");
-}
+Task 7 builds a candidate suffix then applies the mutation synchronously within the awaited tool_call handler and read-back-verifies exact prompt bytes. Mutation failure → mutation_unproven; no trusted review evidence. Restore original prompt if safe, otherwise runtime may proceed under fail-open with an untrusted receipt; token stripping failure follows §7.5's block rule. category/subagent_type and model/provider/mode fields are untouched by augmentation; routing translation is a separate Task 10 concern and must preserve XOR. For a batch, every item is independent; augment only that item's trusted recognized review prompt after all capability envelopes have been stripped. Preserve top-level and item scheduling/target semantics.
 
-if (lookup.data === undefined) {
-  return lookup_failed(
-    lookup.error === undefined ? "missing_data" : "sdk_error_response",
-  );
-}
+Task 7 exact interfaces: `recognizeReviewDispatch(input: ReviewDispatchInput): RecognizedReviewDispatch`, `buildReviewAppendix(input: ReviewAppendixInput): string`, `augmentReviewTaskInput(args: Record<string, unknown>, input: ReviewAppendixInput): ReviewAppendixMutationResult`, `resolveReviewChild(input: ResolveReviewChildInput): ReviewChildBindingResult`, and `parseReviewResult(raw: string, expectation: ReviewResultExpectation): ParseReviewResult`. ReviewAppendixInput contains pending correlation (not a child-bound delivery queue), full contract and contractPath. ReviewResultExpectation contains correlation, requiredClauseIds and candidateRevision. buildReviewAppendix schema/size errors are caught by augmentReviewTaskInput and converted to the exact untrusted reasons; nothing escapes the adapter. The Plan registry copies these types/signatures and the exact resultInstructions literal; scoped-only fields must be present for scoped re-review and absent otherwise.
 
-const childSession = lookup.data;
-```
+`ReviewAppendixMutationResult` is `augmented(receipt) | idempotent(receipt) | untrusted(reason,details)`; reasons are malformed_contract, appendix_too_large, duplicate_appendix, malformed_appendix, mutation_unproven, unsupported_mode, and finding_context_unavailable. A receipt contains exact parent session/call/item, reviewCorrelationId, contractDigest and mutatedPromptDigest; it does not itself prove delivery. Trust later output only after runtime evidence binds that exact augmented invocation to its child and proves appendix presence before first child output. No unrelated child can fetch another call's suffix because it is part of the pre-spawn invocation, never a queued message.
 
-Justice must never inspect `id` or `parentID` on the fields-response wrapper itself.
+Normalized binding is parentSessionId + parentToolCallId + omoTaskId → exactly one NativeReviewChildContext (add batchItemIndex for fanout). Mode-specific physical storage/events may differ. Initial trusted execution/review evidence support is **top-level process execution with runner_kind=host-session only**, and remains BLOCKED until revised Task 1 proves appendix ordering in that mode. The pre-spawn capability/appendix transformations are mode-neutral and do not choose/force OmO mode. Mode is established from observed task result/state before accepting execution/review output: details.execution_mode must equal process and task record runner_kind must equal host-session, with exact runtime ID/child binding. No pre-spawn mode API is assumed. In-process, detached/PID, and unknown modes may run the transformed call, but their output remains unsupported_mode/NOT_PROVEN; their capability-origin evidence alone never makes execution/review evidence trusted. Nested/codemode calls are stripped for token safety but not augmented and remain unsupported_nested. Adding another evidence mode requires artifact reconciliation and A–K proof. Physical parity is never required.
 
-Binding succeeds only when:
-
-1. lookup does not throw;
-2. `lookup.data !== undefined`;
-3. `lookup.data.id === input.sessionID`;
-4. `lookup.data.parentID` exists;
-5. exactly one pending recognized review has that `parentSessionId`;
-6. the pending review is not already incompatibly bound.
-
-Failure semantics are fixed:
-
-```text
-transport exception
-→ lookup_failed("transport_error")
-
-lookup.data === undefined && lookup.error !== undefined
-→ lookup_failed("sdk_error_response")
-
-lookup.data === undefined && lookup.error === undefined
-→ lookup_failed("missing_data")
-
-childSession.id mismatch
-→ conflict/untrusted
-
-parentID missing
-→ parent_missing
-
-zero pending matches
-→ not_found
-
-multiple pending matches
-→ ambiguous
-```
-
-Every failure above causes **no appendix injection** and semantic review evidence remains `NOT_PROVEN`.
-
-A later `session.created/session.updated` event may populate caches or corroborate the already-authoritative relation, but it can never retroactively make a missed injection trusted.
-
-Parent `tool.execute.after` must also corroborate the bound child metadata. A mismatch invalidates the review evidence.
-
-#### Before-hook mutation statement
-
-OpenCode passes the same `args/taskArgs` object through `tool.execute.before` and then into tool execution. Therefore an in-place property mutation such as `output.args.prompt = ...` may be observed by the executor.
-
-Justice v5 nevertheless **chooses not to use before-hook prompt mutation** for review delivery. The supported architecture centralizes review-specific content injection on the child `chat.message` surface after authoritative child→parent resolution.
-
-#### Exact appended Part contract
-
-Justice appends one fully formed synthetic text Part:
-
-```text
-id        = "prt_justice_review_" + randomUUID()
-sessionID = output.message.sessionID
-messageID = output.message.id
-type      = "text"
-text      = rendered Justice review appendix
-synthetic = true
-```
-
-Additional rules:
-
-- `input.sessionID === output.message.sessionID` is required;
-- `output.message.id` is the authoritative message ID;
-- original reviewer parts are not rewritten or removed;
-- the Part is appended to the existing `output.parts` array in place;
-- missing/inconsistent message or session identities cause no injection / `NOT_PROVEN`;
-- the **child `chat.message` appendix path** never alters routing, model, provider, variant, or OmO continuation state;
-- the earlier parent `tool.execute.before` semantic-routing layer may already have translated a recognized Superpowers `subagent_type="general"` marker into `sp-review` / `sp-final-review`; that translation is separate from appendix delivery.
-
-The appendix contains review-correlation ID, artifact-chain ID, task identity where applicable, reviewed range/candidate revision, immutable Conformance Contract path/digest, and structured-result instructions.
-
-Task 1 is a runtime regression gate for this already-selected contract, not an architecture-selection spike.
+The proven host-session relation is parent result task ID → task-state record keyed by task_id → unique session header under `children/<taskId>/sessions/<taskId>/`. Preserve that proof; normalized runtime correlation still requires matching exact invocation/result/item. Failed/ambiguous binding → NOT_PROVEN, never another reviewer. Revised Task 1 fixtures prove the protocol end-to-end without Justice production source; any A–K failure returns to reconciliation.
 
 ### 14.3 Structured result, finding continuity, and final evidence composition — J5D-REVIEW-03
 
@@ -1676,7 +1650,7 @@ Semantic evidence is produced only inside the existing Superpowers-owned review 
 
 ### 15.1 Canonical evidence transport
 
-The Conformance Contract is durable Justice sidecar state. The reviewer receives only a read-only reference plus correlation metadata.
+The Conformance Contract is immutable durable Justice sidecar state. The exact task prompt receives its serialized contract, immutable read-only reference, and correlation metadata before spawn under §14.2.
 
 The structured reviewer result is captured from the **same observed reviewer call** and persisted into Justice evidence state. This call-bound output is the canonical semantic-review transport; a reviewer-authored file is not required for trust.
 
@@ -1824,58 +1798,38 @@ Projects TaskAccepted or PlanComplete only when all applicable gates succeed.
 
 ---
 
-## 20. Controller routing
+## 20. Native methodology activation and controller state
 
-Justice v5 keeps controller verification, Superpowers execution-method activation, and worker routing as three distinct concerns.
+Justice v5 separates:
 
-The previous v4 mapping:
+1. Superpowers package/bootstrap availability;
+2. selected execution method;
+3. method-specific current-session activation evidence;
+4. OmO Native worker/runtime routing.
 
-```text
-brainstorming → sisyphus
-writing-plans → sisyphus
-subagent-driven-development → atlas
-executing-plans → sisyphus
-```
-
-is not treated as an eternal architectural invariant.
-
-Instead:
-
-- Justice has a compatibility profile for expected controller behavior where supported by upstream evidence.
-- Desired/configured/applied/observed controller states remain distinct.
-- A controller mapping is considered verified only when supported by current OpenCode-edition evidence or live compatibility tests.
-- If actual attribution cannot be observed authoritatively, Justice reports Unverified rather than inventing Applied.
-
-This preserves the v4 Configuration Assurance goal without binding v5 to an unverified stale mapping.
-
----
-
+Legacy Sisyphus/Atlas/OpenCode controller mappings are compatibility history only.
 
 ### 20.1 Supported execution-method activation — J5D-ACT-01
 
-Justice does not own methodology-selection semantics. It models selection and activation separately.
-
-#### Method selection
+Method selection remains:
 
 ```text
-explicit user/command selection for this implementation start
-→ trusted recovered method selection from the same active authorization
-→ otherwise method_selection_required
+explicit current selection
+→ trusted recovered selection for same authorization
+→ method_selection_required
 ```
 
-No additional pre-activation method-observation source exists. A native `skill` invocation is not a selection event; it is activation evidence.
+The Native Superpowers package itself injects `using-superpowers` via its Pi `context` handler. Justice coexists with that bootstrap; bootstrap presence proves Superpowers availability but does not by itself prove that `subagent-driven-development` or `executing-plans` was loaded.
 
-Cross-session Justice state may recover which method was selected/used previously for the same authorization, but only as `recovered_selection`.
-
-#### Activation evidence
-
-The OpenCode activation event is a successful native `skill` tool execution with:
+Method-specific activation requires the PROVEN read_tool_result channel:
 
 ```text
-args.name == selected method
-sessionID == current controller session
-authorizationId == current active authorization
+successful read tool_result
+  path → trusted installed Superpowers skills/<method>/SKILL.md
+
 ```
+
+A model assertion, extension-injected text, child-only `load_skills`, runtime task id, or mere package presence is not activation evidence.
 
 Trusted evidence binds:
 
@@ -1883,52 +1837,36 @@ Trusted evidence binds:
 authorizationId
 sessionId
 method
-skillCallId
+evidenceKind
+observedCallOrInputId
 observedAt
 ```
 
-An exact persisted same-session activation record may be reused after restart only when all identity fields required by the contract still match. A record from another session never proves current activation.
-Justice stores one current selection per authorization and one current activation per `authorizationId + sessionId`. Explicit reselection atomically replaces the selection record; a later successful skill activation atomically replaces that session's activation record.
-
-A selection/activation store read, schema, or write failure is fail-closed for methodology evidence: it cannot yield `already_active` or trusted recovered selection. Runtime may remain fail-open only under the existing global policy, while acceptance remains `NOT_PROVEN`.
-
-#### Decision state
+For this baseline:
 
 ```text
-no selected method
-→ method_selection_required
-
-selected method + matching current-session activation evidence
-→ already_active
-→ do NOT invoke the skill again
-
-selected method + no matching current-session activation evidence
-→ needs_activation
-→ invoke exactly skill(name=selected method)
-
-selected method + missing host capability
-→ unavailable
+evidenceKind
+= read_tool_result
 ```
 
-Conflict handling is deterministic:
+host_expanded_skill_input remains NOT_PROVEN and is not an accepted activation kind or implementation requirement. A new channel requires artifact reconciliation.
 
-- explicit current selection overrides stale recovered selection, but if another method was activated earlier in the current session that evidence is not reused; the explicitly selected method requires fresh activation;
-- when selection comes only from recovery and a different current-session method is observed active, return `conflict` / untrusted instead of silently preferring either;
-- activation evidence with mismatched authorization/session identity is untrusted.
+Task 2 owns WorkflowMethodSelection, WorkflowMethodSelectionEvidence, WorkflowActivationEvidence, WorkflowActivationDecision, WorkflowActivationStateStore interfaces and pure resolveWorkflowMethodSelection/resolveWorkflowActivation. Task 6 owns installed skill identity validation, live read observation, state implementation, capability issuance/directive, and invalidation. Task 10 consumes those contracts for guidance/routing only. Selection is durably recoverable; activation is memory-only and cannot survive restart even with the same session ID. Accepted session_compact, shutdown, authorization/method replacement invalidate activation and capability unconditionally. A compaction request without session_compact does not prove acceptance; revised Task 1 must observe accepted compaction rather than assume survival.
 
-Therefore:
+WorkflowActivationStateStore persists selection only at `.justice/v5/workflow-selections.json` using AtomicPersistence. Its exact Task 2 interface is `setSelection(WorkflowMethodSelectionEvidence) → Promise<WorkflowActivationStateMutationResult>`, `setActivation(WorkflowActivationEvidence) → Promise<WorkflowActivationStateMutationResult>` (memory only), `findSelection(authorizationId: string) → Promise<WorkflowActivationStateLookupResult<WorkflowMethodSelectionEvidence>>`, `findCurrentActivation(authorizationId: string, sessionId: string) → Promise<WorkflowActivationStateLookupResult<WorkflowActivationEvidence>>`, `getCurrentActivation(authorizationId: string, sessionId: string) → WorkflowActivationEvidence | null` (synchronous live snapshot for validation), and `invalidateSession(sessionId: string, reason: session_shutdown | restart | session_compact | authorization_changed | method_changed) → void`. saved/idempotent live writes do not imply persistence; failed state writes/lookups remain activation_state_unavailable/NOT_PROVEN. Implement in Task 6, never Task 10.
+
+Decision state:
 
 ```text
-cross-session recovered method
-→ selection restored
-→ needs_activation
-→ fresh current-session skill invocation
-
-same-session exact activation evidence
-→ already_active
+no selection                         → method_selection_required
+valid current-session activation     → already_active
+selected + proven activation channel → needs_activation
+missing/ambiguous channel            → unavailable / NOT_PROVEN
 ```
 
-Justice never treats OmO child continuation as methodology activation and never responds to activation failure by dispatching implementation work itself.
+Justice may request the supported Native skill-loading action, but it never advances Superpowers task/review/fix progression itself.
+
+---
 
 ## 21. Worker semantic classification and category routing — J5D-ROUTE-02 / J5D-CAT-02
 
@@ -2022,6 +1960,7 @@ Caller-owned OmO category names are different: the wire namespace is open and ma
 Current OmO v5 built-in names remain useful compatibility/diagnostic vocabulary:
 
 - visual-engineering;
+- architect;
 - ultrabrain;
 - deep-low;
 - deep-high;
@@ -2051,23 +1990,24 @@ Justice never promotes its built-in vocabulary into OmO namespace authority.
 
 ### 21.5 Model/provider boundary
 
-For the supported OpenCode profile:
+For the supported Native profile:
 
 ```text
-Superpowers task complexity / capability intent
+Superpowers semantic worker/reviewer intent
         ↓
-Justice semantic execution class/category
+model-issued OmO Native task(...)
         ↓
-OmO effective category configuration
+Justice semantic execution class / sp-* category
         ↓
-actual agent/model/provider/reasoning/retry/fallback
+OmO Native effective category configuration
+        ↓
+actual agent/model/provider/reasoning/execution-mode/retry/fallback
 ```
 
-Justice never writes a concrete model/provider into this semantic translation.
-
-Superpowers v6.4.2's generic templates contain model-selection guidance, but the OpenCode/OmO delegate-task wire exposes category/subagent routing rather than a concrete model authority. Therefore the compatibility profile interprets that guidance as semantic capability/complexity intent.
+Justice never writes a concrete model/provider into category-routed task translation. Superpowers Pi's lack of an OmO-specific subagent tool mapping is handled by the Native mapping appendix; it is not permission for Justice to schedule a worker itself.
 
 If future supported upstream introduces a concrete model field as authoritative wire input, Justice must update the compatibility profile explicitly; it must not silently choose precedence between category and concrete model fields.
+
 ---
 
 ## 22. Dependency analysis
@@ -2105,19 +2045,17 @@ Justice observes terminal execution outcome.
 
 Provider failure classification exists only to explain terminal failure and acceptance impact, not to compete with OmO retry logic.
 
-If Justice retains error patterns, they must be synchronized to the OmO v5 model-core baseline rather than the stale 3.17.4 source.
+If Justice retains error patterns, they must be synchronized to the OmO v5.1.17 / Senpi v2026.10.8 runtime behavior rather than stale OpenCode/v4 assumptions. Task lifecycle recovery, host reattach, provider retry, and fallback remain OmO/Senpi responsibilities.
 
 ---
 
 ## 24. Configuration contract — J5D-CONFIG-01
 
-Justice treats **OmO v5 effective configuration resolution** as configured-state authority, not an arbitrary single file.
+Justice treats the OmO v5.1.17 effective `omo.json[c]` resolution as configured-state authority.
 
 ### 24.1 File-layer precedence
 
-For the v5.0.1 OpenCode baseline, Justice uses filesystem resolution that reproduces the audited OmO loader semantics. The upstream `@oh-my-opencode/omo-config-core` package is a private workspace package, not a supported Justice runtime dependency/API, so v5 does not dynamically choose between importing it and a local resolver.
-
-The resolver follows the OmO v5 loader order:
+The resolver follows the documented OmO loader order:
 
 ```text
 lowest
@@ -2132,80 +2070,58 @@ lowest
 highest
 ```
 
-The home directory is the user layer and is not re-read as a project layer.
+The home directory is not double-counted. Invalid/unreadable/malformed values remain diagnostics rather than silently fabricated configuration.
 
-Invalid/unreadable layers and loader diagnostics must be represented consistently with OmO's effective loader semantics rather than silently treated as valid configuration.
+### 24.2 Native effective-view resolution
 
-### 24.2 Effective-view resolution
-
-After file-layer merge, the OpenCode configured view resolves:
+After file merge:
 
 ```text
 shared base
-→ [opencode]
+→ [native]
 → selected profile base
-→ selected profile [opencode]
+→ selected profile [native]
 ```
 
-Profile selection follows the OmO v5 profile resolver (explicit profile where provided, then supported environment/profile sources such as `OMO_PROFILE`, legacy `OCX_PROFILE`, and OpenCode profile directory inference).
+Canonical profile selection follows the audited current loader. `[senpi]` is legacy/deprecation input and is not emitted as canonical Justice documentation.
 
 ### 24.3 Doctor representation
 
-Doctor distinguishes:
+Doctor separates:
 
 ```text
 source layers + diagnostics
         ↓
-effective configured value
+effective Native configured value
         ↓
-runtime applied value (if authoritatively available)
+runtime applied value (if authoritatively observable)
         ↓
 observed execution value
 ```
 
-It never infers applied/observed state merely from a source file.
-
-Legacy `oh-my-opencode.jsonc` / `oh-my-openagent.jsonc` files are migration inputs only and never current configured-state authority.
+Legacy `oh-my-opencode.json[c]`, `oh-my-openagent.json[c]`, and historical `~/.omo/config.jsonc` are migration-only inputs.
 
 ---
 
 ## 25. Doctor and compatibility model
 
-`justice doctor` answers:
+`justice doctor` answers whether the Native semantic-control-plane proof obligations can operate in the current environment.
 
-> Can Justice operate correctly and prove the required contracts in this environment?
+Primary checks include:
 
-It does not answer:
+- OmO Native version and Senpi engine/API metadata;
+- Justice Senpi extension registration;
+- Native `task`, `task_send`, and category/subagent XOR behavior;
+- `tool_call` mutable-input, `toolCallId`, and current-session observation;
+- Task-1-proven runtime task/child correlation capability;
+- Task-1-proven reviewer context-delivery capability;
+- Superpowers Pi package/bootstrap and skill-resource availability;
+- method-specific activation evidence capability;
+- effective `[native]` configuration and category availability;
+- persistence/review-evidence capability;
+- secondary OpenCode adapter status separately when present.
 
-> Is the current plan conformant?
-
-Doctor checks include:
-
-- OpenCode required capabilities;
-- Justice plugin/hook registration;
-- OmO/OpenCode integration;
-- configuration source;
-- category availability;
-- command availability;
-- Superpowers availability where observable;
-- legacy configuration;
-- observation limitations.
-
-Compatibility is capability-first:
-
-```text
-version metadata
-    +
-required capability probes
-    +
-known compatibility constraints
-```
-
-Exact OpenCode patch equality alone is neither necessary nor sufficient.
-
-A newer patch with intact required capabilities may remain supported.
-
-A nominally expected version missing a required capability is unsupported.
+Compatibility is capability-first. A newer OmO/Senpi patch may remain supported when the required seams remain intact; a nominally expected version missing a required proof seam is unsupported.
 
 ---
 
@@ -2250,15 +2166,15 @@ human review resolution:
 
 A recognized v4 record is still subject to the authority rules below. Recognition never means automatic v5 trust.
 
-**v4 plan authorization**
+#### v4 plan authorization
 
 A v4 binding such as `justice-plan-v1` proves only the old plan-level contract. It is not automatically promoted to a v5 artifact-chain authorization. It remains historical until the current Requirements, Design, and Plan are reconciled and explicitly re-approved.
 
-**v4 review dispatch/scheduling state**
+#### v4 review dispatch/scheduling state
 
 Old Justice-owned review scheduling/dispatch records are historical only. v5 never resumes review orchestration from them and they cannot satisfy v5 review gates.
 
-**v4 observations/evidence**
+#### v4 observations/evidence
 
 Raw observations may be retained/imported as historical or untrusted inputs. Evidence without v5 artifact-chain ID, execution correlation, projection schema, and canonical clause IDs cannot satisfy v5 acceptance.
 
@@ -2406,7 +2322,7 @@ The v5 implementation plan must include E2E coverage for at least the following 
 19. Justice does not emit canonical `deep`.
 20. custom `sp-*` categories coexist with OmO v5 routing.
 21. Justice does not directly select model/provider.
-22. compatible OpenCode patch with required capabilities is not rejected solely by patch mismatch.
+22. compatible OmO Native/Senpi patch with required capabilities is not rejected solely by patch mismatch.
 23. missing required host capability is reported accurately.
 
 ### Recovery
@@ -2414,14 +2330,14 @@ The v5 implementation plan must include E2E coverage for at least the following 
 24. compaction retains plan/task/review correlation.
 25. completed work is not re-correlated to another plan after recovery.
 26. Justice/Superpowers state conflict is surfaced rather than silently resolved.
-27. OmO `task_id=ses_...` is preserved and never replaced with Justice TaskIdentity.
-28. a task call is recoverably correlated by durable parent-session/parent-call sidecar binding.
+27. OmO Native runtime task id/name and `task_send` continuation target remain runtime-owned and are never replaced with Justice TaskIdentity.
+28. a Native `tool_call(task)` is recoverably correlated by durable parent-session/parent-tool-call sidecar binding and the Task-1-proven runtime child binding.
 29. both-target `category + subagent_type` input is not silently resolved by Justice.
 30. missing/ambiguous execution correlation leaves evidence NOT_PROVEN.
 31. Requirements change stales Design + Plan chain authority.
 32. a substantive Superpowers Ruling can continue execution but cannot authorize acceptance.
 33. clause projection with duplicate/missing/ambiguous source becomes INCOMPLETE/INVALID and blocks.
-34. the v6.4.2 task reviewer receives the Conformance Contract through the same observed review dispatch.
+34. the v6.4.2 reviewer receives the serialized Conformance Contract in its exact pre-spawn task prompt, with normalized proven child binding and no duplicate dispatch.
 35. missing/malformed structured review result blocks acceptance.
 36. parked Important/Critical remains blocking until trusted later disposition/human quality adjudication.
 37. OmO effective config resolution honors user/project plus harness/profile precedence.
@@ -2431,9 +2347,9 @@ The v5 implementation plan must include E2E coverage for at least the following 
 
 ### Activation and semantic bridge
 
-41. authorized implementation intent activates the selected Superpowers execution method.
+41. authorized implementation intent produces current-session read_tool_result activation; accepted compaction/restart invalidates activation and capability and requires fresh read.
 42. Justice activation does not take ownership of Superpowers task/review progression.
-43. a recognized Superpowers generic worker is translated into one Justice semantic category while preserving XOR.
+43. a recognized Superpowers Native worker intent becomes one model-issued OmO `task` call whose existing input is translated to one Justice semantic category while preserving XOR.
 44. a non-Superpowers explicit `subagent_type` remains caller-owned and is not translated.
 45. Justice semantic classification uses task/review semantics and complexity without selecting a concrete model/provider.
 46. OmO remains the only concrete model/provider/runtime resolver for translated Superpowers work.
@@ -2445,6 +2361,14 @@ The v5 implementation plan must include E2E coverage for at least the following 
 49. review evidence whose bound artifact chain, scope, or reviewed revision changes before acceptance becomes stale and cannot authorize the current candidate.
 50. a clean/complete review result cannot create implementation authorization without the required explicit human approval for the exact current artifact chain.
 51. remediation/re-review can contribute fresh evidence, but Justice does not schedule the fix/re-review loop and does not take ownership of OmO retry/fallback.
+
+### Capability and harness reconciliation scenarios
+
+52. exact valid capability uses the 32-byte pure base64url encoder, request-local context delivery, pre-persistence assistant sanitation and private outbound receipt validation at exact tool_call; unrelated unmarked calls remain external.
+53. wrong identity, expired/post-compaction, malformed/duplicate capability, echo or replay cannot trust or recreate authority; every resolved non-task raw/retired-token call is globally vetoed before implementation with terminate=true, and synthetic toolResult persistence remains token-free without creating provenance.
+54. pre-spawn appendix size/schema/digest/duplicate/mutation failure leaves review NOT_PROVEN; supported host-session batch items cannot consume one another's contracts.
+55. fixture isolation and actual read/assistant/toolResult/session/history/log/evidence storage stay token-free at each append/settlement; real resolved non-task echo has no implementation side effect, real immediate-error results are sanitized, and raw transient host-event recording makes Task 1 fail.
+56. unsupported execution modes/nested calls never borrow host-session proof; normalized contract does not require identical physical implementations.
 
 ---
 
