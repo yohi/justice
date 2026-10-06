@@ -191,6 +191,8 @@ Requirements are deliberately excluded from `reviewScopeId`.
 
 Design and Plan command paths MUST be canonical workspace-relative regular-file identities and MUST reject workspace escape or unsafe symlink traversal before they participate in `reviewScopeId` or mutation authority.
 
+A canonical workspace path is an opaque artifact identity. It is **not** a raw Git pathspec and path normalization is not Git pathspec sanitization. Valid artifact filenames may contain Git pathspec metacharacters or magic prefixes. Whenever Justice passes an artifact path to a Git operation that accepts pathspecs, the Git boundary MUST apply the single literal-path policy defined by CAP1/GIT1; it MUST NOT depend on filename rejection, shell quoting, `--`, NUL framing, or `shell:false` to disable Git's own pathspec interpretation.
+
 ### 5.2 Storage layout and durable scope membership
 
 ```text
@@ -919,53 +921,94 @@ GC is event-projection mark/sweep under a short dedicated GC lock. Because the r
 
 ## 13A. WSP1 — Review target workspace authority
 
-The Review target workspace state is projected explicitly:
+The Review target workspace state is projected explicitly.
+
+Git regular-file identity is:
+
+```text
+GitRegularFileMode = 100644 | 100755
+
+GitTreeEntryBindingV1 {
+  canonicalPath
+  blobSha
+  gitMode
+}
+
+GitIndexEntryBindingV1 {
+  canonicalPath
+  blobSha
+  gitMode
+  stage = 0
+}
+
+WorktreeArtifactBindingV1 {
+  canonicalPath
+  digest
+  gitMode
+}
+```
+
+Only regular-file Git modes `100644` and `100755` are valid Review Gate targets. The index binding MUST be one unique stage-0 entry; an unmerged/multi-stage target is not clean.
+
+`WorktreeArtifactBindingV1.gitMode` is computed directly from filesystem metadata, independently of Git's `core.fileMode` setting:
+
+```text
+(stat.mode & 0o111) != 0
+  → 100755
+
+otherwise
+  → 100644
+```
+
+The projected workspace states are:
 
 ```text
 CLEAN_COMMITTED {
   headSha
   targetCanonicalPath
-  targetBlobSha
-  targetDigest
-  targetIndexBlobSha
+  headEntry: GitTreeEntryBindingV1
+  indexEntry: GitIndexEntryBindingV1
+  worktree: WorktreeArtifactBindingV1
 }
 
 KNOWN_DIRTY {
   headSha
   targetCanonicalPath
-  targetIndexBlobSha
-  workingDigest
+  headEntry: GitTreeEntryBindingV1
+  indexEntry: GitIndexEntryBindingV1
+  worktree: WorktreeArtifactBindingV1
   sourceEventId
 }
 
 MUTATION_IN_FLIGHT {
   headSha
   targetCanonicalPath
-  targetIndexBlobSha
-  preDigest
+  headEntry: GitTreeEntryBindingV1
+  indexEntry: GitIndexEntryBindingV1
+  preWorktree: WorktreeArtifactBindingV1
   remediationStartedEventId
 }
 ```
 
 `UNKNOWN_DIRTY` is never a legal resumable authority state.
 
-`REMEDIATION_STARTED` binds the exact pre-remediation workspace state and HEAD/index guards. `REMEDIATION_COMPLETED` establishes the exact `KNOWN_DIRTY` post-image digest.
+`REMEDIATION_STARTED` binds the exact pre-remediation workspace bytes **and Git mode** together with the HEAD/index tree-entry guards. `review_mutation` is content-only authority: a successful remediation operation MUST preserve the pre-remediation worktree Git mode. `REMEDIATION_COMPLETED` establishes `KNOWN_DIRTY` only when the post-image Git mode still equals the guarded pre-remediation/head/index mode; mode drift is a review-scope violation and cannot advance to self-review or commit.
 
 ### 13A.1 Crash before a durable post-image
 
 For `REMEDIATION_STARTED` without `REMEDIATION_COMPLETED`:
 
 ```text
-HEAD/index guards match
-AND current target digest == preDigest
+HEAD/index entry bindings match
+AND current worktree binding == preWorktree
   → no mutation is durably observed
   → append REMEDIATION_INTERRUPTED_RECOVERED
      disposition = NO_MUTATION_OBSERVED
   → redispatch the same operationId / remediationRound
 
-current target digest != preDigest
-  OR HEAD/index guard mismatch
-  → ownership of current bytes is unprovable
+current worktree binding != preWorktree
+  OR HEAD/index entry binding mismatch
+  → ownership of current bytes/mode is unprovable
   → MUST NOT overwrite or rollback them
   → REMEDIATION_RECOVERY_CONFLICT
   → SUSPENDED
@@ -990,13 +1033,13 @@ This covers, when applicable:
 - operational `EXECUTION_SUSPENDED`,
 - commit failure before a verified commit.
 
-Resume is legal only when HEAD, the target index entry, and the working digest exactly match the durable known-dirty binding, **or** when the suspension contract explicitly permits accepting a new clean committed external baseline through RI1/N1. Any other mutation is fail-closed.
+Resume is legal only when HEAD, the target HEAD/index entry bindings, and the worktree digest/Git mode exactly match the durable known-dirty binding, **or** when the suspension contract explicitly permits accepting a new clean committed external baseline through RI1/N1. Any other content or mode mutation is fail-closed.
 
 ### 13A.3 Upstream reopen discards uncommitted downstream remediation
 
 An upstream reopen MUST NOT carry old uncommitted downstream remediation bytes across a Requirements/Design authority change.
 
-If `REQUIREMENTS_REOPEN_REQUIRED` or `DESIGN_REOPEN_REQUIRED` is derived while the current phase target is `KNOWN_DIRTY`, Justice MUST first restore that target to the exact committed target blob at the guarded current HEAD. This intentionally discards all uncommitted Review Gate mutations for that phase since its last successful remediation commit.
+If `REQUIREMENTS_REOPEN_REQUIRED` or `DESIGN_REOPEN_REQUIRED` is derived while the current phase target is `KNOWN_DIRTY`, Justice MUST first restore that target to the exact committed target blob **and Git mode** at the guarded current HEAD. This intentionally discards all uncommitted Review Gate content mutations for that phase since its last successful remediation commit without changing the approved target mode.
 
 The restore is journaled:
 
@@ -2441,6 +2484,20 @@ Review query does not expose arbitrary shell execution.
 
 Search/read/diff APIs MUST be scoped so they cannot silently expand semantic review beyond the current phase artifact set and explicitly allowed review-safe Git metadata. A query capability is not permission to perform repository-wide implementation compatibility review.
 
+For every artifact-scoped Git query that accepts pathspecs, Justice MUST invoke Git with the global `--literal-pathspecs` option. This is the only Git pathspec-literalization mechanism used by Review Gate v4. Justice MUST NOT mix this contract with `:(literal)` encoding.
+
+```text
+canonical workspace path
+  != raw Git pathspec
+
+shell:false
+NUL termination
+--
+  != Git pathspec literalization
+```
+
+At minimum, scoped Git `status`, `diff`, and `log` operations use `git --literal-pathspecs ... -- <canonicalPath>` or the equivalent literal path-file form. A path-bearing historical read MUST NOT build an ambiguous `<ref>:<path>` revision string from an artifact path; it resolves the revision first, obtains the exact literal tree entry with `git --literal-pathspecs ls-tree ... -- <canonicalPath>`, then reads the returned blob object. `rev-parse`-equivalent revision resolution itself accepts no artifact pathspec.
+
 ### 28.2 review_mutation
 
 Only the remediator receives a short-lived, single-use mutation capability bound to:
@@ -2473,16 +2530,17 @@ targetCanonicalPath
 
 sourceKnownDirtyBinding {
   headSha
-  targetIndexBlobSha
-  workingDigest
+  headEntry: GitTreeEntryBindingV1
+  indexEntry: GitIndexEntryBindingV1
+  worktree: WorktreeArtifactBindingV1
   sourceEventId
 }
 
 targetCleanCommittedBinding {
   headSha
-  targetBlobSha
-  targetDigest
-  targetIndexBlobSha
+  headEntry: GitTreeEntryBindingV1
+  indexEntry: GitIndexEntryBindingV1
+  worktree: WorktreeArtifactBindingV1
 }
 ```
 
@@ -2493,7 +2551,8 @@ Preconditions:
 - the current workspace exactly matches `sourceKnownDirtyBinding`,
 - source and destination bindings are already durable in `REVIEW_TARGET_RESTORE_PREPARED`,
 - source and destination refer to the same canonical target and guarded HEAD,
-- destination bytes are the exact committed target blob identified by the prepared binding.
+- destination bytes are the exact committed target blob identified by the prepared binding,
+- destination Git mode exactly equals the committed target tree-entry mode.
 
 Allowed side effect:
 
@@ -2505,8 +2564,10 @@ sourceKnownDirtyBinding
 Postcondition:
 
 - target working bytes equal the prepared clean digest/blob,
-- target index entry and HEAD still equal the prepared binding,
-- no other path/index entry changed.
+- target worktree Git mode equals the prepared clean Git mode,
+- target index and HEAD tree entries (path + blob + mode) still equal the prepared binding,
+- no other path/index entry changed,
+- the restore implementation preserves the existing regular file's non-Git POSIX permission bits rather than replacing them with a temp-file default; the executable class MUST remain the prepared Git mode.
 
 Forbidden:
 
@@ -2641,12 +2702,15 @@ Before Git side effect:
 ```text
 REVIEW_COMMIT_PREPARED {
   operationId
-  parent HEAD
-  target path
-  expected digest/blob
-  message digest
+  parentHeadSha
+  targetCanonicalPath
+  parentTargetEntry { blobSha, gitMode }
+  preCommitIndexEntry { blobSha, gitMode, stage = 0 }
+  expectedTargetEntry { blobSha, gitMode }
+  expectedArtifactDigest
+  messageDigest
   round
-  lineage refs
+  lineageRefs
 }
 ```
 
@@ -2657,7 +2721,8 @@ HEAD == prepared parent
   → commit not proven complete
   → same operation may execute
 
-HEAD is exact intended commit
+HEAD is exact intended commit,
+including exact target blob + target Git mode + commit metadata
   → REMEDIATION_COMMIT_RECOVERED
   → do not recommit
 
@@ -2672,15 +2737,24 @@ otherwise
 
 Each **new phase admission** requires only that phase's target artifact to be clean. Initial Design admission is checked before creating a new generation. Plan admission is checked before Plan review begins, including after an inherited/current Design CLEAR.
 
-This clean-admission rule does not reject a WSP1-projected `KNOWN_DIRTY` continuation inside an already admitted phase. An ACTIVE/SUSPENDED generation may resume such state only when its exact expected dirty digest, target index entry, and HEAD binding are proven from durable events.
+This clean-admission rule does not reject a WSP1-projected `KNOWN_DIRTY` continuation inside an already admitted phase. An ACTIVE/SUSPENDED generation may resume such state only when its exact expected worktree digest/Git mode and target HEAD/index tree-entry bindings are proven from durable events.
 
-A WSP1 `MUTATION_IN_FLIGHT` state with current bytes different from its preDigest is not a valid dirty continuation and MUST fail closed.
+A WSP1 `MUTATION_IN_FLIGHT` state with a current worktree binding different from its `preWorktree` is not a valid dirty continuation and MUST fail closed.
+
+New phase admission requires all of:
 
 ```text
-target HEAD blob
-== target index blob
-== target working-tree content
+HEAD target entry is one regular-file entry
+AND index target entry is one stage-0 regular-file entry
+
+HEAD target blob == index target blob
+AND HEAD target Git mode == index target Git mode
+
+working-tree bytes == HEAD target blob bytes
+AND working-tree Git mode == HEAD target Git mode
 ```
+
+Content equality alone is insufficient. A mode-only delta such as `100644 → 100755` is a dirty target even when the blob SHA is unchanged. An index-only mode change is also staged target state and is rejected.
 
 Otherwise:
 
@@ -2698,10 +2772,29 @@ Unrelated dirty and staged paths are allowed.
 Justice core uses an exact single-artifact Git commit primitive equivalent to:
 
 ```text
-git -c core.hooksPath=/dev/null   commit --only   --no-gpg-sign   --no-status   --cleanup=verbatim   --pathspec-from-file=-   --pathspec-file-nul   -F <Justice-owned-message-file>
+git --literal-pathspecs
+  -c core.hooksPath=/dev/null
+  commit --only
+  --no-gpg-sign
+  --no-status
+  --cleanup=verbatim
+  --pathspec-from-file=-
+  --pathspec-file-nul
+  -F <Justice-owned-message-file>
 ```
 
-The only pathspec is the canonical phase artifact, passed as literal NUL-terminated input.
+The only pathspec record is the canonical phase artifact, passed as one NUL-terminated input record. NUL framing prevents delimiter/quoting ambiguity but does **not** make a Git pathspec literal; `--literal-pathspecs` is the authority that disables Git pathspec magic/glob expansion. Every Review Gate Git operation that accepts an artifact pathspec uses the same global literal policy.
+
+Before executing the commit, the prepared target mode MUST satisfy:
+
+```text
+parentTargetEntry.gitMode
+== preCommitIndexEntry.gitMode
+== currentWorktree.gitMode
+== expectedTargetEntry.gitMode
+```
+
+Remediation changes content only. Justice MUST NOT prepare or accept a remediation commit that changes the target Git mode.
 
 Agents never receive Git commit authority.
 
@@ -2729,17 +2822,41 @@ Authoritative success requires:
 
 ```text
 newCommit.parent == prepared.parentHeadSha
-changed paths == [targetCanonicalPath]
-newCommit target blob == prepared.expectedBlobSha
-working-tree target digest == prepared.expectedArtifactDigest
-index target blob == prepared.expectedBlobSha
-commit message digest == prepared.messageDigest
-unrelatedIndexFingerprintBefore == unrelatedIndexFingerprintAfter
+
+full commit changed-entry set
+== [targetCanonicalPath]
+
+newCommit target entry.blob
+== prepared.expectedTargetEntry.blobSha
+
+newCommit target entry.gitMode
+== prepared.expectedTargetEntry.gitMode
+== prepared.parentTargetEntry.gitMode
+
+working-tree target digest
+== prepared.expectedArtifactDigest
+
+working-tree target gitMode
+== prepared.expectedTargetEntry.gitMode
+
+index target entry.blob
+== prepared.expectedTargetEntry.blobSha
+
+index target entry.gitMode
+== prepared.expectedTargetEntry.gitMode
+
+commit message digest
+== prepared.messageDigest
+
+unrelatedIndexFingerprintBefore
+== unrelatedIndexFingerprintAfter
 ```
+
+The changed-entry verification examines the complete parent→new-commit diff and compares returned path bytes literally; it is not path-scoped, because its purpose is to detect any accidental extra committed path.
 
 Only then may Justice append `REMEDIATION_COMMIT_SUCCEEDED`.
 
-HEAD change, target external mutation/staging, extra commit paths, or index contamination fail closed.
+HEAD change, target content/mode external mutation, target staging, extra commit paths, target tree-mode drift, or unrelated index contamination fail closed.
 
 ---
 
@@ -2985,8 +3102,10 @@ The canonical projection MUST enforce all of the following.
 | Disposition ordering | apply OSC1 upstream precedence before any current-phase remediation disposition; upstream reopen and current-phase remediation disposition cannot compete at one checkpoint |
 | Current-phase disposition priority | after no upstream blocker remains, when another automatic remediation would otherwise be required, evaluate NC1 first; only if NC1 does not trigger may capacity choose `ROUND_LIMIT_EXHAUSTED` or `REMEDIATION_REQUIRED` |
 | Round limit | after NC1 no-trigger, if another automatic remediation is required with zero remaining generation capacity, `ROUND_LIMIT_EXHAUSTED` is the only legal transition; no next remediation cursor exists |
-| Mutation | only current phase artifact may be mutated; dirty continuation is legal only for exact WSP1 `KNOWN_DIRTY` state |
-| Restore authority | only Justice core may execute `review_restore`, and only from durable prepared source/destination bindings for the current phase artifact |
+| Mutation | only current phase artifact content may be mutated; dirty continuation is legal only for exact WSP1 `KNOWN_DIRTY` content + Git-mode state |
+| Git path identity | canonical workspace path is never raw Git pathspec authority; every artifact-scoped Git pathspec is interpreted under `--literal-pathspecs` |
+| Git entry identity | clean/restore/commit/recovery authority includes target blob + Git mode for HEAD/index and digest + Git mode for worktree |
+| Restore authority | only Justice core may execute `review_restore`, and only from durable prepared source/destination bindings for the current phase artifact; restore preserves approved target Git mode |
 | Unknown partial | `REMEDIATION_STARTED` without completed post-image may never overwrite current != preDigest bytes |
 | Upstream reopen | any known-dirty current-phase target is restored to `CLEAN_COMMITTED` before `REOPEN_REQUIRED` |
 | Self-review | all discovered findings are reconciled; blocking discovery/INDETERMINATE prohibits commit |
@@ -3155,6 +3274,9 @@ Before explicit implementation authorization:
 - Justice core may mutate a phase artifact only through an exact journaled `review_restore` transition whose source and destination bindings are already durable,
 - `review_restore` can never target Requirements, production source, tests, CI/config/dependency/release metadata, or an arbitrary path,
 - Git commit is Justice-core-only through `review_commit`,
+- every artifact-scoped Git path boundary uses literal pathspec semantics; canonical path normalization alone is never treated as Git scope enforcement,
+- clean target, restore, prepared commit, commit recovery, and post-verification bind both content identity and Git regular-file mode,
+- remediation and restore MUST NOT introduce a target executable-mode change,
 - agent/remediator never receives `review_restore` or `review_commit`,
 - Review Gate never pushes.
 
@@ -3191,7 +3313,7 @@ registered deterministic validation evidence
 | Self-review | SRF1, RSL1 |
 | Regression handling | SRF1, LNR1, NC1 |
 | Justice commit boundary | CAP1, CP1, GIT1 |
-| Dirty/staged isolation | WSP1/CAP1/GIT1 |
+| Dirty/staged isolation | WSP1/CAP1/GIT1 literal-path + content/tree-mode identity |
 | Commit traceability | GIT1 + event history |
 | Commit failure blocking | CP1/EVC1 |
 | Semantic non-convergence | NC1/N1 |
