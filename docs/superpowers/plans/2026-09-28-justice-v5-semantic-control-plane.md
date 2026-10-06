@@ -277,6 +277,26 @@ type NativeSuperpowersTaskCapability = {
   readonly issuedFromReadToolCallId: string;
 };
 
+type NativeSuperpowersActivationBinding = {
+  readonly schemaVersion: "justice-native-superpowers-activation-binding-v1";
+  readonly authorizationId: string;
+  readonly sessionId: string;
+  readonly method: SuperpowersExecutionMethod;
+  readonly evidenceKind: "read_tool_result";
+  readonly issuedFromReadToolCallId: string;
+  readonly observedAt: string;
+};
+
+type NativeSuperpowersCallBindingEvidence = {
+  readonly schemaVersion: "justice-native-superpowers-call-binding-v1";
+  readonly parentSessionId: string;
+  readonly parentToolCallId: string;
+  readonly batchItemIndex?: number;
+  readonly capabilityDigest: string;
+  readonly strippedTaskArgsDigest: string;
+  readonly observedAt: string;
+};
+
 type NativeSuperpowersProvenanceEvidence = {
   readonly schemaVersion: "justice-native-superpowers-provenance-evidence-v1";
   readonly protocolId: "justice-native-superpowers-task-capability-v1";
@@ -287,7 +307,8 @@ type NativeSuperpowersProvenanceEvidence = {
   readonly parentSessionId: string;
   readonly parentToolCallId: string;
   readonly batchItemIndex?: number;
-  readonly sourceEvidenceRefs: readonly [string, ...string[]];
+  readonly activationEvidence: NativeSuperpowersActivationBinding;
+  readonly callBindingEvidence: NativeSuperpowersCallBindingEvidence;
   readonly observedAt: string;
 };
 
@@ -298,7 +319,6 @@ type NativeSuperpowersProvenanceInput = {
   readonly batchItemIndex?: number;
   readonly taskArgs: Readonly<Record<string, unknown>>;
   readonly executionMethod: SuperpowersExecutionMethod;
-  readonly observedEvidenceRefs: readonly string[];
 };
 
 type TaskRoutingProvenance =
@@ -1291,12 +1311,12 @@ Only fixture/probe/tests/raw evidence/report are staged; no Justice production, 
 **Interfaces:**
 
 - Consumes: revised Task 1 PROVEN A–K report and existing canonical core identity/routing contracts; no Task 6/10 output.
-- Produces: registry NativeSuperpowersTaskCapability, NativeSuperpowersProvenanceEvidence/Input/Resolver, NativeCapabilityValidationResult, NativeCapabilityOutboundReceipt/Record, NativeCapabilityToolCallGuardInput/Result, CapabilityEnvelopeDecodeResult, WorkflowMethodSelection/Evidence, WorkflowActivationEvidence/Decision/StateStore, and exact `resolveWorkflowMethodSelection(input): WorkflowMethodSelection`, `resolveWorkflowActivation(input: WorkflowActivationInput): WorkflowActivationDecision`, `encodeCapabilityId(bytes: Uint8Array): string`, `encodeTaskCapabilityEnvelope(capabilityId: string, originalDescription: string | null): string`, `decodeTaskCapabilityEnvelope(description: unknown): CapabilityEnvelopeDecodeResult` signatures. Task 2 defines pure encoder/domain shapes only; Task 6 owns guard function/private state and Senpi callbacks. RG-006 vector/length/error contracts remain unchanged.
+- Produces: registry NativeSuperpowersTaskCapability, NativeSuperpowersActivationBinding, NativeSuperpowersCallBindingEvidence, NativeSuperpowersProvenanceEvidence/Input/Resolver, NativeCapabilityValidationResult, NativeCapabilityOutboundReceipt/Record, NativeCapabilityToolCallGuardInput/Result, CapabilityEnvelopeDecodeResult, WorkflowMethodSelection/Evidence, WorkflowActivationEvidence/Decision/StateStore, and exact `resolveWorkflowMethodSelection(input): WorkflowMethodSelection`, `resolveWorkflowActivation(input: WorkflowActivationInput): WorkflowActivationDecision`, `encodeCapabilityId(bytes: Uint8Array): string`, `encodeTaskCapabilityEnvelope(capabilityId: string, originalDescription: string | null): string`, `decodeTaskCapabilityEnvelope(description: unknown): CapabilityEnvelopeDecodeResult` signatures. Task 2 defines pure encoder/domain shapes only; Task 6 owns guard function/private state and Senpi callbacks. RG-006 vector/length/error contracts remain unchanged.
 - Produces registry-defined semantic types.
 - Known Native built-in diagnostic vocabulary includes `architect` in addition to visual-engineering, artistry, ultrabrain, deep-low, deep-high, quick, unspecified-low, unspecified-high, and writing.
 - `TaskRoutingTarget` is the canonical registry type above for a **new-child task call**.
 - `task_send` is parsed separately as OmO-owned runtime continuation; it never enters new-child category translation.
-- Task 2 owns WorkflowActivationEvidence itself; capability/provenance domain never imports Task 10. NativeSuperpowersProvenanceInput carries exact authorization/session/call/item/method/runtime fields; resolver instance receives Task 6 live state at construction, never a Task 10 output parameter. `superpowers` provenance denotes authenticated protocol affiliation for the exact call; no additional host-independent workflow-origin field is part of this contract.
+- Task 2 owns WorkflowActivationEvidence itself; capability/provenance domain never imports Task 10. NativeSuperpowersProvenanceInput carries only exact authorization/session/call/item/method/taskArgs fields; it carries no caller-supplied evidence references. Resolver instance receives Task 6 live activation state and private receipt registry at construction, never a Task 10 output parameter. After successful validation, Task 6 internally derives NativeSuperpowersActivationBinding from the exact current WorkflowActivationEvidence and NativeSuperpowersCallBindingEvidence from the exact private outbound receipt + current call/input digest. `superpowers` provenance denotes authenticated protocol affiliation for the exact call; no additional host-independent workflow-origin field is part of this contract.
 - `translateTaskRouting(input: TranslateTaskRoutingInput): SuperpowersRoutingTranslationResult` is the only pure routing translation contract.
 - `external` provenance preserves the explicit caller route and accepts no semantic classification input.
 - `ambiguous` provenance cannot become trusted translation and accepts no semantic classification input.
@@ -1804,12 +1824,12 @@ git commit -m "feat: persist Native execution correlation"
 - NativeTaskCapabilityRegistry implements `resolve(input: NativeSuperpowersProvenanceInput): NativeCapabilityValidationResult`; constructor consumes WorkflowActivationStateStore, `randomBytes: (size: number) => Uint8Array`, `now: () => string`, and `transcriptGuardReady: () => boolean`. `issue(evidence: WorkflowActivationEvidence): NativeSuperpowersTaskCapability | null` requires current activation and audited guard/profile readiness, uses Task 2 encodeCapabilityId(randomBytes(32)), and returns null without readiness. `captureOutboundTask(input: NativeSuperpowersProvenanceInput): NativeCapabilityOutboundRecord | null` stores only an observed assistant message_end candidate; no public/model API can supply a receipt. `invalidateSession(sessionId: string, reason: "session_shutdown" | "restart" | "session_compact" | "authorization_changed" | "method_changed"): void` clears validity/receipts. Private retired-token sanitation set cannot validate or deliver. No token/receipt persistence.
 - `observeMethodReadResult(input: {readonly authorizationId:string;readonly sessionId:string;readonly method:SuperpowersExecutionMethod;readonly toolCallId:string;readonly canonicalSkillPath:string;readonly successful:boolean}): Promise<WorkflowActivationEvidence | null>` verifies exact installed method identity/selected method and registers live activation before issuing a capability. Failed read/package/bootstrap/child skill never activate.
 - `formatNativeCapabilityDirective(capability: NativeSuperpowersTaskCapability): string` creates only Design §7.5's exact request-local directive literal/envelope. `onNativeCapabilityContext(event: ContextEvent, sessionId: string): ContextEventResult` adds it only to the deep-copy successful method-read message matching issuedFromReadToolCallId; persisted ToolResult is unchanged. `onNativeCapabilityMessageEnd(event: MessageEndEvent, sessionId: string): MessageEndEventResult` synchronously captures/strips assistant ToolCall descriptions, sanitizes echo/metadata and returns the same-role token-free message before host append. In-place safe update + same-role fallback is mandatory; host exceptions are fail-open, never a redaction veto. No async I/O/logging precedes sanitation and no raw exception text is emitted.
-- `resolve(input)` requires the exact private outbound receipt, live capability/activation/authorization/method/session and stripped argument digest. tool_call runs after Senpi queue-drained message_end/append but may still receive a preprepared raw argument copy; strip/restore that copy and compare canonical digest. When all Design §7.5 checks succeed and the input is token-free, resolve to `kind:"superpowers"` as the authenticated protocol-affiliation claim for that exact call. Missing/mismatched/rejected receipt → external or ambiguous, NOT_PROVEN; never reconstruct receipt from history and never infer affiliation from prompt semantics. Strip failure blocks with justice_capability_strip_failed. Task 7 receives no raw token/outbound state.
+- `resolve(input)` requires the exact private outbound receipt, live capability/activation/authorization/method/session and stripped argument digest. tool_call runs after Senpi queue-drained message_end/append but may still receive a preprepared raw argument copy; strip/restore that copy and compare canonical digest. It then reads the exact current WorkflowActivationEvidence from the Task 6 state store and requires authorization/session/method/read-call equality with the receipt/capability. When all Design §7.5 checks succeed and the input is token-free, internally derive NativeSuperpowersActivationBinding + NativeSuperpowersCallBindingEvidence and resolve to `kind:"superpowers"` as the authenticated protocol-affiliation claim for that exact call. NativeSuperpowersProvenanceInput accepts no evidence refs and the private receipt itself is never persisted. Missing/mismatched/rejected receipt → external or ambiguous, NOT_PROVEN; never reconstruct receipt from history and never infer affiliation from prompt semantics. Strip failure blocks with justice_capability_strip_failed. Task 7 receives no raw token/outbound state.
 - `createCapabilityToolCallGuard(registry: NativeTaskCapabilityRegistry): (input: NativeCapabilityToolCallGuardInput) => NativeCapabilityToolCallGuardResult` creates the Task 6-owned named guardCapabilityToolCall closure in src/runtime/native-capability-secret-guard.ts. Call it for every tool_call before tool-specific routing/arm/enable checks, mapping exact event.toolCallId to input.parentToolCallId. Non-task: recursively scan own keys/string values through objects/arrays for literal full live/retired tokens; also consult exact-call non-task secret vetoes recorded before assistant sanitation. Match/veto or uninspectable/error path returns kind=block and the adapter returns exactly `{block:true,reason:"justice_capability_token_leak",terminate:true}`. Invalidate current session capability/related receipts, retain sanitation-only tokens, require fresh method read, never emit raw exception/args or create provenance. task: kind=continue into the unchanged receipt resolver, restore/strip and final read-back; continue alone never grants trust.
 - Registry-internal Task 6 methods are `getSanitationTokens(): readonly string[]`, `rememberNonTaskLeak(sessionId: string, parentToolCallId: string): void`, `hasNonTaskLeak(sessionId: string, parentToolCallId: string): boolean`, and `invalidateCapabilityForLeak(sessionId: string): void`. The veto set is separate from NativeCapabilityOutboundRecord/receipts, memory-only until shutdown/restart, and idempotently prevents execution when source-message sanitation already removed the token from a prepared copy. No Task 7/10 access to tokens/veto state.
 - onNativeCapabilityMessageEnd additionally sanitizes role=toolResult recursively, including synthetic unknown/incomplete/validation errors without normal preflight. Exact occurrences become `[JUSTICE-CAPABILITY-REDACTED]`; role/identity/non-secret result semantics remain, with secret-bearing identifier portions redacted. No receipt/veto/provenance is created from results. Failure uses Design §7.5's exact same-role minimal toolResult fallback and fixed diagnostic, never a raw original.
 - Order: generic secret guard → task-only provenance resolver → Task 7 pre-spawn augmentation → Task 10 routing → OmO execution. Non-task calls never enter semantic classification/routing. Guard terminate=true is only current-batch secret containment, not Justice scheduling/retry ownership. Pre-sanitization stream/tool_execution_start/host event objects are non-recorded transient memory under the proven profile.
-- prompt wording, active method alone, task-body similarity, review-looking text, and mapping-appendix presence alone are rejected as provenance authority.
+- prompt wording, active method alone, task-body similarity, review-looking text, and mapping-appendix presence alone are rejected as provenance authority; a fully valid capability/receipt/exact-call chain is not downgraded because its prose appears unrelated.
 - OpenCode adapter code is not used as Native authority and is not deleted merely to implement Native.
 
 - [ ] **Step 1: Write RED correlation and provenance tests**
@@ -1827,7 +1847,10 @@ Provenance:
 
 - `valid_live_capability_produces_authenticated_superpowers_provenance_for_exact_bound_call`
 - `authenticated_superpowers_provenance_does_not_depend_on_task_prompt_semantics` — identical valid capability/receipt/call binding remains authenticated when task prose changes; prompt wording never creates or removes protocol affiliation.
-- `unrelated_model_issued_task_resolves_external`
+- `authenticated_provenance_embeds_exact_activation_and_call_binding_evidence` — output copies the exact current read_tool_result activation identity and exact private-receipt/current-call digest binding; raw token/private receipt are absent.
+- `provenance_input_exposes_no_caller_supplied_evidence_refs` — input has no arbitrary ref authority and an implementation cannot satisfy provenance with a non-empty string list.
+- `stale_or_wrong_live_activation_or_receipt_binding_cannot_produce_provenance` — wrong read call/session/method or wrong parent call/item/digest remains ambiguous/NOT_PROVEN and cannot be rebound.
+- `unrelated_model_issued_task_without_capability_resolves_external` — no marker and no valid private outbound receipt; prose similarity is irrelevant.
 - `review_like_prompt_without_capability_resolves_external`
 - `wrong_session_authorization_method_capabilities_are_untrusted`
 - `expired_and_post_compaction_capabilities_are_untrusted`
@@ -1891,7 +1914,7 @@ Minimum GREEN:
 - after restoration/augmentation/routing scan all candidate args for decoded/live tokens; copied prompt/label token → `{block:true,reason:"justice_capability_token_leak"}`, redacted diagnostic, no trusted evidence; never rewrite caller prompt to conceal it;
 - same-session-only validity; clear activation and capability on every accepted compaction/shutdown/restart/authorization/method boundary, never deserialize activation;
 - synchronous validation uses getCurrentActivation. Ordinary retired tokens stay sanitation-only until outstanding responses settle; leak-veto retired tokens/veto keys stay until shutdown/restart to contain later new-ID retries. Digests/reasons/retired values never grant validity. Accepted compaction invalidates activation/receipts immediately; late responses are sanitized. Shutdown/restart erases all memory; sanitized history never restores authority;
-- resolve unrelated task calls to `external` and missing/conflicting evidence to `ambiguous`;
+- resolve unmarked/unauthenticated unrelated task calls to `external` and missing/conflicting capability/receipt/call binding to `ambiguous`; once the full authenticated chain succeeds, never downgrade by task prose;
 - produce exact-call origin provenance only after valid capability/current activation/authorization/session/method, successful strip/read-back and non-empty refs; execution/review acceptance separately requires observed details.execution_mode=process and task-state runner_kind=host-session with normalized binding;
 - attach runtime task/child identity only through the proven Native surface;
 - never dispatch a task/reviewer or rewrite `task_send`.
@@ -2471,7 +2494,7 @@ Minimum GREEN:
 Minimum GREEN:
 
 - call the Task 2-owned `translateTaskRouting(TranslateTaskRoutingInput)` contract with Task 6-produced provenance explicitly;
-- consume only Task 6 trusted provenance and never re-infer origin;
+- consume only Task 6 trusted `TaskRoutingProvenance` and never infer protocol affiliation from prompt/task semantics;
 - translate only the already-issued task call;
 - preserve external/specialized routes and `task_send`;
 - never select model/provider/retry/fallback.
@@ -2858,7 +2881,7 @@ Retain the existing v5 semantic-control-plane E2Es and add/ensure Native boundar
 - `native_superpowers_task_review_uses_one_model_issued_omo_task_and_trusted_child_binding`
 - `native_task_runtime_identity_never_becomes_justice_task_identity`.
 - `native_capability_read_to_stripped_task_to_pre_spawn_review_is_exactly_correlated` — selected read → capability → exact tool_call → no child token → full serialized contract before first child output → matching runtime/child → trusted parsed evidence.
-- `native_capability_negative_controls_never_produce_acceptance` — unrelated/review-looking no marker, wrong session/authorization/method, expired/post-compaction, malformed/duplicate markers all leave required evidence NOT_PROVEN.
+- `native_capability_negative_controls_never_produce_acceptance` — unrelated/review-looking **no-marker / unauthenticated** calls, wrong session/authorization/method, expired/post-compaction, malformed/duplicate markers all leave required evidence NOT_PROVEN; a valid authenticated chain is not downgraded by prose semantics.
 - `native_accepted_compaction_and_restart_require_fresh_method_read` — selection recoverable; activation/token cannot recover; new read required.
 - `native_host_session_batch_contracts_do_not_cross_bind` — two item prompts/contracts/runtime IDs uniquely bind children by index.
 - `unsupported_native_modes_do_not_inherit_host_session_acceptance` — in-process/nested/detached/unknown modes remain untrusted without forcing mode.

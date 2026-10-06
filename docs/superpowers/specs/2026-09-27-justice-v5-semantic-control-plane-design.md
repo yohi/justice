@@ -588,6 +588,24 @@ type NativeSuperpowersTaskCapability = {
   readonly method: SuperpowersExecutionMethod;
   readonly issuedFromReadToolCallId: string;
 };
+type NativeSuperpowersActivationBinding = {
+  readonly schemaVersion: "justice-native-superpowers-activation-binding-v1";
+  readonly authorizationId: string;
+  readonly sessionId: string;
+  readonly method: SuperpowersExecutionMethod;
+  readonly evidenceKind: "read_tool_result";
+  readonly issuedFromReadToolCallId: string;
+  readonly observedAt: string;
+};
+type NativeSuperpowersCallBindingEvidence = {
+  readonly schemaVersion: "justice-native-superpowers-call-binding-v1";
+  readonly parentSessionId: string;
+  readonly parentToolCallId: string;
+  readonly batchItemIndex?: number;
+  readonly capabilityDigest: string;
+  readonly strippedTaskArgsDigest: string;
+  readonly observedAt: string;
+};
 type NativeSuperpowersProvenanceEvidence = {
   readonly schemaVersion: "justice-native-superpowers-provenance-evidence-v1";
   readonly protocolId: "justice-native-superpowers-task-capability-v1";
@@ -598,7 +616,8 @@ type NativeSuperpowersProvenanceEvidence = {
   readonly parentSessionId: string;
   readonly parentToolCallId: string;
   readonly batchItemIndex?: number;
-  readonly sourceEvidenceRefs: readonly [string, ...string[]];
+  readonly activationEvidence: NativeSuperpowersActivationBinding;
+  readonly callBindingEvidence: NativeSuperpowersCallBindingEvidence;
   readonly observedAt: string;
 };
 type TaskRoutingProvenance =
@@ -612,7 +631,6 @@ type NativeSuperpowersProvenanceInput = {
   readonly batchItemIndex?: number;
   readonly taskArgs: Readonly<Record<string, unknown>>;
   readonly executionMethod: SuperpowersExecutionMethod;
-  readonly observedEvidenceRefs: readonly string[];
 };
 type CapabilityEnvelopeDecodeResult =
   | { readonly kind: "absent" }
@@ -704,7 +722,7 @@ Task 6 internal methods are `getSanitationTokens(): readonly string[]` (live+ret
 
 Decode requires prefix at byte zero, exactly two unique JSON keys, no duplicate keys, token regex `^[A-Za-z0-9_-]{43}$`, string/null originalDescription, complete JSON consumption, and byte limit. Unknown keys, trailing text, nested reserved prefix, or malformed/oversize marker → malformed_capability; repeated prefix or duplicate keys → duplicate_capability. No reserved marker anywhere → absent/external; a reserved prefix elsewhere is invalid. Never search prompt wording for authority.
 
-**Exact tool_call validation/restoration:** Look up the memory-only outbound record for parentSessionId + event.toolCallId + optional item. A captured receipt must match current authorization/session/method/issued read and live capabilityDigest. Normalize actual event.input by strict envelope restoration if a preprepared raw copy still carries it; otherwise it must already equal the receipt's stripped digest. Validate exact canonical strippedTaskArgsDigest/non-empty observed refs and read-back token-free input. When those checks plus current activation/authorization/session/method succeed, the result may be `kind:"superpowers"` for that exact call: this is the authenticated protocol-affiliation assertion defined above. Never reconstruct a receipt from persisted transcript/label/digest/model fields. Missing receipt + no marker → external; marker without receipt → ambiguous(outbound_receipt_missing); conflicting ID/input or rejected record → ambiguous, NOT_PROVEN. A rejected capability_outside_envelope record additionally blocks execution with justice_capability_token_leak even when transcript sanitation already removed its echo. Wrong identity/revoked capability stays rejected; direct calls without an observed assistant outbound record cannot claim authenticated protocol affiliation. Valid-but-untrusted envelope still restores originalDescription/delete null; malformed/duplicate descriptions are deleted and untrusted. Strip failure blocks with `{block:true,reason:"justice_capability_strip_failed"}`.
+**Exact tool_call validation/restoration:** Look up the memory-only outbound record for parentSessionId + event.toolCallId + optional item. A captured receipt must match current authorization/session/method/issued read and live capabilityDigest. Normalize actual event.input by strict envelope restoration if a preprepared raw copy still carries it; otherwise it must already equal the receipt's stripped digest. Validate exact canonical strippedTaskArgsDigest and read-back token-free input. Then fetch the current trusted `WorkflowActivationEvidence` from Task 6 live state and require exact authorizationId + sessionId + method + `evidenceKind="read_tool_result"` + `observedCallOrInputId === issuedFromReadToolCallId`. When those checks succeed, Task 6 internally derives `NativeSuperpowersActivationBinding` from that live activation and `NativeSuperpowersCallBindingEvidence` from the exact private receipt/current call validation, and may return `kind:"superpowers"` for that exact call. No caller/model input contains either binding and no arbitrary evidence-ref list is accepted: this is the authenticated protocol-affiliation assertion defined above. Never reconstruct a receipt from persisted transcript/label/digest/model fields. Missing receipt + no marker → external; marker without receipt → ambiguous(outbound_receipt_missing); conflicting ID/input or rejected record → ambiguous, NOT_PROVEN. A rejected capability_outside_envelope record additionally blocks execution with justice_capability_token_leak even when transcript sanitation already removed its echo. Wrong identity/revoked capability stays rejected; direct calls without an observed assistant outbound record cannot claim authenticated protocol affiliation. Valid-but-untrusted envelope still restores originalDescription/delete null; malformed/duplicate descriptions are deleted and untrusted. Strip failure blocks with `{block:true,reason:"justice_capability_strip_failed"}`.
 
 After restoration scan the candidate wire input (including original label, prompt and batch sibling fields) for the decoded token and any current registry token. A token copied outside the envelope must not reach a child: block that invocation with `{block:true,reason:"justice_capability_token_leak"}`, produce no trusted provenance, and emit only a redacted token-leak reason. Do not silently delete caller prompt text to hide the leak. The same scan follows review augmentation/routing before return.
 
@@ -718,7 +736,7 @@ Revoked digests/reasons distinguish post_compaction_capability from expired_capa
 
 **Ownership:** Task 1 proves host primitives for capability delivery/persistence safety/exact-call binding → Task 2 owns capability/provenance/activation types and pure decisions → Task 6 owns live activation state, read observation, mapping directive, registry/capability validation/stripping and authenticated protocol provenance → Task 7 consumes that provenance for review recognition/pre-spawn augmentation and Task 10 consumes it for semantic routing → Task 14. Task 6 consumes no Task 10 output.
 
-Task 6 interfaces: NativeTaskCapabilityRegistry implements NativeSuperpowersProvenanceResolver; constructor consumes WorkflowActivationStateStore, `randomBytes(size: number): Uint8Array`, `now(): string`, and `transcriptGuardReady(): boolean`. `issue(evidence: WorkflowActivationEvidence): NativeSuperpowersTaskCapability | null` checks readiness/current activation and uses Task 2 encodeCapabilityId. `captureOutboundTask(input: NativeSuperpowersProvenanceInput): NativeCapabilityOutboundRecord | null` is invoked only by observed assistant message_end, never a public/model tool; `resolve(input): NativeCapabilityValidationResult` consumes its private record at exact tool_call. `invalidateSession(sessionId: string, reason: "session_shutdown" | "restart" | "session_compact" | "authorization_changed" | "method_changed"): void` clears validity/receipts. `observeMethodReadResult(input: {readonly authorizationId:string;readonly sessionId:string;readonly method:SuperpowersExecutionMethod;readonly toolCallId:string;readonly canonicalSkillPath:string;readonly successful:boolean}): Promise<WorkflowActivationEvidence | null>` never modifies persisted result. `formatNativeCapabilityDirective(capability: NativeSuperpowersTaskCapability): string`, `onNativeCapabilityContext(event: ContextEvent, sessionId: string): ContextEventResult`, and `onNativeCapabilityMessageEnd(event: MessageEndEvent, sessionId: string): MessageEndEventResult` belong to Task 6. Guard uses cached current session/catalog identity initialized at session_start, avoiding context getter/I/O before sanitation. Public Senpi event/result imports require fixture type coverage. Identity comes from trusted adapter state; durable provenance contains digest/refs only after strip/read-back. Task 7/10 never receive token/outbound map.
+Task 6 interfaces: NativeTaskCapabilityRegistry implements NativeSuperpowersProvenanceResolver; constructor consumes WorkflowActivationStateStore, `randomBytes(size: number): Uint8Array`, `now(): string`, and `transcriptGuardReady(): boolean`. `issue(evidence: WorkflowActivationEvidence): NativeSuperpowersTaskCapability | null` checks readiness/current activation and uses Task 2 encodeCapabilityId. `captureOutboundTask(input: NativeSuperpowersProvenanceInput): NativeCapabilityOutboundRecord | null` is invoked only by observed assistant message_end, never a public/model tool; `resolve(input): NativeCapabilityValidationResult` consumes its private record at exact tool_call. `invalidateSession(sessionId: string, reason: "session_shutdown" | "restart" | "session_compact" | "authorization_changed" | "method_changed"): void` clears validity/receipts. `observeMethodReadResult(input: {readonly authorizationId:string;readonly sessionId:string;readonly method:SuperpowersExecutionMethod;readonly toolCallId:string;readonly canonicalSkillPath:string;readonly successful:boolean}): Promise<WorkflowActivationEvidence | null>` never modifies persisted result. `formatNativeCapabilityDirective(capability: NativeSuperpowersTaskCapability): string`, `onNativeCapabilityContext(event: ContextEvent, sessionId: string): ContextEventResult`, and `onNativeCapabilityMessageEnd(event: MessageEndEvent, sessionId: string): MessageEndEventResult` belong to Task 6. Guard uses cached current session/catalog identity initialized at session_start, avoiding context getter/I/O before sanitation. Public Senpi event/result imports require fixture type coverage. Identity comes from trusted adapter state; durable provenance contains only token-free typed activation/call-binding copies plus capabilityDigest after strip/read-back. The private outbound receipt itself remains memory-only and is consumed/invalidated according to the existing registry rules. Task 7/10 never receive token/outbound map.
 
 ---
 
