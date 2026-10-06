@@ -12,9 +12,9 @@
 
 **Previous approved Design baseline:** `1f3f22bbc329d66a1144a63ec0802d1f8d26b167`
 
-**Current Design baseline under Fresh Review:** `3aae7763d8cca452ef8262d6a17ebf93c414df8a`
+**Current Design baseline under Fresh Review:** `a5cc8e4307fc52dc81de3c0d8ed98626aed0fff3`
 
-**Current Design blob:** `f24c2f097b50ac5384f71dd9914303e7d43d8015`
+**Current Design blob:** `ce51bebf41611f409d97a0858dddbcbd5f8c7cf0`
 
 ## Global Constraints
 
@@ -33,7 +33,7 @@
 - Reuse the existing `native/review-artifact-linux` N-API binary. Do not add a second native package or a new npm/Cargo dependency.
 - Native Gate locks use a descriptor-relative lock file opened with `O_CLOEXEC` and `flock(fd, LOCK_EX | LOCK_NB)`; the returned handle owns the FD and releases the lock on `close()`/process exit.
 - Review Gate event/CAS/workspace durable replace uses same-directory temp creation, write, `fdatasync`, `renameat2`, and parent-directory `fsync`; all paths are descriptor-relative and symlink-safe. Review Gate directories are owner-only (`0700`) and event/CAS/lock/temp files are owner-only (`0600`).
-- Never auto-restore unknown partial remediation bytes. `REMEDIATION_STARTED` without `REMEDIATION_COMPLETED` may resume only when current bytes still equal the durable preDigest; otherwise suspend with recovery conflict.
+- Never auto-restore unknown partial remediation content or mode. `REMEDIATION_STARTED` without `REMEDIATION_COMPLETED` may resume only when the current worktree binding still equals durable `preWorktree { digest, gitMode }`; otherwise suspend with recovery conflict.
 - `review_mutation` is remediator-only; `review_restore` and `review_commit` are Justice-core-only; implementation mutation remains behind `/justice-implement --approved`.
 - Review Gate commit uses the GIT1 exact-artifact contract and never pushes.
 - Canonical workspace paths are opaque artifact identities, not raw Git pathspecs. Every Review Gate Git operation that accepts an artifact pathspec MUST use the global `--literal-pathspecs` policy. Do not reject otherwise-valid artifact filenames merely because they contain Git pathspec magic; do not mix `--literal-pathspecs` with `:(literal)` encoding.
@@ -47,7 +47,7 @@
 ## Review Focus
 
 1. **Corrupt current-scope genesis vs unrelated-scope corruption:** current scope MUST fail closed without creating a replacement generation, while unrelated corrupt scope MUST NOT globally deny the requested scope. Pin this in Task 4 discovery/store tests.
-2. **Unknown partial remediation vs external edit:** a crash after `REMEDIATION_STARTED` with current bytes different from preDigest MUST never overwrite/restore those bytes. Pin this in Task 9 workspace recovery tests and Task 12 integration tests.
+2. **Unknown partial remediation vs external edit/mode drift:** a crash after `REMEDIATION_STARTED` with current worktree `{ digest, gitMode }` different from durable `preWorktree` MUST never overwrite, restore, or chmod that target. Pin this in Task 9 workspace recovery tests and Task 12 integration tests.
 3. **NC1 vs absolute round exhaustion:** NC1 MUST win whether remaining capacity is positive or zero; only NC1 no-trigger may produce `ROUND_LIMIT_EXHAUSTED` or `REMEDIATION_REQUIRED`. Pin all four truth-table cases in Task 7 and an end-to-end final-round case in Task 15.
 4. **Unrelated staged Git state:** exact Review Gate commit MUST commit only the phase artifact and preserve every unrelated index entry byte-for-byte. Pin this in Task 9 real-Git tests.
 5. **Crash after prepared restore/commit:** restart MUST recover the exact intended side effect once, never duplicate it, and must conflict on any third state. Pin restore/commit recovery in Task 9 and full restart projection in Task 15.
@@ -983,7 +983,7 @@ For `ReviewGateQueryService`, pin:
 Pin actor/operation matrix:
 - reviewer/finding-validator/self-review query-only,
 - denied model/tool operations return the exact lowercase CAP1 reasons `implementation_not_authorized`, `review_scope_violation`, or `review_operation_not_permitted`,
-- remediator has a single-use capability tied to gate/operation/phase/round/path/preDigest/context,
+- remediator has a single-use capability tied to gate/operation/phase/round/path/expectedPreDigest/expectedPreGitMode/context,
 - stale/consumed/wrong-path mutation denied,
 - core restore and core commit are not model capabilities,
 - implementation-capable/unknown tools remain denied.
@@ -1059,6 +1059,7 @@ Cover Review Focus #2 and #5:
 - restore from a non-executable target preserves `100644` and its existing POSIX permission bits,
 - restore from an executable target preserves `100755` and its existing POSIX permission bits,
 - source worktree Git-mode mismatch is a scope/recovery conflict even when the source bytes/digest match,
+- `REMEDIATION_STARTED` crash recovery redispatches only when exact `preWorktree { digest, gitMode }` still matches; content-equal mode drift is a recovery conflict and is never chmod-restored automatically,
 - source/target/path mismatch → lowercase domain error `review_restore_scope_violation`, mapped by the coordinator to durable `REVIEW_RESTORE_SCOPE_VIOLATION`,
 - exact prepared restore execution failure before verified destination → `review_restore_failed` → durable `REVIEW_RESTORE_FAILED`,
 - prepared restore + source state → safe re-execute,
