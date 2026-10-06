@@ -3031,8 +3031,15 @@ SELF_REVIEW_COMPLETED
 → finding reconciliation committed
 → crash
 → current-phase blocker exists
-→ REMEDIATION_REQUIRED
-  basis = SELF_REVIEW_CARRY_FORWARD
+
+if remaining generation remediation capacity > 0
+  → REMEDIATION_REQUIRED
+    basis = SELF_REVIEW_CARRY_FORWARD
+
+else
+  → ROUND_LIMIT_TRANSITION_REQUIRED
+  → ROUND_LIMIT_EXHAUSTED
+  → SUSPENDED
 ```
 
 ---
