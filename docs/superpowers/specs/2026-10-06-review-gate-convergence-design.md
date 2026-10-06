@@ -1014,7 +1014,7 @@ current worktree binding != preWorktree
   → SUSPENDED
 ```
 
-This is fail-closed even when the bytes look like a plausible partial remediation.
+This is fail-closed even when the bytes look like a plausible partial remediation or the content is unchanged but the executable mode drifted.
 
 ### 13A.2 Known-dirty suspension default
 
@@ -1080,8 +1080,8 @@ This restore changes workspace disposition only; it does not resolve a lineage. 
 
 ```text
 REMEDIATION_STARTED only + crash
-  current == preDigest → same-round redispatch
-  current != preDigest → conflict; never auto-rollback unknown bytes
+  current worktree == preWorktree { digest, gitMode } → same-round redispatch
+  current worktree != preWorktree → conflict; never auto-rollback unknown content/mode
 
 REMEDIATION_COMPLETED + operational suspension
   → PRESERVE_KNOWN_DIRTY
@@ -1112,8 +1112,8 @@ The following scenarios have one normative outcome:
 
 | Scenario | Required outcome |
 | --- | --- |
-| 1. Crash immediately after `REMEDIATION_STARTED`; target still equals `preDigest` | Append `REMEDIATION_INTERRUPTED_RECOVERED(NO_MUTATION_OBSERVED)`; redispatch same operation/round. |
-| 2. Crash during partial write; current digest is neither the durable preDigest nor a completed post-image | `REMEDIATION_RECOVERY_CONFLICT`; do not restore, overwrite, or guess ownership. |
+| 1. Crash immediately after `REMEDIATION_STARTED`; target still equals durable `preWorktree { digest, gitMode }` | Append `REMEDIATION_INTERRUPTED_RECOVERED(NO_MUTATION_OBSERVED)`; redispatch same operation/round. |
+| 2. Crash during partial write or mode drift; current worktree binding is neither durable `preWorktree` nor a completed post-image | `REMEDIATION_RECOVERY_CONFLICT`; do not restore, overwrite, chmod, or guess ownership. |
 | 3. Plan remediation self-review discovers a Design-owned blocker | Reconcile blocker; restore Plan known-dirty bytes to clean committed Plan through restore journal; then append `DESIGN_REOPEN_REQUIRED`. |
 | 4. Design remediation self-review discovers a Requirements-owned blocker | Reconcile blocker; restore Design known-dirty bytes to clean committed Design through restore journal; then append `REQUIREMENTS_REOPEN_REQUIRED`. |
 | 5. `REVIEW_NON_CONVERGENT` fires while carrying a known-dirty post-image | Suspend with exact `PRESERVE_KNOWN_DIRTY` binding. Reentry requires exact preserved state or an N1-authorized clean committed material change; no epoch replenishes remediation capacity. |
@@ -2509,6 +2509,7 @@ phase
 remediationRound
 targetCanonicalPath
 expectedPreDigest
+expectedPreGitMode
 phaseBaselineRevision
 ```
 
@@ -2665,16 +2666,16 @@ Projection may expect dirty bytes only when WSP1 provides an exact `KNOWN_DIRTY`
 `REMEDIATION_STARTED` without `REMEDIATION_COMPLETED` is **not** known-dirty authority.
 
 ```text
-HEAD/index guards match
-AND current target digest == durable preDigest
+HEAD/index entry bindings match
+AND current worktree binding == durable preWorktree { digest, gitMode }
   → append REMEDIATION_INTERRUPTED_RECOVERED
      disposition = NO_MUTATION_OBSERVED
   → redispatch same operationId / same remediationRound
     with dispatchSerial++
 
 otherwise
-  → current bytes are not provably Justice-owned
-  → do not restore or overwrite them
+  → current content/mode is not provably Justice-owned
+  → do not restore, overwrite, or chmod it
   → REMEDIATION_RECOVERY_CONFLICT
   → SUSPENDED
 ```
@@ -3106,7 +3107,7 @@ The canonical projection MUST enforce all of the following.
 | Git path identity | canonical workspace path is never raw Git pathspec authority; every artifact-scoped Git pathspec is interpreted under `--literal-pathspecs` |
 | Git entry identity | clean/restore/commit/recovery authority includes target blob + Git mode for HEAD/index and digest + Git mode for worktree |
 | Restore authority | only Justice core may execute `review_restore`, and only from durable prepared source/destination bindings for the current phase artifact; restore preserves approved target Git mode |
-| Unknown partial | `REMEDIATION_STARTED` without completed post-image may never overwrite current != preDigest bytes |
+| Unknown partial | `REMEDIATION_STARTED` without completed post-image may never overwrite/chmod a worktree binding different from durable `preWorktree { digest, gitMode }` |
 | Upstream reopen | any known-dirty current-phase target is restored to `CLEAN_COMMITTED` before `REOPEN_REQUIRED` |
 | Self-review | all discovered findings are reconciled; blocking discovery/INDETERMINATE prohibits commit |
 | Commit | no `REVIEW_COMMIT_PREPARED` without self-review PASS |
