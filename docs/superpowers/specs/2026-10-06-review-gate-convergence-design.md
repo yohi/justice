@@ -1008,7 +1008,7 @@ REVIEW_TARGET_RESTORE_PREPARED {
   targetCleanCommittedBinding
 }
 
-→ exact single-target restore by Justice core
+→ Justice core executes the exact `review_restore` capability
 → verify HEAD/index unchanged and target == targetCleanCommittedBinding
 
 → REVIEW_TARGET_RESTORE_SUCCEEDED
@@ -1025,7 +1025,7 @@ current workspace == targetCleanCommittedBinding
   → append REVIEW_TARGET_RESTORE_RECOVERED
 
 anything else
-  → REVIEW_TARGET_RESTORE_CONFLICT
+  → REVIEW_RESTORE_RECOVERY_CONFLICT
   → SUSPENDED
 ```
 
@@ -1904,10 +1904,44 @@ Current-phase owner:
 no commit
 → current round consumed
 → SELF_REVIEW_CARRY_FORWARD
-→ next remediation round
+→ preserve exact WSP1 KNOWN_DIRTY post-image
+
+if generation-wide phase remediation capacity remains
+  → REMEDIATION_REQUIRED
+  → next remediation round
+
+else
+  → ROUND_LIMIT_TRANSITION_REQUIRED
+  → ROUND_LIMIT_EXHAUSTED
+  → SUSPENDED
+  → preserve exact WSP1 workspace disposition
 ```
 
-For a current-phase blocker, the post-remediation artifact bytes remain the WSP1 `KNOWN_DIRTY` Justice-owned working baseline for `SELF_REVIEW_CARRY_FORWARD`. Target lineages judged RESOLVED by self-review remain lifecycle OPEN until a later successful commit/resolution event, but the next remediator MUST preserve/recheck them while addressing the newly discovered blocker. The next round captures the exact current bytes as its own RO1 pre-image.
+For a current-phase blocker, the post-remediation artifact bytes remain the WSP1 `KNOWN_DIRTY` Justice-owned working baseline for `SELF_REVIEW_CARRY_FORWARD`. Target lineages judged RESOLVED by self-review remain lifecycle OPEN until a later successful commit/resolution event, but any later review/remediation path MUST preserve/recheck them.
+
+A next remediation round is legal only when the generation-wide phase remediation count is still below the absolute ceiling. The next round captures the exact current bytes as its own RO1 pre-image.
+
+Final-round behavior is normative:
+
+```text
+Design remediation round 5
+→ self-review/current-phase blocker
+→ no commit
+→ round 5 consumed
+→ remaining Design remediation capacity = 0
+→ ROUND_LIMIT_EXHAUSTED
+→ SUSPENDED
+→ no Design round 6 cursor exists
+
+Plan remediation round 3
+→ self-review/current-phase blocker
+→ no commit
+→ round 3 consumed
+→ remaining Plan remediation capacity = 0
+→ ROUND_LIMIT_EXHAUSTED
+→ SUSPENDED
+→ no Plan round 4 cursor exists
+```
 
 For an upstream-owned blocker, carry-forward does not occur: WSP1 first journals an exact restore to `CLEAN_COMMITTED`, then Justice appends the corresponding reopen transition.
 
@@ -2231,16 +2265,23 @@ They are NOT reset by:
 - model/provider,
 - operation redispatch.
 
-### 27.4 Budget priority
+### 27.4 Absolute remediation ceiling priority
 
-At a checkpoint:
+At every post-reconciliation / post-self-review checkpoint where another automatic remediation would otherwise be required:
 
 ```text
 if semantic detector triggers
   → REVIEW_NON_CONVERGENT
-else if epoch budget exhausted
+
+else if generation-wide phase remediation ceiling is exhausted
+     AND another automatic remediation is required
   → ROUND_LIMIT_EXHAUSTED
+
+else
+  → remediation may continue
 ```
+
+There is no epoch remediation budget. `ROUND_LIMIT_EXHAUSTED` is projected solely from generation-total phase remediation rounds plus the fact that an additional automatic remediation is required.
 
 ### 27.5 Reentry guard
 
@@ -2279,6 +2320,8 @@ No eligible/material change → remain SUSPENDED with `REVIEW_NON_CONVERGENT_UNC
 `ROUND_LIMIT_EXHAUSTED` and `REVIEW_NON_CONVERGENT` both project `generationStatus = SUSPENDED` and carry the WSP1 workspace disposition active at suspension.
 
 `ROUND_LIMIT_EXHAUSTED` never replenishes remediation capacity. An explicit rerun with no accepted external/context change remains suspended and may return `ROUND_LIMIT_EXHAUSTED_UNCHANGED`. A clean committed external/context change may be admitted for revalidation/fresh review, but the generation-wide remaining remediation count is unchanged; if another automatic remediation would be required with zero remaining slots, `ROUND_LIMIT_EXHAUSTED` is projected again.
+
+A final-round self-review failure is one direct producer of this transition. Its exact known-dirty post-image remains governed by WSP1. Reentry may prove CLEAR after an admissible external committed change, but it can never produce Design round 6 or Plan round 4 in the same generation.
 
 `REVIEW_NON_CONVERGENT` additionally requires N1 material progress before reentry.
 
@@ -2319,8 +2362,18 @@ Operation authority is split into:
 ```text
 review_query
 review_mutation
+review_restore
 review_commit
 implementation
+```
+
+These are distinct authority classes. In particular:
+
+```text
+agent remediation mutation
+  != Justice-core restore
+  != Justice-core commit
+  != implementation mutation
 ```
 
 ### 28.1 review_query
@@ -2355,11 +2408,72 @@ Design Gate → Design only.
 Plan Gate → Plan only.  
 Requirements and production/test/CI/config/release metadata are never Review Gate mutation targets.
 
-### 28.3 review_commit
+### 28.3 review_restore
+
+`review_restore` is a Justice-core-only, operation-bound workspace mutation authority. It is never delegated to an LLM agent or remediator.
+
+It exists only for an already durable `REVIEW_TARGET_RESTORE_PREPARED` transition and is bound to:
+
+```text
+gateId
+operationId
+phase
+targetCanonicalPath
+
+sourceKnownDirtyBinding {
+  headSha
+  targetIndexBlobSha
+  workingDigest
+  sourceEventId
+}
+
+targetCleanCommittedBinding {
+  headSha
+  targetBlobSha
+  targetDigest
+  targetIndexBlobSha
+}
+```
+
+Preconditions:
+
+- Justice owns the Gate lock,
+- the current target path is exactly the current phase artifact,
+- the current workspace exactly matches `sourceKnownDirtyBinding`,
+- source and destination bindings are already durable in `REVIEW_TARGET_RESTORE_PREPARED`,
+- source and destination refer to the same canonical target and guarded HEAD,
+- destination bytes are the exact committed target blob identified by the prepared binding.
+
+Allowed side effect:
+
+```text
+sourceKnownDirtyBinding
+→ exact targetCleanCommittedBinding
+```
+
+Postcondition:
+
+- target working bytes equal the prepared clean digest/blob,
+- target index entry and HEAD still equal the prepared binding,
+- no other path/index entry changed.
+
+Forbidden:
+
+- arbitrary replacement content,
+- arbitrary path selection,
+- Requirements mutation,
+- production/test/CI/config/dependency/release mutation,
+- Git commit/push,
+- agent-controlled restore arguments,
+- restore without a prepared durable source/destination binding.
+
+Crash recovery reuses the same `review_restore` authority and CP1 prepared binding; it does not grant a broader mutation capability.
+
+### 28.4 review_commit
 
 Only Justice core receives commit authority and only after self-review PASS under CP1/GIT1 prepared intent.
 
-### 28.4 implementation
+### 28.5 implementation
 
 Production implementation remains gated by:
 
@@ -2373,7 +2487,7 @@ Fundamental invariant:
 review_mutation != implementation
 ```
 
-### 28.5 Error taxonomy
+### 28.6 Error taxonomy
 
 ```text
 implementation_not_authorized
@@ -2384,6 +2498,15 @@ review_scope_violation
 
 review_operation_not_permitted
   = actor lacks permission for the requested review operation class
+
+review_restore_scope_violation
+  = requested restore does not exactly match prepared phase target/source/destination bindings
+
+review_restore_failed
+  = exact prepared restore side effect failed before success could be verified
+
+review_restore_recovery_conflict
+  = crash recovery cannot prove source or destination exact binding
 
 review_commit_scope_violation
   = exact prepared commit scope was violated
@@ -2452,11 +2575,13 @@ Every later SUSPENDED state derives an explicit WSP1 disposition. Unknown dirty 
 
 For `REVIEW_TARGET_RESTORE_PREPARED` without a succeeded/recovered restore, projection yields `TARGET_RESTORE_RECOVERY_REQUIRED`.
 
-Justice compares the workspace only against the two durable bindings in the prepared event:
+Justice compares the workspace only against the two durable bindings in the prepared event and remains inside the same core-owned `review_restore` capability boundary:
 
-- exact source known-dirty binding → execute/re-execute restore,
+- exact source known-dirty binding → execute/re-execute the exact prepared `review_restore`,
 - exact target clean-committed binding → append `REVIEW_TARGET_RESTORE_RECOVERED`,
-- anything else → `REVIEW_TARGET_RESTORE_CONFLICT` and SUSPENDED.
+- anything else → `REVIEW_RESTORE_RECOVERY_CONFLICT` and SUSPENDED.
+
+Recovery MUST NOT widen target scope, select new bytes, delegate to an agent, or mutate any non-phase artifact.
 
 ### 29.4 Commit crash
 
@@ -2721,9 +2846,9 @@ The following is the normative logical catalog. Exact TypeScript names/schema lo
 | Remediation | `REMEDIATION_STARTED` | mutation intent after durable pre-image |
 | Remediation | `REMEDIATION_COMPLETED` | target post-image established |
 | Recovery | `REMEDIATION_INTERRUPTED_RECOVERED` | proves no mutation was observed before safe same-round redispatch |
-| Workspace | `REVIEW_TARGET_RESTORE_PREPARED` | exact known-dirty → clean-committed restore intent |
-| Workspace | `REVIEW_TARGET_RESTORE_SUCCEEDED` | verified normal target restore |
-| Workspace | `REVIEW_TARGET_RESTORE_RECOVERED` | verified crash-recovered target restore |
+| Workspace | `REVIEW_TARGET_RESTORE_PREPARED` | exact core-owned `review_restore` source/destination authority |
+| Workspace | `REVIEW_TARGET_RESTORE_SUCCEEDED` | verified normal `review_restore` completion |
+| Workspace | `REVIEW_TARGET_RESTORE_RECOVERED` | verified crash-recovered `review_restore` completion |
 | Self-review | `SELF_REVIEW_STARTED` | round/pinned targets fixed |
 | Self-review | `SELF_REVIEW_COMPLETED` | resolution/regression evidence |
 | Commit | `REVIEW_COMMIT_PREPARED` | exact Git side-effect intent |
@@ -2759,7 +2884,9 @@ The following is the normative logical catalog. Exact TypeScript names/schema lo
 - `REVIEW_COMMIT_FAILED`
 - `REVIEW_COMMIT_SCOPE_VIOLATION`
 - `REMEDIATION_RECOVERY_CONFLICT`
-- `REVIEW_TARGET_RESTORE_CONFLICT`
+- `REVIEW_RESTORE_SCOPE_VIOLATION`
+- `REVIEW_RESTORE_FAILED`
+- `REVIEW_RESTORE_RECOVERY_CONFLICT`
 - `REVIEW_COMMIT_RECOVERY_CONFLICT`
 - `RECOVERY_OBJECT_UNAVAILABLE`
 - `REVIEW_TARGET_NOT_CLEAN`
@@ -2804,7 +2931,9 @@ The canonical projection MUST enforce all of the following.
 | Revalidation | STILL_PRESENT creates no occurrence or recurrence counter |
 | Pending revalidation | blocking pending lineage prohibits CLEAR |
 | Remediation | phase-local round ordinal is generation-global monotonic and cannot exceed Design 5 / Plan 3 within one generation |
+| Round limit | if another automatic remediation is required with zero remaining generation capacity, `ROUND_LIMIT_EXHAUSTED` is the only legal transition; no next remediation cursor exists |
 | Mutation | only current phase artifact may be mutated; dirty continuation is legal only for exact WSP1 `KNOWN_DIRTY` state |
+| Restore authority | only Justice core may execute `review_restore`, and only from durable prepared source/destination bindings for the current phase artifact |
 | Unknown partial | `REMEDIATION_STARTED` without completed post-image may never overwrite current != preDigest bytes |
 | Upstream reopen | any known-dirty current-phase target is restored to `CLEAN_COMMITTED` before `REOPEN_REQUIRED` |
 | Self-review | all discovered findings are reconciled; blocking discovery/INDETERMINATE prohibits commit |
@@ -2843,6 +2972,7 @@ TARGET_RESTORE_REQUIRED
 TARGET_RESTORE_RECOVERY_REQUIRED
 
 SELF_REVIEW_REQUIRED
+ROUND_LIMIT_TRANSITION_REQUIRED
 
 COMMIT_REQUIRED
 COMMIT_RECOVERY_REQUIRED
@@ -2864,9 +2994,15 @@ COMPLETED
 
 A crash after any durable evidence/mutation event MUST project to the same next legal operation without relying on in-memory state.
 
-Cursor precedence includes workspace disposition:
+Cursor precedence includes workspace disposition and absolute remediation capacity:
 
 ```text
+current-phase blocker exists
+AND remaining generation remediation capacity == 0
+  → ROUND_LIMIT_TRANSITION_REQUIRED
+  → append ROUND_LIMIT_EXHAUSTED
+  → SUSPENDED
+
 upstream blocker exists
 AND workspace == KNOWN_DIRTY
   → TARGET_RESTORE_REQUIRED
@@ -2940,8 +3076,11 @@ Before explicit implementation authorization:
 - CI/config/release/dependency mutation is prohibited,
 - arbitrary shell mutation is prohibited,
 - reviewer/validator/self-review are query-only,
-- remediator may mutate exactly one phase artifact,
-- Git commit is Justice-core-only,
+- remediator may mutate exactly one phase artifact only through `review_mutation`,
+- Justice core may mutate a phase artifact only through an exact journaled `review_restore` transition whose source and destination bindings are already durable,
+- `review_restore` can never target Requirements, production source, tests, CI/config/dependency/release metadata, or an arbitrary path,
+- Git commit is Justice-core-only through `review_commit`,
+- agent/remediator never receives `review_restore` or `review_commit`,
 - Review Gate never pushes.
 
 Review read scope is contract-validation scope, not repository-wide implementation review.
@@ -2977,11 +3116,11 @@ registered deterministic validation evidence
 | Self-review | SRF1, RSL1 |
 | Regression handling | SRF1, LNR1, NC1 |
 | Justice commit boundary | CAP1, CP1, GIT1 |
-| Dirty/staged isolation | GIT1 |
+| Dirty/staged isolation | WSP1/CAP1/GIT1 |
 | Commit traceability | GIT1 + event history |
 | Commit failure blocking | CP1/EVC1 |
 | Semantic non-convergence | NC1/N1 |
-| Absolute round limits | E1/RTY1 |
+| Absolute round limits | E1/NC1/RTY1 |
 | Persistence | DA1/SV1/PR1/RET1 |
 | Restart/resume | CP1 + projection/ResumeCursor |
 | Design reopen | OSC1/RI1 |
@@ -3014,9 +3153,9 @@ In return, it provides:
 - traceable remediation causality,
 - explicit authority boundaries,
 - semantic recurrence/regression tracking,
-- recoverable exact commits,
+- recoverable exact restores and commits,
 - isolation from unrelated dirty/staged work,
-- clear separation between Review Gate mutation and implementation authority.
+- actor-separated remediation/restore/commit/implementation mutation authorities.
 
 ---
 
