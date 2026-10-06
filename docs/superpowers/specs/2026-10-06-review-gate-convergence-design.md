@@ -203,13 +203,30 @@ Requirements are deliberately excluded from `reviewScopeId`.
 
 Under a short-lived exclusive non-blocking scope lock:
 
-1. Project all histories matching `reviewScopeId`.
-2. Exactly one resumable generation → select it.
-3. No resumable generation → create a new random `gateId`.
-4. More than one resumable generation → `REVIEW_GATE_IDENTITY_CONFLICT`.
-5. Corrupt/unsupported matching history MUST NOT be treated as no history.
+1. Project all histories matching `reviewScopeId` and validate their `supersedesGateId` chain.
+2. More than one resumable generation → `REVIEW_GATE_IDENTITY_CONFLICT`.
+3. Exactly one resumable generation → acquire its Gate lock, reread all authoritative shards, reproject DA1/P1, then resume that generation.
+4. If no resumable generation exists, identify the unique completed chain tip, if any. Multiple/broken completed tips → `REVIEW_GATE_IDENTITY_CONFLICT`.
+5. If the unique completed tip's `CompletedApprovalBindingV1` exactly matches the current structured binding, return that COMPLETED Gate idempotently and read-only. Do not append an event and do not create a new generation.
+6. Otherwise create a new random `gateId`; when a completed tip exists, set `supersedesGateId` to that exact tip. Acquire the new Gate lock and durably append `GATE_CREATED`.
+7. Corrupt/unsupported matching history MUST NOT be treated as no history.
 
-The scope lock MUST remain held until the selected/new Gate lock has been acquired and the authoritative history has been reprojected.
+For a resumable/new generation, the scope lock MUST remain held until the Gate lock is acquired and the authoritative history has been reprojected/created. For exact completed reuse, the scope lock may be released after the immutable completed projection and binding match have been validated.
+
+### 5.3.1 Generation creation payload
+
+`GATE_CREATED` fixes at least:
+
+- `reviewScopeId`,
+- canonical Design path,
+- canonical Plan path,
+- the RR1 Requirements resolution,
+- initial relevant artifact digests,
+- current Design/Plan/global protocol fingerprints,
+- writer identity,
+- optional `supersedesGateId`.
+
+A newly created generation is ACTIVE in Design unless IP1 immediately establishes `DESIGN_CLEAR_INHERITED`, in which case its initial effective phase is Plan.
 
 ### 5.4 Gate lock
 
@@ -227,6 +244,8 @@ The scope lock MUST remain held until the selected/new Gate lock has been acquir
 The Gate lock is held for the entire orchestration invocation, not just individual state transitions.
 
 The Gate lock defines state-transition ownership. It does not grant mutation permission; CAP1 capability checks are independently required.
+
+A crash while ACTIVE does not synthesize a suspension. A later owner reacquires the Gate through R1, keeps the same epoch/budget, and may append `ORCHESTRATION_RESUMED` before continuing from the projected `ResumeCursor`.
 
 ---
 
@@ -487,7 +506,7 @@ CompletedApprovalBindingV1 {
 }
 ```
 
-A completed Gate is idempotently reused only when the current structured binding exactly matches the persisted binding.
+A completed Gate is idempotently reused only when the current structured binding exactly matches the persisted binding. This reuse is read-only: no new event, writer shard, epoch, or Gate lock transition is created.
 
 Package/model/provider/writer changes alone do not invalidate it.
 
@@ -654,7 +673,7 @@ Review Gate history uses a dedicated append-only store, separate from the existi
 
 ### 11.1 Single causal chain
 
-Each authoritative event MUST satisfy:
+`GATE_CREATED` is the genesis event with `gateRevision = 1` and null predecessor ID/digest. Every later authoritative event MUST satisfy:
 
 ```text
 gateRevision == previous.gateRevision + 1
@@ -759,6 +778,17 @@ Malformed output persists only typed failure information.
 
 Authority field policy violations MUST fail with `EVENT_PERSISTENCE_POLICY_VIOLATION`; authority fields MUST NOT be silently redacted into different semantics.
 
+All persisted artifact paths are canonical workspace-relative paths. The persistence boundary is conceptually:
+
+```text
+typed event builder
+→ persistence sanitizer + strict schema validator
+→ PersistableReviewGateEvent
+→ DurableReviewGateEventStore
+```
+
+Only the final persistable type may reach the durable event store.
+
 ### 12.2 Retention
 
 v4 Review Gate event history is an indefinite durable audit ledger.
@@ -769,6 +799,8 @@ v4 Review Gate event history is an indefinite durable audit ledger.
 - automatic rotation/compaction/manual prune is out of scope for v4.
 
 Recovery CAS objects are the only automatically garbage-collected Review Gate storage.
+
+Diagnostics may report `gateCount`, completed/active/suspended counts, `eventCount`, `eventBytes`, recovery object count/bytes, and oldest Gate. These are diagnostic only and confer no delete authority.
 
 ---
 
@@ -800,7 +832,7 @@ capture exact bytes
 → mutation allowed
 ```
 
-CAS publication requires temp write, file flush, atomic publish, parent directory flush, and readback verification.
+CAS publication requires owner-only storage, no symlink traversal, regular-file validation, temp write, file flush, atomic publish, parent directory flush, and readback verification.
 
 Rollback:
 
@@ -961,7 +993,7 @@ Re-running with the guarded artifact unchanged does not create a new epoch or ne
 
 ### 15.2 Accepted external change
 
-A reopen resume may accept a relevant change only when the target is clean and committed and its canonical path/digest is resolvable.
+Any external artifact change used to alter Review Gate authority — including reopen repair or Plan-only baseline replacement — may be accepted only when the affected artifact is clean and committed and its canonical path/digest is resolvable.
 
 Events:
 
@@ -975,9 +1007,11 @@ A mid-attempt input mutation instead produces `REVIEW_INPUT_CHANGED_DURING_ATTEM
 
 ### 15.3 Progress invalidation
 
-`REVIEW_PROGRESS_INVALIDATED` increments affected phase baseline revisions and makes old review progress stale.
+`REVIEW_PROGRESS_INVALIDATED` makes prior phase review progress stale and records the old/new phase review contexts.
 
-Matrix:
+Artifact/binding change advances the affected `phaseBaselineRevision`. Protocol-only change does **not** advance the revision solely because protocol changed; instead the `phaseProtocolFingerprint` and therefore `PhaseReviewContextIdentity` change. The invalidation event therefore records both old/new baseline revisions and old/new context identities, and the revision values may be equal for a protocol-only invalidation.
+
+Artifact-change matrix:
 
 ```text
 Requirements change
@@ -994,6 +1028,23 @@ Design change
 
 Plan-only change
   → Plan revision++
+  → Design CLEAR retained
+  → resume Plan
+```
+
+Protocol-only propagation follows CTX1:
+
+```text
+Design protocol changed
+  → Design context stale
+  → downstream Plan context/progress stale
+  → revisions need not change
+  → effective Design CLEAR invalidated
+  → resume Design
+
+Plan protocol changed only
+  → Plan context/progress stale
+  → Plan revision need not change
   → Design CLEAR retained
   → resume Plan
 ```
@@ -1062,7 +1113,39 @@ Line numbers and free-text explanation are evidence/display only.
 
 Later baseline-specific observations store `confirmedSemanticBasis`; they do not rewrite the canonical lineage basis.
 
-### 16.3 Validator relation
+### 16.3 Reviewer finding-validator contract
+
+Fresh reviewer and `finding-validator` MUST run as different agent roles in different contexts. The same underlying model is allowed. The validator MUST NOT receive reviewer hidden reasoning.
+
+For REVIEWER observations, the validator receives only the candidate finding, pinned phase artifacts/baseline, necessary typed Review Gate history, and Justice-provided opaque lineage candidates.
+
+The validator decision set is:
+
+```text
+VALID
+INVALID
+DUPLICATE
+ALREADY_RESOLVED
+ADVISORY
+DESIGN_REOPEN_REQUIRED
+REQUIREMENTS_REOPEN_REQUIRED
+```
+
+For a valid reviewer observation the finding-validator is authority for validity, severity, ownerScope, typed semantic basis, and current-generation semantic relation. Reviewer preference or a merely different architectural taste is not a blocking finding.
+
+`INVALID` observations are never remediated and create no blocking lineage transition. Their occurrences/validator decisions remain auditable so repeated rejected reviewer observations can be tracked diagnostically.
+
+`DUPLICATE + EXISTING` identifies duplicate candidate observations in the same review snapshot. All occurrences remain auditable, but they represent one blocker.
+
+A VALID minor finding is projected as advisory:
+
+- persist and display it,
+- do not block CLEAR,
+- do not auto-remediate it.
+
+Justice may filter lineage candidates by owner/reference/location/type for efficiency, but candidate retrieval is not semantic authority; the finding-validator decides semantic identity among Justice-provided candidates.
+
+### 16.4 Validator relation
 
 ```text
 EXISTING
@@ -1078,7 +1161,33 @@ A resolved lineage observed again with the same defect present becomes `LINEAGE_
 
 Reviewer and validator MUST evaluate the same `ReviewAttemptBaseline`.
 
-If any relevant digest changes during the attempt:
+Conceptually:
+
+```text
+ReviewAttemptBaseline {
+  gateId
+  reviewAttemptId
+  phase
+
+  phaseBaselineRevision
+  phaseReviewContextIdentity
+
+  relevantArtifactBindings {
+    requirements? { canonicalPath, digest }
+    design { canonicalPath, digest }
+    plan? { canonicalPath, digest }
+  }
+
+  approvedDesignDigest?   # required in Plan
+
+  phaseProtocolFingerprint
+  reviewProtocolFingerprint
+}
+```
+
+Design attempts bind Requirements + Design. Plan attempts bind the effective approved Design + Plan; the Requirements authority remains transitively fixed by the effective Design approval binding.
+
+If any relevant binding/digest changes during the attempt:
 
 ```text
 REVIEW_INPUT_CHANGED_DURING_ATTEMPT
@@ -1183,6 +1292,8 @@ An invalid batch produces no partial reconciliation mutation.
 ---
 
 ## 20. OSC1 — ownerScope disposition and CLEAR dependency closure
+
+Only VALID critical/major CURRENT findings are automatic remediation targets. Minor/advisory findings are never automatic remediation targets and never block CLEAR.
 
 Allowed blocking finding relationships:
 
@@ -1408,7 +1519,20 @@ same operationId
 dispatchSerial++
 ```
 
-### 23.1 Attempt start
+### 23.1 Attempt origin
+
+A fresh attempt records why it exists:
+
+```text
+PHASE_ENTRY
+POST_REMEDIATION_COMMIT
+POST_BASELINE_CHANGE
+POST_NON_CONVERGENCE_REENTRY
+```
+
+Fresh review is therefore a new attempt plus history-blind reviewer context and validated origin prerequisites; it is not a separate identity type.
+
+### 23.2 Attempt start
 
 ```text
 REVIEW_ATTEMPT_STARTED {
@@ -1422,7 +1546,7 @@ REVIEW_ATTEMPT_STARTED {
 }
 ```
 
-This event MUST be durable before reviewer dispatch.
+This event MUST be durable before reviewer dispatch. Before each reviewer/validator/reconciliator external call, Justice also appends `EXTERNAL_OPERATION_DISPATCHED` with the stable `operationId`, next `dispatchSerial`, operation kind, owner reference, and pinned-input fingerprint.
 
 Candidate-zero review still commits an empty candidate, validation, and reconciliation batch so "no findings" is distinguishable from incomplete execution.
 
@@ -1430,7 +1554,7 @@ An attempt is RECONCILED only after `FINDING_RECONCILIATION_COMMITTED`.
 
 If its baseline revision/context/protocol no longer matches current phase state, it projects as STALE and cannot authorize CLEAR.
 
-### 23.2 Non-1:1 relationships
+### 23.3 Non-1:1 relationships
 
 ```text
 1 review attempt → N remediation rounds
@@ -1439,6 +1563,16 @@ successful remediation commit → exactly 1 subsequent fresh review attempt
 ```
 
 Self-review is not a review attempt.
+
+A remediation round need not originate directly from a review attempt. Its authoritative basis is one of:
+
+```text
+REVIEW_RECONCILIATION
+LINEAGE_REVALIDATION
+SELF_REVIEW_CARRY_FORWARD
+```
+
+`REMEDIATION_STARTED` therefore binds `remediationRound`, `RemediationBasis`, the authority event, target lineages, phase context, and recovery pre-image; `sourceReviewAttemptId` is not universally required.
 
 ---
 
@@ -1488,6 +1622,8 @@ PASS requires:
 - all mandatory deterministic checks PASS.
 
 Minor/advisory findings may coexist with PASS.
+
+Every discovered self-review finding MUST complete its semantic reconciliation before commit eligibility is evaluated. Self-review PASS evidence alone never skips `FINDING_RECONCILIATION_COMMITTED` for its discovered occurrences.
 
 ### 24.2 Blocking self-review finding
 
@@ -1572,7 +1708,15 @@ Post-remediation semantic FAIL and PRE_CLEAR semantic FAIL may enter DVF1 findin
 
 `PRE_CLEAR` means required PASS evidence completeness; it does not force execution when exact reusable PASS evidence exists.
 
-### 25.4 Exact-input reuse
+### 25.4 Stage behavior
+
+`BASELINE_ADMISSION` executes before history-blind reviewer dispatch. FAIL or INDETERMINATE cannot satisfy admission and does not create a finding; the Gate suspends.
+
+For `POST_REMEDIATION_SELF_REVIEW`, mandatory deterministic validators run against the same pinned post-remediation baseline before the LLM self-review result is finalized. A semantic FAIL is bridged/reconciled through DVF1, but the LLM self-review still runs so the round obtains combined deterministic and semantic evidence. Any blocking deterministic finding prevents commit.
+
+For `PRE_CLEAR`, Justice first checks evidence completeness. An exact reusable PASS may satisfy the stage. A cache miss executes the validator. A semantic FAIL enters DVF1 and then OSC1 remediation/reopen disposition; it is not merely a silent "CLEAR denied". INDETERMINATE creates no finding and cannot satisfy a mandatory stage.
+
+### 25.5 Exact-input reuse
 
 Validators MUST completely declare semantic inputs.
 
@@ -1590,6 +1734,23 @@ PASS/FAIL/INDETERMINATE semantic results may all be reused on exact inputs.
 Execution failure is never cached as semantic evidence.
 
 Reuse is represented by `DETERMINISTIC_VALIDATION_REUSED`, referencing the original completed validation event.
+
+### 25.6 Execution environment binding
+
+External deterministic validators bind their execution environment separately from protocol semantics:
+
+```text
+ValidationEnvironmentBinding {
+  executionKind
+  resolvedExecutableIdentity?
+  resolvedToolVersion?
+  runtimeContractVersion
+}
+```
+
+A reviewer attempt pins the required external-validator bindings used by that attempt; a self-review operation similarly pins bindings for its logical operation. Redispatch of the same logical operation with a changed binding fails closed with `VALIDATION_ENVIRONMENT_CHANGED_DURING_ATTEMPT`.
+
+The binding participates in exact-input cache identity where applicable. Tool/runtime drift therefore causes a cache miss even when artifact bytes are unchanged, while sandbox implementation details that do not change the binding or semantic contract do not change protocol identity.
 
 ---
 
@@ -1675,6 +1836,26 @@ Excluded:
 
 ### 27.1 Fingerprints
 
+The counter-free blocker landscape is the canonical hash of a sorted typed descriptor:
+
+```text
+BlockerLandscapeDescriptorV1 {
+  phase
+
+  activeBlockingLineages[] {
+    lineageId
+    ownerScope
+    severity
+    violationType
+    governingReference
+    violatedContract
+    currentSemanticLocation
+  }
+}
+```
+
+Only VALID critical/major OPEN CURRENT lineages are included.
+
 ```text
 blockerLandscapeFingerprint
   = semantic identity of the current blocking set
@@ -1682,7 +1863,9 @@ blockerLandscapeFingerprint
 
 convergenceFingerprint
   = richer convergence state
-  = includes recurrence/regression/conflict state
+  = blocker landscape
+  + recurrence/regression counters
+  + repeated conflict groups
 ```
 
 ### 27.2 Trigger rules
@@ -1812,11 +1995,41 @@ NON_CONVERGENCE_REENTRY_VALIDATION
  | DESIGN_REOPEN_REQUIRED
 ```
 
-Only MATERIAL_PROGRESS starts a new epoch/fresh budget.
+Only MATERIAL_PROGRESS starts a new epoch/fresh budget. The changed target artifacts used for reentry MUST be clean and committed.
+
+A reentry-validator `REQUIREMENTS_REOPEN_REQUIRED` or `DESIGN_REOPEN_REQUIRED` result is evidence only and is valid only when it points to an already committed CURRENT upstream blocking lineage satisfying OSC1. Non-convergence reentry validation is not a fifth finding-entry path and cannot create a new lineage. Without such an existing upstream lineage, a reopen result is invalid/fail-closed.
 
 No eligible/material change → remain SUSPENDED with `REVIEW_NON_CONVERGENT_UNCHANGED` invocation outcome.
 
 `ROUND_LIMIT_EXHAUSTED` may start a fresh epoch on explicit rerun; NON_CONVERGENT requires material progress.
+
+`REVIEW_NON_CONVERGENT` persists at least:
+
+```text
+phase
+phaseBaselineRevision
+phaseReviewContextIdentity
+primaryReason
+triggerRules[]
+blockerLandscapeFingerprint
+convergenceFingerprint
+phaseProtocolFingerprint
+reviewProtocolFingerprint
+currentBlockingLineageIds[]
+
+evidence {
+  firstRelevantRemediationRound
+  latestRelevantRemediationRound
+  recurringLineageIds[]
+  conflictGroupKeys[]
+  resolutionEventIds[]
+  regressionEventIds[]
+  remediationCommitShas[]
+  relevantEventIds[]
+}
+```
+
+Free-text explanation is display-only and bounded.
 
 ---
 
@@ -1842,6 +2055,8 @@ Typed read-only APIs only, such as:
 - registered deterministic validation.
 
 Review query does not expose arbitrary shell execution.
+
+Search/read/diff APIs MUST be scoped so they cannot silently expand semantic review beyond the current phase artifact set and explicitly allowed review-safe Git metadata. A query capability is not permission to perform repository-wide implementation compatibility review.
 
 ### 28.2 review_mutation
 
@@ -1974,7 +2189,7 @@ otherwise
 
 ## 30. GIT1 — Exact-artifact remediation commit
 
-Gate admission requires only the target artifact to be clean.
+Each phase admission requires only that phase's target artifact to be clean. Initial Design admission is checked before creating a new generation. Plan admission is checked before Plan review begins, including after an inherited/current Design CLEAR.
 
 ```text
 target HEAD blob
@@ -1986,8 +2201,10 @@ Otherwise:
 
 ```text
 REVIEW_TARGET_NOT_CLEAN
-→ Gate admission blocked
+→ Gate/phase admission blocked
 ```
+
+Before `GATE_CREATED`, this is an invocation outcome and no history event is created. If a valid generation already exists and a later phase/resume target is externally dirty/staged, Justice records an operational suspension with reason `REVIEW_TARGET_NOT_CLEAN`.
 
 Unrelated dirty and staged paths are allowed.
 
@@ -2091,6 +2308,24 @@ summary   # default
 rounds
 findings
 ```
+
+The summary view exposes at least:
+
+- `gateId` and `reviewScopeId`,
+- generation status and current phase,
+- orchestration epoch,
+- effective Design CLEAR authority/binding,
+- current blocker counts by ownerScope,
+- pending revalidation count,
+- current epoch budget usage,
+- generation-total remediation rounds,
+- last suspension/transition,
+- last successful remediation commit,
+- projected `ResumeCursor`,
+- projected `gateRevision`,
+- head event ID.
+
+The rounds view emphasizes attempt → remediation → self-review → commit → fresh-review causality. The findings view is lineage-centric and exposes ownerScope, severity, lifecycle/applicability, occurrence/regression diagnostics, semantic basis, and resolution/regression history.
 
 Raw event schema is not public UX.
 
@@ -2210,6 +2445,7 @@ The following is the normative logical catalog. Exact TypeScript names/schema lo
 - `REMEDIATION_RECOVERY_CONFLICT`
 - `REVIEW_COMMIT_RECOVERY_CONFLICT`
 - `RECOVERY_OBJECT_UNAVAILABLE`
+- `REVIEW_TARGET_NOT_CLEAN`
 
 The following are invocation errors and MUST NOT be appended when authoritative append/projection is unsafe:
 
@@ -2220,6 +2456,7 @@ The following are invocation errors and MUST NOT be appended when authoritative 
 - `REVIEW_PROTOCOL_DESCRIPTOR_INVALID`
 - `EVENT_PERSISTENCE_POLICY_VIOLATION`
 - `REQUIREMENTS_RESOLUTION_REQUIRED`
+- `REVIEW_TARGET_NOT_CLEAN` when failure occurs before any generation exists
 
 ---
 
@@ -2236,7 +2473,7 @@ The canonical projection MUST enforce all of the following.
 | Design milestone | at most one effective Design CLEAR milestone |
 | Invalidation | only the exact current effective milestone may be invalidated |
 | Phase | Plan authority requires an effective Design milestone |
-| Attempt | current authority requires current baseline/context/protocol |
+| Attempt | current authority requires current baseline/context/protocol; protocol-only drift can stale an attempt without changing baseline revision |
 | Attempt completion | attempt RECONCILED only after batch finding reconciliation |
 | Empty review | zero candidates still require empty validation/reconciliation batch |
 | Operation | external completion must correspond to durable dispatch intent |
