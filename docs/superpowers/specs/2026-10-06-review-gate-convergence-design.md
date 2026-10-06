@@ -268,7 +268,7 @@ The Gate lock is held for the entire orchestration invocation, not just individu
 
 The Gate lock defines state-transition ownership. It does not grant mutation permission; CAP1 capability checks are independently required.
 
-A crash while ACTIVE does not synthesize a suspension. A later owner reacquires the Gate through R1, keeps the same epoch/budget, and may append `ORCHESTRATION_RESUMED` before continuing from the projected `ResumeCursor`.
+A crash while ACTIVE does not synthesize a suspension. A later owner reacquires the Gate through R1, keeps the same epoch and the same generation-wide remaining remediation capacity, and may append `ORCHESTRATION_RESUMED` before continuing from the projected `ResumeCursor`.
 
 ---
 
@@ -1059,6 +1059,19 @@ upstream DESIGN_REOPEN_REQUIRED
 verified remediation commit
   → CLEAN_COMMITTED
 ```
+
+### 13A.5 Required recovery scenarios
+
+The following scenarios have one normative outcome:
+
+| Scenario | Required outcome |
+| --- | --- |
+| 1. Crash immediately after `REMEDIATION_STARTED`; target still equals `preDigest` | Append `REMEDIATION_INTERRUPTED_RECOVERED(NO_MUTATION_OBSERVED)`; redispatch same operation/round. |
+| 2. Crash during partial write; current digest is neither the durable preDigest nor a completed post-image | `REMEDIATION_RECOVERY_CONFLICT`; do not restore, overwrite, or guess ownership. |
+| 3. Plan remediation self-review discovers a Design-owned blocker | Reconcile blocker; restore Plan known-dirty bytes to clean committed Plan through restore journal; then append `DESIGN_REOPEN_REQUIRED`. |
+| 4. Design remediation self-review discovers a Requirements-owned blocker | Reconcile blocker; restore Design known-dirty bytes to clean committed Design through restore journal; then append `REQUIREMENTS_REOPEN_REQUIRED`. |
+| 5. `REVIEW_NON_CONVERGENT` fires while carrying a known-dirty post-image | Suspend with exact `PRESERVE_KNOWN_DIRTY` binding. Reentry requires exact preserved state or an N1-authorized clean committed material change; no epoch replenishes remediation capacity. |
+| 6. External process changes a target while Justice expects known dirty bytes | If the new state is not an explicitly admissible clean committed RI1/N1 baseline, fail closed. Justice never overwrites the unexpected bytes. |
 
 ---
 
@@ -2591,7 +2604,7 @@ History query:
 
 Scope lookup canonicalizes Design/Plan, derives `reviewScopeId`, and reads only `events/<reviewScopeId>/`. Execution and history query therefore use the same durable scope-membership authority. It then uses authoritative same-scope `supersedesGateId` chain ordering, not timestamps.
 
-For `--gate <gateId>`, Justice locates the unique `events/<reviewScopeId>/<gateId>/` directory by namespace/directory identity before projecting it. Zero matches means not found; multiple directory matches are an identity conflict. Corrupt/unsupported genesis in the located namespace remains conflict/version failure, not a missing Gate.
+For `--gate <gateId>`, Justice scans scope namespace directory names for a unique `events/*/<gateId>/` directory without decoding any genesis event to determine membership. The enclosing scope directory supplies `reviewScopeId`. Zero matches means not found; multiple directory matches are an identity conflict. Corrupt/unsupported genesis in the located namespace remains conflict/version failure, not a missing Gate.
 
 Default selection:
 
@@ -2851,14 +2864,30 @@ COMPLETED
 
 A crash after any durable evidence/mutation event MUST project to the same next legal operation without relying on in-memory state.
 
+Cursor precedence includes workspace disposition:
+
+```text
+upstream blocker exists
+AND workspace == KNOWN_DIRTY
+  → TARGET_RESTORE_REQUIRED
+
+REVIEW_TARGET_RESTORE_PREPARED without completion
+  → TARGET_RESTORE_RECOVERY_REQUIRED
+
+upstream blocker exists
+AND workspace == CLEAN_COMMITTED
+  → DESIGN_REOPEN_TRANSITION_REQUIRED
+     or REQUIREMENTS_REOPEN_TRANSITION_REQUIRED
+```
+
 Examples:
 
 ```text
 FINDING_RECONCILIATION_COMMITTED
 → crash
 → upstream blocker exists
-→ DESIGN_REOPEN_TRANSITION_REQUIRED
-  or REQUIREMENTS_REOPEN_TRANSITION_REQUIRED
+→ if target clean: REOPEN transition required
+→ if target known-dirty: TARGET_RESTORE_REQUIRED first
 ```
 
 ```text
