@@ -288,6 +288,24 @@ accepted committed relevant artifact change
 
 Epochs are budget-accounting identities, not finding or round identities.
 
+The reason for SUSPENDED state governs reentry:
+
+```text
+REOPEN_REQUIRED
+  → guarded committed upstream change required
+
+ROUND_LIMIT_EXHAUSTED
+  → explicit rerun may start a fresh epoch
+
+REVIEW_NON_CONVERGENT
+  → N1 material-progress guard required
+
+operational EXECUTION_SUSPENDED
+  → resume/recovery follows the projected operation-specific cursor
+```
+
+A newly observed artifact/protocol change never bypasses the applicable suspension guard.
+
 - `GATE_CREATED` starts epoch 1.
 - Crash while ACTIVE → same epoch, same remaining budget.
 - Explicit rerun from durable SUSPENDED → new epoch only when the suspension contract permits it.
@@ -383,7 +401,9 @@ RequirementsResolutionV1 {
 
 No quoted artifact body is stored.
 
-An existing generation never re-runs Requirements resolution. Later artifact changes use RI1 change observation.
+An existing generation never re-runs automatic Requirements resolution. Later artifact changes use RI1 change observation.
+
+Design and Plan canonical paths are fixed by `reviewScopeId` for the generation. If a resumed invocation explicitly supplies a different `--requirements` path, Justice MUST NOT silently replace the persisted binding. The new path may be accepted only as an explicit Requirements authority change under the currently allowed RI1/N1 transition, after applying the same canonicalization/scope/regular-file checks and clean/committed requirement. Otherwise the invocation fails without changing the persisted Requirements identity.
 
 ---
 
@@ -474,6 +494,8 @@ The following do not alter protocol fingerprints solely by changing:
 - filesystem layout,
 - compression/archive mechanics,
 - sandbox implementation details if semantic validator contract is unchanged.
+
+The deterministic-validation portion of a phase descriptor MUST commit, for each semantically relevant registered validator, at least its validator ID, contract version, result schema version, mandatory stages, stage failure policy, and rule semantics. Changing any of those semantics changes the affected phase fingerprint. Changing only runner/sandbox implementation while preserving this contract does not.
 
 Inconsistent shared semantic versions MUST fail with `REVIEW_PROTOCOL_DESCRIPTOR_INVALID`.
 
@@ -659,17 +681,23 @@ Plan protocol changed only
 CrossPhase only changed
   → phase lineage contexts remain current
   → completed Gate binding reuse may fail
+  → any in-flight attempt bound to the old global fingerprint becomes STALE
+  → if the generation is still mutable, resume from the current phase with a fresh attempt as required
 ```
+
+Protocol/artifact change observation does not override the current suspension contract. In particular, a generation suspended by `REVIEW_NON_CONVERGENT` still requires N1 material-progress validation before a new epoch can start; a protocol change cannot bypass that guard.
 
 ---
 
-## 11. DA1 / SV1 — Durable event log
+## 11. P1 / DA1 / SV1 — Durable event log and causal chain
 
 Review Gate history uses a dedicated append-only store, separate from the existing Observation Log.
 
 ```text
 .justice/review-gates/events/<gateId>/<writerId>.jsonl
 ```
+
+Each orchestration owner/process uses a fresh `writerId` shard. Restarting the same Gate keeps the same `gateId` but uses a new writer shard. A writer ID is never ordering authority across shards.
 
 ### 11.1 Single causal chain
 
@@ -687,6 +715,8 @@ eventDigest =
 ```
 
 Per-writer sequence is monotonic, but writer/time ordering is not global authority.
+
+Projection snapshots every authoritative shard, validates each writer sequence, then reconstructs one global chain from `GATE_CREATED` by `gateRevision + previousEventId + previousEventDigest`. Timestamp or filename sorting MUST NOT repair or define global order.
 
 Fork, revision gap, broken predecessor digest, incompatible duplicate revision/event identity, or writer-sequence violation → `REVIEW_HISTORY_CONFLICT`.
 
@@ -868,7 +898,7 @@ DESIGN_CLEAR {
     findingReconciliationEventId
 
     reviewAttemptId
-    designReviewRound
+    reviewAttemptOrdinal
     orchestrationEpoch
   }
 }
@@ -930,7 +960,7 @@ PLAN_CLEAR {
     findingReconciliationEventId
 
     reviewAttemptId
-    planReviewRound
+    reviewAttemptOrdinal
     orchestrationEpoch
   }
 }
@@ -1285,6 +1315,31 @@ REVIEW_PROGRESS_INVALIDATED
 
 Finding reconciliation is attempt-level batch mutation.
 
+At minimum, each `FINDING_RECONCILIATION_COMMITTED` entry records:
+
+```text
+occurrenceId
+validationEvidenceEventId
+validation decision
+
+action:
+  CREATE
+  | BIND_EXISTING
+  | BIND_PRIOR
+  | NONE
+
+lineageId?
+predecessorLineageRef?
+
+lifecycleTransition:
+  NONE
+  | OPENED
+  | REGRESSED
+  | REOPENED
+```
+
+The external LLM/deterministic result remains evidence; this Justice-core reconciliation event is lineage mutation authority.
+
 Before committing the batch, Justice MUST validate snapshot-wide consistency including duplicate/conflicting decisions, ownerScope/decision consistency, opaque-ref validity, and lifecycle legality.
 
 An invalid batch produces no partial reconciliation mutation.
@@ -1388,9 +1443,9 @@ stale-lineage revalidation
   → no occurrenceId
 ```
 
-Input identifies one existing lineage and target phase context.
+The logical check is per existing lineage, but execution/evidence MAY be batched for all `PENDING_REVALIDATION` lineages sharing the same pinned target context. `LINEAGE_REVALIDATION_COMPLETED` is validator evidence for that batch; Justice commits all consistent STILL_PRESENT applicability transitions in an authoritative batch and uses RSL1 resolution events separately for RESOLVED entries.
 
-Allowed outcomes:
+Allowed per-lineage outcomes:
 
 ```text
 STILL_PRESENT
@@ -1466,6 +1521,25 @@ Self-review `RESOLVED` is evidence only until:
 Commit failure leaves the lineage OPEN.
 
 External committed artifact change may resolve a lineage only through explicit `EXTERNAL_CHANGE_REVALIDATION`.
+
+`LINEAGE_RESOLUTION_COMMITTED` records at least:
+
+```text
+lineageId
+
+resolutionAuthority:
+  POST_REMEDIATION_SELF_REVIEW
+  | EXTERNAL_CHANGE_REVALIDATION
+
+validationEvidenceEventId
+remediationRound?
+validatedArtifactDigest
+commitSha?
+committedArtifactDigest
+resolutionBasis
+```
+
+For post-remediation resolution, commit SHA and committed digest are required and must match the self-review baseline. For external-change revalidation, the fields bind the accepted committed external baseline.
 
 ### 22.2 Fresh review
 
@@ -1601,7 +1675,7 @@ Discovered findings do create `occurrenceId` and enter normal lineage reconcilia
 observationSource = SELF_REVIEW
 ```
 
-They MUST NOT be run through a second ordinary validity-validation call.
+Before dispatch, Justice supplies the self-review context with opaque existing-lineage candidates. Each discovered finding returns its current-generation `EXISTING | NEW` semantic relation in the same self-review result. It MUST NOT be run through a second ordinary validity-validation or same-generation semantic-relation LLM call. Justice core still performs the normal authoritative reconciliation commit. XGR1 remains a separate context only when a NEW lineage requires predecessor-generation reconciliation.
 
 If the same semantic defect appears as both target `STILL_PRESENT` and discovered `EXISTING` in one self-review result:
 
@@ -2001,7 +2075,7 @@ A reentry-validator `REQUIREMENTS_REOPEN_REQUIRED` or `DESIGN_REOPEN_REQUIRED` r
 
 No eligible/material change → remain SUSPENDED with `REVIEW_NON_CONVERGENT_UNCHANGED` invocation outcome.
 
-`ROUND_LIMIT_EXHAUSTED` may start a fresh epoch on explicit rerun; NON_CONVERGENT requires material progress.
+`ROUND_LIMIT_EXHAUSTED` and `REVIEW_NON_CONVERGENT` both project `generationStatus = SUSPENDED`. `ROUND_LIMIT_EXHAUSTED` may start a fresh epoch on explicit rerun; NON_CONVERGENT requires material progress.
 
 `REVIEW_NON_CONVERGENT` persists at least:
 
@@ -2466,7 +2540,7 @@ The canonical projection MUST enforce all of the following.
 
 | Domain | Invariant |
 | --- | --- |
-| Event chain | DA1 predecessor/revision/digest chain is exact |
+| Event chain | P1/DA1 predecessor/revision/digest chain is exact across all writer shards |
 | Generation | `GATE_CREATED` is first authoritative generation event |
 | Completion | `PLAN_CLEAR` is unique and terminal; nothing follows |
 | Status | COMPLETED iff PLAN_CLEAR exists |
@@ -2486,7 +2560,7 @@ The canonical projection MUST enforce all of the following.
 | Pending revalidation | blocking pending lineage prohibits CLEAR |
 | Remediation | phase-local round ordinal is generation-global monotonic |
 | Mutation | only current phase artifact may be mutated |
-| Self-review | blocking discovery/INDETERMINATE prohibits commit |
+| Self-review | all discovered findings are reconciled; blocking discovery/INDETERMINATE prohibits commit |
 | Commit | no `REVIEW_COMMIT_PREPARED` without self-review PASS |
 | Commit identity | actual Git result must exactly match prepared intent |
 | Post-commit | verified remediation commit requires a new fresh review attempt |
