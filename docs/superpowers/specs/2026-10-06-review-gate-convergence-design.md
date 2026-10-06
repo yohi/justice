@@ -1052,6 +1052,9 @@ ROUND_LIMIT_EXHAUSTED
 REVIEW_NON_CONVERGENT
   → PRESERVE_KNOWN_DIRTY when dirty, otherwise CLEAN_COMMITTED
 
+# The §27.4 priority chooses which suspension reason applies.
+# Both preserve the same exact WSP1 workspace authority when entered from KNOWN_DIRTY.
+
 upstream REQUIREMENTS_REOPEN_REQUIRED
 upstream DESIGN_REOPEN_REQUIRED
   → RESTORE_TO_CLEAN_COMMITTED before REOPEN_REQUIRED
@@ -1905,41 +1908,66 @@ no commit
 → current round consumed
 → SELF_REVIEW_CARRY_FORWARD
 → preserve exact WSP1 KNOWN_DIRTY post-image
+→ evaluate the §27.4 current-phase remediation disposition
 
-if generation-wide phase remediation capacity remains
-  → REMEDIATION_REQUIRED
-  → next remediation round
+if NC1 semantic detector triggers
+  → REVIEW_NON_CONVERGENT
+  → SUSPENDED
 
-else
+else if generation-wide phase remediation capacity == 0
   → ROUND_LIMIT_TRANSITION_REQUIRED
   → ROUND_LIMIT_EXHAUSTED
   → SUSPENDED
-  → preserve exact WSP1 workspace disposition
+
+else
+  → REMEDIATION_REQUIRED
+  → next remediation round
 ```
+
+The §27.4 priority is authoritative. `SELF_REVIEW_CARRY_FORWARD` records the remediation basis/workspace continuation; it does not by itself authorize another remediation round or choose the suspension reason.
 
 For a current-phase blocker, the post-remediation artifact bytes remain the WSP1 `KNOWN_DIRTY` Justice-owned working baseline for `SELF_REVIEW_CARRY_FORWARD`. Target lineages judged RESOLVED by self-review remain lifecycle OPEN until a later successful commit/resolution event, but any later review/remediation path MUST preserve/recheck them.
 
 A next remediation round is legal only when the generation-wide phase remediation count is still below the absolute ceiling. The next round captures the exact current bytes as its own RO1 pre-image.
 
-Final-round behavior is normative:
+Final-round behavior is normative and still follows §27.4 priority:
 
 ```text
 Design remediation round 5
 → self-review/current-phase blocker
 → no commit
 → round 5 consumed
-→ remaining Design remediation capacity = 0
-→ ROUND_LIMIT_EXHAUSTED
-→ SUSPENDED
+→ reconcile all self-review findings
+→ evaluate NC1
+
+if NC1 triggers
+  → REVIEW_NON_CONVERGENT
+  → SUSPENDED
+
+else
+  → remaining Design remediation capacity = 0
+  → ROUND_LIMIT_EXHAUSTED
+  → SUSPENDED
+
 → no Design round 6 cursor exists
+
 
 Plan remediation round 3
 → self-review/current-phase blocker
 → no commit
 → round 3 consumed
-→ remaining Plan remediation capacity = 0
-→ ROUND_LIMIT_EXHAUSTED
-→ SUSPENDED
+→ reconcile all self-review findings
+→ evaluate NC1
+
+if NC1 triggers
+  → REVIEW_NON_CONVERGENT
+  → SUSPENDED
+
+else
+  → remaining Plan remediation capacity = 0
+  → ROUND_LIMIT_EXHAUSTED
+  → SUSPENDED
+
 → no Plan round 4 cursor exists
 ```
 
@@ -2265,23 +2293,44 @@ They are NOT reset by:
 - model/provider,
 - operation redispatch.
 
-### 27.4 Absolute remediation ceiling priority
+### 27.4 Current-phase remediation disposition priority
 
-At every post-reconciliation / post-self-review checkpoint where another automatic remediation would otherwise be required:
+This section is the single authority for choosing among semantic non-convergence, round exhaustion, and remediation continuation.
+
+At every post-reconciliation / post-self-review checkpoint where a CURRENT current-phase critical/major blocker means another automatic remediation would otherwise be required:
 
 ```text
-if semantic detector triggers
+1. Evaluate NC1 on the fully reconciled authoritative lineage state.
+
+if NC1 triggers
   → REVIEW_NON_CONVERGENT
+  → SUSPENDED
 
 else if generation-wide phase remediation ceiling is exhausted
-     AND another automatic remediation is required
   → ROUND_LIMIT_EXHAUSTED
+  → SUSPENDED
 
 else
-  → remediation may continue
+  → REMEDIATION_REQUIRED
 ```
 
-There is no epoch remediation budget. `ROUND_LIMIT_EXHAUSTED` is projected solely from generation-total phase remediation rounds plus the fact that an additional automatic remediation is required.
+The three outcomes are mutually exclusive for one projected checkpoint:
+
+```text
+NC1 trigger + capacity > 0
+  → REVIEW_NON_CONVERGENT only
+
+NC1 trigger + capacity == 0
+  → REVIEW_NON_CONVERGENT only
+
+NC1 no-trigger + capacity == 0
+  → ROUND_LIMIT_EXHAUSTED only
+
+NC1 no-trigger + capacity > 0
+  → REMEDIATION_REQUIRED only
+```
+
+There is no epoch remediation budget. `ROUND_LIMIT_EXHAUSTED` is projected solely after NC1 has not triggered, from generation-total phase remediation rounds plus the fact that an additional automatic remediation is required.
 
 ### 27.5 Reentry guard
 
@@ -2931,7 +2980,8 @@ The canonical projection MUST enforce all of the following.
 | Revalidation | STILL_PRESENT creates no occurrence or recurrence counter |
 | Pending revalidation | blocking pending lineage prohibits CLEAR |
 | Remediation | phase-local round ordinal is generation-global monotonic and cannot exceed Design 5 / Plan 3 within one generation |
-| Round limit | if another automatic remediation is required with zero remaining generation capacity, `ROUND_LIMIT_EXHAUSTED` is the only legal transition; no next remediation cursor exists |
+| Current-phase disposition priority | when another automatic remediation would otherwise be required, evaluate NC1 first; only if NC1 does not trigger may capacity choose `ROUND_LIMIT_EXHAUSTED` or `REMEDIATION_REQUIRED` |
+| Round limit | after NC1 no-trigger, if another automatic remediation is required with zero remaining generation capacity, `ROUND_LIMIT_EXHAUSTED` is the only legal transition; no next remediation cursor exists |
 | Mutation | only current phase artifact may be mutated; dirty continuation is legal only for exact WSP1 `KNOWN_DIRTY` state |
 | Restore authority | only Justice core may execute `review_restore`, and only from durable prepared source/destination bindings for the current phase artifact |
 | Unknown partial | `REMEDIATION_STARTED` without completed post-image may never overwrite current != preDigest bytes |
@@ -2994,14 +3044,23 @@ COMPLETED
 
 A crash after any durable evidence/mutation event MUST project to the same next legal operation without relying on in-memory state.
 
-Cursor precedence includes workspace disposition and absolute remediation capacity:
+Cursor precedence includes workspace disposition and the §27.4 current-phase disposition priority:
 
 ```text
-current-phase blocker exists
-AND remaining generation remediation capacity == 0
-  → ROUND_LIMIT_TRANSITION_REQUIRED
-  → append ROUND_LIMIT_EXHAUSTED
-  → SUSPENDED
+current-phase blocking remediation would otherwise be required
+  → evaluate NC1 first
+
+  if NC1 triggers
+    → REVIEW_NON_CONVERGENT
+    → SUSPENDED
+
+  else if remaining generation remediation capacity == 0
+    → ROUND_LIMIT_TRANSITION_REQUIRED
+    → append ROUND_LIMIT_EXHAUSTED
+    → SUSPENDED
+
+  else
+    → REMEDIATION_REQUIRED
 
 upstream blocker exists
 AND workspace == KNOWN_DIRTY
@@ -3031,15 +3090,20 @@ SELF_REVIEW_COMPLETED
 → finding reconciliation committed
 → crash
 → current-phase blocker exists
+→ evaluate NC1 on the reconciled lineage state
 
-if remaining generation remediation capacity > 0
-  → REMEDIATION_REQUIRED
-    basis = SELF_REVIEW_CARRY_FORWARD
+if NC1 triggers
+  → REVIEW_NON_CONVERGENT
+  → SUSPENDED
 
-else
+else if remaining generation remediation capacity == 0
   → ROUND_LIMIT_TRANSITION_REQUIRED
   → ROUND_LIMIT_EXHAUSTED
   → SUSPENDED
+
+else
+  → REMEDIATION_REQUIRED
+    basis = SELF_REVIEW_CARRY_FORWARD
 ```
 
 ---
