@@ -1051,7 +1051,7 @@ justice-review-remediator
 
 Every result must bind exact `operationId` plus its attempt/round context. Unknown fields, stale IDs, duplicate results, and malformed typed semantic basis fail closed. Raw output is discarded after strict parse.
 
-- [ ] **Step 2: Define agent permissions**
+- [ ] **Step 2: Define agent permissions with an explicit Task 10 compatibility window**
 
 ```text
 controller: task only
@@ -1060,7 +1060,9 @@ finding-validator: read only
 remediator: read + edit/write/apply_patch; hook/CAP1 narrows actual scope
 ```
 
-No worker receives shell, generic task, `justice_review`, or commit/restore authority.
+No new worker receives shell, generic task, `justice_review`, or commit/restore authority.
+
+Because PlanBridge is not migrated until Task 12, Task 10 MUST keep the existing auto-registered `justice-review-worker` and the legacy execution facade working for the current v4 Review Gate path. The legacy worker remains read-only and gains no new authority. Task 12 removes its automatic registration, compatibility facade, and legacy tests atomically after all callers have moved to the new reviewer/validator/remediator topology. User-defined config entries with the legacy name are not deleted; Justice simply stops creating or referencing the canonical legacy worker after Task 12.
 
 - [ ] **Step 3: Rewrite controller prompt as a dumb exact packet relay**
 
@@ -1080,6 +1082,8 @@ Review prompt inputs are exactly phase-scoped:
 - Any Git/status/diff/log/show/revision evidence in an operation packet comes only from Task 9 `ReviewGateQueryService`, is bounded to the same phase scope, and is evidence only; workers never receive a shell/Git execution capability.
 
 - [ ] **Step 5: Update registration tests and commit**
+
+At Task 10 GREEN, assert the new four canonical agents are registered with the permissions above **and** the canonical legacy `justice-review-worker` remains temporarily registered/read-only so the unmigrated PlanBridge path still passes. The test must mark its removal as a Task 12 expectation, not a permanent contract.
 
 ```bash
 bun run vitest run tests/core/review-gate/agent-protocol.test.ts   tests/core/review-gate-execution.test.ts tests/runtime/command-registration.test.ts
@@ -1173,7 +1177,9 @@ git commit -m "feat: plan Review Gate orchestration from events"
 - Create: `src/runtime/review-gate-coordinator.ts`
 - Modify: `src/hooks/plan-bridge.ts`
 - Modify: `src/runtime/opencode-adapter.ts`
+- Modify: `src/runtime/command-registration.ts`
 - Modify: `tests/hooks/plan-bridge-review-lock.test.ts`
+- Modify: `tests/runtime/command-registration.test.ts`
 - Rename: `tests/integration/review-gate-adapter-retry.test.ts` → `tests/integration/review-gate-adapter-orchestration.test.ts`
 - Modify: `tests/integration/review-gate-implementation-lock.test.ts`
 - Modify: `tests/runtime/opencode-adapter.test.ts`
@@ -1213,7 +1219,7 @@ Assert:
 - a relevant Requirements/Design/Plan binding change during a pinned attempt suspends as `REVIEW_INPUT_CHANGED_DURING_ATTEMPT` and no mixed-snapshot validator result is accepted,
 - reviewer/validator execution failure after durable dispatch projects the typed `EXECUTION_SUSPENDED` reason (including `FRESH_REVIEW_FAILED` where applicable) without repeating a completed remediation/restore/commit side effect.
 
-- [ ] **Step 2: Assemble the production protocol descriptor, then implement the coordinator execution loop**
+- [ ] **Step 2: Assemble the production protocol descriptor and one shared runtime service graph, then implement the coordinator execution loop**
 
 Implement `src/runtime/review-gate-protocol.ts` to combine:
 - Task 10 immutable static prompt-contract digests,
@@ -1223,6 +1229,20 @@ Implement `src/runtime/review-gate-protocol.ts` to combine:
 All newly introduced `*ContractVersion` / policy-version fields start at integer `1`; future semantic changes increment the owning field instead of reusing version 1 with new meaning. Shared finding-validator/severity/resolution/lineage/convergence semantics are supplied identically to both phase descriptors. The controller relay contract version is CrossPhase-only.
 
 The factory returns the one current `ReviewProtocolDescriptorV1` plus Design/Plan/global fingerprints. No placeholder prompt digest or runtime/model/provider identity is permitted.
+
+In `OpenCodeAdapter.#runInit()`, create one shared Review Gate runtime service graph per workspace:
+```text
+LinuxReviewGateProvider?
+→ ReviewGateEventStore
+→ ReviewGateLockManager
+→ ReviewGateRecoveryStore
+→ ReviewGateArtifactReader
+→ ReviewGateQueryService
+→ ReviewGateGit
+→ production protocol provider
+→ ReviewGateCoordinator
+```
+Inject that single coordinator into `justice.getPlanBridge().setReviewGateCoordinator(...)`. Store/reuse the same event/artifact/protocol services for Task 13 history and Task 14 approval lookup; do not create parallel Review Gate stores with independent state. If the native mutation substrate is unavailable, construct the coordinator in mutation-unavailable mode so start/resume can return the Design-defined blocked outcome without falling back to unsafe mutation.
 
 For each pure `ReviewGateNextOperation`:
 1. append required intent/evidence event,
@@ -1241,7 +1261,7 @@ Bind worker session/call to durable `operationId`, not retry round state. Remedi
 
 - [ ] **Step 4: Remove legacy retry state/files and legacy session Review Gate lock authority**
 
-After all Task 12 imports are migrated:
+After all Task 12 imports are migrated, update `command-registration.ts` so Justice no longer auto-registers or references the canonical legacy `justice-review-worker`; the new reviewer/finding-validator/remediator agents are the only canonical Review Gate workers. Then:
 ```bash
 git rm   src/core/review-gate-retry-state.ts   src/core/review-gate-lock.ts   src/core/review-gate-execution.ts   tests/core/review-gate-retry-state.test.ts   tests/core/review-gate-lock.test.ts   tests/core/review-gate-execution.test.ts
 
@@ -1253,7 +1273,7 @@ Session maps may retain transient call/lock handles only; durable Gate state com
 - [ ] **Step 5: Run integration regressions**
 
 ```bash
-bun run vitest run   tests/hooks/plan-bridge-review-lock.test.ts   tests/integration/review-gate-adapter-orchestration.test.ts   tests/integration/review-gate-implementation-lock.test.ts   tests/runtime/opencode-adapter.test.ts
+bun run vitest run   tests/hooks/plan-bridge-review-lock.test.ts   tests/integration/review-gate-adapter-orchestration.test.ts   tests/integration/review-gate-implementation-lock.test.ts   tests/runtime/command-registration.test.ts   tests/runtime/opencode-adapter.test.ts
 ```
 
 Expected: PASS with new semantics.
@@ -1261,7 +1281,7 @@ Expected: PASS with new semantics.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/runtime/review-gate-protocol.ts src/runtime/review-gate-coordinator.ts   src/hooks/plan-bridge.ts src/runtime/opencode-adapter.ts   tests/hooks/plan-bridge-review-lock.test.ts   tests/integration/review-gate-adapter-orchestration.test.ts   tests/integration/review-gate-implementation-lock.test.ts   tests/runtime/opencode-adapter.test.ts
+git add src/runtime/review-gate-protocol.ts src/runtime/review-gate-coordinator.ts   src/hooks/plan-bridge.ts src/runtime/opencode-adapter.ts   src/runtime/command-registration.ts   tests/hooks/plan-bridge-review-lock.test.ts   tests/runtime/command-registration.test.ts   tests/integration/review-gate-adapter-orchestration.test.ts   tests/integration/review-gate-implementation-lock.test.ts   tests/runtime/opencode-adapter.test.ts
 
 git commit -m "feat: orchestrate Review Gate from durable events"
 ```
@@ -1311,7 +1331,7 @@ Do not expose raw events. History querying never deletes, compacts, repairs, or 
 
 - [ ] **Step 4: Wire command registration and command.execute.before**
 
-History command has no agent and causes no Gate lock, event append, epoch, resume, artifact re-resolution, or validator call. Replace host-expanded prompt parts with Justice-generated read-only result text.
+History command has no agent and causes no Gate lock, event append, epoch, resume, artifact re-resolution, or validator call. It reuses the Task 12 shared event-store/projection services; it does not instantiate a second store/provider. Replace host-expanded prompt parts with Justice-generated read-only result text.
 
 - [ ] **Step 5: Run tests and commit**
 
@@ -1365,7 +1385,7 @@ Without any in-memory Review Gate lock/session state, a restarted process can st
 
 - [ ] **Step 3: Implement lookup and integrate `handleImplementationArm`**
 
-Replace current process-local `reviewGateLock.designDigest/planDigest` approval authority with durable lookup. After durable approval succeeds, keep the existing `AuthorizationStore` canonical plan snapshot/fingerprint flow unchanged for implementation task authorization.
+Replace current process-local `reviewGateLock.designDigest/planDigest` approval authority with durable lookup built from the Task 12 shared event-store/artifact/protocol services. Do not create a second Review Gate store/provider. After durable approval succeeds, keep the existing `AuthorizationStore` canonical plan snapshot/fingerprint flow unchanged for implementation task authorization.
 
 - [ ] **Step 4: Assert stale completed Gate is never mutated**
 
