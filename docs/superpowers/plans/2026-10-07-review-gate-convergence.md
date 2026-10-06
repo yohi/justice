@@ -30,7 +30,7 @@
 - Mutating Review Gate execution is supported only when the Linux Review Gate native substrate proves Linux x64 + glibc + `openat2` + `renameat2` + non-blocking `flock` + file/directory sync semantics. Missing capability blocks mutation; it never degrades to unsafe Node-only writes.
 - Reuse the existing `native/review-artifact-linux` N-API binary. Do not add a second native package or a new npm/Cargo dependency.
 - Native Gate locks use a descriptor-relative lock file opened with `O_CLOEXEC` and `flock(fd, LOCK_EX | LOCK_NB)`; the returned handle owns the FD and releases the lock on `close()`/process exit.
-- Review Gate event/CAS/workspace durable replace uses same-directory temp creation, write, `fdatasync`, `renameat2`, and parent-directory `fsync`; all paths are descriptor-relative and symlink-safe.
+- Review Gate event/CAS/workspace durable replace uses same-directory temp creation, write, `fdatasync`, `renameat2`, and parent-directory `fsync`; all paths are descriptor-relative and symlink-safe. Review Gate directories are owner-only (`0700`) and event/CAS/lock/temp files are owner-only (`0600`).
 - Never auto-restore unknown partial remediation bytes. `REMEDIATION_STARTED` without `REMEDIATION_COMPLETED` may resume only when current bytes still equal the durable preDigest; otherwise suspend with recovery conflict.
 - `review_mutation` is remediator-only; `review_restore` and `review_commit` are Justice-core-only; implementation mutation remains behind `/justice-implement --approved`.
 - Review Gate commit uses the GIT1 exact-artifact contract and never pushes.
@@ -82,6 +82,7 @@
 - Create `src/runtime/review-gate-recovery-store.ts` — RO1 CAS publish/read/GC.
 - Create `src/runtime/review-gate-artifacts.ts` — safe Requirements/Design/Plan reads and admission bindings.
 - Create `src/runtime/review-gate-git.ts` — GIT1 inspect/restore/commit/recovery.
+- Create `src/runtime/review-gate-protocol.ts` — assembles the production typed protocol descriptor from Task 8 validator contracts and Task 10 static agent prompt contracts.
 - Create `src/runtime/review-gate-coordinator.ts` — executes pure orchestrator operations, owns live lock/capability handles.
 - Create `src/runtime/review-gate-history.ts` — lock-free coherent snapshot query/renderer.
 - Modify `src/runtime/review-gate-tool-paths.ts` — extract read/write target paths for CAP1 enforcement.
@@ -91,9 +92,10 @@
 ### Existing integration
 
 - Modify `src/hooks/plan-bridge.ts` — delegate Review Gate state/work to `ReviewGateCoordinator`; retain workflow/authorization responsibilities.
-- Modify `src/core/implement-command.ts` only if types need exact binding lookup injection; CLI remains compatible.
-- Remove after migration: `src/core/review-gate-retry-state.ts`, legacy stateful contents of `src/core/review-gate-lock.ts`, and legacy retry-oriented `src/core/review-gate-execution.ts`; replacement behavior lives under `src/core/review-gate/`.
-- Keep compatibility-facing function names only where current adapter/tests require them until Task 12 migrates callers.
+- Leave `src/core/implement-command.ts` unchanged; `/justice-implement` CLI syntax is unchanged and durable approval lookup is integrated in `PlanBridge`/runtime in Task 14.
+- Delete in Task 12 after all callers are migrated: `src/core/review-gate-retry-state.ts`, `src/core/review-gate-lock.ts`, and `src/core/review-gate-execution.ts`.
+- Delete in Task 12 after migration: `tests/core/review-gate-retry-state.test.ts`, `tests/core/review-gate-lock.test.ts`, and `tests/core/review-gate-execution.test.ts`; their replacement coverage lives under `tests/core/review-gate/` and the new integration test.
+- Rename in Task 12: `tests/integration/review-gate-adapter-retry.test.ts` → `tests/integration/review-gate-adapter-orchestration.test.ts`.
 
 ### Native
 
@@ -179,7 +181,7 @@ Add N-API exports:
 - `probeReviewGateCapabilities()`
 - `openReviewGateRoot(rootDir: string)`
 
-The native root owns the workspace root FD and exposes only typed scope/gate/writer/digest operations listed above. Use existing `openat2` helper patterns; never accept a raw arbitrary `.justice` path from JS.
+The native root owns the workspace root FD and exposes only typed scope/gate/writer/digest operations listed above. Use existing `openat2` helper patterns; never accept a raw arbitrary `.justice` path from JS. Create Review Gate directories with mode `0700` and lock/event/CAS/temp files with mode `0600`; tests must assert the effective modes under a normal umask.
 
 The durable replace sequence is exactly:
 
@@ -262,7 +264,7 @@ git commit -m "feat: add durable Review Gate native substrate"
   - `computePhaseReviewContextIdentity(...): string`
   - `computeDesignApprovalBindingFingerprint(binding): string`
   - `computeCompletedApprovalBindingFingerprint(binding): string`
-  - `buildReviewProtocolDescriptor(registry): ReviewProtocolDescriptorV1`
+  - `buildReviewProtocolDescriptor(input: ReviewProtocolDescriptorInput): ReviewProtocolDescriptorV1`
   - `computeProtocolFingerprints(descriptor): ReviewProtocolFingerprints`
   - `extractDesignRequirementsReference(markdown: string): RequirementsReferenceExtraction`
   - `ReviewGateArtifactReader.readRegularWorkspaceFile(path: string): Promise<Buffer | null>`
@@ -293,6 +295,14 @@ Expected: FAIL.
 
 Use immutable readonly structures. Do not include model/provider/runtime identity in protocol fingerprints.
 
+Task 2 implements only the **pure descriptor schema/fingerprint machinery**. `ReviewProtocolDescriptorInput` explicitly accepts:
+- Design/Plan/CrossPhase semantic contract versions and policies,
+- static reviewer/validator/remediator/self-review prompt digests,
+- deterministic validator contract descriptors,
+- absolute Design/Plan round limits.
+
+Task 2 tests use fixed descriptor fixtures. Do **not** assemble the production descriptor here: Task 8 supplies the production deterministic validator contract set, Task 10 supplies the static agent prompt contracts, and Task 12 wires both through `src/runtime/review-gate-protocol.ts`.
+
 - [ ] **Step 3: Write RED RR1 tests**
 
 Cover:
@@ -314,6 +324,15 @@ Also accept the same path without backticks. Multiple canonical matches are ambi
 - [ ] **Step 4: Implement the pure extractor plus runtime artifact reader**
 
 The extractor returns candidates only; the runtime reader uses Task 1 native workspace reads and computes SHA-256 digests.
+
+Add explicit opaque ID issuers for Justice-owned identities:
+```ts
+newGateId(): GateId
+newReviewAttemptId(): ReviewAttemptId
+newOperationId(): OperationId
+newOccurrenceId(): OccurrenceId
+```
+backed by `randomUUID()`. Lineage display IDs remain projection-owned monotonic `DG-L-NNN` / `PG-L-NNN`; agents never issue them.
 
 - [ ] **Step 5: Update the slash-command parser for RR1 and RTY1**
 
@@ -465,7 +484,9 @@ Cover Review Focus #1:
 Run: `bun run vitest run tests/runtime/review-gate-event-store.test.ts tests/core/review-gate/discovery.test.ts`  
 Expected: FAIL.
 
-- [ ] **Step 2: Implement stable shard snapshot and P1 merge**
+- [ ] **Step 2: Implement stable shard snapshot, writer allocation, and P1 merge**
+
+Allocate one fresh `WriterId` per coordinator/orchestration-owner lifetime using the existing `w-${randomUUID()}` convention from `src/runtime/writer-id.ts`; retry if that writer shard already exists in the selected Gate. A restarted owner always uses a new writer shard. `writerId` and writer sequence are never cross-shard ordering authority.
 
 Read each writer shard exactly once per snapshot. Verify per-writer sequence, then reconstruct one causal chain by revision/predecessor/digest; never timestamp-sort a fork.
 
@@ -483,11 +504,17 @@ Under the caller-held Gate lock:
 ```text
 scope LOCK_EX|LOCK_NB
 → snapshot/select generation
-→ acquire selected/new Gate lock
+→ exact completed binding match:
+     return immutable reuse
+     do NOT acquire Gate lock
+     do NOT create writer shard/event
+→ otherwise acquire selected/new Gate lock
 → reread/reproject selected Gate
 → release scope lock
 → retain Gate lock for orchestration invocation
 ```
+
+The event store exposes no automatic history-delete/rotation API in v4. ACTIVE, SUSPENDED, COMPLETED, corrupt, and unsupported Gate directories are retained indefinitely.
 
 - [ ] **Step 5: Implement RO1 CAS**
 
@@ -540,7 +567,10 @@ Table-test Design §34:
 - pending revalidation blocks CLEAR,
 - restore authority and unknown partial invariants,
 - Design round >5 / Plan round >3 is history conflict,
-- protocol-only drift can stale context without baseline revision increment.
+- protocol-only drift can stale context without baseline revision increment,
+- `DESIGN_CLEAR_INHERITED` is valid only from the exact immediate `supersedesGateId` COMPLETED predecessor with an exact `DesignApprovalBindingV1`; it establishes the effective Design milestone without pretending to be reviewed in the new generation,
+- `DESIGN_CLEAR` / `PLAN_CLEAR` clearanceBasis references a current RECONCILED fresh review and its exact candidate/validation/reconciliation evidence events,
+- completed generation accepts no later diagnostic or state-transition event.
 
 Run: `bun run vitest run tests/core/review-gate/projection.test.ts`  
 Expected: FAIL.
@@ -846,7 +876,17 @@ In a temporary Git repository assert:
 - hooks and signing do not run,
 - prepared parent/blob/message mismatch conflicts,
 - exact intended commit is recovered after simulated crash,
-- third-state HEAD causes recovery conflict.
+- third-state HEAD causes recovery conflict,
+- commit message is exactly:
+```text
+docs: address <design|plan> review round <N>
+
+Review-Gate: <design|plan>
+Review-Round: <N>
+Findings: <comma-separated sorted lineage IDs>
+```
+  with no Gate ID, operation ID, validator internals, or push side effect,
+- scope mismatch → `REVIEW_COMMIT_SCOPE_VIOLATION`, Git/process failure before verified success → `REVIEW_COMMIT_FAILED`, and unprovable crash state → `REVIEW_COMMIT_RECOVERY_CONFLICT`.
 
 - [ ] **Step 4: Implement Git runner without shell interpolation**
 
@@ -867,7 +907,8 @@ Write exactly one NUL-terminated target path to stdin.
 
 Cover Review Focus #2 and #5:
 - known dirty exact source → clean committed exact destination,
-- source mismatch → `REVIEW_RESTORE_SCOPE_VIOLATION`,
+- source/target/path mismatch → `REVIEW_RESTORE_SCOPE_VIOLATION`,
+- exact prepared restore execution failure before verified destination → `REVIEW_RESTORE_FAILED`,
 - prepared restore + source state → safe re-execute,
 - prepared restore + destination state → recovered,
 - any third state → `REVIEW_RESTORE_RECOVERY_CONFLICT`,
@@ -936,7 +977,11 @@ No worker receives shell, generic task, `justice_review`, or commit/restore auth
 
 Remove Retry-Budget semantics. The controller invokes exactly the Justice-supplied operation packet, then only follows a subsequent Justice-supplied NEXT OPERATION packet. It never chooses phase, round, retry, finding status, or commit/reopen action.
 
+Export the immutable static prompt text/contracts and `computeReviewGatePromptContractDigests()`; these exact digests are consumed by Task 12's production protocol factory.
+
 - [ ] **Step 4: Implement operation prompt builders/parsers**
+
+Every operation that Design requires to use a fresh context (ordinary finding validation, self-review, lineage revalidation, cross-generation reconciliation, and non-convergence reentry) MUST dispatch a new foreground task with no continuation/session reuse. A redispatch after crash/malformed output keeps the same logical `operationId` but still uses a fresh physical child task and increments `dispatchSerial`.
 
 Review prompt inputs are exactly phase-scoped:
 - Design reviewer/validator: Requirements + Design.
@@ -1034,17 +1079,21 @@ git commit -m "feat: plan Review Gate orchestration from events"
 ### Task 12: Add `ReviewGateCoordinator` and migrate PlanBridge/OpenCode hook integration
 
 **Files:**
+- Create: `src/runtime/review-gate-protocol.ts`
 - Create: `src/runtime/review-gate-coordinator.ts`
 - Modify: `src/hooks/plan-bridge.ts`
 - Modify: `src/runtime/opencode-adapter.ts`
 - Modify: `src/runtime/review-gate-tool-paths.ts` if hook metadata needs operation bindings
 - Modify: `tests/hooks/plan-bridge-review-lock.test.ts`
-- Modify: `tests/integration/review-gate-adapter-retry.test.ts` (rename behavior assertions from retry to orchestrator)
+- Rename: `tests/integration/review-gate-adapter-retry.test.ts` → `tests/integration/review-gate-adapter-orchestration.test.ts`
 - Modify: `tests/integration/review-gate-implementation-lock.test.ts`
 - Modify: `tests/runtime/opencode-adapter.test.ts`
 - Remove: `src/core/review-gate-retry-state.ts`
-- Remove/replace legacy implementation in: `src/core/review-gate-lock.ts`
-- Remove legacy retry tests: `tests/core/review-gate-retry-state.test.ts`
+- Remove: `src/core/review-gate-lock.ts`
+- Remove: `src/core/review-gate-execution.ts`
+- Remove: `tests/core/review-gate-retry-state.test.ts`
+- Remove: `tests/core/review-gate-lock.test.ts`
+- Remove: `tests/core/review-gate-execution.test.ts`
 
 **Interfaces:**
 - Produces:
@@ -1065,13 +1114,22 @@ class ReviewGateCoordinator {
 Assert:
 - command start performs RR1 + target-clean admission before `GATE_CREATED`,
 - scope lock then Gate lock ordering,
-- exact completed binding is read-only reuse,
-- active/suspended generation resumes same durable gate,
+- exact completed binding is read-only reuse with no Gate lock acquisition, writer allocation, or append,
+- active/suspended generation resumes same durable gate with a fresh writer shard,
+- initial Design phase admission rejects a dirty/staged Design target before `GATE_CREATED`,
+- Plan phase admission rejects a dirty/staged Plan target before the first Plan review, including after current/inherited Design CLEAR,
 - missing native mutation capability returns blocked guidance without unsafe fallback,
 - lock handle is retained across worker operations and released on terminal return/session teardown/process-close seam,
 - external worker completion cannot mutate state without matching durable dispatch event.
 
-- [ ] **Step 2: Implement the coordinator execution loop**
+- [ ] **Step 2: Assemble the production protocol descriptor, then implement the coordinator execution loop**
+
+Implement `src/runtime/review-gate-protocol.ts` to combine:
+- Task 10 immutable static prompt-contract digests,
+- Task 8 deterministic validator semantic contracts/stages/rules,
+- Design/Plan/CrossPhase fixed semantic policy versions and absolute 5/3 ceilings.
+
+The factory returns the one current `ReviewProtocolDescriptorV1` plus Design/Plan/global fingerprints. No placeholder prompt digest or runtime/model/provider identity is permitted.
 
 For each pure `ReviewGateNextOperation`:
 1. append required intent/evidence event,
@@ -1087,14 +1145,21 @@ No in-memory retry state.
 
 Bind worker session/call to durable `operationId`, not retry round state. Remediator tool checks consume the exact CAP1 mutation capability. Read operations are limited to phase-approved artifact paths.
 
-- [ ] **Step 4: Remove legacy retry state and legacy session Review Gate lock authority**
+- [ ] **Step 4: Remove legacy retry state/files and legacy session Review Gate lock authority**
+
+After all Task 12 imports are migrated:
+```bash
+git rm   src/core/review-gate-retry-state.ts   src/core/review-gate-lock.ts   src/core/review-gate-execution.ts   tests/core/review-gate-retry-state.test.ts   tests/core/review-gate-lock.test.ts   tests/core/review-gate-execution.test.ts
+
+git mv   tests/integration/review-gate-adapter-retry.test.ts   tests/integration/review-gate-adapter-orchestration.test.ts
+```
 
 Session maps may retain transient call/lock handles only; durable Gate state comes from event projection.
 
 - [ ] **Step 5: Run integration regressions**
 
 ```bash
-bun run vitest run   tests/hooks/plan-bridge-review-lock.test.ts   tests/integration/review-gate-adapter-retry.test.ts   tests/integration/review-gate-implementation-lock.test.ts   tests/runtime/opencode-adapter.test.ts
+bun run vitest run   tests/hooks/plan-bridge-review-lock.test.ts   tests/integration/review-gate-adapter-orchestration.test.ts   tests/integration/review-gate-implementation-lock.test.ts   tests/runtime/opencode-adapter.test.ts
 ```
 
 Expected: PASS with new semantics.
@@ -1102,9 +1167,7 @@ Expected: PASS with new semantics.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/runtime/review-gate-coordinator.ts src/hooks/plan-bridge.ts   src/runtime/opencode-adapter.ts src/runtime/review-gate-tool-paths.ts   src/core/review-gate-lock.ts   tests/hooks/plan-bridge-review-lock.test.ts   tests/integration/review-gate-adapter-retry.test.ts   tests/integration/review-gate-implementation-lock.test.ts   tests/runtime/opencode-adapter.test.ts
-
-git rm src/core/review-gate-retry-state.ts tests/core/review-gate-retry-state.test.ts
+git add src/runtime/review-gate-protocol.ts src/runtime/review-gate-coordinator.ts   src/hooks/plan-bridge.ts src/runtime/opencode-adapter.ts   src/runtime/review-gate-tool-paths.ts   tests/hooks/plan-bridge-review-lock.test.ts   tests/integration/review-gate-adapter-orchestration.test.ts   tests/integration/review-gate-implementation-lock.test.ts   tests/runtime/opencode-adapter.test.ts
 
 git commit -m "feat: orchestrate Review Gate from durable events"
 ```
@@ -1150,7 +1213,7 @@ Cover:
 
 Summary includes exactly the Design HQ1 fields: IDs/status/phase/epoch, Design CLEAR authority, blocker counts, pending revalidation, absolute remediation usage/remaining, last transition/commit, ResumeCursor, gateRevision/headEventId.
 
-Do not expose raw events.
+Do not expose raw events. History querying never deletes, compacts, repairs, or rewrites retained event history. Storage diagnostics (gate/completed/active/suspended counts, event count/bytes, recovery object count/bytes, oldest Gate when available) are non-authoritative display data only.
 
 - [ ] **Step 4: Wire command registration and command.execute.before**
 
@@ -1191,14 +1254,16 @@ interface ReviewGateApprovalLookup {
 
 - [ ] **Step 1: Write RED approval lookup tests**
 
-A plan is approved only when exactly one retained COMPLETED generation for that plan has:
+Enumerate completed candidates whose persisted `CompletedApprovalBindingV1.plan.canonicalPath` equals the requested Plan path. For each candidate, re-read the persisted Requirements/Design/Plan canonical paths, compute current digests plus the Task 12 production `reviewProtocolFingerprint`, and retain only exact structured-binding matches.
+
+A plan is approved only when exactly one exact current match has:
 - current Requirements canonical path + digest,
 - current Design canonical path + digest,
 - current Plan canonical path + digest,
 - current `reviewProtocolFingerprint`,
 all exactly equal to persisted `CompletedApprovalBindingV1`.
 
-Test Requirements-only, Design-only, Plan-only, protocol-only drift → not approved.
+Test Requirements-only, Design-only, Plan-only, protocol-only drift → not approved. Zero exact matches → `not_approved`; more than one exact current match across scope namespaces → `identity_conflict`.
 
 - [ ] **Step 2: Write RED restart tests**
 
@@ -1228,7 +1293,7 @@ git commit -m "feat: bind implementation approval to Review Gate history"
 **Files:**
 - Create: `tests/integration/review-gate-event-sourced-flow.test.ts`
 - Create: `tests/integration/review-gate-restart-recovery.test.ts`
-- Modify: `tests/integration/review-gate-adapter-retry.test.ts` (rename file if no retry semantics remain)
+- Modify: `tests/integration/review-gate-adapter-orchestration.test.ts`
 - Modify: `README.md`
 - Modify: `SPEC.md`
 - Modify: `AGENTS.md` only to synchronize invariants; do not add implementation guidance that belongs in code/tests.
@@ -1272,9 +1337,9 @@ Cover:
 
 Prove all six NC1 triggers, N1 material progress guard, and that no execution path creates Design round 6 or Plan round 4.
 
-- [ ] **Step 5: Remove stale retry terminology and obsolete tests**
+- [ ] **Step 5: Remove stale retry terminology**
 
-Rename/remove test descriptions that still describe `retryBudget`, textual `contentChanged == false`, or combined Design+Plan review. Keep only RTY1 parser compatibility assertions for `legacyRetryOption`.
+The legacy retry-state/execution/lock files and tests were already deleted/renamed in Task 12. In remaining tests/docs, remove descriptions that treat `retryBudget`, textual `contentChanged == false`, or combined Design+Plan review as authoritative behavior. Keep only RTY1 parser compatibility assertions for `legacyRetryOption`.
 
 - [ ] **Step 6: Update README/SPEC/AGENTS to the shipped architecture**
 
@@ -1348,4 +1413,6 @@ Before implementation starts, Fresh Implementation Plan Review Gate must verify:
 7. History query and implementation approval consume durable projection, not process-local Review Gate state.
 8. `--retry` exists only as deprecated parser compatibility.
 9. No Task asks the implementer to choose architecture, a library, a lock primitive, a storage format, an error policy, or a test strategy.
-10. Production implementation MUST NOT begin until this Plan's Fresh Implementation Plan Review Gate is READY.
+10. Production protocol descriptor assembly occurs only after deterministic validator contracts and static agent prompt contracts exist; no placeholder fingerprint inputs are used.
+11. GIT1 commit subject/trailers and REVIEW_COMMIT/REVIEW_RESTORE error taxonomy are fixed and tested.
+12. Production implementation MUST NOT begin until this Plan's Fresh Implementation Plan Review Gate is READY.
