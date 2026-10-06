@@ -189,6 +189,8 @@ reviewScopeId =
 
 Requirements are deliberately excluded from `reviewScopeId`.
 
+Design and Plan command paths MUST be canonical workspace-relative regular-file identities and MUST reject workspace escape or unsafe symlink traversal before they participate in `reviewScopeId` or mutation authority.
+
 ### 5.2 Storage layout
 
 ```text
@@ -212,6 +214,8 @@ Under a short-lived exclusive non-blocking scope lock:
 7. Corrupt/unsupported matching history MUST NOT be treated as no history.
 
 For a resumable/new generation, the scope lock MUST remain held until the Gate lock is acquired and the authoritative history has been reprojected/created. For exact completed reuse, the scope lock may be released after the immutable completed projection and binding match have been validated.
+
+The binding used for completed reuse or `GATE_CREATED` MUST be constructed from artifact/protocol identities reread while the scope lock is held. The scope lock does not prevent external workspace edits, so any detected admission-input drift aborts that decision and requires a fresh discovery/admission snapshot rather than returning or creating a Gate from mixed reads. A selected resumable Gate similarly rereads current artifact/protocol identity after acquiring the Gate lock and routes differences through RI1/CTX1 instead of resuming from stale assumptions.
 
 ### 5.3.1 Generation creation payload
 
@@ -1710,6 +1714,8 @@ no commit
 → next remediation round
 ```
 
+The post-remediation artifact bytes from the failed self-review round remain the Justice-owned current working baseline for that carry-forward. Target lineages judged RESOLVED by self-review remain lifecycle OPEN until a later successful commit/resolution event, but the next remediator MUST preserve/recheck them while addressing the newly discovered blocker. The next round captures the exact current bytes as its own RO1 pre-image.
+
 Upstream owner:
 
 ```text
@@ -2211,9 +2217,17 @@ Completed durable evidence prevents the corresponding side effect from being rep
 
 Reviewer/validator external call with dispatch intent but no completion may be redispatched with the same operation ID if its pinned baseline remains valid.
 
-### 29.2 Remediation crash
+### 29.2 Remediation crash and Justice-owned dirty continuation
 
 Before mutation, RO1 pre-image must be durable.
+
+Projection may legitimately expect the Review target to be dirty relative to HEAD in these states:
+
+- `REMEDIATION_STARTED` / `REMEDIATION_COMPLETED` before commit,
+- post-self-review `SELF_REVIEW_CARRY_FORWARD`,
+- a round-limit suspension reached with the exact uncommitted Justice-owned post-image.
+
+Such dirty state is not user/external dirtiness. Resume is permitted only when HEAD, target path, and current working-tree digest exactly match the durable expected Justice-owned state. A mismatch is fail-closed; Justice MUST NOT guess or reconstruct a missing post-image.
 
 ```text
 REMEDIATION_STARTED only
@@ -2263,7 +2277,9 @@ otherwise
 
 ## 30. GIT1 — Exact-artifact remediation commit
 
-Each phase admission requires only that phase's target artifact to be clean. Initial Design admission is checked before creating a new generation. Plan admission is checked before Plan review begins, including after an inherited/current Design CLEAR.
+Each **new phase admission** requires only that phase's target artifact to be clean. Initial Design admission is checked before creating a new generation. Plan admission is checked before Plan review begins, including after an inherited/current Design CLEAR.
+
+This clean-admission rule does not reject a CP1-projected Justice-owned dirty continuation inside an already admitted phase. An ACTIVE/SUSPENDED generation may resume such state only when its exact expected dirty digest and HEAD binding are proven from durable events.
 
 ```text
 target HEAD blob
@@ -2278,7 +2294,7 @@ REVIEW_TARGET_NOT_CLEAN
 → Gate/phase admission blocked
 ```
 
-Before `GATE_CREATED`, this is an invocation outcome and no history event is created. If a valid generation already exists and a later phase/resume target is externally dirty/staged, Justice records an operational suspension with reason `REVIEW_TARGET_NOT_CLEAN`.
+Before `GATE_CREATED`, this is an invocation outcome and no history event is created. If a valid generation already exists and a later phase/resume target is dirty/staged **without** an exact CP1 Justice-owned dirty-state binding, Justice records an operational suspension with reason `REVIEW_TARGET_NOT_CLEAN`.
 
 Unrelated dirty and staged paths are allowed.
 
@@ -2559,7 +2575,7 @@ The canonical projection MUST enforce all of the following.
 | Revalidation | STILL_PRESENT creates no occurrence or recurrence counter |
 | Pending revalidation | blocking pending lineage prohibits CLEAR |
 | Remediation | phase-local round ordinal is generation-global monotonic |
-| Mutation | only current phase artifact may be mutated |
+| Mutation | only current phase artifact may be mutated; dirty continuation is legal only when exact Justice-owned state is projected |
 | Self-review | all discovered findings are reconciled; blocking discovery/INDETERMINATE prohibits commit |
 | Commit | no `REVIEW_COMMIT_PREPARED` without self-review PASS |
 | Commit identity | actual Git result must exactly match prepared intent |
