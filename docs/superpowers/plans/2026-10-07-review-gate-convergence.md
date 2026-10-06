@@ -81,6 +81,7 @@
 - Create `src/runtime/review-gate-lock-manager.ts` — scope/Gate/GC lock lifecycle.
 - Create `src/runtime/review-gate-recovery-store.ts` — RO1 CAS publish/read/GC.
 - Create `src/runtime/review-gate-artifacts.ts` — safe Requirements/Design/Plan reads and admission bindings.
+- Create `src/runtime/review-gate-query.ts` — CAP1 typed, phase-scoped read/search/Git-metadata query service; no shell or repository-wide semantic review.
 - Create `src/runtime/review-gate-git.ts` — GIT1 inspect/restore/commit/recovery.
 - Create `src/runtime/review-gate-protocol.ts` — assembles the production typed protocol descriptor from Task 8 validator contracts and Task 10 static agent prompt contracts.
 - Create `src/runtime/review-gate-coordinator.ts` — executes pure orchestrator operations, owns live lock/capability handles.
@@ -870,15 +871,47 @@ git commit -m "feat: add deterministic Review Gate validation"
 
 **Files:**
 - Create: `src/core/review-gate/capabilities.ts`
+- Create: `src/runtime/review-gate-query.ts`
 - Create: `src/runtime/review-gate-git.ts`
 - Modify: `src/runtime/review-gate-tool-paths.ts`
 - Create: `tests/core/review-gate/capabilities.test.ts`
+- Create: `tests/runtime/review-gate-query.test.ts`
 - Create: `tests/runtime/review-gate-git.test.ts`
 - Modify: `tests/runtime/review-gate-tool-paths.test.ts`
 
 **Interfaces:**
 - Produces:
 ```ts
+type ReviewQueryScope = Readonly<{
+  phase: ReviewPhase;
+  allowedArtifactPaths: ReadonlySet<string>;
+  allowedGitPaths: ReadonlySet<string>;
+}>;
+
+interface ReviewGateQueryService {
+  readArtifact(scope: ReviewQueryScope, path: string): Promise<Buffer>;
+  searchArtifact(
+    scope: ReviewQueryScope,
+    path: string,
+    literal: string,
+  ): Promise<readonly ReviewQueryMatch[]>;
+  getScopedStatus(scope: ReviewQueryScope): Promise<ReviewGitStatus>;
+  getScopedDiff(
+    scope: ReviewQueryScope,
+    request: ReviewDiffRequest,
+  ): Promise<ReviewGitDiff>;
+  resolveRevision(ref: ReviewRevisionRef): Promise<string>;
+  getScopedLog(
+    scope: ReviewQueryScope,
+    request: ReviewLogRequest,
+  ): Promise<readonly ReviewGitLogEntry[]>;
+  showPathAtRevision(
+    scope: ReviewQueryScope,
+    ref: ReviewRevisionRef,
+    path: string,
+  ): Promise<Buffer>;
+}
+
 class ReviewGateCapabilityRegistry {
   issueMutation(input: ReviewMutationCapabilityInput): ReviewMutationCapability;
   consumeMutation(capabilityId: string, use: ScopedToolUse): ReviewCapabilityDecision;
@@ -895,7 +928,18 @@ class ReviewGateGit {
 }
 ```
 
-- [ ] **Step 1: Write RED CAP1 tests**
+- [ ] **Step 1: Write RED CAP1 query-scope and actor tests**
+
+For `ReviewGateQueryService`, pin:
+- Design scope = bound Requirements + current Design only,
+- Plan scope = effective approved Design + current Plan only,
+- self-review/remediation scope is explicitly constructed from upstream authority + current phase target,
+- artifact search is an in-process literal search over already authorized bytes; it cannot traverse/glob another path,
+- status/diff/log/show are pathscoped to `allowedGitPaths`,
+- revision resolution accepts only Justice-defined symbolic refs/validated Git object IDs, not shell fragments,
+- Git reads use `spawn("git", args, { shell: false })`,
+- no query API accepts arbitrary executable, argv, cwd, environment, or repository-wide path omission,
+- raw query output is transient/bounded and is never itself durable Review Gate authority.
 
 Pin actor/operation matrix:
 - reviewer/finding-validator/self-review query-only,
@@ -904,9 +948,11 @@ Pin actor/operation matrix:
 - core restore and core commit are not model capabilities,
 - implementation-capable/unknown tools remain denied.
 
-- [ ] **Step 2: Expand tool-path extraction to read scope**
+- [ ] **Step 2: Implement the typed query service and expand tool-path extraction to read scope**
 
-Extract canonical target paths for `read`, edit/write variants, and `apply_patch`. Do not introduce arbitrary shell/grep/glob model permissions.
+Implement `ReviewGateQueryService` using Task 1 safe workspace reads plus non-mutating Git subprocess calls with `shell:false`. Search is performed in-process on authorized artifact bytes. Every Git operation includes an explicit authorized path list except `resolveRevision`, which resolves only a validated ref and returns an object ID.
+
+Extract canonical target paths for the model-visible `read`, edit/write variants, and `apply_patch`. Do not expose shell, repository-wide grep/glob, or a new public plugin tool. The coordinator injects any scoped Git/query metadata required by an operation packet; agents may additionally use `read` only for exact phase-authorized paths.
 
 - [ ] **Step 3: Write RED real-Git GIT1 tests**
 
@@ -964,9 +1010,9 @@ Get clean bytes by verified Git blob identity; pass only the durable source dige
 - [ ] **Step 7: Run tests and commit**
 
 ```bash
-bun run vitest run   tests/core/review-gate/capabilities.test.ts   tests/runtime/review-gate-tool-paths.test.ts   tests/runtime/review-gate-git.test.ts
+bun run vitest run   tests/core/review-gate/capabilities.test.ts   tests/runtime/review-gate-query.test.ts   tests/runtime/review-gate-tool-paths.test.ts   tests/runtime/review-gate-git.test.ts
 
-git add src/core/review-gate/capabilities.ts src/runtime/review-gate-git.ts   src/runtime/review-gate-tool-paths.ts tests/core/review-gate/capabilities.test.ts   tests/runtime/review-gate-git.test.ts tests/runtime/review-gate-tool-paths.test.ts
+git add src/core/review-gate/capabilities.ts src/runtime/review-gate-query.ts   src/runtime/review-gate-git.ts   src/runtime/review-gate-tool-paths.ts tests/core/review-gate/capabilities.test.ts   tests/runtime/review-gate-query.test.ts tests/runtime/review-gate-git.test.ts   tests/runtime/review-gate-tool-paths.test.ts
 git commit -m "feat: enforce Review Gate mutation and Git authority"
 ```
 
@@ -1031,6 +1077,7 @@ Review prompt inputs are exactly phase-scoped:
 - Plan reviewer/validator: approved Design + Plan.
 - Remediator reads upstream authority + current phase target, writes only target.
 - Fresh reviewer receives no lineage/remediation history.
+- Any Git/status/diff/log/show/revision evidence in an operation packet comes only from Task 9 `ReviewGateQueryService`, is bounded to the same phase scope, and is evidence only; workers never receive a shell/Git execution capability.
 
 - [ ] **Step 5: Update registration tests and commit**
 
@@ -1179,11 +1226,12 @@ The factory returns the one current `ReviewProtocolDescriptorV1` plus Design/Pla
 
 For each pure `ReviewGateNextOperation`:
 1. append required intent/evidence event,
-2. execute the one permitted side effect,
-3. strict-parse result,
-4. append typed completion/mutation event,
-5. reproject,
-6. derive next operation.
+2. build the exact phase `ReviewQueryScope` and gather only the typed Task 9 query evidence required by that operation,
+3. execute the one permitted side effect,
+4. strict-parse result,
+5. append typed completion/mutation event,
+6. reproject,
+7. derive next operation.
 
 No in-memory retry state.
 
@@ -1454,7 +1502,7 @@ Before implementation starts, Fresh Implementation Plan Review Gate must verify:
 2. Native lock/durability implementation choice is fixed: existing `native/review-artifact-linux` binary, `flock(LOCK_EX|LOCK_NB)`, `O_CLOEXEC`, descriptor-relative `openat2`, `renameat2`, `fdatasync`, parent `fsync`; no package/API choice remains for the implementer.
 3. Event-store/CAS layout and exact TS/native interfaces are fixed.
 4. Finding/lineage/NC1/round-limit priority is tested before runtime orchestration integration.
-5. `review_mutation`, `review_restore`, `review_commit`, and implementation authority are separate in both types and integration tests.
+5. CAP1 `review_query` is implemented as typed phase-scoped reads/search/Git metadata with no arbitrary shell or scope expansion; `review_mutation`, `review_restore`, `review_commit`, and implementation authority are separate in both types and integration tests.
 6. Restore and commit crash windows have exact prepared/succeeded/recovered/conflict tests.
 7. History query and implementation approval consume durable projection, not process-local Review Gate state.
 8. `--retry` exists only as deprecated parser compatibility.
