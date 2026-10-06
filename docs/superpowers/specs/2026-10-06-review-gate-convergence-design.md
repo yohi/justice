@@ -950,14 +950,26 @@ WorktreeArtifactBindingV1 {
 
 Only regular-file Git modes `100644` and `100755` are valid Review Gate targets. The index binding MUST be one unique stage-0 entry; an unmerged/multi-stage target is not clean.
 
-`WorktreeArtifactBindingV1.gitMode` is computed directly from filesystem metadata, independently of Git's `core.fileMode` setting:
+`WorktreeArtifactBindingV1.gitMode` is computed directly from filesystem metadata, independently of Git's `core.fileMode` setting.
+
+Git regular-file executable identity follows the **owner execute bit** (`S_IXUSR`) only. Group/other execute bits alone MUST NOT produce Git mode `100755`.
 
 ```text
-(stat.mode & 0o111) != 0
+(stat.mode & 0o100) != 0
   → 100755
 
 otherwise
   → 100644
+```
+
+Normative examples:
+
+```text
+POSIX 0644 → Git 100644
+POSIX 0744 → Git 100755
+POSIX 0755 → Git 100755
+POSIX 0655 → Git 100644
+POSIX 0645 → Git 100644
 ```
 
 The projected workspace states are:
@@ -1014,7 +1026,7 @@ current worktree binding != preWorktree
   → SUSPENDED
 ```
 
-This is fail-closed even when the bytes look like a plausible partial remediation or the content is unchanged but the executable mode drifted.
+This is fail-closed even when the bytes look like a plausible partial remediation or the content is unchanged but the executable mode drifted. In particular, a durable `preWorktree.gitMode = 100755` followed by current POSIX mode `0655` is a mode mismatch (`100644`) and MUST produce recovery conflict rather than safe redispatch.
 
 ### 13A.2 Known-dirty suspension default
 
@@ -2756,6 +2768,19 @@ AND working-tree Git mode == HEAD target Git mode
 ```
 
 Content equality alone is insufficient. A mode-only delta such as `100644 → 100755` is a dirty target even when the blob SHA is unchanged. An index-only mode change is also staged target state and is rejected.
+
+The clean check MUST use the owner-execute-bit normalization above. For example:
+
+```text
+HEAD/index Git mode: 100755
+worktree POSIX mode: 0655
+content/blob: unchanged
+
+→ worktree Git mode = 100644
+→ REVIEW_TARGET_NOT_CLEAN
+```
+
+Group/other execute bits MUST NOT mask removal of the owner execute bit.
 
 Otherwise:
 
