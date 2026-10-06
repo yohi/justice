@@ -43,9 +43,9 @@
 
 1. **Corrupt current-scope genesis vs unrelated-scope corruption:** current scope MUST fail closed without creating a replacement generation, while unrelated corrupt scope MUST NOT globally deny the requested scope. Pin this in Task 4 discovery/store tests.
 2. **Unknown partial remediation vs external edit:** a crash after `REMEDIATION_STARTED` with current bytes different from preDigest MUST never overwrite/restore those bytes. Pin this in Task 9 workspace recovery tests and Task 12 integration tests.
-3. **NC1 vs absolute round exhaustion:** NC1 MUST win whether remaining capacity is positive or zero; only NC1 no-trigger may produce `ROUND_LIMIT_EXHAUSTED` or `REMEDIATION_REQUIRED`. Pin all four truth-table cases in Task 7 and an end-to-end final-round case in Task 14.
+3. **NC1 vs absolute round exhaustion:** NC1 MUST win whether remaining capacity is positive or zero; only NC1 no-trigger may produce `ROUND_LIMIT_EXHAUSTED` or `REMEDIATION_REQUIRED`. Pin all four truth-table cases in Task 7 and an end-to-end final-round case in Task 15.
 4. **Unrelated staged Git state:** exact Review Gate commit MUST commit only the phase artifact and preserve every unrelated index entry byte-for-byte. Pin this in Task 9 real-Git tests.
-5. **Crash after prepared restore/commit:** restart MUST recover the exact intended side effect once, never duplicate it, and must conflict on any third state. Pin restore/commit recovery in Task 9 and full restart projection in Task 14.
+5. **Crash after prepared restore/commit:** restart MUST recover the exact intended side effect once, never duplicate it, and must conflict on any third state. Pin restore/commit recovery in Task 9 and full restart projection in Task 15.
 
 ---
 
@@ -113,6 +113,43 @@
 - Update existing Review Gate command/adapter/authorization tests rather than duplicating legacy expectations.
 
 ---
+
+## Design Contract Ownership
+
+| Approved Design contract | Owning implementation tasks |
+| --- | --- |
+| ARCH1 authority split / agents as evidence producers | 3, 5, 10, 11, 12 |
+| R1 / C1 / L1 scope discovery + process-lifetime locks | 1, 4, 12, 13 |
+| G1 generation lifecycle / completion | 4, 5, 11, 12 |
+| E1 epochs + absolute Design 5 / Plan 3 rounds | 5, 7, 11, 15 |
+| RR1 Requirements resolution | 2, 12, 15 |
+| PF1 phase/global protocol descriptors | 2, 8, 10, 12, 15 |
+| CB1 completed binding reuse / implementation staleness | 2, 4, 5, 12, 14 |
+| IP1 DESIGN_CLEAR inheritance | 5, 11, 15 |
+| CTX1 baseline revision + semantic context identity | 2, 5, 6, 12, 15 |
+| P1 / DA1 / SV1 causal log, durability, schema evolution | 1, 3, 4 |
+| PR1 / RET1 persistence policy + indefinite history | 3, 4, 13 |
+| RO1 recovery CAS | 1, 4, 9, 12 |
+| WSP1 workspace authority / exact restore | 5, 9, 11, 12, 15 |
+| CLR1 Design/Plan CLEAR milestones | 5, 11, 15 |
+| RI1 reopen / invalidation | 5, 6, 11, 12, 15 |
+| LNR1 / AR1 finding identity + pinned validation | 6, 10, 11, 12 |
+| XG1 / XGR1 cross-generation lineage | 6, 10, 11 |
+| EV1 evidence vs authoritative mutation | 3, 6, 11, 12 |
+| OSC1 ownerScope/upstream precedence | 5, 6, 7, 11 |
+| RV1 stale-lineage revalidation | 6, 10, 11 |
+| RSL1 / FR1 resolution + history-blind fresh review | 5, 6, 10, 11, 12 |
+| AIM1 attempt/operation/dispatch identity | 2, 5, 10, 11, 12 |
+| SRF1 self-review findings / carry-forward | 6, 7, 10, 11 |
+| VAL1 / VSC1 deterministic validators + cache | 2, 8, 11, 12 |
+| DVF1 deterministic finding bridge | 6, 8, 11 |
+| NC1 / N1 non-convergence + material-progress reentry | 7, 10, 11, 15 |
+| CAP1 query/mutation/restore/commit authority | 9, 10, 12 |
+| CP1 event-sourced recovery journal / ResumeCursor | 5, 9, 11, 12, 15 |
+| GIT1 exact-artifact commit | 9, 12, 15 |
+| HQ1 history query | 4, 5, 13 |
+| RTY1 deprecated `--retry` no-op | 2, 15 |
+| EVC1 catalog + projection invariants | 3, 5, 11, 15 |
 
 ### Task 1: Prove and publish the Linux Review Gate native substrate
 
@@ -332,7 +369,7 @@ newReviewAttemptId(): ReviewAttemptId
 newOperationId(): OperationId
 newOccurrenceId(): OccurrenceId
 ```
-backed by `randomUUID()`. Lineage display IDs remain projection-owned monotonic `DG-L-NNN` / `PG-L-NNN`; agents never issue them.
+backed by `randomUUID()`. Task 6 owns lineage ID issuance: Justice core derives the next generation-local, owner-scoped monotonic `LineageId` from projection state (Design/Plan examples `DG-L-NNN` / `PG-L-NNN`); validators only select Justice-provided opaque existing-lineage refs and never supply a new lineage ID.
 
 - [ ] **Step 5: Update the slash-command parser for RR1 and RTY1**
 
@@ -649,6 +686,11 @@ selectFindingDisposition(
   phase: ReviewPhase,
   lineages: readonly ProjectedLineage[],
 ): ScopeDisposition
+
+issueNextLineageId(
+  projection: ReviewGateProjection,
+  ownerScope: FindingOwnerScope,
+): LineageId
 ```
 
 - [ ] **Step 1: Write RED lineage identity tests**
@@ -794,7 +836,8 @@ Pin:
 - PRE_CLEAR reuses exact PASS evidence,
 - exact FAIL/INDETERMINATE evidence can also be reused,
 - execution failure is never cached,
-- changed executable/runtime binding causes cache miss,
+- a changed executable/runtime binding on a **new** logical validation causes cache miss,
+- redispatch of the **same** logical validation operation with a changed execution-environment binding fails closed as `VALIDATION_ENVIRONMENT_CHANGED_DURING_ATTEMPT`,
 - undeclared input use is impossible through runner interface,
 - BASELINE_ADMISSION FAIL creates no finding,
 - same `(validationEventId, ruleId)` creates at most one occurrence.
@@ -807,7 +850,7 @@ Production registry contains:
 
 Do not register general lint/test/build commands.
 
-`ISOLATED_PROCESS` descriptors are representable but return deterministic-validation-unavailable unless a future registered runner supplies the Design-required sandbox contract; no v4 production descriptor uses it.
+`ISOLATED_PROCESS` descriptors are representable but produce unavailable/execution-failure evidence mapped to `DETERMINISTIC_VALIDATION_FAILED` unless a future registered runner supplies the Design-required sandbox contract; no v4 production descriptor uses it. This path never fabricates PASS/FAIL/INDETERMINATE semantic evidence.
 
 - [ ] **Step 3: Implement cache/input bindings and DVF1 bridge**
 
@@ -977,7 +1020,7 @@ No worker receives shell, generic task, `justice_review`, or commit/restore auth
 
 Remove Retry-Budget semantics. The controller invokes exactly the Justice-supplied operation packet, then only follows a subsequent Justice-supplied NEXT OPERATION packet. It never chooses phase, round, retry, finding status, or commit/reopen action.
 
-Export the immutable static prompt text/contracts and `computeReviewGatePromptContractDigests()`; these exact digests are consumed by Task 12's production protocol factory.
+Export the immutable static prompt text/contracts and `computeReviewGatePromptContractDigests()`; these exact digests are consumed by Task 12's production protocol factory. The digest set has explicit keys `designReviewer`, `planReviewer`, `findingValidator`, `remediator`, and `selfReview`; dynamic gate/attempt/round/artifact values are excluded from the static digest.
 
 - [ ] **Step 4: Implement operation prompt builders/parsers**
 
@@ -1083,7 +1126,6 @@ git commit -m "feat: plan Review Gate orchestration from events"
 - Create: `src/runtime/review-gate-coordinator.ts`
 - Modify: `src/hooks/plan-bridge.ts`
 - Modify: `src/runtime/opencode-adapter.ts`
-- Modify: `src/runtime/review-gate-tool-paths.ts` if hook metadata needs operation bindings
 - Modify: `tests/hooks/plan-bridge-review-lock.test.ts`
 - Rename: `tests/integration/review-gate-adapter-retry.test.ts` → `tests/integration/review-gate-adapter-orchestration.test.ts`
 - Modify: `tests/integration/review-gate-implementation-lock.test.ts`
@@ -1120,7 +1162,9 @@ Assert:
 - Plan phase admission rejects a dirty/staged Plan target before the first Plan review, including after current/inherited Design CLEAR,
 - missing native mutation capability returns blocked guidance without unsafe fallback,
 - lock handle is retained across worker operations and released on terminal return/session teardown/process-close seam,
-- external worker completion cannot mutate state without matching durable dispatch event.
+- external worker completion cannot mutate state without matching durable dispatch event,
+- a relevant Requirements/Design/Plan binding change during a pinned attempt suspends as `REVIEW_INPUT_CHANGED_DURING_ATTEMPT` and no mixed-snapshot validator result is accepted,
+- reviewer/validator execution failure after durable dispatch projects the typed `EXECUTION_SUSPENDED` reason (including `FRESH_REVIEW_FAILED` where applicable) without repeating a completed remediation/restore/commit side effect.
 
 - [ ] **Step 2: Assemble the production protocol descriptor, then implement the coordinator execution loop**
 
@@ -1128,6 +1172,8 @@ Implement `src/runtime/review-gate-protocol.ts` to combine:
 - Task 10 immutable static prompt-contract digests,
 - Task 8 deterministic validator semantic contracts/stages/rules,
 - Design/Plan/CrossPhase fixed semantic policy versions and absolute 5/3 ceilings.
+
+All newly introduced `*ContractVersion` / policy-version fields start at integer `1`; future semantic changes increment the owning field instead of reusing version 1 with new meaning. Shared finding-validator/severity/resolution/lineage/convergence semantics are supplied identically to both phase descriptors. The controller relay contract version is CrossPhase-only.
 
 The factory returns the one current `ReviewProtocolDescriptorV1` plus Design/Plan/global fingerprints. No placeholder prompt digest or runtime/model/provider identity is permitted.
 
@@ -1167,7 +1213,7 @@ Expected: PASS with new semantics.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/runtime/review-gate-protocol.ts src/runtime/review-gate-coordinator.ts   src/hooks/plan-bridge.ts src/runtime/opencode-adapter.ts   src/runtime/review-gate-tool-paths.ts   tests/hooks/plan-bridge-review-lock.test.ts   tests/integration/review-gate-adapter-orchestration.test.ts   tests/integration/review-gate-implementation-lock.test.ts   tests/runtime/opencode-adapter.test.ts
+git add src/runtime/review-gate-protocol.ts src/runtime/review-gate-coordinator.ts   src/hooks/plan-bridge.ts src/runtime/opencode-adapter.ts   tests/hooks/plan-bridge-review-lock.test.ts   tests/integration/review-gate-adapter-orchestration.test.ts   tests/integration/review-gate-implementation-lock.test.ts   tests/runtime/opencode-adapter.test.ts
 
 git commit -m "feat: orchestrate Review Gate from durable events"
 ```
@@ -1394,7 +1440,7 @@ Confirm every changed production/test/doc/native file is named by this Implement
 - [ ] **Step 10: Commit**
 
 ```bash
-git add tests/integration README.md SPEC.md AGENTS.md
+git add   tests/integration/review-gate-event-sourced-flow.test.ts   tests/integration/review-gate-restart-recovery.test.ts   tests/integration/review-gate-adapter-orchestration.test.ts   README.md SPEC.md AGENTS.md
 git commit -m "test: verify event-sourced Review Gate workflow"
 ```
 
@@ -1404,7 +1450,7 @@ git commit -m "test: verify event-sourced Review Gate workflow"
 
 Before implementation starts, Fresh Implementation Plan Review Gate must verify:
 
-1. Every Design section R1–RTY1 / EVC1 / CTX1 / ARCH1 maps to at least one owning task above.
+1. The `Design Contract Ownership` table remains complete: every approved R1–RTY1 / EVC1 / CTX1 / ARCH1 contract maps to at least one owning task and every owning task keeps the approved Design semantics unchanged.
 2. Native lock/durability implementation choice is fixed: existing `native/review-artifact-linux` binary, `flock(LOCK_EX|LOCK_NB)`, `O_CLOEXEC`, descriptor-relative `openat2`, `renameat2`, `fdatasync`, parent `fsync`; no package/API choice remains for the implementer.
 3. Event-store/CAS layout and exact TS/native interfaces are fixed.
 4. Finding/lineage/NC1/round-limit priority is tested before runtime orchestration integration.
@@ -1415,4 +1461,5 @@ Before implementation starts, Fresh Implementation Plan Review Gate must verify:
 9. No Task asks the implementer to choose architecture, a library, a lock primitive, a storage format, an error policy, or a test strategy.
 10. Production protocol descriptor assembly occurs only after deterministic validator contracts and static agent prompt contracts exist; no placeholder fingerprint inputs are used.
 11. GIT1 commit subject/trailers and REVIEW_COMMIT/REVIEW_RESTORE error taxonomy are fixed and tested.
-12. Production implementation MUST NOT begin until this Plan's Fresh Implementation Plan Review Gate is READY.
+12. Validation environment drift and review-input drift have explicit fail-closed tests before OpenCode integration.
+13. Production implementation MUST NOT begin until this Plan's Fresh Implementation Plan Review Gate is READY.
