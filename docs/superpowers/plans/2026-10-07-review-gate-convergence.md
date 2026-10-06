@@ -10,9 +10,11 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-06-review-gate-convergence-design.md`
 
-**Approved Design baseline:** `1f3f22bbc329d66a1144a63ec0802d1f8d26b167`
+**Previous approved Design baseline:** `1f3f22bbc329d66a1144a63ec0802d1f8d26b167`
 
-**Approved Design blob:** `2ea580a9119b4e6369745564189c0c91ce7ced1d`
+**Current Design baseline under Fresh Review:** `3aae7763d8cca452ef8262d6a17ebf93c414df8a`
+
+**Current Design blob:** `f24c2f097b50ac5384f71dd9914303e7d43d8015`
 
 ## Global Constraints
 
@@ -34,6 +36,8 @@
 - Never auto-restore unknown partial remediation bytes. `REMEDIATION_STARTED` without `REMEDIATION_COMPLETED` may resume only when current bytes still equal the durable preDigest; otherwise suspend with recovery conflict.
 - `review_mutation` is remediator-only; `review_restore` and `review_commit` are Justice-core-only; implementation mutation remains behind `/justice-implement --approved`.
 - Review Gate commit uses the GIT1 exact-artifact contract and never pushes.
+- Canonical workspace paths are opaque artifact identities, not raw Git pathspecs. Every Review Gate Git operation that accepts an artifact pathspec MUST use the global `--literal-pathspecs` policy. Do not reject otherwise-valid artifact filenames merely because they contain Git pathspec magic; do not mix `--literal-pathspecs` with `:(literal)` encoding.
+- Git target identity is content + tree-entry mode. Review Gate supports regular-file modes `100644` and `100755`; clean admission, WSP1 recovery/restore, prepared commit/recovery, and post-verification must bind both blob/digest and Git mode. Worktree Git mode is derived directly from `stat.mode & 0o111`, independent of `core.fileMode`.
 - `/justice-implement --approved` must validate the exact current `CompletedApprovalBindingV1`, including Requirements, Design, Plan, and `reviewProtocolFingerprint`, before handing off to the existing plan-authorization store.
 - Persist only typed/bounded/redacted Review Gate audit fields; never persist prompts, hidden reasoning, raw model/tool output, full artifacts, credentials, environment variables, or absolute host paths.
 - Preserve the Design's two error namespaces: CAP1/domain denial/error codes are lowercase (`implementation_not_authorized`, `review_scope_violation`, `review_operation_not_permitted`, `review_restore_*`, `review_commit_*`); durable `EXECUTION_SUSPENDED.reason` / history failure enums are the corresponding uppercase EVC1 values. Runtime adapters return typed lowercase domain errors; the coordinator performs the explicit mapping when appending a durable suspension event.
@@ -47,6 +51,8 @@
 3. **NC1 vs absolute round exhaustion:** NC1 MUST win whether remaining capacity is positive or zero; only NC1 no-trigger may produce `ROUND_LIMIT_EXHAUSTED` or `REMEDIATION_REQUIRED`. Pin all four truth-table cases in Task 7 and an end-to-end final-round case in Task 15.
 4. **Unrelated staged Git state:** exact Review Gate commit MUST commit only the phase artifact and preserve every unrelated index entry byte-for-byte. Pin this in Task 9 real-Git tests.
 5. **Crash after prepared restore/commit:** restart MUST recover the exact intended side effect once, never duplicate it, and must conflict on any third state. Pin restore/commit recovery in Task 9 and full restart projection in Task 15.
+6. **Literal Git path identity:** a valid target named `:(glob)*.md` MUST remain one literal artifact across status/diff/log/ls-tree/commit; unrelated dirty paths MUST NOT be queried or committed through Git pathspec expansion. Pin runtime RED tests in Task 9 and lifecycle proof in Task 15.
+7. **Git mode identity:** mode-only HEAD/index/worktree drift MUST make the target non-clean, normal remediation MUST preserve the pre-remediation target Git mode, and restore MUST preserve the approved target mode. Pin runtime RED tests in Task 9 and lifecycle proof in Task 15.
 
 ---
 
@@ -132,7 +138,7 @@
 | P1 / DA1 / SV1 causal log, durability, schema evolution | 1, 3, 4 |
 | PR1 / RET1 persistence policy + indefinite history | 3, 4, 13 |
 | RO1 recovery CAS | 1, 4, 9, 12 |
-| WSP1 workspace authority / exact restore | 5, 9, 11, 12, 15 |
+| WSP1 workspace authority / exact restore | 1, 2, 5, 9, 11, 12, 15 |
 | CLR1 Design/Plan CLEAR milestones | 5, 11, 15 |
 | RI1 reopen / invalidation | 5, 6, 11, 12, 15 |
 | LNR1 / AR1 finding identity + pinned validation | 6, 10, 11, 12 |
@@ -146,9 +152,9 @@
 | VAL1 / VSC1 deterministic validators + cache | 2, 8, 11, 12 |
 | DVF1 deterministic finding bridge | 6, 8, 11 |
 | NC1 / N1 non-convergence + material-progress reentry | 7, 10, 11, 15 |
-| CAP1 query/mutation/restore/commit authority | 9, 10, 12 |
+| CAP1 query/mutation/restore/commit authority | 2, 9, 10, 12, 15 |
 | CP1 event-sourced recovery journal / ResumeCursor | 5, 9, 11, 12, 15 |
-| GIT1 exact-artifact commit | 9, 12, 15 |
+| GIT1 exact-artifact commit | 2, 9, 12, 15 |
 | HQ1 history query | 4, 5, 13 |
 | RTY1 deprecated `--retry` no-op | 2, 15 |
 | EVC1 catalog + projection invariants | 3, 5, 11, 15 |
@@ -182,7 +188,7 @@
   - `LinuxReviewGateProvider.listRecoveryObjects(): Promise<readonly string[]>`
   - `LinuxReviewGateProvider.deleteRecoveryObject(digest: string): Promise<void>`
   - `LinuxReviewGateProvider.readWorkspaceFile(path: string): Promise<Buffer | null>`
-  - `LinuxReviewGateProvider.replaceWorkspaceFileExact(path: string, expectedCurrentDigest: string, replacement: Buffer): Promise<void>`
+  - `LinuxReviewGateProvider.replaceWorkspaceFileExact(path: string, expectedCurrent: { digest: string; gitMode: "100644" | "100755" }, replacement: { bytes: Buffer; gitMode: "100644" | "100755" }): Promise<void>`
 - Native lock primitive: descriptor-relative regular file + `O_CLOEXEC` + `flock(LOCK_EX | LOCK_NB)`; handle owns FD.
 
 - [ ] **Step 1: Write native/runtime RED tests for the capability surface**
@@ -195,6 +201,9 @@ Add tests that assert:
 - writer shard durable replace round-trips bytes,
 - recovery object create is no-replace and exact-existing is accepted,
 - workspace replace rejects a current-digest mismatch,
+- workspace replace rejects a current Git-mode mismatch even when bytes/digest match,
+- replacement requires `replacement.gitMode === expectedCurrent.gitMode`,
+- replacement preserves the existing regular file's full POSIX permission bits across atomic replacement for both non-executable and executable files, so the Git executable class is unchanged,
 - every ID/path validator rejects traversal, slash injection, malformed SHA-256, and symlinked workspace ancestors.
 
 Run: `bun run vitest run tests/runtime/linux-review-gate-provider.test.ts tests/runtime/linux-review-gate-provider-mock.test.ts`  
@@ -209,7 +218,9 @@ In `native/review-artifact-linux/src/lib.rs`, add focused tests for:
 - parent directory `fsync`,
 - `renameat2` same-directory publish,
 - `RENAME_NOREPLACE` recovery object publication,
-- descriptor-relative workspace path traversal rejection.
+- descriptor-relative workspace path traversal rejection,
+- worktree Git-mode derivation from `stat.mode & 0o111`,
+- exact-replace current-mode guard and permission-preserving temp-file publication.
 
 Run: `cargo test --manifest-path native/review-artifact-linux/Cargo.toml --features test`  
 Expected: FAIL until the low-level primitives are implemented.
@@ -221,6 +232,8 @@ Add N-API exports:
 - `openReviewGateRoot(rootDir: string)`
 
 The native root owns the workspace root FD and exposes only typed scope/gate/writer/digest operations listed above. Use existing `openat2` helper patterns; never accept a raw arbitrary `.justice` path from JS. Create Review Gate directories with mode `0700` and lock/event/CAS/temp files with mode `0600`; tests must assert the effective modes under a normal umask.
+
+For `replaceWorkspaceFileExact`, open/fstat the current regular file descriptor, verify current digest and derived Git mode, require replacement Git mode to equal the expected current Git mode, copy the current file's permission bits to the temp inode with `fchmod` before publish, then perform the existing durable rename/fsync sequence. Recheck the published file's digest + Git mode. This prevents an atomic replacement from silently changing `100644 ↔ 100755` and avoids replacing ordinary permission bits with a temp-file default.
 
 The durable replace sequence is exactly:
 
@@ -251,6 +264,7 @@ lock_cloexec
 writer_shard_durable_publish
 recovery_object_noreplace
 workspace_exact_replace_guard
+workspace_exact_replace_mode_preserved
 symlinked_ancestor_rejected
 ```
 
@@ -299,6 +313,11 @@ git commit -m "feat: add durable Review Gate native substrate"
 - Produces:
   - branded string aliases `ReviewScopeId`, `GateId`, `WriterId`, `ReviewAttemptId`, `OperationId`, `LineageId`, `OccurrenceId`
   - `ArtifactBinding = { canonicalPath: string; digest: string }`
+  - `GitRegularFileMode = "100644" | "100755"`
+  - `GitTreeEntryBindingV1 = { canonicalPath: string; blobSha: string; gitMode: GitRegularFileMode }`
+  - `GitIndexEntryBindingV1 = { canonicalPath: string; blobSha: string; gitMode: GitRegularFileMode; stage: 0 }`
+  - `WorktreeArtifactBindingV1 = { canonicalPath: string; digest: string; gitMode: GitRegularFileMode }`
+  - `ReviewTargetGitBinding = { headSha: string; headEntry: GitTreeEntryBindingV1; indexEntry: GitIndexEntryBindingV1; worktree: WorktreeArtifactBindingV1 }`
   - `computeReviewScopeId(designPath: string, planPath: string): ReviewScopeId`
   - `computePhaseReviewContextIdentity(...): string`
   - `computeDesignApprovalBindingFingerprint(binding): string`
@@ -323,6 +342,7 @@ export interface ReviewGateRequest {
 Pin:
 - exact `justice-review-scope-v1\0<design>\0<plan>` hash input,
 - canonical JSON key ordering,
+- a workspace-safe filename containing Git pathspec magic such as `:(glob)*.md` remains a valid canonical artifact identity; Task 2 MUST NOT reject it merely to compensate for Git semantics,
 - phase-local vs global fingerprint invalidation examples from PF1,
 - CrossPhase-only change leaves phase fingerprints unchanged,
 - shared policy version drift returns `REVIEW_PROTOCOL_DESCRIPTOR_INVALID`.
@@ -935,6 +955,7 @@ class ReviewGateCapabilityRegistry {
 
 class ReviewGateGit {
   inspectTarget(path: string): Promise<ReviewTargetGitBinding>;
+  classifyTargetClean(binding: ReviewTargetGitBinding): "clean" | "not_clean";
   prepareRestore(input: ReviewRestorePrepareInput): Promise<ReviewTargetRestorePreparedPayload>;
   executePreparedRestore(payload: ReviewTargetRestorePreparedPayload): Promise<ReviewRestoreResult>;
   recoverPreparedRestore(payload: ReviewTargetRestorePreparedPayload): Promise<ReviewRestoreRecoveryResult>;
@@ -952,8 +973,10 @@ For `ReviewGateQueryService`, pin:
 - self-review/remediation scope is explicitly constructed from upstream authority + current phase target,
 - artifact search is an in-process literal search over already authorized bytes; it cannot traverse/glob another path,
 - status/diff/log/show are pathscoped to `allowedGitPaths`,
+- create an allowed literal file named `:(glob)*.md` plus unrelated `a.md` / `b.md`; scoped status/diff/log/tree lookup returns only the literal target and never expands Git pathspec magic,
 - revision resolution accepts only Justice-defined symbolic refs/validated Git object IDs, not shell fragments,
-- Git reads use `spawn("git", args, { shell: false })`,
+- every path-accepting Git read uses `spawn("git", ["--literal-pathspecs", ...args], { shell: false })`,
+- `showPathAtRevision` resolves the revision, uses literal `ls-tree -z <oid> -- <path>` to obtain the exact tree entry, then `cat-file blob <blobSha>`; it never constructs `<ref>:<path>`,
 - no query API accepts arbitrary executable, argv, cwd, environment, or repository-wide path omission,
 - raw query output is transient/bounded and is never itself durable Review Gate authority.
 
@@ -967,20 +990,26 @@ Pin actor/operation matrix:
 
 - [ ] **Step 2: Implement the typed query service and expand tool-path extraction to read scope**
 
-Implement `ReviewGateQueryService` using Task 1 safe workspace reads plus non-mutating Git subprocess calls with `shell:false`. Search is performed in-process on authorized artifact bytes. Every Git operation includes an explicit authorized path list except `resolveRevision`, which resolves only a validated ref and returns an object ID.
+Implement `ReviewGateQueryService` using Task 1 safe workspace reads plus non-mutating Git subprocess calls with `shell:false`. Search is performed in-process on authorized artifact bytes. Add one internal `runGitLiteral(args)` seam that always invokes `git --literal-pathspecs ...`; every Git operation that consumes an artifact path MUST go through it. Every path-bearing operation includes an explicit authorized path list except `resolveRevision`, which resolves only a validated ref and returns an object ID. `showPathAtRevision` uses `ls-tree -z` + `cat-file blob`, not revision/path string concatenation.
 
 Extract canonical target paths for the model-visible `read`, edit/write variants, and `apply_patch`. Do not expose shell, repository-wide grep/glob, or a new public plugin tool. The coordinator injects any scoped Git/query metadata required by an operation packet; agents may additionally use `read` only for exact phase-authorized paths.
 
 - [ ] **Step 3: Write RED real-Git GIT1 tests**
 
 In a temporary Git repository assert:
-- target must be HEAD == index == worktree at new phase admission,
+- clean admission requires exact HEAD/index/worktree content **and Git mode** identity,
+- target filename `:(glob)*.md` with unrelated dirty `a.md` and `b.md` commits only the literal target; unrelated worktree changes remain untouched,
+- the same literal filename cannot expand scope in scoped status/diff/log/tree queries,
+- worktree-only mode drift `HEAD 100644 / index 100644 / worktree 100755` with unchanged blob bytes is `REVIEW_TARGET_NOT_CLEAN`,
+- index-only mode drift created with an index mode change is `REVIEW_TARGET_NOT_CLEAN`,
+- unmerged/multi-stage target index entries are `REVIEW_TARGET_NOT_CLEAN`,
 - unrelated dirty paths are allowed,
 - unrelated staged paths are allowed,
 - commit changes exactly target path,
+- a normal content remediation commit preserves `parentTargetEntry.gitMode == newCommitTargetEntry.gitMode`,
 - unrelated index fingerprint is identical before/after,
 - hooks and signing do not run,
-- prepared parent/blob/message mismatch conflicts,
+- prepared parent/blob/**mode**/message mismatch conflicts,
 - exact intended commit is recovered after simulated crash,
 - third-state HEAD causes recovery conflict,
 - commit message is exactly:
@@ -998,23 +1027,38 @@ Findings: <comma-separated sorted lineage IDs>
 
 - [ ] **Step 4: Implement Git runner without shell interpolation**
 
-Use `spawn("git", args, { shell: false })`.
+Use `spawn("git", args, { shell: false })`. All artifact-path Git invocations share the Task 9 `runGitLiteral(args)` policy; do not special-case or pre-escape pathspec magic.
 
 Commit args are equivalent to:
 
 ```text
+--literal-pathspecs
 -c core.hooksPath=/dev/null
 commit --only --no-gpg-sign --no-status --cleanup=verbatim
 --pathspec-from-file=- --pathspec-file-nul
 -F <Justice-owned-message-file>
 ```
 
-Write exactly one NUL-terminated target path to stdin.
+Write exactly one NUL-terminated target path to stdin. `--pathspec-file-nul` supplies framing only; `--literal-pathspecs` is the pathspec-safety authority.
+
+Before `REVIEW_COMMIT_PREPARED`, require:
+
+```text
+parentTargetEntry.gitMode
+== preCommitIndexEntry.gitMode
+== currentWorktree.gitMode
+== expectedTargetEntry.gitMode
+```
+
+`expectedTargetEntry.blobSha` is the remediated content blob; its `gitMode` is copied from the parent clean authority. Post-verification parses the full parent→commit changed-entry set and asserts the only path is the literal target, then verifies target blob + Git mode in the new tree, index, and worktree.
 
 - [ ] **Step 5: Write RED WSP1 restore/recovery tests**
 
 Cover Review Focus #2 and #5:
 - known dirty exact source → clean committed exact destination,
+- restore from a non-executable target preserves `100644` and its existing POSIX permission bits,
+- restore from an executable target preserves `100755` and its existing POSIX permission bits,
+- source worktree Git-mode mismatch is a scope/recovery conflict even when the source bytes/digest match,
 - source/target/path mismatch → lowercase domain error `review_restore_scope_violation`, mapped by the coordinator to durable `REVIEW_RESTORE_SCOPE_VIOLATION`,
 - exact prepared restore execution failure before verified destination → `review_restore_failed` → durable `REVIEW_RESTORE_FAILED`,
 - prepared restore + source state → safe re-execute,
@@ -1024,7 +1068,7 @@ Cover Review Focus #2 and #5:
 
 - [ ] **Step 6: Implement `review_restore` through Task 1 native exact replace**
 
-Get clean bytes by verified Git blob identity; pass only the durable source digest + clean bytes to `replaceWorkspaceFileExact`; recheck HEAD/index before and after.
+Get clean bytes from the verified target `headEntry.blobSha`. Pass the durable source `{ digest, gitMode }` and clean replacement `{ bytes, gitMode: targetCleanCommittedBinding.headEntry.gitMode }` to Task 1 `replaceWorkspaceFileExact`. The source and destination Git modes MUST be equal for Review Gate restore. Recheck HEAD/index tree entries plus worktree digest/Git mode before and after. A native replace that cannot prove mode preservation is `review_restore_failed`; it never advances to `REVIEW_TARGET_RESTORE_SUCCEEDED`.
 
 - [ ] **Step 7: Run tests and commit**
 
@@ -1452,7 +1496,7 @@ Use a temporary Git/workspace and deterministic fake agent runner:
 7. history query,
 8. `/justice-implement --approved`.
 
-Assert durable history alone reconstructs the same final projection after creating a fresh coordinator instance.
+Assert durable history alone reconstructs the same final projection after creating a fresh coordinator instance. The successful remediation path also asserts the target Git mode before remediation equals the target mode in the resulting commit and final worktree.
 
 - [ ] **Step 2: Add Review Focus restart/crash E2E cases**
 
@@ -1461,7 +1505,9 @@ Cover:
 - Review Focus #2 unknown partial bytes never overwritten,
 - Review Focus #3 final round with NC1 trigger chooses NON_CONVERGENT even with zero capacity; no-trigger chooses ROUND_LIMIT,
 - Review Focus #4 unrelated staged index survives commit,
-- Review Focus #5 prepared restore/commit recover exactly once and conflict on third state.
+- Review Focus #5 prepared restore/commit recover exactly once and conflict on third state,
+- Review Focus #6 literal pathspec target `:(glob)*.md` + unrelated dirty paths → exactly the literal target is queried/committed and unrelated dirty bytes remain,
+- Review Focus #7 worktree-only and index-only mode drift → phase admission rejected; successful remediation + commit + restore paths preserve the approved target Git mode.
 
 - [ ] **Step 3: Add reopen/invalidation/protocol-change E2E cases**
 
@@ -1548,12 +1594,12 @@ Before implementation starts, Fresh Implementation Plan Review Gate must verify:
 2. Native lock/durability implementation choice is fixed: existing `native/review-artifact-linux` binary, `flock(LOCK_EX|LOCK_NB)`, `O_CLOEXEC`, descriptor-relative `openat2`, `renameat2`, `fdatasync`, parent `fsync`; no package/API choice remains for the implementer.
 3. Event-store/CAS layout and exact TS/native interfaces are fixed.
 4. Finding/lineage/NC1/round-limit priority is tested before runtime orchestration integration.
-5. CAP1 `review_query` is implemented as typed phase-scoped reads/search/Git metadata with no arbitrary shell or scope expansion; `review_mutation`, `review_restore`, `review_commit`, and implementation authority are separate in both types and integration tests.
+5. CAP1 `review_query` is implemented as typed phase-scoped reads/search/Git metadata with no arbitrary shell or scope expansion; every artifact path entering Git uses `--literal-pathspecs`, including pathspec-magic filenames; `review_mutation`, `review_restore`, `review_commit`, and implementation authority are separate in both types and integration tests.
 6. Restore and commit crash windows have exact prepared/succeeded/recovered/conflict tests.
 7. History query and implementation approval consume durable projection, not process-local Review Gate state.
 8. `--retry` exists only as deprecated parser compatibility.
 9. No Task asks the implementer to choose architecture, a library, a lock primitive, a storage format, an error policy, or a test strategy.
 10. Production protocol descriptor assembly occurs only after deterministic validator contracts and static agent prompt contracts exist; no placeholder fingerprint inputs are used.
-11. GIT1 commit subject/trailers and both lowercase CAP1/domain ↔ uppercase EVC1 REVIEW_COMMIT/REVIEW_RESTORE error namespaces are fixed and tested.
+11. GIT1 commit subject/trailers, literal-path policy, target blob+mode identity, mode-preserving restore, and both lowercase CAP1/domain ↔ uppercase EVC1 REVIEW_COMMIT/REVIEW_RESTORE error namespaces are fixed and tested.
 12. Validation environment drift and review-input drift have explicit fail-closed tests before OpenCode integration.
 13. Production implementation MUST NOT begin until this Plan's Fresh Implementation Plan Review Gate is READY.
