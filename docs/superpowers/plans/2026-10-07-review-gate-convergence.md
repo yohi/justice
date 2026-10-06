@@ -12,9 +12,9 @@
 
 **Previous approved Design baseline:** `1f3f22bbc329d66a1144a63ec0802d1f8d26b167`
 
-**Current Design baseline under Fresh Review:** `a5cc8e4307fc52dc81de3c0d8ed98626aed0fff3`
+**Current Design baseline under Fresh Review:** `94059285858637af89325f1cd685bd8e96dbd9f6`
 
-**Current Design blob:** `ce51bebf41611f409d97a0858dddbcbd5f8c7cf0`
+**Current Design blob:** `62626e718d8e06325d67f4aa5c5d5ebdc775e50d`
 
 ## Global Constraints
 
@@ -37,7 +37,7 @@
 - `review_mutation` is remediator-only; `review_restore` and `review_commit` are Justice-core-only; implementation mutation remains behind `/justice-implement --approved`.
 - Review Gate commit uses the GIT1 exact-artifact contract and never pushes.
 - Canonical workspace paths are opaque artifact identities, not raw Git pathspecs. Every Review Gate Git operation that accepts an artifact pathspec MUST use the global `--literal-pathspecs` policy. Do not reject otherwise-valid artifact filenames merely because they contain Git pathspec magic; do not mix `--literal-pathspecs` with `:(literal)` encoding.
-- Git target identity is content + tree-entry mode. Review Gate supports regular-file modes `100644` and `100755`; clean admission, WSP1 recovery/restore, prepared commit/recovery, and post-verification must bind both blob/digest and Git mode. Worktree Git mode is derived directly from `stat.mode & 0o111`, independent of `core.fileMode`.
+- Git target identity is content + tree-entry mode. Review Gate supports regular-file modes `100644` and `100755`; clean admission, WSP1 recovery/restore, prepared commit/recovery, and post-verification must bind both blob/digest and Git mode. Worktree Git mode is derived from the owner execute bit only: `(stat.mode & 0o100) != 0` / `S_IXUSR`, independent of `core.fileMode`. Group/other execute bits alone do not produce `100755`.
 - `/justice-implement --approved` must validate the exact current `CompletedApprovalBindingV1`, including Requirements, Design, Plan, and `reviewProtocolFingerprint`, before handing off to the existing plan-authorization store.
 - Persist only typed/bounded/redacted Review Gate audit fields; never persist prompts, hidden reasoning, raw model/tool output, full artifacts, credentials, environment variables, or absolute host paths.
 - Preserve the Design's two error namespaces: CAP1/domain denial/error codes are lowercase (`implementation_not_authorized`, `review_scope_violation`, `review_operation_not_permitted`, `review_restore_*`, `review_commit_*`); durable `EXECUTION_SUSPENDED.reason` / history failure enums are the corresponding uppercase EVC1 values. Runtime adapters return typed lowercase domain errors; the coordinator performs the explicit mapping when appending a durable suspension event.
@@ -202,6 +202,7 @@ Add tests that assert:
 - recovery object create is no-replace and exact-existing is accepted,
 - workspace replace rejects a current-digest mismatch,
 - workspace replace rejects a current Git-mode mismatch even when bytes/digest match,
+- runtime/native normalization tests pin `0644→100644`, `0744→100755`, `0755→100755`, `0655→100644`, and `0645→100644`; `0655` is the regression case proving group/other execute bits do not substitute for `S_IXUSR`,
 - replacement requires `replacement.gitMode === expectedCurrent.gitMode`,
 - replacement preserves the existing regular file's full POSIX permission bits across atomic replacement for both non-executable and executable files, so the Git executable class is unchanged,
 - every ID/path validator rejects traversal, slash injection, malformed SHA-256, and symlinked workspace ancestors.
@@ -219,7 +220,8 @@ In `native/review-artifact-linux/src/lib.rs`, add focused tests for:
 - `renameat2` same-directory publish,
 - `RENAME_NOREPLACE` recovery object publication,
 - descriptor-relative workspace path traversal rejection,
-- worktree Git-mode derivation from `stat.mode & 0o111`,
+- worktree Git-mode derivation from `S_IXUSR` / `stat.mode & 0o100`,
+- exact normalization cases `0644→100644`, `0744→100755`, `0755→100755`, `0655→100644`, and `0645→100644`,
 - exact-replace current-mode guard and permission-preserving temp-file publication.
 
 Run: `cargo test --manifest-path native/review-artifact-linux/Cargo.toml --features test`  
@@ -1001,6 +1003,7 @@ In a temporary Git repository assert:
 - target filename `:(glob)*.md` with unrelated dirty `a.md` and `b.md` commits only the literal target; unrelated worktree changes remain untouched,
 - the same literal filename cannot expand scope in scoped status/diff/log/tree queries,
 - worktree-only mode drift `HEAD 100644 / index 100644 / worktree 100755` with unchanged blob bytes is `REVIEW_TARGET_NOT_CLEAN`,
+- Git-semantic edge case: `HEAD/index 100755`, unchanged content, worktree POSIX mode `0655` normalizes to `100644` and is `REVIEW_TARGET_NOT_CLEAN`,
 - index-only mode drift created with an index mode change is `REVIEW_TARGET_NOT_CLEAN`,
 - unmerged/multi-stage target index entries are `REVIEW_TARGET_NOT_CLEAN`,
 - unrelated dirty paths are allowed,
@@ -1060,6 +1063,7 @@ Cover Review Focus #2 and #5:
 - restore from an executable target preserves `100755` and its existing POSIX permission bits,
 - source worktree Git-mode mismatch is a scope/recovery conflict even when the source bytes/digest match,
 - `REMEDIATION_STARTED` crash recovery redispatches only when exact `preWorktree { digest, gitMode }` still matches; content-equal mode drift is a recovery conflict and is never chmod-restored automatically,
+- regression case: durable `preWorktree.gitMode = 100755` + unchanged content + current POSIX mode `0655` normalizes to `100644` and produces `REMEDIATION_RECOVERY_CONFLICT`, never safe redispatch,
 - source/target/path mismatch → lowercase domain error `review_restore_scope_violation`, mapped by the coordinator to durable `REVIEW_RESTORE_SCOPE_VIOLATION`,
 - exact prepared restore execution failure before verified destination → `review_restore_failed` → durable `REVIEW_RESTORE_FAILED`,
 - prepared restore + source state → safe re-execute,
@@ -1508,7 +1512,7 @@ Cover:
 - Review Focus #4 unrelated staged index survives commit,
 - Review Focus #5 prepared restore/commit recover exactly once and conflict on third state,
 - Review Focus #6 literal pathspec target `:(glob)*.md` + unrelated dirty paths → exactly the literal target is queried/committed and unrelated dirty bytes remain,
-- Review Focus #7 worktree-only and index-only mode drift → phase admission rejected; successful remediation + commit + restore paths preserve the approved target Git mode.
+- Review Focus #7 worktree-only and index-only mode drift → phase admission rejected; specifically `HEAD/index 100755 + unchanged content + worktree POSIX 0655` MUST normalize to worktree Git mode `100644` and be rejected; successful remediation + commit + restore paths preserve the approved target Git mode.
 
 - [ ] **Step 3: Add reopen/invalidation/protocol-change E2E cases**
 
@@ -1601,6 +1605,6 @@ Before implementation starts, Fresh Implementation Plan Review Gate must verify:
 8. `--retry` exists only as deprecated parser compatibility.
 9. No Task asks the implementer to choose architecture, a library, a lock primitive, a storage format, an error policy, or a test strategy.
 10. Production protocol descriptor assembly occurs only after deterministic validator contracts and static agent prompt contracts exist; no placeholder fingerprint inputs are used.
-11. GIT1 commit subject/trailers, literal-path policy, target blob+mode identity, mode-preserving restore, and both lowercase CAP1/domain ↔ uppercase EVC1 REVIEW_COMMIT/REVIEW_RESTORE error namespaces are fixed and tested.
+11. GIT1 commit subject/trailers, literal-path policy, target blob+mode identity, owner-execute-bit worktree mode normalization (including `0655→100644`), mode-preserving restore, and both lowercase CAP1/domain ↔ uppercase EVC1 REVIEW_COMMIT/REVIEW_RESTORE error namespaces are fixed and tested.
 12. Validation environment drift and review-input drift have explicit fail-closed tests before OpenCode integration.
 13. Production implementation MUST NOT begin until this Plan's Fresh Implementation Plan Review Gate is READY.
