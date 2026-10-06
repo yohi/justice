@@ -1901,6 +1901,8 @@ Every discovered self-review finding MUST complete its semantic reconciliation b
 
 ### 24.2 Blocking self-review finding
 
+OSC1 upstream precedence is evaluated first. The current-phase path below applies only when no CURRENT upstream blocking lineage exists.
+
 Current-phase owner:
 
 ```text
@@ -2295,7 +2297,7 @@ They are NOT reset by:
 
 ### 27.4 Current-phase remediation disposition priority
 
-This section is the single authority for choosing among semantic non-convergence, round exhaustion, and remediation continuation.
+This section is the single authority for choosing among semantic non-convergence, round exhaustion, and remediation continuation **after OSC1 upstream precedence has determined that no CURRENT upstream blocker requires reopen**.
 
 At every post-reconciliation / post-self-review checkpoint where a CURRENT current-phase critical/major blocker means another automatic remediation would otherwise be required:
 
@@ -2980,7 +2982,8 @@ The canonical projection MUST enforce all of the following.
 | Revalidation | STILL_PRESENT creates no occurrence or recurrence counter |
 | Pending revalidation | blocking pending lineage prohibits CLEAR |
 | Remediation | phase-local round ordinal is generation-global monotonic and cannot exceed Design 5 / Plan 3 within one generation |
-| Current-phase disposition priority | when another automatic remediation would otherwise be required, evaluate NC1 first; only if NC1 does not trigger may capacity choose `ROUND_LIMIT_EXHAUSTED` or `REMEDIATION_REQUIRED` |
+| Disposition ordering | apply OSC1 upstream precedence before any current-phase remediation disposition; upstream reopen and current-phase remediation disposition cannot compete at one checkpoint |
+| Current-phase disposition priority | after no upstream blocker remains, when another automatic remediation would otherwise be required, evaluate NC1 first; only if NC1 does not trigger may capacity choose `ROUND_LIMIT_EXHAUSTED` or `REMEDIATION_REQUIRED` |
 | Round limit | after NC1 no-trigger, if another automatic remediation is required with zero remaining generation capacity, `ROUND_LIMIT_EXHAUSTED` is the only legal transition; no next remediation cursor exists |
 | Mutation | only current phase artifact may be mutated; dirty continuation is legal only for exact WSP1 `KNOWN_DIRTY` state |
 | Restore authority | only Justice core may execute `review_restore`, and only from durable prepared source/destination bindings for the current phase artifact |
@@ -3044,10 +3047,23 @@ COMPLETED
 
 A crash after any durable evidence/mutation event MUST project to the same next legal operation without relying on in-memory state.
 
-Cursor precedence includes workspace disposition and the §27.4 current-phase disposition priority:
+Cursor precedence applies OSC1 upstream ownership before the §27.4 current-phase disposition:
 
 ```text
-current-phase blocking remediation would otherwise be required
+upstream blocker exists
+AND workspace == KNOWN_DIRTY
+  → TARGET_RESTORE_REQUIRED
+
+REVIEW_TARGET_RESTORE_PREPARED without completion
+  → TARGET_RESTORE_RECOVERY_REQUIRED
+
+upstream blocker exists
+AND workspace == CLEAN_COMMITTED
+  → DESIGN_REOPEN_TRANSITION_REQUIRED
+     or REQUIREMENTS_REOPEN_TRANSITION_REQUIRED
+
+no CURRENT upstream blocker
+AND current-phase blocking remediation would otherwise be required
   → evaluate NC1 first
 
   if NC1 triggers
@@ -3061,18 +3077,6 @@ current-phase blocking remediation would otherwise be required
 
   else
     → REMEDIATION_REQUIRED
-
-upstream blocker exists
-AND workspace == KNOWN_DIRTY
-  → TARGET_RESTORE_REQUIRED
-
-REVIEW_TARGET_RESTORE_PREPARED without completion
-  → TARGET_RESTORE_RECOVERY_REQUIRED
-
-upstream blocker exists
-AND workspace == CLEAN_COMMITTED
-  → DESIGN_REOPEN_TRANSITION_REQUIRED
-     or REQUIREMENTS_REOPEN_TRANSITION_REQUIRED
 ```
 
 Examples:
