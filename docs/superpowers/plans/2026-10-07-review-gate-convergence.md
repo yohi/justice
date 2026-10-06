@@ -36,6 +36,7 @@
 - Review Gate commit uses the GIT1 exact-artifact contract and never pushes.
 - `/justice-implement --approved` must validate the exact current `CompletedApprovalBindingV1`, including Requirements, Design, Plan, and `reviewProtocolFingerprint`, before handing off to the existing plan-authorization store.
 - Persist only typed/bounded/redacted Review Gate audit fields; never persist prompts, hidden reasoning, raw model/tool output, full artifacts, credentials, environment variables, or absolute host paths.
+- Preserve the Design's two error namespaces: CAP1/domain denial/error codes are lowercase (`implementation_not_authorized`, `review_scope_violation`, `review_operation_not_permitted`, `review_restore_*`, `review_commit_*`); durable `EXECUTION_SUSPENDED.reason` / history failure enums are the corresponding uppercase EVC1 values. Runtime adapters return typed lowercase domain errors; the coordinator performs the explicit mapping when appending a durable suspension event.
 - Every task follows TDD and ends in an independently reviewable commit.
 - Before implementation completion, run fresh: `bun run test`, `bun run typecheck`, `bun run lint`, and `bun run build`.
 
@@ -441,7 +442,13 @@ Reject:
 - environment/credential fields,
 - unbounded display text.
 
-Assert semantic authority fields are never silently truncated/redacted. Display-only text may be bounded.
+Assert semantic authority fields are never silently truncated/redacted. Fix v1 display-only bounds in this task:
+```text
+MAX_FINDING_SUMMARY_CHARS = 512
+MAX_DISPLAY_RATIONALE_CHARS = 2048
+MAX_REMEDIATION_SUMMARY_CHARS = 2048
+```
+Over-limit display fields are safely truncated with an explicit `truncated: true` display flag; authority/fingerprint inputs are never derived from the truncated copy.
 
 - [ ] **Step 4: Implement `PersistableReviewGateEvent` boundary**
 
@@ -454,7 +461,11 @@ typed event builder
 → durable store
 ```
 
-- [ ] **Step 5: Run tests**
+- [ ] **Step 5: Pin EVC1 error mapping and run tests**
+
+Add a table test that maps lowercase CAP1/runtime errors to the exact uppercase `EXECUTION_SUSPENDED.reason` values and separately asserts invocation-only failures (`REVIEW_GATE_BUSY`, `REVIEW_GATE_IDENTITY_CONFLICT`, `REVIEW_HISTORY_CONFLICT`, `REVIEW_HISTORY_VERSION_UNSUPPORTED`, `REVIEW_PROTOCOL_DESCRIPTOR_INVALID`, `EVENT_PERSISTENCE_POLICY_VIOLATION`, `REQUIREMENTS_RESOLUTION_REQUIRED`) are never fabricated as authoritative history events when append/projection is unsafe.
+
+Then run:
 
 Run: `bun run vitest run tests/core/review-gate/events.test.ts tests/core/review-gate/persistence-policy.test.ts`  
 Expected: PASS.
@@ -513,6 +524,8 @@ interface ReviewGateRecoveryStore {
 
 Cover Review Focus #1:
 - corrupt `GATE_CREATED` under the requested `reviewScopeId` namespace blocks discovery and cannot become “no history”,
+- an empty/incomplete Gate directory under the requested scope (for example a crash before durable `GATE_CREATED`) is retained and treated as current-scope conflict/corruption, never auto-deleted or interpreted as no history,
+- native/temp shard files matching the Design non-authority temp convention are excluded from writer-shard enumeration/projection and may be cleaned only best-effort,
 - corrupt unrelated scope is not opened during requested-scope discovery,
 - same-scope broken/multiple tips produce `REVIEW_GATE_IDENTITY_CONFLICT`,
 - supersedes target outside scope is conflict,
@@ -698,8 +711,10 @@ issueNextLineageId(
 
 Pin:
 - Justice issues lineage IDs; validator supplies only opaque existing refs,
-- VALID+EXISTING resolved defect present → REGRESSED, same ID,
+- VALID+EXISTING resolved defect present → REGRESSED, same ID and increments `regressionCount`,
 - NEW cannot be ALREADY_RESOLVED,
+- ALREADY_RESOLVED is valid only for EXISTING+RESOLVED+defect-absent and updates only `alreadyResolvedObservationCount` / `lastStaleObservationRound`,
+- INVALID observations remain auditable but create no blocking/remediation transition,
 - duplicate candidates in one snapshot map to one blocker,
 - minor/advisory persists but never blocks/remediates,
 - ownerScope/phase/decision mismatch is `VALIDATOR_RESULT_CONFLICT`,
@@ -721,7 +736,8 @@ Pin:
 - new generation always gets a new lineage ID,
 - immediate predecessor only,
 - predecessor relation never inherits counters,
-- malformed/ambiguous cross-gen result prevents lineage finalization.
+- malformed/ambiguous cross-gen result prevents lineage finalization and produces the typed `CROSS_GENERATION_RECONCILIATION_FAILED` suspension evidence path,
+- cross-generation reconciliation never re-validates or overturns the current finding's VALID decision.
 
 Run: `bun run vitest run tests/core/review-gate/lineage.test.ts`  
 Expected: FAIL.
@@ -855,7 +871,7 @@ Do not register general lint/test/build commands.
 
 - [ ] **Step 3: Implement cache/input bindings and DVF1 bridge**
 
-Severity/ownerScope/violationType/governingReference/violatedContract come from the rule descriptor, never from an LLM.
+Severity/ownerScope/violationType/governingReference/violatedContract come from the rule descriptor, never from an LLM. For deterministic observations, the finding-validator result schema permits semantic `EXISTING | NEW` relation only; `INVALID`, severity changes, ownerScope changes, or contract rewrites are schema-invalid.
 
 - [ ] **Step 4: Run tests and commit**
 
@@ -943,6 +959,7 @@ For `ReviewGateQueryService`, pin:
 
 Pin actor/operation matrix:
 - reviewer/finding-validator/self-review query-only,
+- denied model/tool operations return the exact lowercase CAP1 reasons `implementation_not_authorized`, `review_scope_violation`, or `review_operation_not_permitted`,
 - remediator has a single-use capability tied to gate/operation/phase/round/path/preDigest/context,
 - stale/consumed/wrong-path mutation denied,
 - core restore and core commit are not model capabilities,
@@ -975,7 +992,9 @@ Review-Round: <N>
 Findings: <comma-separated sorted lineage IDs>
 ```
   with no Gate ID, operation ID, validator internals, or push side effect,
-- scope mismatch → `REVIEW_COMMIT_SCOPE_VIOLATION`, Git/process failure before verified success → `REVIEW_COMMIT_FAILED`, and unprovable crash state → `REVIEW_COMMIT_RECOVERY_CONFLICT`.
+- scope mismatch → `review_commit_scope_violation` → durable `REVIEW_COMMIT_SCOPE_VIOLATION`,
+- Git/process failure before verified success → `review_commit_failed` → durable `REVIEW_COMMIT_FAILED`,
+- unprovable crash state → `review_commit_recovery_conflict` → durable `REVIEW_COMMIT_RECOVERY_CONFLICT`.
 
 - [ ] **Step 4: Implement Git runner without shell interpolation**
 
@@ -996,11 +1015,11 @@ Write exactly one NUL-terminated target path to stdin.
 
 Cover Review Focus #2 and #5:
 - known dirty exact source → clean committed exact destination,
-- source/target/path mismatch → `REVIEW_RESTORE_SCOPE_VIOLATION`,
-- exact prepared restore execution failure before verified destination → `REVIEW_RESTORE_FAILED`,
+- source/target/path mismatch → lowercase domain error `review_restore_scope_violation`, mapped by the coordinator to durable `REVIEW_RESTORE_SCOPE_VIOLATION`,
+- exact prepared restore execution failure before verified destination → `review_restore_failed` → durable `REVIEW_RESTORE_FAILED`,
 - prepared restore + source state → safe re-execute,
 - prepared restore + destination state → recovered,
-- any third state → `REVIEW_RESTORE_RECOVERY_CONFLICT`,
+- any third state → `review_restore_recovery_conflict` → durable `REVIEW_RESTORE_RECOVERY_CONFLICT`,
 - Requirements/prod/tests/config paths cannot be restore targets.
 
 - [ ] **Step 6: Implement `review_restore` through Task 1 native exact replace**
@@ -1050,6 +1069,12 @@ justice-review-remediator
 - [ ] **Step 1: Write RED strict result-schema tests**
 
 Every result must bind exact `operationId` plus its attempt/round context. Unknown fields, stale IDs, duplicate results, and malformed typed semantic basis fail closed. Raw output is discarded after strict parse.
+
+Pin:
+- REVIEWER candidate validation receives candidate + pinned artifacts/baseline + typed necessary history/opaque lineage refs, never reviewer hidden reasoning,
+- self-review cannot report one target lineage as `STILL_PRESENT` and also rediscover the same semantic lineage as an `EXISTING` discovered finding; this is `SELF_REVIEW_RESULT_CONFLICT`,
+- self-review discovered findings already carry validity + same-generation semantic relation and are not passed through a second ordinary validity call,
+- lineage revalidation has only `STILL_PRESENT | RESOLVED | INDETERMINATE` and cannot create a new finding.
 
 - [ ] **Step 2: Define agent permissions with an explicit Task 10 compatibility window**
 
@@ -1444,6 +1469,7 @@ Cover:
 - Plan finding owned by Design → dirty Plan restore → DESIGN_REOPEN_REQUIRED,
 - Design finding owned by Requirements → dirty Design restore → REQUIREMENTS_REOPEN_REQUIRED,
 - Requirements/Design change invalidates both phase progress,
+- an explicit `--requirements` path change on an existing generation never silently re-runs RR1 auto-resolution; it is accepted only through the currently legal RI1/N1 Requirements-authority change path,
 - Plan-only change retains Design CLEAR,
 - Design protocol change invalidates Design+Plan; Plan-only protocol change invalidates Plan only; CrossPhase-only change keeps phase lineage applicability but prevents completed binding reuse.
 
@@ -1528,6 +1554,6 @@ Before implementation starts, Fresh Implementation Plan Review Gate must verify:
 8. `--retry` exists only as deprecated parser compatibility.
 9. No Task asks the implementer to choose architecture, a library, a lock primitive, a storage format, an error policy, or a test strategy.
 10. Production protocol descriptor assembly occurs only after deterministic validator contracts and static agent prompt contracts exist; no placeholder fingerprint inputs are used.
-11. GIT1 commit subject/trailers and REVIEW_COMMIT/REVIEW_RESTORE error taxonomy are fixed and tested.
+11. GIT1 commit subject/trailers and both lowercase CAP1/domain ↔ uppercase EVC1 REVIEW_COMMIT/REVIEW_RESTORE error namespaces are fixed and tested.
 12. Validation environment drift and review-input drift have explicit fail-closed tests before OpenCode integration.
 13. Production implementation MUST NOT begin until this Plan's Fresh Implementation Plan Review Gate is READY.
