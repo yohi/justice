@@ -9,6 +9,23 @@ import {
   validateReviewGateRemediationResult,
 } from "../../src/core/review-gate-execution";
 
+import * as legacy from "../../src/core/review-gate/legacy-execution";
+describe("legacy execution compatibility re-export facade (Task 10 window)", () => {
+  it("re-exports the relocated legacy module verbatim until Task 12 removes it", () => {
+    // The facade must be a pure re-export surface: identical exported values
+    // (markers, worker agent name, parser functions) so the unmigrated
+    // PlanBridge path (Retry-Budget role-marked prompts, justice-review-worker,
+    // NEXT TASK packets) keeps working unchanged until Task 12.
+    expect(REVIEW_GATE_EXECUTION_MARKER).toBe(legacy.REVIEW_GATE_EXECUTION_MARKER);
+    expect(REVIEW_GATE_REMEDIATION_MARKER).toBe(legacy.REVIEW_GATE_REMEDIATION_MARKER);
+    expect(parseReviewGateWorkerResult).toBe(legacy.parseReviewGateWorkerResult);
+    expect(parseReviewGateRemediationResult).toBe(legacy.parseReviewGateRemediationResult);
+    expect(validateReviewGateRemediationResult).toBe(legacy.validateReviewGateRemediationResult);
+    expect(extractReviewGateWorkerPrompt).toBe(legacy.extractReviewGateWorkerPrompt);
+    expect(extractReviewGateIdFromTaskPrompt).toBe(legacy.extractReviewGateIdFromTaskPrompt);
+  });
+});
+
 describe("review gate execution contract", () => {
   it("extracts the Gate ID only from the exact marker prefix", () => {
     expect(
