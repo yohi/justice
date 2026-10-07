@@ -26,6 +26,12 @@ async function withMockedNativeAddon<T>(
   }
 }
 
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.resetModules();
+  mockedNativeAddon.value = undefined;
+});
+
 describe("LinuxOpenat2ReviewArtifactProvider native boundaries", () => {
   it("fails open when the native addon cannot be loaded", async () => {
     if (process.platform !== "linux" || process.arch !== "x64") return;

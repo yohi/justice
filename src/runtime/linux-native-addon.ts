@@ -46,7 +46,7 @@ export type JusticeLinuxNativeGateLockHandle = Readonly<{
   readonly verifyCloexec: () => boolean;
 }>;
 
-export type JusticeLinuxNativeGateAddon = Readonly<{
+export type JusticeLinuxNativeGateRoot = Readonly<{
   readonly acquireScopeLock: (
     reviewScopeId: string,
   ) => JusticeLinuxNativeGateLockHandle | "occupied";
@@ -74,9 +74,17 @@ export type JusticeLinuxNativeGateAddon = Readonly<{
   readonly readWorkspaceFile: (path: string) => Buffer | null;
   readonly replaceWorkspaceFileExact: (
     path: string,
-    expectedCurrent: Readonly<{ readonly digest: string; readonly gitMode: "100644" | "100755" }>,
-    replacement: Readonly<{ readonly bytes: Buffer; readonly gitMode: "100644" | "100755" }>,
+    expectedCurrentDigest: string,
+    expectedGitMode: "100644" | "100755",
+    replacementBytes: Buffer,
+    replacementGitMode: "100644" | "100755",
   ) => void;
+  readonly close: () => void;
+}>;
+
+export type JusticeLinuxNativeGateAddon = Readonly<{
+  readonly openReviewGateRoot: (rootDir: string) => JusticeLinuxNativeGateRoot;
+  readonly probeReviewGateCapabilities: () => NativeCapabilities;
 }>;
 
 export type JusticeLinuxNativeAddon = Readonly<{
@@ -125,19 +133,7 @@ function isGateAddon(
   value: Record<string, unknown>,
 ): value is Record<string, unknown> & JusticeLinuxNativeGateAddon {
   return (
-    typeof value.acquireScopeLock === "function" &&
-    typeof value.acquireGateLock === "function" &&
-    typeof value.acquireRecoveryGcLock === "function" &&
-    typeof value.listScopeIds === "function" &&
-    typeof value.listGateIds === "function" &&
-    typeof value.listWriterIds === "function" &&
-    typeof value.readWriterShard === "function" &&
-    typeof value.durableReplaceWriterShard === "function" &&
-    typeof value.publishRecoveryObject === "function" &&
-    typeof value.readRecoveryObject === "function" &&
-    typeof value.listRecoveryObjects === "function" &&
-    typeof value.deleteRecoveryObject === "function" &&
-    typeof value.readWorkspaceFile === "function" &&
-    typeof value.replaceWorkspaceFileExact === "function"
+    typeof value.openReviewGateRoot === "function" &&
+    typeof value.probeReviewGateCapabilities === "function"
   );
 }

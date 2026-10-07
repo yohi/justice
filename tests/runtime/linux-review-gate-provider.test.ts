@@ -1,5 +1,5 @@
 import process from "node:process";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createLinuxReviewGateProvider } from "../../src/runtime/linux-review-gate-provider";
 
 describe("LinuxReviewGateProvider publication", () => {
@@ -11,8 +11,21 @@ describe("LinuxReviewGateProvider publication", () => {
     expect(createLinuxReviewGateProvider("/tmp")).toBeDefined();
   });
 
-  it("returns undefined when the native gate addon is unavailable", () => {
-    expect(createLinuxReviewGateProvider("/tmp")).toBeUndefined();
+  it("returns undefined when the native gate addon is unavailable", async () => {
+    vi.resetModules();
+    vi.doMock("../../src/runtime/linux-native-addon", () => ({
+      hasGlibcRuntime: () => true,
+      loadJusticeLinuxNativeAddon: () => undefined,
+    }));
+    try {
+      const { createLinuxReviewGateProvider: unavailableProvider } = await import(
+        "../../src/runtime/linux-review-gate-provider"
+      );
+      expect(unavailableProvider("/tmp")).toBeUndefined();
+    } finally {
+      vi.doUnmock("../../src/runtime/linux-native-addon");
+      vi.resetModules();
+    }
   });
 });
 
@@ -42,7 +55,7 @@ describe("LinuxReviewGateProvider contract", () => {
     const provider = createLinuxReviewGateProvider("/tmp");
     expect(provider).toBeDefined();
     if (provider === undefined) return;
-    const lock = await provider.acquireScopeLock("scope-a");
+    const lock = await provider.acquireScopeLock("scope-cloexec");
     expect(lock).not.toBe("occupied");
     if (lock !== "occupied") {
       expect(lock.verifyCloexec()).toBe(true);
@@ -54,8 +67,9 @@ describe("LinuxReviewGateProvider contract", () => {
     const provider = createLinuxReviewGateProvider("/tmp");
     expect(provider).toBeDefined();
     if (provider === undefined) return;
-    expect(() => provider.close()).toThrow("not_implemented");
-    await expect(provider.listScopeIds()).rejects.toThrow();
+    expect(() => provider.close()).not.toThrow();
+    expect(() => provider.close()).not.toThrow();
+    await expect(provider.listScopeIds()).rejects.toThrow("provider_closed");
   });
 
   it.each(["", "scope/child", "..", "scope\\child"])(
