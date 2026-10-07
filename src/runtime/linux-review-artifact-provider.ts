@@ -1,8 +1,12 @@
-import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
 import type { FileWriter, ReservedReviewArtifactIo } from "../core/types";
-
-const NATIVE_ADDON_FILE = "index.linux-x64-gnu.node";
+import {
+  hasGlibcRuntime,
+  loadJusticeLinuxNativeAddon,
+  type NativeCapabilities,
+  type NativeHandle,
+  type NativeRoot,
+  type ReservationDescriptor,
+} from "./linux-native-addon";
 
 export type LinuxOpenat2RuntimeEnvironment = Readonly<{
   readonly platform: NodeJS.Platform;
@@ -16,41 +20,6 @@ export type LinuxOpenat2ReviewArtifactProvider = Readonly<{
   readonly createExclusiveMarker: NonNullable<FileWriter["createExclusiveMarker"]>;
   readonly reservedReviewArtifactIo: ReservedReviewArtifactIo;
   readonly close: () => void;
-}>;
-
-type NativeIdentity = Readonly<{ readonly device: string; readonly inode: string }>;
-type NativeCapabilities = Readonly<{
-  readonly linux: boolean;
-  readonly x64: boolean;
-  readonly glibc: boolean;
-  readonly openat2: boolean;
-  readonly renameat2: boolean;
-}>;
-type NativeHandle = Readonly<{
-  readonly artifactIdentity: () => NativeIdentity;
-  readonly leasePath: () => string;
-  readonly close: () => void;
-}>;
-type ReservationDescriptor = Readonly<{
-  readonly artifactPath: string;
-  readonly leasePath: string;
-  readonly artifactIdentity: NativeIdentity;
-}>;
-type NativeRoot = Readonly<{
-  readonly createExclusiveMarker: (artifactPath: string) => NativeHandle;
-  readonly openExistingReservation: (descriptor: ReservationDescriptor) => NativeHandle;
-  readonly writeExisting: (handle: NativeHandle, bytes: Buffer) => void;
-  readonly readOnce: (handle: NativeHandle) => Buffer;
-  readonly cleanupExistingReservation: (
-    descriptor: ReservationDescriptor,
-  ) => Readonly<{
-    readonly status: "cleaned" | "quarantine_retained" | "replacement_retained" | "cleanup_incomplete";
-  }>;
-  readonly close: () => void;
-}>;
-type NativeAddon = Readonly<{
-  readonly openReviewArtifactRoot: (rootDir: string) => NativeRoot;
-  readonly probeReviewArtifactCapabilities: () => NativeCapabilities;
 }>;
 
 export function isSupportedLinuxOpenat2Environment(
@@ -72,8 +41,9 @@ export function createLinuxOpenat2ReviewArtifactProvider(
     return undefined;
   }
 
-  const addon = loadNativeAddon();
-  if (addon === undefined) return undefined;
+  const nativeAddon = loadJusticeLinuxNativeAddon();
+  if (nativeAddon === undefined) return undefined;
+  const addon = nativeAddon.artifact;
 
   let capabilities: NativeCapabilities;
   try {
@@ -188,37 +158,6 @@ export function createLinuxOpenat2ReviewArtifactProvider(
       }
     },
   };
-}
-
-function loadNativeAddon(): NativeAddon | undefined {
-  try {
-    const require = createRequire(import.meta.url);
-    const addonPath = fileURLToPath(new URL(`../../dist/native/${NATIVE_ADDON_FILE}`, import.meta.url));
-    const loaded: unknown = require(addonPath);
-    return isNativeAddon(loaded) ? loaded : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function isNativeAddon(value: unknown): value is NativeAddon {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as Record<string, unknown>;
-  return (
-    typeof record.openReviewArtifactRoot === "function" &&
-    typeof record.probeReviewArtifactCapabilities === "function"
-  );
-}
-
-function hasGlibcRuntime(): boolean {
-  try {
-    const report = process.report?.getReport() as
-      | { readonly header?: { readonly glibcVersionRuntime?: unknown } }
-      | undefined;
-    return typeof report?.header?.glibcVersionRuntime === "string";
-  } catch {
-    return false;
-  }
 }
 
 function nativeErrorCode(cause: unknown): string | undefined {
