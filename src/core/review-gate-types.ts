@@ -8,6 +8,8 @@ export type ArtifactDigest = string & { readonly __brand: "ArtifactDigest" };
 
 export type ReviewGatePhase = "design" | "plan";
 export type ReviewGateStatus = "active" | "suspended" | "completed";
+export const MAX_DESIGN_REMEDIATION_ROUNDS = 5;
+export const MAX_PLAN_REMEDIATION_ROUNDS = 3;
 export type ReviewGateSuspensionReason =
   | "reopen_required"
   | "round_limit_exhausted"
