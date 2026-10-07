@@ -72,6 +72,11 @@ export function extractReviewGateToolPaths(
   ) {
     return normalizeTargetPaths(readStringFields(args, FILE_PATH_KEYS));
   }
+  // CAP1 scope enforcement also covers the model-visible read tool: the
+  // coordinator scope-checks exact phase-authorized artifacts on read.
+  if (toolName === "read") {
+    return normalizeTargetPaths(readStringFields(args, FILE_PATH_KEYS));
+  }
 
   if (toolName !== "apply_patch") return [];
   const patches = readStringFields(args, PATCH_TEXT_KEYS);
