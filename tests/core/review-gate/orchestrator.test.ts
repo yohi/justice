@@ -481,7 +481,7 @@ describe("planReviewGateNextOperation — crash-window planning", () => {
     ).toEqual({
       kind: "dispatch_reviewer",
       phase: "design",
-      redispachedOperationId: "op-review-1",
+      redispatchedOperationId: "op-review-1",
     });
 
     const candidate = {
@@ -507,7 +507,7 @@ describe("planReviewGateNextOperation — crash-window planning", () => {
       kind: "dispatch_finding_validator",
       phase: "design",
       candidate,
-      redispachedOperationId: "op-validate-1",
+      redispatchedOperationId: "op-validate-1",
     });
   });
 
@@ -538,7 +538,7 @@ describe("planReviewGateNextOperation — crash-window planning", () => {
       phase: "design",
       round,
       lineageIds: [lineageA],
-      redispachedOperationId: "op-self-1",
+      redispatchedOperationId: "op-self-1",
     });
 
     expect(
@@ -557,7 +557,7 @@ describe("planReviewGateNextOperation — crash-window planning", () => {
     ).toEqual({
       kind: "dispatch_lineage_revalidation",
       lineageId: lineageA,
-      redispachedOperationId: "op-reval-1",
+      redispatchedOperationId: "op-reval-1",
     });
 
     const suspended = projectReviewGate([
@@ -579,7 +579,7 @@ describe("planReviewGateNextOperation — crash-window planning", () => {
     ).toEqual({
       kind: "validate_non_convergence_reentry",
       phase: "design",
-      redispachedOperationId: "op-reentry-1",
+      redispatchedOperationId: "op-reentry-1",
     });
   });
 
