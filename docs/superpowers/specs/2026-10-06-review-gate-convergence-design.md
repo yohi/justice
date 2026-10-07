@@ -1,0 +1,3399 @@
+# Justice Review Gate — Convergence, Validation, and Traceability Design
+
+**Status:** Design candidate  
+**Date:** 2026-10-06  
+**Target:** Justice v4.x, baseline v4.3.1  
+**Authority:** GitHub Issue #297 — Justice Review Gate — Convergence, Validation, and Traceability Requirements  
+**Repository:** `yohi/justice`  
+**Implementation Authorization:** NOT GRANTED by this document
+
+---
+
+## 1. Purpose
+
+This design replaces the v4 Review Gate's combined Design + Plan retry loop with an event-sourced deterministic approval orchestrator.
+
+The design MUST satisfy the following workflow:
+
+```text
+Requirements
+    ↓
+DESIGN GATE
+    ↓
+DESIGN_CLEAR
+    ↓
+approved Design fixed
+    ↓
+PLAN GATE
+    ↓
+PLAN_CLEAR
+    ↓
+explicit implementation authorization
+    ↓
+/justice-implement --approved
+```
+
+The Review Gate is a pre-implementation contract approval mechanism. It MUST NOT become a production source review, implementation executor, merge authority, or human approval substitute.
+
+A CLEAR result means only:
+
+```text
+under the pinned Review Gate protocol and approved artifact binding,
+no unresolved blocking finding remains in the applicable dependency closure
+```
+
+It MUST NOT mean human approval, merge approval, or implementation authorization.
+
+---
+
+## 2. Scope
+
+### 2.1 In scope
+
+- `/justice-review-gate`
+- staged Design Gate then Plan Gate
+- Requirements resolution and binding
+- independent finding validation
+- semantic finding lineage
+- remediation and self-review
+- deterministic review validation
+- semantic non-convergence detection
+- Justice-controlled remediation commits
+- durable Review Gate history
+- restart/recovery semantics
+- review-safe capabilities
+- approval binding and protocol fingerprinting
+- history query UX
+- v4 compatibility for `--retry`
+
+### 2.2 Out of scope
+
+- production implementation
+- production source code review
+- Requirements auto-remediation
+- Plan Gate mutation of Design
+- Git push or merge automation
+- CodeRabbit integration changes
+- project-tracked Review Gate history files
+- TypeScript module/file layout
+- exact class/interface names
+- Zod schema file placement
+- concrete OS lock API
+- concrete test-file layout
+- implementation task ordering
+
+---
+
+## 3. ARCH1 — Event-Sourced Deterministic Review Orchestrator
+
+The architecture is fixed as:
+
+```text
+ARCH1
+Event-Sourced Deterministic Review Orchestrator
+
+1. Agents do not own workflow state.
+2. Evidence does not mutate state by itself.
+3. Justice core performs every authoritative transition.
+4. Durable events are the only Review Gate state source.
+5. Projection determines resume behavior after every restart.
+6. Semantic lineage, not textual findings, determines convergence.
+7. Git/workspace mutation is capability-scoped and core-controlled.
+```
+
+### 3.1 Responsibility split
+
+```text
+LLM agents
+  = observation
+  = semantic judgment
+  = bounded artifact remediation
+
+registered deterministic validators
+  = deterministic rule authority
+
+Justice core
+  = identity issuance
+  = state transitions
+  = scope enforcement
+  = lineage lifecycle
+  = persistence
+  = commit
+  = recovery
+  = convergence detection
+  = approval binding
+```
+
+Agents MUST NOT issue authoritative Gate, lineage, commit, generation, round, or approval transitions.
+
+### 3.2 Rejected alternatives
+
+The following alternatives are rejected for v4:
+
+1. Extending the current mutable retry-state machine with more flags.  
+   This does not provide durable causal history, semantic lineage, or reliable crash recovery.
+
+2. Introducing a database or generic workflow engine.  
+   This adds migrations, database lifecycle, corruption semantics, and runtime dependencies that are unnecessary for v4.
+
+---
+
+## 4. Authority order and phase model
+
+The artifact authority order is:
+
+```text
+requirements
+  > design
+    > plan
+```
+
+A finding's discovery location and remediation ownership are different concepts:
+
+```text
+observedPhase
+  = where the defect was discovered
+
+ownerScope
+  = requirements | design | plan
+  = artifact authority responsible for the defect
+```
+
+A reopen transition is orchestration state, not defect identity.
+
+```text
+lineage
+  = semantic defect authority
+
+REOPEN_REQUIRED
+  = Justice-derived orchestration transition
+```
+
+---
+
+## 5. R1 / C1 / L1 — Generation discovery and locking
+
+### 5.1 Review scope identity
+
+A workspace-local Review scope is:
+
+```text
+reviewScopeId =
+  sha256(
+    "justice-review-scope-v1\0"
+    + canonicalDesignPath
+    + "\0"
+    + canonicalPlanPath
+  )
+```
+
+Requirements are deliberately excluded from `reviewScopeId`.
+
+Design and Plan command paths MUST be canonical workspace-relative regular-file identities and MUST reject workspace escape or unsafe symlink traversal before they participate in `reviewScopeId` or mutation authority.
+
+A canonical workspace path is an opaque artifact identity. It is **not** a raw Git pathspec and path normalization is not Git pathspec sanitization. Valid artifact filenames may contain Git pathspec metacharacters or magic prefixes. Whenever Justice passes an artifact path to a Git operation that accepts pathspecs, the Git boundary MUST apply the single literal-path policy defined by CAP1/GIT1; it MUST NOT depend on filename rejection, shell quoting, `--`, NUL framing, or `shell:false` to disable Git's own pathspec interpretation.
+
+### 5.2 Storage layout and durable scope membership
+
+```text
+.justice/review-gates/
+  events/<reviewScopeId>/<gateId>/<writerId>.jsonl
+  locks/scopes/<reviewScopeId>.lock
+  locks/gates/<gateId>.lock
+  recovery/objects/sha256/...
+```
+
+The storage namespace `events/<reviewScopeId>/...` is the durable discovery authority for scope membership. Scope discovery MUST NOT depend on successfully decoding `GATE_CREATED`.
+
+`GATE_CREATED.reviewScopeId` is redundant integrity evidence and MUST exactly equal the enclosing namespace. A mismatch is `REVIEW_HISTORY_CONFLICT`.
+
+```text
+corrupt/unsupported GATE_CREATED under current scope namespace
+  → current scope history is corrupt/unsupported
+  → fail closed
+  → MUST NOT create a replacement generation
+
+corrupt/unsupported history under an unrelated scope namespace
+  → current-scope execution does not open/project it
+  → does not globally deny the current scope
+
+supersedesGateId
+  → MUST resolve to a generation in the same reviewScopeId namespace
+```
+
+### 5.3 Gate discovery
+
+Under a short-lived exclusive non-blocking scope lock:
+
+1. Enumerate only Gate directories under `events/<reviewScopeId>/`.
+2. Project those histories and validate their same-scope `supersedesGateId` chain.
+3. More than one resumable generation → `REVIEW_GATE_IDENTITY_CONFLICT`.
+4. Exactly one resumable generation → acquire its Gate lock, reread all authoritative shards from that same scope namespace, reproject DA1/P1, then resume that generation.
+5. If no resumable generation exists, identify the unique completed chain tip, if any. Multiple/broken completed tips → `REVIEW_GATE_IDENTITY_CONFLICT`.
+6. If the unique completed tip's `CompletedApprovalBindingV1` exactly matches the current structured binding, return that COMPLETED Gate idempotently and read-only. Do not append an event and do not create a new generation.
+7. Otherwise create a new random `gateId` directory only under `events/<reviewScopeId>/`; when a completed tip exists, set `supersedesGateId` to that exact same-scope tip. Acquire the new Gate lock and durably append `GATE_CREATED`.
+8. Any corrupt/unsupported Gate directory already present under the current scope namespace blocks discovery; it MUST NOT be treated as no history.
+
+For a resumable/new generation, the scope lock MUST remain held until the Gate lock is acquired and the authoritative history has been reprojected/created. For exact completed reuse, the scope lock may be released after the immutable completed projection and binding match have been validated.
+
+The binding used for completed reuse or `GATE_CREATED` MUST be constructed from artifact/protocol identities reread while the scope lock is held. The scope lock does not prevent external workspace edits, so any detected admission-input drift aborts that decision and requires a fresh discovery/admission snapshot rather than returning or creating a Gate from mixed reads. A selected resumable Gate similarly rereads current artifact/protocol identity after acquiring the Gate lock and routes differences through RI1/CTX1 instead of resuming from stale assumptions.
+
+### 5.3.1 Generation creation payload
+
+`GATE_CREATED` fixes at least:
+
+- `reviewScopeId`,
+- canonical Design path,
+- canonical Plan path,
+- the RR1 Requirements resolution,
+- initial relevant artifact digests,
+- current Design/Plan/global protocol fingerprints,
+- writer identity,
+- optional `supersedesGateId`.
+
+A newly created generation is ACTIVE in Design unless IP1 immediately establishes `DESIGN_CLEAR_INHERITED`, in which case its initial effective phase is Plan.
+
+### 5.4 Gate lock
+
+`.justice/review-gates/locks/gates/<gateId>.lock` is an OS process-lifetime exclusive lock bound to an open file descriptor.
+
+- PID, writer ID, and timestamps are diagnostic only.
+- TTL and heartbeat MUST NOT define ownership.
+- Lock acquisition is non-blocking.
+- Existing owner → `REVIEW_GATE_BUSY`.
+- Workers MUST NOT inherit the lock descriptor.
+- Missing required runtime lock capability → mutating Review Gate MUST fail closed.
+
+### 5.5 Lock scope
+
+The Gate lock is held for the entire orchestration invocation, not just individual state transitions.
+
+The Gate lock defines state-transition ownership. It does not grant mutation permission; CAP1 capability checks are independently required.
+
+A crash while ACTIVE does not synthesize a suspension. A later owner reacquires the Gate through R1, keeps the same epoch and the same generation-wide remaining remediation capacity, and may append `ORCHESTRATION_RESUMED` before continuing from the projected `ResumeCursor`.
+
+---
+
+## 6. G1 / E1 — Generation lifecycle, epochs, rounds
+
+### 6.1 Generation status
+
+```text
+ACTIVE
+SUSPENDED
+COMPLETED
+```
+
+Invariant:
+
+```text
+COMPLETED iff PLAN_CLEAR exists
+```
+
+`DESIGN_CLEAR` is a milestone, not completion.
+
+A history integrity/version failure is an invocation failure and MUST NOT be represented as a durable Gate status.
+
+### 6.2 Reopen and resume
+
+A reopen request suspends the generation. It does not itself invalidate an approval milestone.
+
+```text
+REOPEN_REQUIRED + unchanged guarded artifact
+  → remain SUSPENDED
+
+accepted committed relevant artifact change
+  → observe change
+  → invalidate affected progress
+  → start a new orchestration epoch
+  → ACTIVE
+```
+
+### 6.3 Orchestration epochs
+
+Epochs are orchestration/reentry identities, not finding/round identities and **not remediation-budget reset boundaries**.
+
+The reason for SUSPENDED state governs reentry:
+
+```text
+REOPEN_REQUIRED
+  → guarded committed upstream change required
+
+ROUND_LIMIT_EXHAUSTED
+  → automatic remediation is exhausted for that phase/generation
+  → rerun may observe/accept a clean committed external change
+  → MUST NOT replenish remediation capacity
+
+REVIEW_NON_CONVERGENT
+  → N1 material-progress guard required
+
+operational EXECUTION_SUSPENDED
+  → resume/recovery follows the projected operation-specific cursor
+```
+
+A newly observed artifact/protocol change never bypasses the applicable suspension guard.
+
+- `GATE_CREATED` starts epoch 1.
+- Crash while ACTIVE → same epoch.
+- A permitted suspension reentry may start a new epoch, but remediation capacity is always computed generation-wide.
+- Killing/restarting the process or starting a new epoch MUST NOT refresh remediation capacity.
+
+### 6.4 Remediation round identity and absolute ceiling
+
+Design and Plan remediation rounds are generation-global and phase-local monotonic ordinals.
+
+```text
+designRemediationRound: 1, 2, 3, 4, 5
+planRemediationRound:   1, 2, 3
+```
+
+They do not reset on a new epoch.
+
+Issue #297 defines absolute per-generation ceilings:
+
+```text
+maxDesignRemediationRounds = 5
+maxPlanRemediationRounds   = 3
+
+remainingDesignRemediations =
+  max(0, 5 - generationTotalDesignRemediationRounds)
+
+remainingPlanRemediations =
+  max(0, 3 - generationTotalPlanRemediationRounds)
+```
+
+A started remediation round consumes one absolute slot even if self-review later blocks commit. Justice MUST NOT start Design round 6 or Plan round 4 in the same Gate generation.
+
+After the ceiling is exhausted, a clean committed external artifact change and the resulting revalidation/fresh review may still establish CLEAR. If blocking findings remain and another automatic remediation would be required, Justice remains/returns `ROUND_LIMIT_EXHAUSTED`; no new remediation round is created.
+
+---
+
+## 7. RR1 — Requirements resolution
+
+`--requirements <path>` is optional.
+
+Resolution precedence is:
+
+```text
+explicit --requirements
+  > Design-declared explicit Requirements reference
+  > no other heuristic
+```
+
+### 7.1 Explicit path
+
+If supplied, Justice MUST:
+
+- canonicalize to a workspace-relative canonical path,
+- reject path escape/symlink abuse,
+- require a regular readable file,
+- use the explicit path as resolution authority.
+
+If the Design declares a different Requirements path, the resolver MUST NOT override the explicit path. The mismatch is a Design Gate finding.
+
+### 7.2 Automatic resolution
+
+If `--requirements` is absent, Justice MAY inspect only a strict explicit Requirements reference declared by the Design artifact.
+
+Exactly one valid canonical candidate is required.
+
+The following MUST produce the invocation/discovery outcome `REQUIREMENTS_RESOLUTION_REQUIRED` before any `gateId` generation is created:
+
+- zero candidates,
+- multiple distinct candidates,
+- malformed reference,
+- path escape,
+- missing target,
+- non-regular target.
+
+The following heuristics are prohibited:
+
+- directory scan,
+- filename similarity,
+- date/stem matching,
+- most-recent file selection,
+- reverse inference from Plan.
+
+### 7.3 Persisted resolution
+
+`GATE_CREATED` stores:
+
+```text
+RequirementsResolutionV1 {
+  source:
+    EXPLICIT
+    | AUTO_DESIGN_REFERENCE
+
+  canonicalPath
+  digest
+
+  designReferenceEvidence? {
+    referenceKind
+    logicalLocation
+  }
+}
+```
+
+No quoted artifact body is stored.
+
+An existing generation never re-runs automatic Requirements resolution. Later artifact changes use RI1 change observation.
+
+Design and Plan canonical paths are fixed by `reviewScopeId` for the generation. If a resumed invocation explicitly supplies a different `--requirements` path, Justice MUST NOT silently replace the persisted binding. The new path may be accepted only as an explicit Requirements authority change under the currently allowed RI1/N1 transition, after applying the same canonicalization/scope/regular-file checks and clean/committed requirement. Otherwise the invocation fails without changing the persisted Requirements identity.
+
+---
+
+## 8. PF1 — Protocol descriptors and fingerprints
+
+Protocol identity is split by semantic effect.
+
+```text
+ReviewProtocolDescriptorV1
+├─ design: DesignProtocolDescriptorV1
+├─ plan: PlanProtocolDescriptorV1
+└─ crossPhase: CrossPhaseProtocolDescriptorV1
+```
+
+```text
+designProtocolFingerprint
+  = sha256(canonicalJson(DesignProtocolDescriptorV1))
+
+planProtocolFingerprint
+  = sha256(canonicalJson(PlanProtocolDescriptorV1))
+
+reviewProtocolFingerprint
+  = sha256(canonicalJson(ReviewProtocolDescriptorV1))
+```
+
+A phase descriptor MUST include every semantic dependency capable of changing that phase's CLEAR result.
+
+Shared semantics MUST be explicitly represented in every affected phase descriptor.
+
+### 8.1 Design descriptor semantic inputs
+
+At minimum:
+
+- Design review contract version
+- finding-validator contract version
+- remediation contract version
+- self-review contract version
+- Requirements resolution policy version
+- severity policy version
+- Design reopen policy version
+- resolution policy version
+- lineage policy version
+- convergence policy version
+- Design round limit
+- static reviewer/validator/remediator/self-review prompt digests
+- deterministic validation semantic contract
+
+### 8.2 Plan descriptor semantic inputs
+
+At minimum:
+
+- Plan review contract version
+- finding-validator contract version
+- remediation contract version
+- self-review contract version
+- severity policy version
+- Plan reopen policy version
+- resolution policy version
+- lineage policy version
+- convergence policy version
+- Plan round limit
+- static reviewer/validator/remediator/self-review prompt digests
+- deterministic validation semantic contract
+
+### 8.3 Cross-phase descriptor
+
+Contains semantics that affect whole-Gate orchestration but do not independently alter Design or Plan review validity, including:
+
+- phase transition policy
+- completed binding policy
+- Design CLEAR inheritance policy
+- cross-generation lineage policy
+- review-scope identity policy
+- generation policy
+- restart/resume policy
+
+### 8.4 Exclusions
+
+The following do not alter protocol fingerprints solely by changing:
+
+- model/provider identity,
+- temperature,
+- writer/process identity,
+- timestamp,
+- package version if review semantics are unchanged,
+- event storage version,
+- lock implementation,
+- filesystem layout,
+- compression/archive mechanics,
+- sandbox implementation details if semantic validator contract is unchanged.
+
+The deterministic-validation portion of a phase descriptor MUST commit, for each semantically relevant registered validator, at least its validator ID, contract version, result schema version, mandatory stages, stage failure policy, and rule semantics. Changing any of those semantics changes the affected phase fingerprint. Changing only runner/sandbox implementation while preserving this contract does not.
+
+Inconsistent shared semantic versions MUST fail with `REVIEW_PROTOCOL_DESCRIPTOR_INVALID`.
+
+---
+
+## 9. CB1 / IP1 — Approval bindings and generation reuse
+
+### 9.1 Completed approval binding
+
+```text
+CompletedApprovalBindingV1 {
+  reviewScopeId
+
+  requirements {
+    canonicalPath
+    digest
+  }
+
+  design {
+    canonicalPath
+    digest
+  }
+
+  plan {
+    canonicalPath
+    digest
+  }
+
+  reviewProtocolFingerprint
+}
+```
+
+A completed Gate is idempotently reused only when the current structured binding exactly matches the persisted binding. This reuse is read-only: no new event, writer shard, epoch, or Gate lock transition is created.
+
+Package/model/provider/writer changes alone do not invalidate it.
+
+Any binding mismatch creates a fresh generation with `supersedesGateId`; the old completed generation remains immutable.
+
+`/justice-implement --approved` MUST use the same structured binding to detect stale approval.
+
+### 9.2 Design approval binding
+
+```text
+DesignApprovalBindingV1 {
+  reviewScopeId
+
+  requirements {
+    canonicalPath
+    digest
+  }
+
+  design {
+    canonicalPath
+    digest
+  }
+
+  designProtocolFingerprint
+}
+```
+
+### 9.3 Design CLEAR inheritance
+
+A fresh generation MAY inherit predecessor Design CLEAR only when:
+
+- predecessor is exactly `supersedesGateId`,
+- predecessor generation is COMPLETED,
+- predecessor has a valid Design CLEAR milestone,
+- predecessor and current `DesignApprovalBindingV1` are exactly equal.
+
+The new generation MUST append:
+
+```text
+DESIGN_CLEAR_INHERITED {
+  predecessorGateId
+  predecessorDesignClearEventId
+
+  designApprovalBinding
+  designApprovalBindingFingerprint
+
+  inheritanceBasis {
+    predecessorDesignApprovalBindingFingerprint
+    currentDesignApprovalBindingFingerprint
+  }
+}
+```
+
+The projected authority is:
+
+```text
+designClear.authority =
+  REVIEWED_THIS_GENERATION
+  | INHERITED_FROM_PREDECESSOR
+```
+
+Inheritance follows only the immediate predecessor; older continuity follows the predecessor chain.
+
+A Plan-only protocol/content change may create a fresh generation yet still inherit Design CLEAR when the Design binding remains exact.
+
+---
+
+## 10. CTX1 — Phase review context and baseline revision
+
+State-machine ordinal and semantic identity are separate.
+
+```text
+phaseBaselineRevision
+  = generation-local monotonic progress/version ordinal
+
+PhaseReviewContextIdentity
+  = semantic context identity
+```
+
+Design context identity is derived from:
+
+- phase = Design,
+- Requirements canonical path/digest,
+- Design canonical path/digest,
+- `designProtocolFingerprint`.
+
+Plan context identity is derived from:
+
+- phase = Plan,
+- effective Design approval binding fingerprint,
+- Plan canonical path/digest,
+- `planProtocolFingerprint`.
+
+Lineage applicability is projected as:
+
+```text
+CURRENT {
+  baselineRevision
+  contextIdentity
+}
+
+PENDING_REVALIDATION {
+  fromBaselineRevision
+  fromContextIdentity
+  toBaselineRevision
+  toContextIdentity
+}
+```
+
+Artifact change changes baseline revision and semantic context.
+
+Phase protocol change may change semantic context without changing artifact bytes.
+
+Cross-phase-only protocol change does not invalidate phase lineage applicability, though an in-flight attempt bound to an old global protocol fingerprint becomes stale.
+
+### 10.1 Protocol change observation
+
+```text
+REVIEW_PROTOCOL_CHANGE_OBSERVED {
+  previousReviewProtocolFingerprint
+  currentReviewProtocolFingerprint
+
+  previousDesignProtocolFingerprint
+  currentDesignProtocolFingerprint
+
+  previousPlanProtocolFingerprint
+  currentPlanProtocolFingerprint
+
+  affectedPhases[]
+}
+```
+
+This event records Justice's observation of typed descriptor differences; it is not the authority that defines protocol semantics.
+
+Propagation:
+
+```text
+Design protocol changed
+  → Design context stale
+  → downstream Plan authority stale
+  → effective Design CLEAR invalidated
+  → Design + Plan progress invalidated
+  → resume Design
+
+Plan protocol changed only
+  → Design CLEAR retained
+  → Plan progress invalidated
+  → resume Plan
+
+CrossPhase only changed
+  → phase lineage contexts remain current
+  → completed Gate binding reuse may fail
+  → any in-flight attempt bound to the old global fingerprint becomes STALE
+  → if the generation is still mutable, resume from the current phase with a fresh attempt as required
+```
+
+Protocol/artifact change observation does not override the current suspension contract. In particular, a generation suspended by `REVIEW_NON_CONVERGENT` still requires N1 material-progress validation before a new epoch can start; a protocol change cannot bypass that guard.
+
+---
+
+## 11. P1 / DA1 / SV1 — Durable event log and causal chain
+
+Review Gate history uses a dedicated append-only store, separate from the existing Observation Log.
+
+```text
+.justice/review-gates/events/<reviewScopeId>/<gateId>/<writerId>.jsonl
+```
+
+The enclosing `reviewScopeId` namespace is scope-membership authority as defined by R1. Each orchestration owner/process uses a fresh `writerId` shard. Restarting the same Gate keeps the same `gateId` but uses a new writer shard. A writer ID is never ordering authority across shards.
+
+### 11.1 Single causal chain
+
+`GATE_CREATED` is the genesis event with `gateRevision = 1` and null predecessor ID/digest. Every later authoritative event MUST satisfy:
+
+```text
+gateRevision == previous.gateRevision + 1
+previousEventId == previous.eventId
+previousEventDigest == previous.eventDigest
+```
+
+```text
+eventDigest =
+  sha256(canonicalJson(event envelope excluding eventDigest))
+```
+
+Per-writer sequence is monotonic, but writer/time ordering is not global authority.
+
+Projection snapshots every authoritative shard for one `events/<reviewScopeId>/<gateId>/` directory, validates each writer sequence, then reconstructs one global chain from `GATE_CREATED` by `gateRevision + previousEventId + previousEventDigest`. The genesis payload's `reviewScopeId` MUST match the enclosing namespace, and every `supersedesGateId` MUST remain in that namespace. Timestamp or filename sorting MUST NOT repair or define global order.
+
+Fork, revision gap, broken predecessor digest, incompatible duplicate revision/event identity, or writer-sequence violation → `REVIEW_HISTORY_CONFLICT`.
+
+Justice MUST NOT auto-sort forks or truncate an invalid tail.
+
+### 11.2 Event append durability
+
+A Review Gate event append is successful only after:
+
+1. read current authoritative shard,
+2. construct full previous content + one complete event line,
+3. write same-directory temporary file,
+4. flush file contents,
+5. atomic same-filesystem rename/publish,
+6. flush parent directory,
+7. success return.
+
+Append requires an expected head:
+
+```text
+{ eventId, eventDigest, gateRevision }
+```
+
+Mismatch → conflict; no append.
+
+Temporary files are non-authoritative and may be cleaned best-effort.
+
+Required runtime capabilities include open/write, file flush, atomic same-FS rename, directory flush, and CLOEXEC. Missing capability → mutating Review Gate fails closed.
+
+### 11.3 Versioned envelope
+
+```text
+{
+  envelopeVersion
+  eventId
+  gateId
+  writerId
+  sequence
+  gateRevision
+  previousEventId
+  previousEventDigest
+  eventType
+  payloadVersion
+  recordedAt
+  payload
+  eventDigest
+}
+```
+
+Persisted events are immutable.
+
+Storage version, review protocol version, and Justice package version are independent concepts.
+
+Supported old events are verified using their persisted canonicalization, decoded, and upcast in memory. Persisted history is never rewritten.
+
+Unknown authoritative semantics → `REVIEW_HISTORY_VERSION_UNSUPPORTED`, not silent skip.
+
+---
+
+## 12. PR1 / RET1 — Persistence policy and retention
+
+### 12.1 Long-lived event log
+
+Persist only typed, bounded, redacted authority/audit data.
+
+The event log MUST NOT persist:
+
+- full artifact contents,
+- quoted artifact excerpts,
+- raw reviewer/validator/remediator/self-review output,
+- prompts or hidden reasoning,
+- raw tool output,
+- environment variables,
+- credentials/tokens,
+- absolute home/workspace paths.
+
+Agent raw output lifecycle:
+
+```text
+raw
+→ strict parse
+→ typed result
+→ persistence policy validation
+→ bounded/redacted event
+→ discard raw
+```
+
+Malformed output persists only typed failure information.
+
+Authority field policy violations MUST fail with `EVENT_PERSISTENCE_POLICY_VIOLATION`; authority fields MUST NOT be silently redacted into different semantics.
+
+All persisted artifact paths are canonical workspace-relative paths. The persistence boundary is conceptually:
+
+```text
+typed event builder
+→ persistence sanitizer + strict schema validator
+→ PersistableReviewGateEvent
+→ DurableReviewGateEventStore
+```
+
+Only the final persistable type may reach the durable event store.
+
+### 12.2 Retention
+
+v4 Review Gate event history is an indefinite durable audit ledger.
+
+- ACTIVE/SUSPENDED histories are retained.
+- COMPLETED histories are retained.
+- corrupt/unsupported histories are retained and cannot be deleted to bypass failure.
+- automatic rotation/compaction/manual prune is out of scope for v4.
+
+Recovery CAS objects are the only automatically garbage-collected Review Gate storage.
+
+Diagnostics may report `gateCount`, completed/active/suspended counts, `eventCount`, `eventBytes`, recovery object count/bytes, and oldest Gate. These are diagnostic only and confer no delete authority.
+
+---
+
+## 13. RO1 — Durable recovery CAS
+
+Pre-remediation artifact bytes MUST NOT be embedded in JSONL history.
+
+```text
+.justice/review-gates/recovery/objects/sha256/ab/<digest...>
+```
+
+Events store only:
+
+- algorithm,
+- digest,
+- size,
+- objectRef locator.
+
+Algorithm + digest are authority; objectRef is a locator.
+
+Before mutation:
+
+```text
+capture exact bytes
+→ hash
+→ durable CAS publish
+→ readback + digest verify
+→ REMEDIATION_STARTED
+→ mutation allowed
+```
+
+CAS publication requires owner-only storage, no symlink traversal, regular-file validation, temp write, file flush, atomic publish, parent directory flush, and readback verification.
+
+Rollback:
+
+- reads object,
+- rehashes,
+- verifies recovery guards,
+- atomically restores,
+- verifies restored digest.
+
+Missing/corrupt recovery object → `RECOVERY_OBJECT_UNAVAILABLE` and SUSPENDED. Justice MUST NOT reconstruct missing bytes heuristically.
+
+The durable pre-image is rollback material only when a later transition has separately proven which workspace bytes Justice is allowed to replace. The existence of a pre-image MUST NOT be treated as proof that arbitrary current dirty bytes are Justice-owned.
+
+For `REMEDIATION_STARTED` without durable `REMEDIATION_COMPLETED`, if current target bytes differ from the exact durable pre-remediation binding, Justice MUST NOT restore the pre-image. CP1/WSP1 require fail-closed `REMEDIATION_RECOVERY_CONFLICT`.
+
+A pre-image is live only while the corresponding remediation operation is incomplete or while a later explicitly journaled restore still references it.
+
+GC is event-projection mark/sweep under a short dedicated GC lock. Because the recovery CAS is shared across scope namespaces, if any retained Gate history that could reference recovery objects cannot be projected safely, no global sweep occurs. Leaks are tolerated; deleting live recovery data is not.
+
+---
+
+## 13A. WSP1 — Review target workspace authority
+
+The Review target workspace state is projected explicitly.
+
+Git regular-file identity is:
+
+```text
+GitRegularFileMode = 100644 | 100755
+
+GitTreeEntryBindingV1 {
+  canonicalPath
+  blobSha
+  gitMode
+}
+
+GitIndexEntryBindingV1 {
+  canonicalPath
+  blobSha
+  gitMode
+  stage = 0
+}
+
+WorktreeArtifactBindingV1 {
+  canonicalPath
+  digest
+  gitMode
+}
+```
+
+Only regular-file Git modes `100644` and `100755` are valid Review Gate targets. The index binding MUST be one unique stage-0 entry; an unmerged/multi-stage target is not clean.
+
+`WorktreeArtifactBindingV1.gitMode` is computed directly from filesystem metadata, independently of Git's `core.fileMode` setting.
+
+Git regular-file executable identity follows the **owner execute bit** (`S_IXUSR`) only. Group/other execute bits alone MUST NOT produce Git mode `100755`.
+
+```text
+(stat.mode & 0o100) != 0
+  → 100755
+
+otherwise
+  → 100644
+```
+
+Normative examples:
+
+```text
+POSIX 0644 → Git 100644
+POSIX 0744 → Git 100755
+POSIX 0755 → Git 100755
+POSIX 0655 → Git 100644
+POSIX 0645 → Git 100644
+```
+
+The projected workspace states are:
+
+```text
+CLEAN_COMMITTED {
+  headSha
+  targetCanonicalPath
+  headEntry: GitTreeEntryBindingV1
+  indexEntry: GitIndexEntryBindingV1
+  worktree: WorktreeArtifactBindingV1
+}
+
+KNOWN_DIRTY {
+  headSha
+  targetCanonicalPath
+  headEntry: GitTreeEntryBindingV1
+  indexEntry: GitIndexEntryBindingV1
+  worktree: WorktreeArtifactBindingV1
+  sourceEventId
+}
+
+MUTATION_IN_FLIGHT {
+  headSha
+  targetCanonicalPath
+  headEntry: GitTreeEntryBindingV1
+  indexEntry: GitIndexEntryBindingV1
+  preWorktree: WorktreeArtifactBindingV1
+  remediationStartedEventId
+}
+```
+
+`UNKNOWN_DIRTY` is never a legal resumable authority state.
+
+`REMEDIATION_STARTED` binds the exact pre-remediation workspace bytes **and Git mode** together with the HEAD/index tree-entry guards. `review_mutation` is content-only authority: a successful remediation operation MUST preserve the pre-remediation worktree Git mode. `REMEDIATION_COMPLETED` establishes `KNOWN_DIRTY` only when the post-image Git mode still equals the guarded pre-remediation/head/index mode; mode drift is a review-scope violation and cannot advance to self-review or commit.
+
+### 13A.1 Crash before a durable post-image
+
+For `REMEDIATION_STARTED` without `REMEDIATION_COMPLETED`:
+
+```text
+HEAD/index entry bindings match
+AND current worktree binding == preWorktree
+  → no mutation is durably observed
+  → append REMEDIATION_INTERRUPTED_RECOVERED
+     disposition = NO_MUTATION_OBSERVED
+  → redispatch the same operationId / remediationRound
+
+current worktree binding != preWorktree
+  OR HEAD/index entry binding mismatch
+  → ownership of current bytes/mode is unprovable
+  → MUST NOT overwrite or rollback them
+  → REMEDIATION_RECOVERY_CONFLICT
+  → SUSPENDED
+```
+
+This is fail-closed even when the bytes look like a plausible partial remediation or the content is unchanged but the executable mode drifted. In particular, a durable `preWorktree.gitMode = 100755` followed by current POSIX mode `0655` is a mode mismatch (`100644`) and MUST produce recovery conflict rather than safe redispatch.
+
+### 13A.2 Known-dirty suspension default
+
+After `REMEDIATION_COMPLETED` and before a verified commit or explicit restore, every suspension defaults to:
+
+```text
+workspaceDisposition = PRESERVE_KNOWN_DIRTY
+workspaceBinding     = exact KNOWN_DIRTY binding
+```
+
+This covers, when applicable:
+
+- `SELF_REVIEW_CARRY_FORWARD`,
+- `ROUND_LIMIT_EXHAUSTED`,
+- `REVIEW_NON_CONVERGENT`,
+- operational `EXECUTION_SUSPENDED`,
+- commit failure before a verified commit.
+
+Resume is legal only when HEAD, the target HEAD/index entry bindings, and the worktree digest/Git mode exactly match the durable known-dirty binding, **or** when the suspension contract explicitly permits accepting a new clean committed external baseline through RI1/N1. Any other content or mode mutation is fail-closed.
+
+### 13A.3 Upstream reopen discards uncommitted downstream remediation
+
+An upstream reopen MUST NOT carry old uncommitted downstream remediation bytes across a Requirements/Design authority change.
+
+If `REQUIREMENTS_REOPEN_REQUIRED` or `DESIGN_REOPEN_REQUIRED` is derived while the current phase target is `KNOWN_DIRTY`, Justice MUST first restore that target to the exact committed target blob **and Git mode** at the guarded current HEAD. This intentionally discards all uncommitted Review Gate content mutations for that phase since its last successful remediation commit without changing the approved target mode.
+
+The restore is journaled:
+
+```text
+REVIEW_TARGET_RESTORE_PREPARED {
+  operationId
+  reason: UPSTREAM_REOPEN
+  sourceKnownDirtyBinding
+  targetCleanCommittedBinding
+}
+
+→ Justice core executes the exact `review_restore` capability
+→ verify HEAD/index unchanged and target == targetCleanCommittedBinding
+
+→ REVIEW_TARGET_RESTORE_SUCCEEDED
+   or REVIEW_TARGET_RESTORE_RECOVERED
+```
+
+Crash recovery:
+
+```text
+current workspace == sourceKnownDirtyBinding
+  → execute/re-execute exact restore
+
+current workspace == targetCleanCommittedBinding
+  → append REVIEW_TARGET_RESTORE_RECOVERED
+
+anything else
+  → REVIEW_RESTORE_RECOVERY_CONFLICT
+  → SUSPENDED
+```
+
+Only after the target is `CLEAN_COMMITTED` may Justice append the upstream `REOPEN_REQUIRED`.
+
+This restore changes workspace disposition only; it does not resolve a lineage. Target lineages remain OPEN unless later resolved by RSL1.
+
+### 13A.4 Suspension matrix
+
+```text
+REMEDIATION_STARTED only + crash
+  current worktree == preWorktree { digest, gitMode } → same-round redispatch
+  current worktree != preWorktree → conflict; never auto-rollback unknown content/mode
+
+REMEDIATION_COMPLETED + operational suspension
+  → PRESERVE_KNOWN_DIRTY
+
+SELF_REVIEW_CARRY_FORWARD
+  → PRESERVE_KNOWN_DIRTY
+
+ROUND_LIMIT_EXHAUSTED
+  → PRESERVE_KNOWN_DIRTY when dirty, otherwise CLEAN_COMMITTED
+
+REVIEW_NON_CONVERGENT
+  → PRESERVE_KNOWN_DIRTY when dirty, otherwise CLEAN_COMMITTED
+
+# The §27.4 priority chooses which suspension reason applies.
+# Both preserve the same exact WSP1 workspace authority when entered from KNOWN_DIRTY.
+
+upstream REQUIREMENTS_REOPEN_REQUIRED
+upstream DESIGN_REOPEN_REQUIRED
+  → RESTORE_TO_CLEAN_COMMITTED before REOPEN_REQUIRED
+
+verified remediation commit
+  → CLEAN_COMMITTED
+```
+
+### 13A.5 Required recovery scenarios
+
+The following scenarios have one normative outcome:
+
+| Scenario | Required outcome |
+| --- | --- |
+| 1. Crash immediately after `REMEDIATION_STARTED`; target still equals durable `preWorktree { digest, gitMode }` | Append `REMEDIATION_INTERRUPTED_RECOVERED(NO_MUTATION_OBSERVED)`; redispatch same operation/round. |
+| 2. Crash during partial write or mode drift; current worktree binding is neither durable `preWorktree` nor a completed post-image | `REMEDIATION_RECOVERY_CONFLICT`; do not restore, overwrite, chmod, or guess ownership. |
+| 3. Plan remediation self-review discovers a Design-owned blocker | Reconcile blocker; restore Plan known-dirty bytes to clean committed Plan through restore journal; then append `DESIGN_REOPEN_REQUIRED`. |
+| 4. Design remediation self-review discovers a Requirements-owned blocker | Reconcile blocker; restore Design known-dirty bytes to clean committed Design through restore journal; then append `REQUIREMENTS_REOPEN_REQUIRED`. |
+| 5. `REVIEW_NON_CONVERGENT` fires while carrying a known-dirty post-image | Suspend with exact `PRESERVE_KNOWN_DIRTY` binding. Reentry requires exact preserved state or an N1-authorized clean committed material change; no epoch replenishes remediation capacity. |
+| 6. External process changes a target while Justice expects known dirty bytes | If the new state is not an explicitly admissible clean committed RI1/N1 baseline, fail closed. Justice never overwrites the unexpected bytes. |
+
+---
+
+## 14. CLR1 — CLEAR milestone semantics
+
+CLEAR events are approval milestone authority. They do not duplicate finding history.
+
+### 14.1 DESIGN_CLEAR
+
+```text
+DESIGN_CLEAR {
+  designApprovalBinding
+  designApprovalBindingFingerprint
+
+  clearanceBasis {
+    freshReviewOperationId
+    reviewCandidatesEventId
+    findingValidationEventId
+    findingReconciliationEventId
+
+    reviewAttemptId
+    reviewAttemptOrdinal
+    orchestrationEpoch
+  }
+}
+```
+
+Justice MUST append `DESIGN_CLEAR` only after fresh projection under the Gate lock proves:
+
+- generation ACTIVE,
+- phase Design,
+- current review attempt RECONCILED,
+- no unresolved critical/major blocker in Requirements + Design closure,
+- no pending lineage revalidation in the closure,
+- no pending reopen/failure/remediation/self-review/commit operation,
+- current Requirements/Design binding exactly matches the approval binding,
+- current Design protocol fingerprint matches.
+
+Projection after Design CLEAR:
+
+```text
+generationStatus = ACTIVE
+phase = plan
+```
+
+### 14.2 DESIGN_CLEAR_INHERITED
+
+Defined by IP1. It is a first-class Design milestone in the new generation.
+
+### 14.3 PLAN_CLEAR
+
+```text
+PLAN_CLEAR {
+  designClearEventId
+
+  completedApprovalBinding
+  approvalBindingFingerprint
+
+  planApprovalBinding {
+    reviewScopeId
+
+    approvedDesign {
+      canonicalPath
+      digest
+    }
+
+    plan {
+      canonicalPath
+      digest
+    }
+
+    planProtocolFingerprint
+  }
+
+  planApprovalBindingFingerprint
+
+  clearanceBasis {
+    freshReviewOperationId
+    reviewCandidatesEventId
+    findingValidationEventId
+    findingReconciliationEventId
+
+    reviewAttemptId
+    reviewAttemptOrdinal
+    orchestrationEpoch
+  }
+}
+```
+
+PLAN CLEAR requires:
+
+- valid effective Design milestone,
+- current Plan review attempt RECONCILED,
+- no unresolved critical/major blocker in Requirements + Design + Plan closure,
+- no pending lineage revalidation in the closure,
+- no reopen/failure/remediation/self-review/commit operation,
+- current approved Design equals Design milestone binding,
+- current Plan digest equals Plan approval binding,
+- current phase/global protocol fingerprints equal approval binding.
+
+Projection:
+
+```text
+PLAN_CLEAR
+→ generationStatus = COMPLETED
+```
+
+After PLAN CLEAR, no later Review Gate event may be appended to that generation, including diagnostic events.
+
+Completed Gate reuse is read-only.
+
+### 14.4 Effective Design milestone
+
+History may contain:
+
+```text
+DESIGN_CLEAR #1
+→ DESIGN_CLEAR_INVALIDATED(#1)
+→ DESIGN_CLEAR #2
+```
+
+At most one Design milestone may be effective at once.
+
+---
+
+## 15. RI1 — Reopen and invalidation state machine
+
+### 15.1 Reopen request
+
+`DESIGN_REOPEN_REQUIRED` and `REQUIREMENTS_REOPEN_REQUIRED` are authoritative Justice transitions derived only after triggering blocking lineages have been committed.
+
+They produce:
+
+```text
+generationStatus = SUSPENDED
+resumeTargetPhase = design
+```
+
+They MUST NOT immediately invalidate Design CLEAR.
+
+The reopen event stores the guarded artifact path/digest and triggering lineage/event references.
+
+If the current phase target is WSP1 `KNOWN_DIRTY`, Justice MUST complete the journaled `RESTORE_TO_CLEAN_COMMITTED` disposition before appending the reopen transition. Therefore an upstream reopen suspension never retains uncommitted downstream remediation bytes.
+
+Re-running with the guarded upstream artifact unchanged does not create a new epoch or remediation capacity.
+
+### 15.2 Accepted external change
+
+Any external artifact change used to alter Review Gate authority — including reopen repair or Plan-only baseline replacement — may be accepted only when the affected artifact is clean and committed and its canonical path/digest is resolvable.
+
+Events:
+
+```text
+REQUIREMENTS_CHANGE_OBSERVED
+DESIGN_CHANGE_OBSERVED
+PLAN_CHANGE_OBSERVED
+```
+
+A mid-attempt input mutation instead produces `REVIEW_INPUT_CHANGED_DURING_ATTEMPT`; mixed-snapshot validation is forbidden.
+
+### 15.3 Progress invalidation
+
+`REVIEW_PROGRESS_INVALIDATED` makes prior phase review progress stale and records the old/new phase review contexts.
+
+Artifact/binding change advances the affected `phaseBaselineRevision`. Protocol-only change does **not** advance the revision solely because protocol changed; instead the `phaseProtocolFingerprint` and therefore `PhaseReviewContextIdentity` change. The invalidation event therefore records both old/new baseline revisions and old/new context identities, and the revision values may be equal for a protocol-only invalidation.
+
+Artifact-change matrix:
+
+```text
+Requirements change
+  → Design revision++
+  → Plan revision++
+  → effective Design CLEAR invalidated
+  → resume Design
+
+Design change
+  → Design revision++
+  → Plan revision++
+  → effective Design CLEAR invalidated
+  → resume Design
+
+Plan-only change
+  → Plan revision++
+  → Design CLEAR retained
+  → resume Plan
+```
+
+Protocol-only propagation follows CTX1:
+
+```text
+Design protocol changed
+  → Design context stale
+  → downstream Plan context/progress stale
+  → revisions need not change
+  → effective Design CLEAR invalidated
+  → resume Design
+
+Plan protocol changed only
+  → Plan context/progress stale
+  → Plan revision need not change
+  → Design CLEAR retained
+  → resume Plan
+```
+
+Existing Git remediation commits are not reverted. Only Review Gate approval progress becomes stale.
+
+### 15.4 DESIGN_CLEAR_INVALIDATED
+
+This event references and invalidates the exact currently effective Design milestone.
+
+It never deletes or rewrites the historical milestone.
+
+### 15.5 Lineage effect
+
+Progress invalidation is not lineage resolution.
+
+Every affected OPEN blocking lineage becomes `PENDING_REVALIDATION` for the new phase review context.
+
+CLEAR is forbidden until explicit lineage revalidation completes.
+
+---
+
+## 16. LNR1 — Finding identity and lineage
+
+Identity is separated into:
+
+```text
+occurrenceId
+  = one semantic finding observation
+
+lineageId
+  = one semantic defect identity within a Gate generation
+
+legacy itemKey
+  = existing Observation/Review evidence identity
+  = not Review Gate lineage authority
+```
+
+### 16.1 Lineage ID authority
+
+LLMs MUST NOT create arbitrary lineage IDs.
+
+Flow:
+
+```text
+candidate/validated observation
+→ Justice issues occurrenceId
+→ Justice presents opaque candidate existing-lineage refs
+→ finding-validator decides semantic relation
+→ Justice core binds existing lineage or issues new lineageId
+```
+
+Example display IDs may be `DG-L-001` and `PG-L-001`, but IDs are opaque and MUST NOT carry semantic authority.
+
+### 16.2 Typed semantic basis
+
+A lineage has an immutable generation-local canonical basis containing:
+
+- violationType
+- governingReference
+- semanticLocation
+- violatedContract
+- ownerScope
+
+Line numbers and free-text explanation are evidence/display only.
+
+Later baseline-specific observations store `confirmedSemanticBasis`; they do not rewrite the canonical lineage basis.
+
+### 16.3 Reviewer finding-validator contract
+
+Fresh reviewer and `finding-validator` MUST run as different agent roles in different contexts. The same underlying model is allowed. The validator MUST NOT receive reviewer hidden reasoning.
+
+For REVIEWER observations, the validator receives only the candidate finding, pinned phase artifacts/baseline, necessary typed Review Gate history, and Justice-provided opaque lineage candidates.
+
+The validator decision set is:
+
+```text
+VALID
+INVALID
+DUPLICATE
+ALREADY_RESOLVED
+ADVISORY
+DESIGN_REOPEN_REQUIRED
+REQUIREMENTS_REOPEN_REQUIRED
+```
+
+For a valid reviewer observation the finding-validator is authority for validity, severity, ownerScope, typed semantic basis, and current-generation semantic relation. Reviewer preference or a merely different architectural taste is not a blocking finding.
+
+`INVALID` observations are never remediated and create no blocking lineage transition. Their occurrences/validator decisions remain auditable so repeated rejected reviewer observations can be tracked diagnostically.
+
+`DUPLICATE + EXISTING` identifies duplicate candidate observations in the same review snapshot. All occurrences remain auditable, but they represent one blocker.
+
+A VALID minor finding is projected as advisory:
+
+- persist and display it,
+- do not block CLEAR,
+- do not auto-remediate it.
+
+Justice may filter lineage candidates by owner/reference/location/type for efficiency, but candidate retrieval is not semantic authority; the finding-validator decides semantic identity among Justice-provided candidates.
+
+### 16.4 Validator relation
+
+```text
+EXISTING
+NEW
+NONE
+```
+
+A resolved lineage observed again with the same defect present becomes `LINEAGE_REGRESSED`; a new lineage is not issued.
+
+---
+
+## 17. AR1 — Snapshot-pinned validity and ALREADY_RESOLVED
+
+Reviewer and validator MUST evaluate the same `ReviewAttemptBaseline`.
+
+Conceptually:
+
+```text
+ReviewAttemptBaseline {
+  gateId
+  reviewAttemptId
+  phase
+
+  phaseBaselineRevision
+  phaseReviewContextIdentity
+
+  relevantArtifactBindings {
+    requirements? { canonicalPath, digest }
+    design { canonicalPath, digest }
+    plan? { canonicalPath, digest }
+  }
+
+  approvedDesignDigest?   # required in Plan
+
+  phaseProtocolFingerprint
+  reviewProtocolFingerprint
+}
+```
+
+Design attempts bind Requirements + Design. Plan attempts bind the effective approved Design + Plan; the Requirements authority remains transitively fixed by the effective Design approval binding.
+
+If any relevant binding/digest changes during the attempt:
+
+```text
+REVIEW_INPUT_CHANGED_DURING_ATTEMPT
+→ SUSPENDED
+```
+
+`ALREADY_RESOLVED` is valid only when:
+
+```text
+lineageRelation = EXISTING
+AND target lineage.status = RESOLVED
+AND defect is absent on the pinned baseline
+```
+
+`NEW + ALREADY_RESOLVED` is impossible.
+
+If a resolved lineage's semantic defect is present on the pinned baseline:
+
+```text
+VALID + EXISTING
+→ LINEAGE_REGRESSED
+→ lifecycle RESOLVED → OPEN
+→ regressionCount++
+```
+
+Conflicting validity results for one lineage on one snapshot → `VALIDATOR_RESULT_CONFLICT`.
+
+---
+
+## 18. XG1 / XGR1 — Cross-generation lineage continuity
+
+Lineage IDs are generation-local.
+
+A fresh generation always creates a new lineage ID even when the defect is semantically identical to one in the predecessor generation.
+
+Optional continuity:
+
+```text
+predecessorLineageRef {
+  gateId
+  lineageId
+}
+```
+
+Same-generation recurrence uses `LINEAGE_REGRESSED`.
+
+Cross-generation continuity uses `CROSS_GENERATION_LINEAGE_LINKED` semantics without inheriting counters/history.
+
+Cross-generation reconciliation is a separate finding-validator context and occurs only when:
+
+```text
+current relation = NEW
+AND supersedesGateId != null
+AND new lineage creation is required
+```
+
+The validator may return:
+
+```text
+RELATED_PRIOR_GENERATION
+NO_PRIOR_MATCH
+```
+
+It MUST NOT re-evaluate current defect validity.
+
+Failure/malformed/stale/ambiguous cross-generation reconciliation → `CROSS_GENERATION_RECONCILIATION_FAILED`; lineage finalization is suspended.
+
+Only the immediate completed predecessor is eligible for direct reconciliation.
+
+---
+
+## 19. EV1 — Evidence vs authoritative mutation
+
+External results are evidence:
+
+```text
+REVIEW_CANDIDATES_OBSERVED
+FINDING_VALIDATION_COMPLETED
+CROSS_GENERATION_RECONCILIATION_COMPLETED
+LINEAGE_REVALIDATION_COMPLETED
+SELF_REVIEW_COMPLETED
+DETERMINISTIC_VALIDATION_COMPLETED
+```
+
+Justice-core authoritative mutation events include:
+
+```text
+FINDING_RECONCILIATION_COMMITTED
+LINEAGE_REVALIDATION_COMMITTED
+LINEAGE_RESOLUTION_COMMITTED
+DESIGN_CLEAR
+PLAN_CLEAR
+REVIEW_PROGRESS_INVALIDATED
+```
+
+Finding reconciliation is attempt-level batch mutation.
+
+At minimum, each `FINDING_RECONCILIATION_COMMITTED` entry records:
+
+```text
+occurrenceId
+validationEvidenceEventId
+validation decision
+
+action:
+  CREATE
+  | BIND_EXISTING
+  | BIND_PRIOR
+  | NONE
+
+lineageId?
+predecessorLineageRef?
+
+lifecycleTransition:
+  NONE
+  | OPENED
+  | REGRESSED
+  | REOPENED
+```
+
+The external LLM/deterministic result remains evidence; this Justice-core reconciliation event is lineage mutation authority.
+
+Before committing the batch, Justice MUST validate snapshot-wide consistency including duplicate/conflicting decisions, ownerScope/decision consistency, opaque-ref validity, and lifecycle legality.
+
+An invalid batch produces no partial reconciliation mutation.
+
+---
+
+## 20. OSC1 — ownerScope disposition and CLEAR dependency closure
+
+Only VALID critical/major CURRENT findings are automatic remediation targets. Minor/advisory findings are never automatic remediation targets and never block CLEAR.
+
+Allowed blocking finding relationships:
+
+| observed phase | ownerScope | blocking decision |
+| --- | --- | --- |
+| Design | Design | VALID |
+| Design | Requirements | REQUIREMENTS_REOPEN_REQUIRED |
+| Plan | Plan | VALID |
+| Plan | Design | DESIGN_REOPEN_REQUIRED |
+| Plan | Requirements | REQUIREMENTS_REOPEN_REQUIRED |
+
+A blocking Design-phase finding owned by Plan is invalid.
+
+A Plan finding owned by Design/Requirements but returned merely as `VALID` is invalid; the appropriate reopen decision is required.
+
+Violations fail before reconciliation with `VALIDATOR_RESULT_CONFLICT`.
+
+Minor findings are advisory and do not trigger reopen.
+
+### 20.1 Upstream precedence
+
+Plan disposition:
+
+```text
+requirements-owned CURRENT blocker
+  → REQUIREMENTS_REOPEN_REQUIRED
+
+else design-owned CURRENT blocker
+  → DESIGN_REOPEN_REQUIRED
+
+else plan-owned CURRENT blocker
+  → remediation
+
+else pending revalidation blocker
+  → revalidation
+
+else
+  → PLAN_CLEAR candidate
+```
+
+Design disposition:
+
+```text
+requirements-owned CURRENT blocker
+  → REQUIREMENTS_REOPEN_REQUIRED
+
+else design-owned CURRENT blocker
+  → remediation
+
+else pending revalidation blocker
+  → revalidation
+
+else
+  → DESIGN_CLEAR candidate
+```
+
+### 20.2 Blocker projection
+
+Project separately:
+
+- `currentRemediableBlockers`
+- `currentUpstreamBlockers`
+- `pendingRevalidationBlockers`
+
+`unresolvedClearanceBlockers` is their union.
+
+Design CLEAR dependency closure:
+
+```text
+requirements + design
+```
+
+Plan CLEAR dependency closure:
+
+```text
+requirements + design + plan
+```
+
+`PENDING_REVALIDATION` blocks CLEAR but is excluded from the NC1 semantic blocker landscape.
+
+---
+
+## 21. RV1 — Stale lineage revalidation
+
+Lineage revalidation is not a new finding observation.
+
+```text
+reviewer candidate
+  → occurrenceId
+
+stale-lineage revalidation
+  → no occurrenceId
+```
+
+The logical check is per existing lineage, but execution/evidence MAY be batched for all `PENDING_REVALIDATION` lineages sharing the same pinned target context. `LINEAGE_REVALIDATION_COMPLETED` is validator evidence for that batch; Justice commits all consistent STILL_PRESENT applicability transitions in an authoritative batch and uses RSL1 resolution events separately for RESOLVED entries.
+
+Allowed per-lineage outcomes:
+
+```text
+STILL_PRESENT
+RESOLVED
+INDETERMINATE
+```
+
+### 21.1 STILL_PRESENT
+
+```text
+OPEN + PENDING_REVALIDATION
+→ LINEAGE_REVALIDATION_COMMITTED
+→ OPEN + CURRENT(target context)
+```
+
+The following counters MUST NOT increase:
+
+- occurrenceCount
+- recurrenceCount
+- regressionCount
+
+Diagnostic `revalidationCount` may increase.
+
+### 21.2 RESOLVED
+
+Use:
+
+```text
+LINEAGE_RESOLUTION_COMMITTED
+resolutionAuthority = EXTERNAL_CHANGE_REVALIDATION
+```
+
+No separate resolution event is introduced.
+
+### 21.3 INDETERMINATE/failure
+
+Lifecycle stays OPEN and applicability remains PENDING_REVALIDATION.
+
+CLEAR remains prohibited.
+
+Revalidation may update baseline-specific confirmed semantic basis, but MUST NOT create a new defect. Any different/new defect is the responsibility of a later fresh review.
+
+---
+
+## 22. RSL1 / FR1 — Resolution authority and fresh review
+
+Reviewer absence, remediator assertion, artifact digest change, or fresh-review omission does not resolve a lineage.
+
+### 22.1 Resolution authority
+
+A blocking lineage may become RESOLVED only through:
+
+```text
+LINEAGE_RESOLUTION_COMMITTED
+```
+
+Normal remediation sequence:
+
+```text
+remediation
+→ SELF_REVIEW_COMPLETED
+→ Justice commit
+→ REMEDIATION_COMMIT_SUCCEEDED | REMEDIATION_COMMIT_RECOVERED
+→ LINEAGE_RESOLUTION_COMMITTED
+→ fresh review required
+```
+
+Self-review `RESOLVED` is evidence only until:
+
+- the remediation commit succeeds,
+- the committed artifact digest equals the self-review pinned digest.
+
+Commit failure leaves the lineage OPEN.
+
+External committed artifact change may resolve a lineage only through explicit `EXTERNAL_CHANGE_REVALIDATION`.
+
+`LINEAGE_RESOLUTION_COMMITTED` records at least:
+
+```text
+lineageId
+
+resolutionAuthority:
+  POST_REMEDIATION_SELF_REVIEW
+  | EXTERNAL_CHANGE_REVALIDATION
+
+validationEvidenceEventId
+remediationRound?
+validatedArtifactDigest
+commitSha?
+committedArtifactDigest
+resolutionBasis
+```
+
+For post-remediation resolution, commit SHA and committed digest are required and must match the self-review baseline. For external-change revalidation, the fields bind the accepted committed external baseline.
+
+### 22.2 Fresh review
+
+Fresh review is:
+
+- history-blind,
+- independent,
+- performed against the committed current baseline,
+- responsible for new defect discovery, regression rediscovery, and missed defect rediscovery.
+
+The reviewer receives the phase artifacts/protocol/current committed digests, but not remediation story or lineage history.
+
+The validator/core perform validity and semantic lineage reconciliation afterward.
+
+An OPEN lineage omitted by fresh review stays OPEN.
+
+CLEAR is possible only after fresh review reconciliation and all CLR1 conditions.
+
+Fresh review execution failure → SUSPENDED; prior commit and resolution evidence remain durable and remediation MUST NOT be repeated.
+
+---
+
+## 23. AIM1 — Review attempt identity
+
+```text
+reviewAttemptId
+  = one history-blind reviewer snapshot evaluation
+
+remediationRound
+  = phase mutation-cycle identity
+
+operationId
+  = one logical external/side-effect operation
+
+dispatchSerial
+  = one physical dispatch attempt for the same operationId
+```
+
+A new `reviewAttemptId` is issued only for a new independent reviewer evaluation of an authoritative baseline, including:
+
+- phase entry,
+- post-remediation commit fresh review,
+- post-baseline-change fresh review,
+- post-non-convergence material-progress reentry fresh review when required.
+
+Crash/retry/host restart/malformed-result redispatch:
+
+```text
+same reviewAttemptId
+same operationId
+dispatchSerial++
+```
+
+### 23.1 Attempt origin
+
+A fresh attempt records why it exists:
+
+```text
+PHASE_ENTRY
+POST_REMEDIATION_COMMIT
+POST_BASELINE_CHANGE
+POST_NON_CONVERGENCE_REENTRY
+```
+
+Fresh review is therefore a new attempt plus history-blind reviewer context and validated origin prerequisites; it is not a separate identity type.
+
+### 23.2 Attempt start
+
+```text
+REVIEW_ATTEMPT_STARTED {
+  reviewAttemptId
+  attemptOrdinal
+  phase
+  origin
+  phaseBaselineRevision
+  phaseReviewContextIdentity
+  reviewAttemptBaseline
+}
+```
+
+This event MUST be durable before reviewer dispatch. Before each reviewer/validator/reconciliator external call, Justice also appends `EXTERNAL_OPERATION_DISPATCHED` with the stable `operationId`, next `dispatchSerial`, operation kind, owner reference, and pinned-input fingerprint.
+
+Candidate-zero review still commits an empty candidate, validation, and reconciliation batch so "no findings" is distinguishable from incomplete execution.
+
+An attempt is RECONCILED only after `FINDING_RECONCILIATION_COMMITTED`.
+
+If its baseline revision/context/protocol no longer matches current phase state, it projects as STALE and cannot authorize CLEAR.
+
+### 23.3 Non-1:1 relationships
+
+```text
+1 review attempt → N remediation rounds
+1 remediation round → 0 or 1 successful commit
+successful remediation commit → exactly 1 subsequent fresh review attempt
+```
+
+Self-review is not a review attempt.
+
+A remediation round need not originate directly from a review attempt. Its authoritative basis is one of:
+
+```text
+REVIEW_RECONCILIATION
+LINEAGE_REVALIDATION
+SELF_REVIEW_CARRY_FORWARD
+```
+
+`REMEDIATION_STARTED` therefore binds `remediationRound`, `RemediationBasis`, the authority event, target lineages, phase context, and recovery pre-image; `sourceReviewAttemptId` is not universally required.
+
+---
+
+## 24. SRF1 — Self-review findings
+
+Self-review uses the same `finding-validator` role in a fresh context.
+
+Self-review is both:
+
+1. targeted resolution validation for remediation targets, and
+2. validated discovery authority for new regressions.
+
+```text
+SelfReviewResult {
+  targetLineageChecks[]
+  discoveredFindings[]
+  deterministicChecks[]
+}
+```
+
+Target checks do not create occurrences.
+
+Discovered findings do create `occurrenceId` and enter normal lineage reconciliation with:
+
+```text
+observationSource = SELF_REVIEW
+```
+
+Before dispatch, Justice supplies the self-review context with opaque existing-lineage candidates. Each discovered finding returns its current-generation `EXISTING | NEW` semantic relation in the same self-review result. It MUST NOT be run through a second ordinary validity-validation or same-generation semantic-relation LLM call. Justice core still performs the normal authoritative reconciliation commit. XGR1 remains a separate context only when a NEW lineage requires predecessor-generation reconciliation.
+
+If the same semantic defect appears as both target `STILL_PRESENT` and discovered `EXISTING` in one self-review result:
+
+```text
+SELF_REVIEW_RESULT_CONFLICT
+→ fail closed
+```
+
+### 24.1 PASS
+
+PASS requires:
+
+- every targeted blocking lineage = RESOLVED,
+- no discovered VALID critical/major finding,
+- no upstream reopen finding,
+- no INDETERMINATE target,
+- pinned baseline unchanged,
+- all mandatory deterministic checks PASS.
+
+Minor/advisory findings may coexist with PASS.
+
+Every discovered self-review finding MUST complete its semantic reconciliation before commit eligibility is evaluated. Self-review PASS evidence alone never skips `FINDING_RECONCILIATION_COMMITTED` for its discovered occurrences.
+
+### 24.2 Blocking self-review finding
+
+OSC1 upstream precedence is evaluated first. The current-phase path below applies only when no CURRENT upstream blocking lineage exists.
+
+Current-phase owner:
+
+```text
+no commit
+→ current round consumed
+→ SELF_REVIEW_CARRY_FORWARD
+→ preserve exact WSP1 KNOWN_DIRTY post-image
+→ evaluate the §27.4 current-phase remediation disposition
+
+if NC1 semantic detector triggers
+  → REVIEW_NON_CONVERGENT
+  → SUSPENDED
+
+else if generation-wide phase remediation capacity == 0
+  → ROUND_LIMIT_TRANSITION_REQUIRED
+  → ROUND_LIMIT_EXHAUSTED
+  → SUSPENDED
+
+else
+  → REMEDIATION_REQUIRED
+  → next remediation round
+```
+
+The §27.4 priority is authoritative. `SELF_REVIEW_CARRY_FORWARD` records the remediation basis/workspace continuation; it does not by itself authorize another remediation round or choose the suspension reason.
+
+For a current-phase blocker, the post-remediation artifact bytes remain the WSP1 `KNOWN_DIRTY` Justice-owned working baseline for `SELF_REVIEW_CARRY_FORWARD`. Target lineages judged RESOLVED by self-review remain lifecycle OPEN until a later successful commit/resolution event, but any later review/remediation path MUST preserve/recheck them.
+
+A next remediation round is legal only when the generation-wide phase remediation count is still below the absolute ceiling. The next round captures the exact current bytes as its own RO1 pre-image.
+
+Final-round behavior is normative and still follows §27.4 priority:
+
+```text
+Design remediation round 5
+→ self-review/current-phase blocker
+→ no commit
+→ round 5 consumed
+→ reconcile all self-review findings
+→ evaluate NC1
+
+if NC1 triggers
+  → REVIEW_NON_CONVERGENT
+  → SUSPENDED
+
+else
+  → remaining Design remediation capacity = 0
+  → ROUND_LIMIT_EXHAUSTED
+  → SUSPENDED
+
+→ no Design round 6 cursor exists
+
+
+Plan remediation round 3
+→ self-review/current-phase blocker
+→ no commit
+→ round 3 consumed
+→ reconcile all self-review findings
+→ evaluate NC1
+
+if NC1 triggers
+  → REVIEW_NON_CONVERGENT
+  → SUSPENDED
+
+else
+  → remaining Plan remediation capacity = 0
+  → ROUND_LIMIT_EXHAUSTED
+  → SUSPENDED
+
+→ no Plan round 4 cursor exists
+```
+
+For an upstream-owned blocker, carry-forward does not occur: WSP1 first journals an exact restore to `CLEAN_COMMITTED`, then Justice appends the corresponding reopen transition.
+
+Upstream owner:
+
+```text
+no commit
+→ corresponding REOPEN_REQUIRED
+→ SUSPENDED
+```
+
+Self-review occurrences count toward recurrence/regression and NC1.
+
+---
+
+## 25. VAL1 / VSC1 — Deterministic validation
+
+`runDeterministicValidation()` is not arbitrary command execution.
+
+Agent input may select only a registered `validatorId`.
+
+Justice controls:
+
+- executable/function,
+- arguments,
+- declared inputs,
+- environment,
+- isolation,
+- result schema,
+- semantic rule contract.
+
+### 25.1 Execution kinds
+
+```text
+IN_PROCESS
+  = preferred pure validation
+
+ISOLATED_PROCESS
+  = exceptional
+  = pinned snapshot
+  = authoritative workspace write impossible
+  = network disabled
+  = private disposable scratch only
+```
+
+General `lint`, `test`, `build`, shell, or package commands are not review-safe merely by name.
+
+Missing isolation capability → deterministic validation unavailable/fail closed.
+
+### 25.2 Result semantics
+
+```text
+PASS
+FAIL
+INDETERMINATE
+```
+
+These are semantic outcomes.
+
+Timeout, sandbox failure, missing binary, malformed output, and runner failure are execution failures and are not cached semantic outcomes.
+
+### 25.3 Mandatory stages
+
+```text
+BASELINE_ADMISSION
+POST_REMEDIATION_SELF_REVIEW
+PRE_CLEAR
+```
+
+`BASELINE_ADMISSION` is a reviewability prerequisite. Its FAIL is not a finding lineage; it suspends before reviewer dispatch.
+
+Post-remediation semantic FAIL and PRE_CLEAR semantic FAIL may enter DVF1 finding flow.
+
+`PRE_CLEAR` means required PASS evidence completeness; it does not force execution when exact reusable PASS evidence exists.
+
+### 25.4 Stage behavior
+
+`BASELINE_ADMISSION` executes before history-blind reviewer dispatch. FAIL or INDETERMINATE cannot satisfy admission and does not create a finding; the Gate suspends.
+
+For `POST_REMEDIATION_SELF_REVIEW`, mandatory deterministic validators run against the same pinned post-remediation baseline before the LLM self-review result is finalized. A semantic FAIL is bridged/reconciled through DVF1, but the LLM self-review still runs so the round obtains combined deterministic and semantic evidence. Any blocking deterministic finding prevents commit.
+
+For `PRE_CLEAR`, Justice first checks evidence completeness. An exact reusable PASS may satisfy the stage. A cache miss executes the validator. A semantic FAIL enters DVF1 and then OSC1 remediation/reopen disposition; it is not merely a silent "CLEAR denied". INDETERMINATE creates no finding and cannot satisfy a mandatory stage.
+
+### 25.5 Exact-input reuse
+
+Validators MUST completely declare semantic inputs.
+
+```text
+ValidationInputBinding
+→ validationCacheKey = sha256(canonicalJson(binding))
+```
+
+The binding includes validator contract/result schema, phase, declared content digests/bindings, and execution environment identity where applicable.
+
+Reuse requires exact cache-key equality.
+
+PASS/FAIL/INDETERMINATE semantic results may all be reused on exact inputs.
+
+Execution failure is never cached as semantic evidence.
+
+Reuse is represented by `DETERMINISTIC_VALIDATION_REUSED`, referencing the original completed validation event.
+
+### 25.6 Execution environment binding
+
+External deterministic validators bind their execution environment separately from protocol semantics:
+
+```text
+ValidationEnvironmentBinding {
+  executionKind
+  resolvedExecutableIdentity?
+  resolvedToolVersion?
+  runtimeContractVersion
+}
+```
+
+A reviewer attempt pins the required external-validator bindings used by that attempt; a self-review operation similarly pins bindings for its logical operation. Redispatch of the same logical operation with a changed binding fails closed with `VALIDATION_ENVIRONMENT_CHANGED_DURING_ATTEMPT`.
+
+The binding participates in exact-input cache identity where applicable. Tool/runtime drift therefore causes a cache miss even when artifact bytes are unchanged, while sandbox implementation details that do not change the binding or semantic contract do not change protocol identity.
+
+---
+
+## 26. DVF1 — Deterministic finding bridge
+
+Finding observation sources are:
+
+```text
+REVIEWER
+SELF_REVIEW
+DETERMINISTIC_VALIDATION
+```
+
+`LINEAGE_REVALIDATION` is not an observation source because it creates no occurrence.
+
+A registered deterministic rule failure has this authority split:
+
+```text
+rule execution
+  → defect existence authority
+
+DeterministicValidationRuleDescriptor
+  → severity
+  → ownerScope
+  → violationType
+  → governingReference
+  → violatedContract
+
+finding-validator
+  → EXISTING | NEW semantic identity only
+
+Justice core
+  → occurrenceId
+  → lineageId
+  → lifecycle transition
+```
+
+The LLM MUST NOT override deterministic validity, severity, or ownerScope.
+
+```text
+DETERMINISTIC_VALIDATION_COMPLETED
+  = validation execution evidence
+
+DETERMINISTIC_FINDINGS_OBSERVED
+  = finding subsystem bridge
+```
+
+One deterministic finding occurrence is allowed per:
+
+```text
+(validationEventId, ruleId)
+```
+
+Reusing the same validation result creates no new occurrence.
+
+A new exact-input validation event that fails the same rule creates a new occurrence and may contribute to recurrence/regression.
+
+BASELINE_ADMISSION FAIL never enters lineage flow.
+
+---
+
+## 27. NC1 / N1 — Semantic non-convergence
+
+The current v4 `contentChanged == false` no-progress heuristic is not authority.
+
+Detector input is only:
+
+```text
+VALID
+critical | major
+OPEN
+applicability = CURRENT
+authoritative lineage state
+```
+
+Excluded:
+
+- minor/advisory,
+- PENDING_REVALIDATION,
+- raw text diff,
+- model/provider,
+- worker retry noise.
+
+### 27.1 Fingerprints
+
+The counter-free blocker landscape is the canonical hash of a sorted typed descriptor:
+
+```text
+BlockerLandscapeDescriptorV1 {
+  phase
+
+  activeBlockingLineages[] {
+    lineageId
+    ownerScope
+    severity
+    violationType
+    governingReference
+    violatedContract
+    currentSemanticLocation
+  }
+}
+```
+
+Only VALID critical/major OPEN CURRENT lineages are included.
+
+```text
+blockerLandscapeFingerprint
+  = semantic identity of the current blocking set
+  = no recurrence/regression counters
+
+convergenceFingerprint
+  = richer convergence state
+  = blocker landscape
+  + recurrence/regression counters
+  + repeated conflict groups
+```
+
+### 27.2 Trigger rules
+
+Priority order:
+
+1. `RESOLVED_LINEAGE_REGRESSED`
+2. `REMEDIATION_OSCILLATION`
+3. `SAME_LINEAGE_STALL`
+4. `CONTRACT_CONFLICT_REPEATED`
+5. `BLOCKER_LANDSCAPE_REPEATED`
+6. `BLOCKER_COUNT_NOT_IMPROVING`
+
+Multiple rules may trigger simultaneously. The first in the fixed order is `primaryReason`; all are persisted in `triggerRules[]`.
+
+#### RESOLVED_LINEAGE_REGRESSED
+
+On the same phase baseline revision and phase protocol fingerprint:
+
+```text
+LINEAGE_RESOLUTION_COMMITTED
+→ later LINEAGE_REGRESSED
+→ immediate REVIEW_NON_CONVERGENT
+```
+
+Accepted context change does not count as this same-loop regression.
+
+#### SAME_LINEAGE_STALL
+
+The same lineage is targeted by two consecutive remediation rounds and is `STILL_PRESENT` after both.
+
+#### BLOCKER_COUNT_NOT_IMPROVING
+
+Two consecutive remediation cycles with:
+
+```text
+postBlockingCount >= preBlockingCount
+```
+
+A strictly lower count resets the streak.
+
+#### BLOCKER_LANDSCAPE_REPEATED
+
+Exact semantic blocker landscape remains unchanged for two consecutive remediation cycles.
+
+#### CONTRACT_CONFLICT_REPEATED
+
+A deterministic conflict-group key is derived from:
+
+```text
+ownerScope
+violationType
+governingReference
+violatedContract
+```
+
+Semantic location is excluded.
+
+If the same group is targeted and remains blocking after two consecutive targeted rounds, non-convergence triggers.
+
+#### REMEDIATION_OSCILLATION
+
+```text
+fingerprint[n] == fingerprint[n-2]
+AND fingerprint[n] != fingerprint[n-1]
+```
+
+### 27.3 Detector state
+
+No dedicated mutable convergence-state file exists.
+
+```text
+durable events
+→ remediation-cycle projection
+→ NC1 pure evaluation
+```
+
+Semantic streak reset boundaries:
+
+- phase baseline revision change,
+- phase protocol fingerprint change.
+
+They are NOT reset by:
+
+- orchestration epoch,
+- host restart,
+- writer change,
+- model/provider,
+- operation redispatch.
+
+### 27.4 Current-phase remediation disposition priority
+
+This section is the single authority for choosing among semantic non-convergence, round exhaustion, and remediation continuation **after OSC1 upstream precedence has determined that no CURRENT upstream blocker requires reopen**.
+
+At every post-reconciliation / post-self-review checkpoint where a CURRENT current-phase critical/major blocker means another automatic remediation would otherwise be required:
+
+```text
+1. Evaluate NC1 on the fully reconciled authoritative lineage state.
+
+if NC1 triggers
+  → REVIEW_NON_CONVERGENT
+  → SUSPENDED
+
+else if generation-wide phase remediation ceiling is exhausted
+  → ROUND_LIMIT_EXHAUSTED
+  → SUSPENDED
+
+else
+  → REMEDIATION_REQUIRED
+```
+
+The three outcomes are mutually exclusive for one projected checkpoint:
+
+```text
+NC1 trigger + capacity > 0
+  → REVIEW_NON_CONVERGENT only
+
+NC1 trigger + capacity == 0
+  → REVIEW_NON_CONVERGENT only
+
+NC1 no-trigger + capacity == 0
+  → ROUND_LIMIT_EXHAUSTED only
+
+NC1 no-trigger + capacity > 0
+  → REMEDIATION_REQUIRED only
+```
+
+There is no epoch remediation budget. `ROUND_LIMIT_EXHAUSTED` is projected solely after NC1 has not triggered, from generation-total phase remediation rounds plus the fact that an additional automatic remediation is required.
+
+### 27.5 Reentry guard
+
+`REVIEW_NON_CONVERGENT` stores phase, relevant artifact/protocol identity, blockers, recurring set, and convergence fingerprints.
+
+Eligible reentry changes:
+
+Design:
+- Requirements digest,
+- Design digest,
+- Design protocol fingerprint.
+
+Plan:
+- approved Design digest,
+- Plan digest,
+- Plan protocol fingerprint.
+
+Model/provider alone is not eligible.
+
+Eligible change invokes a new-context validator:
+
+```text
+NON_CONVERGENCE_REENTRY_VALIDATION
+→ MATERIAL_PROGRESS
+ | NO_MATERIAL_PROGRESS
+ | REQUIREMENTS_REOPEN_REQUIRED
+ | DESIGN_REOPEN_REQUIRED
+```
+
+Only MATERIAL_PROGRESS permits non-convergence reentry and may start a new epoch. It does **not** replenish the absolute generation remediation ceiling. The changed target artifacts used for reentry MUST be clean and committed.
+
+A reentry-validator `REQUIREMENTS_REOPEN_REQUIRED` or `DESIGN_REOPEN_REQUIRED` result is evidence only and is valid only when it points to an already committed CURRENT upstream blocking lineage satisfying OSC1. Non-convergence reentry validation is not a fifth finding-entry path and cannot create a new lineage. Without such an existing upstream lineage, a reopen result is invalid/fail-closed.
+
+No eligible/material change → remain SUSPENDED with `REVIEW_NON_CONVERGENT_UNCHANGED` invocation outcome.
+
+`ROUND_LIMIT_EXHAUSTED` and `REVIEW_NON_CONVERGENT` both project `generationStatus = SUSPENDED` and carry the WSP1 workspace disposition active at suspension.
+
+`ROUND_LIMIT_EXHAUSTED` never replenishes remediation capacity. An explicit rerun with no accepted external/context change remains suspended and may return `ROUND_LIMIT_EXHAUSTED_UNCHANGED`. A clean committed external/context change may be admitted for revalidation/fresh review, but the generation-wide remaining remediation count is unchanged; if another automatic remediation would be required with zero remaining slots, `ROUND_LIMIT_EXHAUSTED` is projected again.
+
+A final-round self-review failure is one direct producer of this transition. Its exact known-dirty post-image remains governed by WSP1. Reentry may prove CLEAR after an admissible external committed change, but it can never produce Design round 6 or Plan round 4 in the same generation.
+
+`REVIEW_NON_CONVERGENT` additionally requires N1 material progress before reentry.
+
+`REVIEW_NON_CONVERGENT` persists at least:
+
+```text
+phase
+phaseBaselineRevision
+phaseReviewContextIdentity
+primaryReason
+triggerRules[]
+blockerLandscapeFingerprint
+convergenceFingerprint
+phaseProtocolFingerprint
+reviewProtocolFingerprint
+currentBlockingLineageIds[]
+
+evidence {
+  firstRelevantRemediationRound
+  latestRelevantRemediationRound
+  recurringLineageIds[]
+  conflictGroupKeys[]
+  resolutionEventIds[]
+  regressionEventIds[]
+  remediationCommitShas[]
+  relevantEventIds[]
+}
+```
+
+Free-text explanation is display-only and bounded.
+
+---
+
+## 28. CAP1 — Review-safe capability model
+
+Operation authority is split into:
+
+```text
+review_query
+review_mutation
+review_restore
+review_commit
+implementation
+```
+
+These are distinct authority classes. In particular:
+
+```text
+agent remediation mutation
+  != Justice-core restore
+  != Justice-core commit
+  != implementation mutation
+```
+
+### 28.1 review_query
+
+Typed read-only APIs only, such as:
+
+- artifact reads,
+- scoped search,
+- scoped diff,
+- Git status/diff/log/show/rev-parse equivalents,
+- registered deterministic validation.
+
+Review query does not expose arbitrary shell execution.
+
+Search/read/diff APIs MUST be scoped so they cannot silently expand semantic review beyond the current phase artifact set and explicitly allowed review-safe Git metadata. A query capability is not permission to perform repository-wide implementation compatibility review.
+
+For every artifact-scoped Git query that accepts pathspecs, Justice MUST invoke Git with the global `--literal-pathspecs` option. This is the only Git pathspec-literalization mechanism used by Review Gate v4. Justice MUST NOT mix this contract with `:(literal)` encoding.
+
+```text
+canonical workspace path
+  != raw Git pathspec
+
+shell:false
+NUL termination
+--
+  != Git pathspec literalization
+```
+
+At minimum, scoped Git `status`, `diff`, and `log` operations use `git --literal-pathspecs ... -- <canonicalPath>` or the equivalent literal path-file form. A path-bearing historical read MUST NOT build an ambiguous `<ref>:<path>` revision string from an artifact path; it resolves the revision first, obtains the exact literal tree entry with `git --literal-pathspecs ls-tree ... -- <canonicalPath>`, then reads the returned blob object. `rev-parse`-equivalent revision resolution itself accepts no artifact pathspec.
+
+### 28.2 review_mutation
+
+Only the remediator receives a short-lived, single-use mutation capability bound to:
+
+```text
+gateId
+operationId
+phase
+remediationRound
+targetCanonicalPath
+expectedPreDigest
+expectedPreGitMode
+phaseBaselineRevision
+```
+
+Design Gate → Design only.  
+Plan Gate → Plan only.  
+Requirements and production/test/CI/config/release metadata are never Review Gate mutation targets.
+
+### 28.3 review_restore
+
+`review_restore` is a Justice-core-only, operation-bound workspace mutation authority. It is never delegated to an LLM agent or remediator.
+
+It exists only for an already durable `REVIEW_TARGET_RESTORE_PREPARED` transition and is bound to:
+
+```text
+gateId
+operationId
+phase
+targetCanonicalPath
+
+sourceKnownDirtyBinding {
+  headSha
+  headEntry: GitTreeEntryBindingV1
+  indexEntry: GitIndexEntryBindingV1
+  worktree: WorktreeArtifactBindingV1
+  sourceEventId
+}
+
+targetCleanCommittedBinding {
+  headSha
+  headEntry: GitTreeEntryBindingV1
+  indexEntry: GitIndexEntryBindingV1
+  worktree: WorktreeArtifactBindingV1
+}
+```
+
+Preconditions:
+
+- Justice owns the Gate lock,
+- the current target path is exactly the current phase artifact,
+- the current workspace exactly matches `sourceKnownDirtyBinding`,
+- source and destination bindings are already durable in `REVIEW_TARGET_RESTORE_PREPARED`,
+- source and destination refer to the same canonical target and guarded HEAD,
+- destination bytes are the exact committed target blob identified by the prepared binding,
+- destination Git mode exactly equals the committed target tree-entry mode.
+
+Allowed side effect:
+
+```text
+sourceKnownDirtyBinding
+→ exact targetCleanCommittedBinding
+```
+
+Postcondition:
+
+- target working bytes equal the prepared clean digest/blob,
+- target worktree Git mode equals the prepared clean Git mode,
+- target index and HEAD tree entries (path + blob + mode) still equal the prepared binding,
+- no other path/index entry changed,
+- the restore implementation preserves the existing regular file's non-Git POSIX permission bits rather than replacing them with a temp-file default; the executable class MUST remain the prepared Git mode.
+
+Forbidden:
+
+- arbitrary replacement content,
+- arbitrary path selection,
+- Requirements mutation,
+- production/test/CI/config/dependency/release mutation,
+- Git commit/push,
+- agent-controlled restore arguments,
+- restore without a prepared durable source/destination binding.
+
+Crash recovery reuses the same `review_restore` authority and CP1 prepared binding; it does not grant a broader mutation capability.
+
+### 28.4 review_commit
+
+Only Justice core receives commit authority and only after self-review PASS under CP1/GIT1 prepared intent.
+
+### 28.5 implementation
+
+Production implementation remains gated by:
+
+```text
+/justice-implement --approved
+```
+
+Fundamental invariant:
+
+```text
+review_mutation != implementation
+```
+
+### 28.6 Error taxonomy
+
+```text
+implementation_not_authorized
+  = implementation authority is required but absent
+
+review_scope_violation
+  = review operation class is valid but target is outside review scope
+
+review_operation_not_permitted
+  = actor lacks permission for the requested review operation class
+
+review_restore_scope_violation
+  = requested restore does not exactly match prepared phase target/source/destination bindings
+
+review_restore_failed
+  = exact prepared restore side effect failed before success could be verified
+
+review_restore_recovery_conflict
+  = crash recovery cannot prove source or destination exact binding
+
+review_commit_scope_violation
+  = exact prepared commit scope was violated
+
+review_commit_failed
+  = scoped commit operation failed
+
+review_commit_recovery_conflict
+  = crash recovery cannot prove exact intended commit identity
+```
+
+---
+
+## 29. CP1 — Event-sourced step journal and recovery
+
+There is no mutable checkpoint source of truth.
+
+```text
+durable events
+→ pure projection
+→ ResumeCursor
+→ next permitted operation
+```
+
+`operationId` is stable for one logical operation. `dispatchSerial` increments for physical redispatch.
+
+Completed durable evidence prevents the corresponding side effect from being repeated.
+
+### 29.1 Read-only external calls
+
+Reviewer/validator external call with dispatch intent but no completion may be redispatched with the same operation ID if its pinned baseline remains valid.
+
+### 29.2 Remediation crash and Justice-owned dirty continuation
+
+Before mutation, RO1 pre-image must be durable.
+
+Projection may expect dirty bytes only when WSP1 provides an exact `KNOWN_DIRTY` binding, including:
+
+- `REMEDIATION_COMPLETED` before commit,
+- `SELF_REVIEW_CARRY_FORWARD`,
+- `ROUND_LIMIT_EXHAUSTED` / `REVIEW_NON_CONVERGENT` reached from a known post-image,
+- operational suspension after a known post-image.
+
+`REMEDIATION_STARTED` without `REMEDIATION_COMPLETED` is **not** known-dirty authority.
+
+```text
+HEAD/index entry bindings match
+AND current worktree binding == durable preWorktree { digest, gitMode }
+  → append REMEDIATION_INTERRUPTED_RECOVERED
+     disposition = NO_MUTATION_OBSERVED
+  → redispatch same operationId / same remediationRound
+    with dispatchSerial++
+
+otherwise
+  → current content/mode is not provably Justice-owned
+  → do not restore, overwrite, or chmod it
+  → REMEDIATION_RECOVERY_CONFLICT
+  → SUSPENDED
+```
+
+`REMEDIATION_COMPLETED` stores the exact post-image digest and establishes WSP1 `KNOWN_DIRTY`; with that exact binding intact, resume continues at self-review.
+
+Every later SUSPENDED state derives an explicit WSP1 disposition. Unknown dirty bytes never become a resumable state.
+
+### 29.3 Target-restore crash
+
+For `REVIEW_TARGET_RESTORE_PREPARED` without a succeeded/recovered restore, projection yields `TARGET_RESTORE_RECOVERY_REQUIRED`.
+
+Justice compares the workspace only against the two durable bindings in the prepared event and remains inside the same core-owned `review_restore` capability boundary:
+
+- exact source known-dirty binding → execute/re-execute the exact prepared `review_restore`,
+- exact target clean-committed binding → append `REVIEW_TARGET_RESTORE_RECOVERED`,
+- anything else → `REVIEW_RESTORE_RECOVERY_CONFLICT` and SUSPENDED.
+
+Recovery MUST NOT widen target scope, select new bytes, delegate to an agent, or mutate any non-phase artifact.
+
+### 29.4 Commit crash
+
+Before Git side effect:
+
+```text
+REVIEW_COMMIT_PREPARED {
+  operationId
+  parentHeadSha
+  targetCanonicalPath
+  parentTargetEntry { blobSha, gitMode }
+  preCommitIndexEntry { blobSha, gitMode, stage = 0 }
+  expectedTargetEntry { blobSha, gitMode }
+  expectedArtifactDigest
+  messageDigest
+  round
+  lineageRefs
+}
+```
+
+Recovery:
+
+```text
+HEAD == prepared parent
+  → commit not proven complete
+  → same operation may execute
+
+HEAD is exact intended commit,
+including exact target blob + target Git mode + commit metadata
+  → REMEDIATION_COMMIT_RECOVERED
+  → do not recommit
+
+otherwise
+  → REVIEW_COMMIT_RECOVERY_CONFLICT
+  → SUSPENDED
+```
+
+---
+
+## 30. GIT1 — Exact-artifact remediation commit
+
+Each **new phase admission** requires only that phase's target artifact to be clean. Initial Design admission is checked before creating a new generation. Plan admission is checked before Plan review begins, including after an inherited/current Design CLEAR.
+
+This clean-admission rule does not reject a WSP1-projected `KNOWN_DIRTY` continuation inside an already admitted phase. An ACTIVE/SUSPENDED generation may resume such state only when its exact expected worktree digest/Git mode and target HEAD/index tree-entry bindings are proven from durable events.
+
+A WSP1 `MUTATION_IN_FLIGHT` state with a current worktree binding different from its `preWorktree` is not a valid dirty continuation and MUST fail closed.
+
+New phase admission requires all of:
+
+```text
+HEAD target entry is one regular-file entry
+AND index target entry is one stage-0 regular-file entry
+
+HEAD target blob == index target blob
+AND HEAD target Git mode == index target Git mode
+
+working-tree bytes == HEAD target blob bytes
+AND working-tree Git mode == HEAD target Git mode
+```
+
+Content equality alone is insufficient. A mode-only delta such as `100644 → 100755` is a dirty target even when the blob SHA is unchanged. An index-only mode change is also staged target state and is rejected.
+
+The clean check MUST use the owner-execute-bit normalization above. For example:
+
+```text
+HEAD/index Git mode: 100755
+worktree POSIX mode: 0655
+content/blob: unchanged
+
+→ worktree Git mode = 100644
+→ REVIEW_TARGET_NOT_CLEAN
+```
+
+Group/other execute bits MUST NOT mask removal of the owner execute bit.
+
+Otherwise:
+
+```text
+REVIEW_TARGET_NOT_CLEAN
+→ Gate/phase admission blocked
+```
+
+Before `GATE_CREATED`, this is an invocation outcome and no history event is created. If a valid generation already exists and a later phase/resume target is dirty/staged **without** an exact WSP1 `KNOWN_DIRTY` binding, Justice records an operational suspension with reason `REVIEW_TARGET_NOT_CLEAN`.
+
+Unrelated dirty and staged paths are allowed.
+
+### 30.1 Commit primitive contract
+
+Justice core uses an exact single-artifact Git commit primitive equivalent to:
+
+```text
+git --literal-pathspecs
+  -c core.hooksPath=/dev/null
+  commit --only
+  --no-gpg-sign
+  --no-status
+  --cleanup=verbatim
+  --pathspec-from-file=-
+  --pathspec-file-nul
+  -F <Justice-owned-message-file>
+```
+
+The only pathspec record is the canonical phase artifact, passed as one NUL-terminated input record. NUL framing prevents delimiter/quoting ambiguity but does **not** make a Git pathspec literal; `--literal-pathspecs` is the authority that disables Git pathspec magic/glob expansion. Every Review Gate Git operation that accepts an artifact pathspec uses the same global literal policy.
+
+Before executing the commit, the prepared target mode MUST satisfy:
+
+```text
+parentTargetEntry.gitMode
+== preCommitIndexEntry.gitMode
+== currentWorktree.gitMode
+== expectedTargetEntry.gitMode
+```
+
+Remediation changes content only. Justice MUST NOT prepare or accept a remediation commit that changes the target Git mode.
+
+Agents never receive Git commit authority.
+
+### 30.2 Commit message
+
+Base format:
+
+```text
+docs: address plan review round 2
+
+Review-Gate: plan
+Review-Round: 2
+Findings: PG-L-004, PG-L-007
+```
+
+Gate ID and validator internals remain only in Justice history.
+
+Review Gate never pushes.
+
+### 30.3 Post-verification
+
+Git process exit 0 is evidence only.
+
+Authoritative success requires:
+
+```text
+newCommit.parent == prepared.parentHeadSha
+
+full commit changed-entry set
+== [targetCanonicalPath]
+
+newCommit target entry.blob
+== prepared.expectedTargetEntry.blobSha
+
+newCommit target entry.gitMode
+== prepared.expectedTargetEntry.gitMode
+== prepared.parentTargetEntry.gitMode
+
+working-tree target digest
+== prepared.expectedArtifactDigest
+
+working-tree target gitMode
+== prepared.expectedTargetEntry.gitMode
+
+index target entry.blob
+== prepared.expectedTargetEntry.blobSha
+
+index target entry.gitMode
+== prepared.expectedTargetEntry.gitMode
+
+commit message digest
+== prepared.messageDigest
+
+unrelatedIndexFingerprintBefore
+== unrelatedIndexFingerprintAfter
+```
+
+The changed-entry verification examines the complete parent→new-commit diff and compares returned path bytes literally; it is not path-scoped, because its purpose is to detect any accidental extra committed path.
+
+Only then may Justice append `REMEDIATION_COMMIT_SUCCEEDED`.
+
+HEAD change, target content/mode external mutation, target staging, extra commit paths, target tree-mode drift, or unrelated index contamination fail closed.
+
+---
+
+## 31. HQ1 — Durable history query UX
+
+Execution and query are separate commands.
+
+```text
+/justice-review-gate
+  = orchestration / mutation / resume
+
+/justice-review-history
+  = durable projection read only
+```
+
+Supported lookup:
+
+```text
+/justice-review-history
+  --design <path>
+  --plan <path>
+  [--view summary|rounds|findings]
+  [--all-generations]
+
+/justice-review-history
+  --gate <gateId>
+  [--view summary|rounds|findings]
+```
+
+History query:
+
+- appends no event,
+- acquires no Gate/Scope lock,
+- creates no epoch,
+- performs no resume,
+- re-resolves no artifact,
+- executes no validator.
+
+Scope lookup canonicalizes Design/Plan, derives `reviewScopeId`, and reads only `events/<reviewScopeId>/`. Execution and history query therefore use the same durable scope-membership authority. It then uses authoritative same-scope `supersedesGateId` chain ordering, not timestamps.
+
+For `--gate <gateId>`, Justice scans scope namespace directory names for a unique `events/*/<gateId>/` directory without decoding any genesis event to determine membership. The enclosing scope directory supplies `reviewScopeId`. Zero matches means not found; multiple directory matches are an identity conflict. Corrupt/unsupported genesis in the located namespace remains conflict/version failure, not a missing Gate.
+
+Default selection:
+
+1. unique ACTIVE/SUSPENDED chain tip,
+2. otherwise unique latest COMPLETED chain tip,
+3. ambiguous/broken tips → `REVIEW_GATE_IDENTITY_CONFLICT`.
+
+Views:
+
+```text
+summary   # default
+rounds
+findings
+```
+
+The summary view exposes at least:
+
+- `gateId` and `reviewScopeId`,
+- generation status and current phase,
+- orchestration epoch,
+- effective Design CLEAR authority/binding,
+- current blocker counts by ownerScope,
+- pending revalidation count,
+- generation-absolute remediation usage and remaining capacity for the current phase,
+- generation-total remediation rounds,
+- last suspension/transition,
+- last successful remediation commit,
+- projected `ResumeCursor`,
+- projected `gateRevision`,
+- head event ID.
+
+The rounds view emphasizes attempt → remediation → self-review → commit → fresh-review causality. The findings view is lineage-centric and exposes ownerScope, severity, lifecycle/applicability, occurrence/regression diagnostics, semantic basis, and resolution/regression history.
+
+Raw event schema is not public UX.
+
+History rendering pipeline:
+
+```text
+versioned persisted events
+→ canonical projection
+→ stable HistoryQuery DTO
+→ renderer
+```
+
+A query captures the target shard set and each shard's bytes once, then projects that coherent snapshot only. It does not re-read individual shards mid-projection.
+
+Concurrent orchestration may therefore produce a slightly stale but coherent durable prefix.
+
+History conflict/version unsupported → fail closed; no partial best-effort display.
+
+---
+
+## 32. RTY1 — v4 `--retry` compatibility
+
+v4 continues parsing:
+
+```text
+--retry N
+```
+
+using the current compatibility range, but the option is:
+
+```text
+deprecated
+parser compatibility only
+no-op
+```
+
+It MUST NOT:
+
+- alter Design/Plan budgets,
+- create an epoch,
+- bypass NON_CONVERGENT,
+- alter protocol fingerprints,
+- mutate history.
+
+Internal naming SHOULD be `legacyRetryOption?: number`, not `retryBudget`.
+
+The authoritative **absolute per-generation** ceilings come only from phase protocol descriptors:
+
+```text
+Design = 5 total remediation rounds per Gate generation
+Plan   = 3 total remediation rounds per Gate generation
+```
+
+Epoch changes never replenish these ceilings.
+
+A deprecation warning is invocation-level only and is not persisted.
+
+v5 removes the option.
+
+---
+
+## 33. EVC1 — Event catalog
+
+The following is the normative logical catalog. Exact TypeScript names/schema locations are implementation details, but semantic event identities and authority boundaries are fixed.
+
+| Category | Event | Authority |
+| --- | --- | --- |
+| Generation | `GATE_CREATED` | generation creation and initial bindings |
+| Orchestration | `ORCHESTRATION_RESUMED` | same-epoch crash resume audit |
+| Orchestration | `ORCHESTRATION_EPOCH_STARTED` | explicit new epoch after eligible suspension |
+| Dispatch | `EXTERNAL_OPERATION_DISPATCHED` | physical dispatch intent for logical operation |
+| Review | `REVIEW_ATTEMPT_STARTED` | AIM1 attempt + pinned baseline |
+| Review | `REVIEW_CANDIDATES_OBSERVED` | reviewer candidate evidence |
+| Validation | `FINDING_VALIDATION_COMPLETED` | reviewer candidate validator evidence |
+| Cross-gen | `CROSS_GENERATION_RECONCILIATION_COMPLETED` | predecessor semantic relation evidence |
+| Finding | `FINDING_RECONCILIATION_COMMITTED` | occurrence-to-lineage authoritative mutation |
+| Deterministic | `DETERMINISTIC_VALIDATION_COMPLETED` | semantic validator result |
+| Deterministic | `DETERMINISTIC_VALIDATION_REUSED` | exact-input evidence reuse reference |
+| Deterministic | `DETERMINISTIC_FINDINGS_OBSERVED` | deterministic finding bridge |
+| Revalidation | `LINEAGE_REVALIDATION_COMPLETED` | stale lineage validator evidence |
+| Revalidation | `LINEAGE_REVALIDATION_COMMITTED` | STILL_PRESENT applicability authority |
+| Remediation | `REMEDIATION_STARTED` | mutation intent after durable pre-image |
+| Remediation | `REMEDIATION_COMPLETED` | target post-image established |
+| Recovery | `REMEDIATION_INTERRUPTED_RECOVERED` | proves no mutation was observed before safe same-round redispatch |
+| Workspace | `REVIEW_TARGET_RESTORE_PREPARED` | exact core-owned `review_restore` source/destination authority |
+| Workspace | `REVIEW_TARGET_RESTORE_SUCCEEDED` | verified normal `review_restore` completion |
+| Workspace | `REVIEW_TARGET_RESTORE_RECOVERED` | verified crash-recovered `review_restore` completion |
+| Self-review | `SELF_REVIEW_STARTED` | round/pinned targets fixed |
+| Self-review | `SELF_REVIEW_COMPLETED` | resolution/regression evidence |
+| Commit | `REVIEW_COMMIT_PREPARED` | exact Git side-effect intent |
+| Commit | `REMEDIATION_COMMIT_SUCCEEDED` | verified normal commit |
+| Commit | `REMEDIATION_COMMIT_RECOVERED` | verified crash-recovered commit |
+| Lineage | `LINEAGE_RESOLUTION_COMMITTED` | only OPEN→RESOLVED authority |
+| Reopen | `REQUIREMENTS_REOPEN_REQUIRED` | upstream Requirements suspension |
+| Reopen | `DESIGN_REOPEN_REQUIRED` | Plan→Design suspension |
+| Change | `REQUIREMENTS_CHANGE_OBSERVED` | accepted committed Requirements change |
+| Change | `DESIGN_CHANGE_OBSERVED` | accepted committed Design change |
+| Change | `PLAN_CHANGE_OBSERVED` | accepted committed Plan change |
+| Protocol | `REVIEW_PROTOCOL_CHANGE_OBSERVED` | observation of typed protocol descriptor drift |
+| Invalidation | `REVIEW_PROGRESS_INVALIDATED` | old phase progress made stale |
+| Invalidation | `DESIGN_CLEAR_INVALIDATED` | exact effective Design milestone invalidated |
+| Approval | `DESIGN_CLEAR` | current-generation Design approval |
+| Approval | `DESIGN_CLEAR_INHERITED` | predecessor Design approval inherited |
+| Approval | `PLAN_CLEAR` | complete approval + terminal completion |
+| Convergence | `REVIEW_NON_CONVERGENT` | semantic non-convergence suspension |
+| Budget | `ROUND_LIMIT_EXHAUSTED` | absolute phase/generation remediation ceiling exhausted |
+| Reentry | `NON_CONVERGENCE_REENTRY_VALIDATION_COMPLETED` | material-progress/reopen evidence |
+| Failure | `EXECUTION_SUSPENDED` | valid-history operational fail-closed suspension |
+
+`EXECUTION_SUSPENDED.reason` is a typed enum and may include:
+
+- `FRESH_REVIEW_FAILED`
+- `DETERMINISTIC_VALIDATION_FAILED`
+- `DETERMINISTIC_VALIDATION_PRECONDITION_FAILED`
+- `VALIDATION_ENVIRONMENT_CHANGED_DURING_ATTEMPT`
+- `REVIEW_INPUT_CHANGED_DURING_ATTEMPT`
+- `VALIDATOR_RESULT_CONFLICT`
+- `SELF_REVIEW_RESULT_CONFLICT`
+- `CROSS_GENERATION_RECONCILIATION_FAILED`
+- `REVIEW_COMMIT_FAILED`
+- `REVIEW_COMMIT_SCOPE_VIOLATION`
+- `REMEDIATION_RECOVERY_CONFLICT`
+- `REVIEW_RESTORE_SCOPE_VIOLATION`
+- `REVIEW_RESTORE_FAILED`
+- `REVIEW_RESTORE_RECOVERY_CONFLICT`
+- `REVIEW_COMMIT_RECOVERY_CONFLICT`
+- `RECOVERY_OBJECT_UNAVAILABLE`
+- `REVIEW_TARGET_NOT_CLEAN`
+
+The following are invocation errors and MUST NOT be appended when authoritative append/projection is unsafe:
+
+- `REVIEW_GATE_BUSY`
+- `REVIEW_GATE_IDENTITY_CONFLICT`
+- `REVIEW_HISTORY_CONFLICT`
+- `REVIEW_HISTORY_VERSION_UNSUPPORTED`
+- `REVIEW_PROTOCOL_DESCRIPTOR_INVALID`
+- `EVENT_PERSISTENCE_POLICY_VIOLATION`
+- `REQUIREMENTS_RESOLUTION_REQUIRED`
+- `REVIEW_TARGET_NOT_CLEAN` when failure occurs before any generation exists
+
+---
+
+## 34. Projection invariants
+
+The canonical projection MUST enforce all of the following.
+
+| Domain | Invariant |
+| --- | --- |
+| Scope membership | event directory namespace is `reviewScopeId` authority; genesis payload must match it |
+| Event chain | P1/DA1 predecessor/revision/digest chain is exact across all writer shards |
+| Generation | `GATE_CREATED` is first authoritative generation event |
+| Supersession | `supersedesGateId` remains inside one `reviewScopeId` namespace |
+| Completion | `PLAN_CLEAR` is unique and terminal; nothing follows |
+| Status | COMPLETED iff PLAN_CLEAR exists |
+| Design milestone | at most one effective Design CLEAR milestone |
+| Invalidation | only the exact current effective milestone may be invalidated |
+| Phase | Plan authority requires an effective Design milestone |
+| Attempt | current authority requires current baseline/context/protocol; protocol-only drift can stale an attempt without changing baseline revision |
+| Attempt completion | attempt RECONCILED only after batch finding reconciliation |
+| Empty review | zero candidates still require empty validation/reconciliation batch |
+| Operation | external completion must correspond to durable dispatch intent |
+| Dispatch | `dispatchSerial` is monotonic for one `operationId` |
+| Occurrence | occurrence ID is generation-unique and reconciled at most once |
+| Lineage | lineage ID is Justice-issued; canonical basis is immutable |
+| Owner scope | OSC1 phase/owner/decision matrix must hold |
+| Resolution | only `LINEAGE_RESOLUTION_COMMITTED` changes OPEN→RESOLVED |
+| Revalidation | STILL_PRESENT creates no occurrence or recurrence counter |
+| Pending revalidation | blocking pending lineage prohibits CLEAR |
+| Remediation | phase-local round ordinal is generation-global monotonic and cannot exceed Design 5 / Plan 3 within one generation |
+| Disposition ordering | apply OSC1 upstream precedence before any current-phase remediation disposition; upstream reopen and current-phase remediation disposition cannot compete at one checkpoint |
+| Current-phase disposition priority | after no upstream blocker remains, when another automatic remediation would otherwise be required, evaluate NC1 first; only if NC1 does not trigger may capacity choose `ROUND_LIMIT_EXHAUSTED` or `REMEDIATION_REQUIRED` |
+| Round limit | after NC1 no-trigger, if another automatic remediation is required with zero remaining generation capacity, `ROUND_LIMIT_EXHAUSTED` is the only legal transition; no next remediation cursor exists |
+| Mutation | only current phase artifact content may be mutated; dirty continuation is legal only for exact WSP1 `KNOWN_DIRTY` content + Git-mode state |
+| Git path identity | canonical workspace path is never raw Git pathspec authority; every artifact-scoped Git pathspec is interpreted under `--literal-pathspecs` |
+| Git entry identity | clean/restore/commit/recovery authority includes target blob + Git mode for HEAD/index and digest + Git mode for worktree |
+| Restore authority | only Justice core may execute `review_restore`, and only from durable prepared source/destination bindings for the current phase artifact; restore preserves approved target Git mode |
+| Unknown partial | `REMEDIATION_STARTED` without completed post-image may never overwrite/chmod a worktree binding different from durable `preWorktree { digest, gitMode }` |
+| Upstream reopen | any known-dirty current-phase target is restored to `CLEAN_COMMITTED` before `REOPEN_REQUIRED` |
+| Self-review | all discovered findings are reconciled; blocking discovery/INDETERMINATE prohibits commit |
+| Commit | no `REVIEW_COMMIT_PREPARED` without self-review PASS |
+| Commit identity | actual Git result must exactly match prepared intent |
+| Post-commit | verified remediation commit requires a new fresh review attempt |
+| Deterministic reuse | validation reuse requires exact cache key |
+| Deterministic bridge | one occurrence max per validation event + rule |
+| Reopen | triggering upstream blocking lineage must already be committed |
+| Non-convergence | NC1 is reconstructed from history and not reset by epoch |
+| CLEAR | dependency closure has zero CURRENT/PENDING blocking lineage |
+| PLAN CLEAR | full current CompletedApprovalBinding must exactly match |
+
+---
+
+## 35. ResumeCursor
+
+The next legal action is derived from projection; it is not stored as mutable checkpoint state.
+
+Representative cursor values:
+
+```text
+DESIGN_REVIEW_REQUIRED
+PLAN_REVIEW_REQUIRED
+
+VALIDATION_REQUIRED
+CROSS_GENERATION_RECONCILIATION_REQUIRED
+FINDING_RECONCILIATION_COMMIT_REQUIRED
+
+LINEAGE_REVALIDATION_REQUIRED
+
+REMEDIATION_REQUIRED
+REMEDIATION_RECOVERY_REQUIRED
+
+TARGET_RESTORE_REQUIRED
+TARGET_RESTORE_RECOVERY_REQUIRED
+
+SELF_REVIEW_REQUIRED
+ROUND_LIMIT_TRANSITION_REQUIRED
+
+COMMIT_REQUIRED
+COMMIT_RECOVERY_REQUIRED
+RESOLUTION_COMMIT_REQUIRED
+
+REQUIREMENTS_REOPEN_TRANSITION_REQUIRED
+DESIGN_REOPEN_TRANSITION_REQUIRED
+
+FRESH_REVIEW_REQUIRED
+
+PRE_CLEAR_VALIDATION_REQUIRED
+CLEAR_READY
+
+NON_CONVERGENCE_REENTRY_VALIDATION_REQUIRED
+
+SUSPENDED
+COMPLETED
+```
+
+A crash after any durable evidence/mutation event MUST project to the same next legal operation without relying on in-memory state.
+
+Cursor precedence applies OSC1 upstream ownership before the §27.4 current-phase disposition:
+
+```text
+upstream blocker exists
+AND workspace == KNOWN_DIRTY
+  → TARGET_RESTORE_REQUIRED
+
+REVIEW_TARGET_RESTORE_PREPARED without completion
+  → TARGET_RESTORE_RECOVERY_REQUIRED
+
+upstream blocker exists
+AND workspace == CLEAN_COMMITTED
+  → DESIGN_REOPEN_TRANSITION_REQUIRED
+     or REQUIREMENTS_REOPEN_TRANSITION_REQUIRED
+
+no CURRENT upstream blocker
+AND current-phase blocking remediation would otherwise be required
+  → evaluate NC1 first
+
+  if NC1 triggers
+    → REVIEW_NON_CONVERGENT
+    → SUSPENDED
+
+  else if remaining generation remediation capacity == 0
+    → ROUND_LIMIT_TRANSITION_REQUIRED
+    → append ROUND_LIMIT_EXHAUSTED
+    → SUSPENDED
+
+  else
+    → REMEDIATION_REQUIRED
+```
+
+Examples:
+
+```text
+FINDING_RECONCILIATION_COMMITTED
+→ crash
+→ upstream blocker exists
+→ if target clean: REOPEN transition required
+→ if target known-dirty: TARGET_RESTORE_REQUIRED first
+```
+
+```text
+SELF_REVIEW_COMPLETED
+→ finding reconciliation committed
+→ crash
+→ current-phase blocker exists
+→ evaluate NC1 on the reconciled lineage state
+
+if NC1 triggers
+  → REVIEW_NON_CONVERGENT
+  → SUSPENDED
+
+else if remaining generation remediation capacity == 0
+  → ROUND_LIMIT_TRANSITION_REQUIRED
+  → ROUND_LIMIT_EXHAUSTED
+  → SUSPENDED
+
+else
+  → REMEDIATION_REQUIRED
+    basis = SELF_REVIEW_CARRY_FORWARD
+```
+
+---
+
+## 36. Finding entry-point closure
+
+The complete finding lifecycle has four entry paths:
+
+```text
+REVIEWER
+  → candidate observation
+  → LLM validator decides validity + semantic relation
+  → normal lineage reconciliation
+
+SELF_REVIEW
+  → finding-validator produces validated observation
+  → semantic relation only
+  → normal lineage reconciliation
+
+DETERMINISTIC_VALIDATION
+  → registered rule produces validated observation
+  → semantic relation only
+  → normal lineage reconciliation
+
+LINEAGE_REVALIDATION
+  → existing lineage applicability check
+  → no occurrence
+  → applicability or resolution transition
+```
+
+No fifth implicit path may mutate lineage lifecycle.
+
+---
+
+## 37. Security and implementation-safety invariants
+
+Before explicit implementation authorization:
+
+- production source mutation is prohibited,
+- test source mutation is prohibited,
+- CI/config/release/dependency mutation is prohibited,
+- arbitrary shell mutation is prohibited,
+- reviewer/validator/self-review are query-only,
+- remediator may mutate exactly one phase artifact only through `review_mutation`,
+- Justice core may mutate a phase artifact only through an exact journaled `review_restore` transition whose source and destination bindings are already durable,
+- `review_restore` can never target Requirements, production source, tests, CI/config/dependency/release metadata, or an arbitrary path,
+- Git commit is Justice-core-only through `review_commit`,
+- every artifact-scoped Git path boundary uses literal pathspec semantics; canonical path normalization alone is never treated as Git scope enforcement,
+- clean target, restore, prepared commit, commit recovery, and post-verification bind both content identity and Git regular-file mode,
+- remediation and restore MUST NOT introduce a target executable-mode change,
+- agent/remediator never receives `review_restore` or `review_commit`,
+- Review Gate never pushes.
+
+Review read scope is contract-validation scope, not repository-wide implementation review.
+
+Design Gate semantic review inputs:
+
+```text
+Requirements
+Design
+review-safe Git metadata
+registered deterministic validation evidence
+```
+
+Plan Gate semantic review inputs:
+
+```text
+approved Design
+Plan
+review-safe Git metadata
+registered deterministic validation evidence
+```
+
+---
+
+## 38. Acceptance mapping to Issue #297
+
+| Requirement / AC | Design contract |
+| --- | --- |
+| Design then Plan separation | CLR1, OSC1, ResumeCursor |
+| Design immutability in Plan | CAP1, OSC1 |
+| Finding validation | LNR1, AR1, EV1 |
+| Minor advisory | severity policy in PF1/OSC1 |
+| Self-review | SRF1, RSL1 |
+| Regression handling | SRF1, LNR1, NC1 |
+| Justice commit boundary | CAP1, CP1, GIT1 |
+| Dirty/staged isolation | WSP1/CAP1/GIT1 literal-path + content/tree-mode identity |
+| Commit traceability | GIT1 + event history |
+| Commit failure blocking | CP1/EVC1 |
+| Semantic non-convergence | NC1/N1 |
+| Absolute round limits | E1/NC1/RTY1 |
+| Persistence | DA1/SV1/PR1/RET1 |
+| Restart/resume | CP1 + projection/ResumeCursor |
+| Design reopen | OSC1/RI1 |
+| Requirements reopen | OSC1/RI1 |
+| Implementation safety | CAP1 |
+| Review-safe access | CAP1/VAL1 |
+| Requirements resolution | RR1 |
+| Durable history query | HQ1 |
+| Approval/digest boundary | PF1/CB1/IP1/CTX1 |
+| `--retry` compatibility | RTY1 |
+
+---
+
+## 39. Design consequences
+
+This design intentionally accepts:
+
+- linear rewrite cost for small v4 JSONL Gate histories,
+- generation-local lineage IDs,
+- strict fail-closed behavior for unsupported/corrupt history,
+- explicit semantic revalidation after baseline/protocol context changes,
+- fail-closed unknown partial-write recovery instead of destructive guessing,
+- scope-namespaced Gate history discovery,
+- multiple small remediation commits,
+- no automatic history compaction in v4.
+
+In return, it provides:
+
+- deterministic restart behavior,
+- traceable remediation causality,
+- explicit authority boundaries,
+- semantic recurrence/regression tracking,
+- recoverable exact restores and commits,
+- isolation from unrelated dirty/staged work,
+- actor-separated remediation/restore/commit/implementation mutation authorities.
+
+---
+
+## 40. Implementation boundary
+
+This Design Spec does not select:
+
+- final TypeScript module names,
+- final classes/interfaces,
+- exact event schema source files,
+- exact native lock binding,
+- exact Git process wrapper,
+- exact test file organization,
+- implementation task order.
+
+Those belong to the subsequent Implementation Plan.
+
+No production source/test/config implementation is authorized by approval of this Design Spec.
