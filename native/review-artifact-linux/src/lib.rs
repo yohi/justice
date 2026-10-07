@@ -4,8 +4,6 @@ use std::ffi::CString;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::path::Path;
-use std::collections::HashSet;
-use std::sync::Mutex;
 
 use napi::bindgen_prelude::{Buffer, Either};
 use napi::{Error, Result};
@@ -478,27 +476,26 @@ pub fn open_review_gate_root(root_dir: String) -> Result<ReviewGateRoot> {
         scopes_fd: Some(gates_fd),
         recovery_fd: Some(recovery_fd),
         workspace_fd: Some(workspace_fd),
-        consumed_locks: Mutex::new(HashSet::new()),
     })
 }
 
 // =========================================================================
-// Review Gate native surface (Task 1-b skeleton)
+// Review Gate native surface
 // =========================================================================
 //
 // The N-API exports below exist and are callable, but the durable
-// event/shard/recovery storage lands in later tasks. For this slice:
-// - `acquire_*` validates its identifier, then opens the real
-//   descriptor-relative lock file (mode 0600, `O_CLOEXEC|O_NOFOLLOW`) so the
-//   handle carries a live `O_CLOEXEC` descriptor for `verify_cloexec`; real
-//   `flock(LOCK_EX | LOCK_NB)` semantics are added in later tasks.
-// - Lock occupation is a per-root-instance latch: the first acquisition of a
-//   (kind, id) resource succeeds and every later acquisition of that same
-//   resource inside THIS root instance is `occupied`, even after `release`.
+// event/shard/recovery storage lands in later tasks. Locking uses real
+// process-wide advisory locks: `acquire_*` validates its identifier, opens the
+// descriptor-relative lock file (mode 0600,
+// `O_RDWR|O_CREAT|O_NOFOLLOW|O_CLOEXEC`), and takes `flock(LOCK_EX|LOCK_NB)`
+// on it. `EWOULDBLOCK` yields `"occupied"`; any other lock failure yields
+// `review_gate_lock_unavailable`. The lock file itself is the source of
+// truth, so separate roots and separate processes contend for the same target
+// until the winning handle releases it.
 
 #[napi]
-// Skeleton fields: identifiers exist for the later flock wiring; they are not
-// read until that task lands.
+// Metadata reserved for later tasks (scope/gate attribution); fields are not
+// exposed over N-API yet.
 #[allow(dead_code)]
 pub struct GateLockHandle {
     fd: Option<OwnedFd>,
@@ -511,7 +508,13 @@ pub struct GateLockHandle {
 impl GateLockHandle {
     #[napi]
     pub fn release(&mut self) {
-        self.fd = None;
+        let Some(fd) = self.fd.take() else {
+            return;
+        };
+        // Best-effort unlock: closing the descriptor also releases the flock,
+        // so a failed `LOCK_UN` is fail-safe here.
+        // SAFETY: `fd` is a live descriptor and `flock` takes no user pointers.
+        let _ = unsafe { libc::flock(fd.as_raw_fd(), libc::LOCK_UN) };
     }
 
     #[napi]
@@ -529,16 +532,13 @@ impl GateLockHandle {
     }
 }
 
+#[allow(clippy::struct_field_names)]
 #[napi]
 pub struct ReviewGateRoot {
     root_fd: Option<OwnedFd>,
     scopes_fd: Option<OwnedFd>,
     recovery_fd: Option<OwnedFd>,
     workspace_fd: Option<OwnedFd>,
-    // Task 1-b skeleton latch: `acquire_*` records each (kind, id) resource
-    // the first time it succeeds and every later attempt for that resource
-    // inside THIS root instance is `occupied`, even after `release`.
-    consumed_locks: Mutex<HashSet<String>>,
 }
 
 #[napi]
@@ -546,7 +546,7 @@ impl ReviewGateRoot {
     #[napi]
     /// # Errors
     /// Returns a stable N-API error when the root is closed, the scope id is
-    /// invalid, or the skeleton lock descriptor cannot be opened.
+    /// invalid, or the lock file cannot be opened or locked.
     #[allow(clippy::needless_pass_by_value)]
     pub fn acquire_scope_lock(
         &self,
@@ -558,7 +558,7 @@ impl ReviewGateRoot {
     #[napi]
     /// # Errors
     /// Returns a stable N-API error when the root is closed, the gate id is
-    /// invalid, or the skeleton lock descriptor cannot be opened.
+    /// invalid, or the lock file cannot be opened or locked.
     #[allow(clippy::needless_pass_by_value)]
     pub fn acquire_gate_lock(&self, gate_id: String) -> Result<Either<String, GateLockHandle>> {
         self.acquire_lock("gate", &gate_id)
@@ -566,8 +566,8 @@ impl ReviewGateRoot {
 
     #[napi]
     /// # Errors
-    /// Returns a stable N-API error when the root is closed or the skeleton
-    /// lock descriptor cannot be opened.
+    /// Returns a stable N-API error when the root is closed or the recovery GC
+    /// lock file cannot be opened or locked.
     pub fn acquire_recovery_gc_lock(&self) -> Result<Either<String, GateLockHandle>> {
         self.acquire_lock("recovery-gc", "recovery-gc")
     }
@@ -733,14 +733,6 @@ impl ReviewGateRoot {
             "recovery-gc" => "locks/recovery-gc.lock".to_string(),
             _ => return Err(Error::from_reason("review_gate_invalid_id")),
         };
-        let mut consumed = self
-            .consumed_locks
-            .lock()
-            .map_err(|_| Error::from_reason("root_closed"))?;
-        let key = format!("{kind}\u{0}{id}");
-        if consumed.contains(&key) {
-            return Ok(Either::A("occupied".to_string()));
-        }
         let fd = open_relative(
             gates_fd.as_raw_fd(),
             &lock_path,
@@ -748,7 +740,17 @@ impl ReviewGateRoot {
             0o600,
         )
         .map_err(|error| map_io_error(&error, "review_gate_lock_unavailable"))?;
-        consumed.insert(key);
+        // SAFETY: `fd` is a live descriptor and `flock` takes no user pointers.
+        let lock_result = unsafe { libc::flock(fd.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if lock_result != 0 {
+            let lock_error = io::Error::last_os_error();
+            // Dropping `fd` on these returns closes the just-opened descriptor, so a
+            // losing attempt never leaks it; the winner keeps it until `release`.
+            if lock_error.raw_os_error() == Some(libc::EWOULDBLOCK) {
+                return Ok(Either::A("occupied".to_string()));
+            }
+            return Err(Error::from_reason("review_gate_lock_unavailable"));
+        }
         let (scope_id, gate_id) = match kind {
             "scope" => (id.to_string(), None),
             "gate" => (String::new(), Some(id.to_string())),

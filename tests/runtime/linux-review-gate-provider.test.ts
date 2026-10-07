@@ -30,25 +30,54 @@ describe("LinuxReviewGateProvider publication", () => {
 });
 
 describe("LinuxReviewGateProvider contract", () => {
-  it("acquires exclusive scope, gate, and recovery GC locks", async () => {
+  it("acquires and contends exclusive scope, gate, and recovery GC locks", async () => {
     const provider = createLinuxReviewGateProvider("/tmp");
     expect(provider).toBeDefined();
     if (provider === undefined) return;
 
-    const scopeLock = await provider.acquireScopeLock("scope-a");
+    const scopeLock = await provider.acquireScopeLock("scope-flock-a");
     expect(scopeLock).not.toBe("occupied");
-    if (scopeLock !== "occupied") scopeLock.release();
-    await expect(provider.acquireScopeLock("scope-a")).resolves.toBe("occupied");
+    if (scopeLock === "occupied") return;
+    await expect(provider.acquireScopeLock("scope-flock-a")).resolves.toBe("occupied");
+    scopeLock.release();
+    const scopeReacquired = await provider.acquireScopeLock("scope-flock-a");
+    expect(scopeReacquired).not.toBe("occupied");
+    if (scopeReacquired !== "occupied") scopeReacquired.release();
 
-    const gateLock = await provider.acquireGateLock("gate-a");
+    const gateLock = await provider.acquireGateLock("gate-flock-a");
     expect(gateLock).not.toBe("occupied");
-    if (gateLock !== "occupied") gateLock.release();
-    await expect(provider.acquireGateLock("gate-a")).resolves.toBe("occupied");
+    if (gateLock === "occupied") return;
+    await expect(provider.acquireGateLock("gate-flock-a")).resolves.toBe("occupied");
+    gateLock.release();
+    const gateReacquired = await provider.acquireGateLock("gate-flock-a");
+    expect(gateReacquired).not.toBe("occupied");
+    if (gateReacquired !== "occupied") gateReacquired.release();
 
     const gcLock = await provider.acquireRecoveryGcLock();
     expect(gcLock).not.toBe("occupied");
-    if (gcLock !== "occupied") gcLock.release();
+    if (gcLock === "occupied") return;
     await expect(provider.acquireRecoveryGcLock()).resolves.toBe("occupied");
+    gcLock.release();
+    const gcReacquired = await provider.acquireRecoveryGcLock();
+    expect(gcReacquired).not.toBe("occupied");
+    if (gcReacquired !== "occupied") gcReacquired.release();
+  });
+
+  it("contends between two providers on the same root directory", async () => {
+    const first = createLinuxReviewGateProvider("/tmp");
+    const second = createLinuxReviewGateProvider("/tmp");
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    if (first === undefined || second === undefined) return;
+
+    const held = await first.acquireScopeLock("scope-flock-contend");
+    expect(held).not.toBe("occupied");
+    if (held === "occupied") return;
+    await expect(second.acquireScopeLock("scope-flock-contend")).resolves.toBe("occupied");
+    held.release();
+    const reacquired = await second.acquireScopeLock("scope-flock-contend");
+    expect(reacquired).not.toBe("occupied");
+    if (reacquired !== "occupied") reacquired.release();
   });
 
   it("verifies lock descriptors are close-on-exec", async () => {
