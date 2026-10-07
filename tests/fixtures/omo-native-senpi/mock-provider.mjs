@@ -1,3 +1,4 @@
+/* global process queueMicrotask */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 

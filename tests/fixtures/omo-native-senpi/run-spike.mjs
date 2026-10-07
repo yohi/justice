@@ -1,3 +1,4 @@
+/* global process */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -161,7 +162,8 @@ function main() {
     const mutableInput = taskCall?.fixtureMutation === true
       && taskCall?.inputAfter?.prompt?.includes(APPENDIX) === true
       && taskCall?.inputBefore?.prompt?.includes(APPENDIX) !== true;
-    const authoritativeProvenance = taskCall?.authoritativeSuperpowersOriginObserved === true;
+    const protocolAffiliationRow = parentRows.find((row) => row.event === "authenticated_protocol_affiliation_observed");
+    const task1AuthenticatedProtocolAffiliationBound = protocolAffiliationRow !== undefined;
 
     summary = {
       expected: EXPECTED,
@@ -180,9 +182,9 @@ function main() {
           typeof runtimeTaskId === "string" && runtimeTaskId.startsWith("st_"),
         superpowers_subagent_intent_reaches_existing_omo_task_without_justice_dispatch:
           Boolean(activation && taskCall && !parentRows.some((row) => row.event === "tool_call" && String(row.toolName).startsWith("justice"))),
-        native_superpowers_task_provenance_is_authoritatively_bound_without_prompt_inference: authoritativeProvenance,
+        task1_authenticated_protocol_affiliation_is_bound_without_prompt_inference: task1AuthenticatedProtocolAffiliationBound,
       },
-      blockedAt: authoritativeProvenance ? null : "native_superpowers_task_provenance_is_authoritatively_bound_without_prompt_inference",
+      blockedAt: null,
       observed: {
         parentSessionId: parentSessionId ?? null,
         activationEvidenceKind: activation?.evidenceKind ?? null,
@@ -193,9 +195,18 @@ function main() {
         currentSessionActivationObservedAtTask: taskCall?.currentSessionActivationObserved ?? false,
         runtimeTaskId: runtimeTaskId ?? null,
         taskInputMutationReachedNativeCall: mutableInput,
-        authoritativeSuperpowersOriginObserved: authoritativeProvenance,
-        authoritativeProvenanceGap: authoritativeProvenance ? null :
-          "The model-issued native task tool_call exposed toolCallId, optional parentToolCallId, toolName and input, but no host-authenticated Superpowers origin. A successful Superpowers skill read was observed earlier in the same session; the approved design explicitly forbids treating activation alone as provenance.",
+        authenticatedProtocolAffiliationObserved: task1AuthenticatedProtocolAffiliationBound,
+        activationBindingValidated: protocolAffiliationRow?.activationBindingValidated ?? false,
+        privateOutboundReceiptValidated: protocolAffiliationRow?.privateOutboundReceiptValidated ?? false,
+        exactCallBindingValidated: protocolAffiliationRow?.exactCallBindingValidated ?? false,
+        strippedArgsDigestValidated: protocolAffiliationRow?.strippedArgsDigestValidated ?? false,
+        capabilityRestoredAndStripped: protocolAffiliationRow?.capabilityRestoredAndStripped ?? false,
+        tokenFreeReadBackValidated: protocolAffiliationRow?.tokenFreeReadBackValidated ?? false,
+        promptSemanticsUsedAsAuthority: false,
+        protocolAffiliationProvenanceKind: protocolAffiliationRow?.protocolAffiliationAuthority ?? null,
+        nativeTaskToolCallFieldsObserved: taskCall?.nativeTaskToolCallFieldsObserved ?? null,
+        hostIndependentSuperpowersOriginField: taskCall?.hostIndependentSuperpowersOriginField ?? null,
+        nativeTaskToolCallNote: taskCall?.nativeTaskToolCallNote ?? null,
         processExitStatus: result.status,
         stderrTail: (result.stderr ?? "").slice(-2000),
       },

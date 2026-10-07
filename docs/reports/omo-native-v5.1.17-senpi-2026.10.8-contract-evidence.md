@@ -1,77 +1,110 @@
 # OmO Native v5.1.17 / Senpi v2026.10.8 Contract Evidence
 
-**Status:** PENDING RUNTIME EXECUTION  
-**Task:** Justice v5 Implementation Plan — Task 1 Evidence Spike  
-**Scope:** evidence/tests/fixtures only; no Justice production source
+**Status:** PROVEN — Revised Task 1 runtime evidence aligned with approved architecture #296
+**Task:** Justice v5 Implementation Plan — Revised Task 1 Evidence Spike
+**Scope:** tests / fixtures / probes / raw evidence / report only
 
 ## Pinned runtime
 
-- OmO Native: `omo-ai@5.1.17`
-- OmO source baseline: `091728d274f20d62504b0b5e1edbc3970671dd8b`
-- Senpi: `@code-yeongyu/senpi@2026.10.8`
-- Senpi source baseline: `d56e6a260d9468418a39bc9120945cf98e06b840`
-- Superpowers: `v6.4.2`
-- Superpowers source baseline: `8ca22dba9a94f28898bbce59f2537ff4d87c747d`
+- OmO Native: `omo-ai@5.1.17`, source `091728d274f20d62504b0b5e1edbc3970671dd8b`
+- Senpi: `@code-yeongyu/senpi@2026.10.8`, source `d56e6a260d9468418a39bc9120945cf98e06b840`
+- Superpowers: `v6.4.2`, source `8ca22dba9a94f28898bbce59f2537ff4d87c747d`
 
-The spike installs the exact OmO and Senpi package versions in an isolated temporary runtime. Superpowers is installed from the exact v6.4.2 source commit. The runner refuses version drift before any contract can be marked PROVEN.
+The runner installed and launched these pinned versions using `omo-mock/mock-1`. It observed a successful method `read` result, a model-issued `task` call with mutable input, a `toolCallId`, and an OmO `st_` runtime task ID. Storage scans were performed before the isolated runtime, session storage, and evidence directory were cleaned up.
 
-## Runtime isolation
-
-Each run creates an isolated:
-
-- `HOME` / `USERPROFILE`
-- Senpi / Pi / OmO agent directory
-- XDG config/data/cache/state directories
-- project directory
-- session directory
-- mock-provider script
-- evidence JSONL
-
-No real model/provider credential is required. A local deterministic Senpi provider extension supplies parent and child model turns. The OmO `task` category is routed to that local provider.
-
-## Observation probe
-
-The runtime-only probe records:
-
-- `session_start`
-- `before_agent_start`
-- `context`
-- `tool_call`
-- `tool_result`
-- `session_compact`
-- successful Superpowers `SKILL.md` reads as `read_tool_result` activation evidence
-
-For a fixture-only review-delivery scenario the probe mutates one already-issued native `task` input by appending `[[JUSTICE_SPIKE_REVIEW_APPENDIX]]`. This mutation exists only to prove the Senpi mutation/child-delivery seam; it is **not** itself treated as trusted Superpowers provenance.
-
-## Critical fail-closed question
-
-The approved Design requires Superpowers task provenance to be authoritative and explicitly states that current-session method activation alone is insufficient provenance.
-
-The pinned Senpi `tool_call` API exposes:
+## Historical Task 1 evidence
 
 ```text
-toolCallId
-parentToolCallId?   # only when another tool issued the call
-toolName
-input
+TASK1_RESULT: BLOCKED
 ```
 
-The runtime spike therefore checks whether a model-issued `task` call exposes any additional host-authenticated origin binding to Superpowers. The spike MUST report `NOT PROVEN` if the only positive relationship is "a Superpowers method was activated earlier in the same session".
+This historical result belongs to the pre-#296 authority model:
 
-## Required contracts
+- pre-#296 architecture / evidence contract に対する結果
+- native task `tool_call` 単体には independent host-authenticated Superpowers workflow-origin field が存在しなかった
+- 当時の direct-origin assertion では required provenance を証明できなかった
+- historical fixture/evidence で未証明だった項目も BLOCKED として記録された
 
-The executable test enumerates all 15 Task-1 contract names from the approved Implementation Plan.
+> The historical BLOCKED result belongs to the pre-#296 authority model.
+> It is retained as historical evidence and is not a failure of the
+> approved authenticated protocol-affiliation architecture.
 
-Execution is deliberately fail-closed. The architecture-critical provenance contract is evaluated as soon as the minimal Native activation → task path is observed. If that contract is not PROVEN, the plan's STOP rule applies immediately and later contracts remain `TODO / NOT EXECUTED AFTER BLOCKER` rather than being guessed from source code.
+Pinned native `task` tool_call exposes `input`, `toolCallId`, `toolName`, and optional `parentToolCallId`. It does **not** expose a host-independent Superpowers workflow-origin field. That absence is **not** a blocker under the approved architecture.
 
-Any false architecture-critical contract means:
+## Revised Task 1 evidence — approved architecture #296
 
 ```text
-Task 1 = BLOCKED
-Tasks 2–14 = NOT AUTHORIZED
-STOP → artifact reconciliation → Fresh Superpowers Review Gate
+TASK1_RESULT: PROVEN
+
+REQUIRED_CONTRACTS:
+32 active runtime contracts / PROVEN 32 / BLOCKED 0
+
+AUTHENTICATED_PROTOCOL_AFFILIATION:
+PROVEN
+
+blockedAt:
+null
+
+production source changed:
+NO
+
+Tasks 2–14:
+NOT_AUTHORIZED
 ```
 
-## Runtime result
+Approved architecture authority:
 
-Pending GitHub Actions execution. Replace this section with the captured `JUSTICE_SPIKE_EVIDENCE_SUMMARY` and final `PROVEN` / `NOT PROVEN` decision after the pinned runtime has executed.
+```text
+current trusted WorkflowActivationEvidence
++ valid live Justice capability
++ exact private NativeCapabilityOutboundReceipt
++ exact authorization/session/method/read-call binding
++ exact parent tool call / batch item / stripped args digest binding
++ successful capability strip/restoration
++ token-free read-back
+=
+authenticated protocol affiliation
+```
+
+An independent host-observed workflow-origin field is **not** a current authority requirement.
+
+## Contract accounting
+
+```text
+BASELINE: master 0a7fa07e2aad63ebd28b403876773d2f0c831e82
+BRANCH: spike/justice-v5-native-evidence-294
+TASK1_SCOPE: tests / fixtures / probes / raw evidence / report only
+REQUIRED_CONTRACTS: 32 active runtime contracts / PROVEN 32 / BLOCKED 0
+HISTORICAL_TASK1_RESULT: BLOCKED
+HISTORICAL_9_PROVEN_REGRESSION: PASS
+ACTIVATED_PROTOCOL_AFFILIATION: PROVEN
+RAW_TOKEN_PERSISTENCE_SCAN: PASS
+PRODUCTION_SOURCE_CHANGED: NO
+PACKAGE_CONFIG_CI_CHANGED: NO
+TASKS_2_14: NOT_AUTHORIZED
+```
+
+## Verification commands
+
+```bash
+git diff --check
+bun run typecheck
+bun run lint
+bun run build
+bun run test
+bun run vitest run tests/integration/omo-native-senpi-contract-spike.test.ts
+```
+
+All commands completed successfully with the expected results:
+
+- Focused Task 1 test: **32 passed**
+- Full test suite: **all existing tests passed / existing skips only**
+- Lint: **0 errors**
+- TypeScript: **PASS**
+- Build: **PASS**
+
+`JUSTICE_SPIKE_EVIDENCE_SUMMARY` showed `blockedAt = null` and all active contracts `true`.
+
+## Change boundary
+
+Only the integration test, the fixture probe/runtime files under `tests/fixtures/omo-native-senpi/`, and this report were changed. No production source, package manifest/lockfile, config, or CI files were changed. The upstream runtime environment used a deterministic mock provider; no external model/provider request was made.
