@@ -12,10 +12,17 @@ describe("canonicalizeArtifactPath", () => {
     expect(canonicalizeArtifactPath("docs//design.md")).toBe("docs/design.md");
   });
 
+  it("allows safe names containing double dots", () => {
+    expect(canonicalizeArtifactPath("release..md")).toBe("release..md");
+    expect(canonicalizeArtifactPath("docs/re..lease.md")).toBe("docs/re..lease.md");
+  });
+
   it.each([
     "",
     "/etc/passwd",
     "../secret",
+    ".",
+    "docs/.",
     "docs/../secret",
     "docs\\design.md",
     "docs/./design.md",

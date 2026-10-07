@@ -631,7 +631,7 @@ impl ReviewGateRoot {
         previous_digest: Option<String>,
         bytes: Buffer,
     ) -> Result<()> {
-        let _ = self.directory_fds();
+        self.directory_fds()?;
         gate_lock_id(&review_scope_id)?;
         gate_lock_id(&gate_id)?;
         gate_lock_id(&writer_id)?;
@@ -648,7 +648,7 @@ impl ReviewGateRoot {
     /// invalid; the no-replace CAS publication itself lands in later tasks.
     #[allow(clippy::needless_pass_by_value)]
     pub fn publish_recovery_object(&self, digest: String, bytes: Buffer) -> Result<String> {
-        let _ = self.directory_fds();
+        self.directory_fds()?;
         recovery_digest(&digest)?;
         let _ = bytes.len();
         Ok("created".to_string())
@@ -678,7 +678,7 @@ impl ReviewGateRoot {
     /// invalid; the guarded delete itself lands in later tasks.
     #[allow(clippy::needless_pass_by_value)]
     pub fn delete_recovery_object(&self, digest: String) -> Result<()> {
-        let _ = self.directory_fds();
+        self.directory_fds()?;
         recovery_digest(&digest)?;
         Ok(())
     }
@@ -707,7 +707,7 @@ impl ReviewGateRoot {
         replacement_bytes: Buffer,
         replacement_git_mode: String,
     ) -> Result<()> {
-        let _ = self.directory_fds();
+        self.directory_fds()?;
         workspace_relative_path(&path)?;
         recovery_digest(&expected_current_digest)?;
         workspace_git_mode(&expected_git_mode)?;

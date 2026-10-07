@@ -38,6 +38,14 @@ export function projectReviewGateState(events: readonly ReviewGateEvent[]): Revi
 
   let state = getInitialReviewGateState(firstEvent);
   for (const event of events.slice(1)) {
+    if (state.status === "completed") {
+      if (event.eventType === "COMPLETED_APPROVAL_BINDING" && state.approvalBinding !== null) {
+        if (sameBinding(state.approvalBinding, event.payload.approvalBinding)) continue;
+        throw new Error("review_gate_completed_binding_conflict");
+      }
+      throw new Error("review_gate_event_after_completion");
+    }
+
     switch (event.eventType) {
       case "GATE_CREATED":
         throw new Error("review_gate_duplicate_gate_creation");
@@ -170,9 +178,6 @@ function completeState(
   event: CompletedApprovalBindingV1,
 ): ReviewGateState {
   const { approvalBinding } = event.payload;
-  if (state.status === "completed" && state.approvalBinding !== null && !sameBinding(state.approvalBinding, approvalBinding)) {
-    throw new Error("review_gate_completed_binding_conflict");
-  }
   return { ...state, status: "completed", approvalBinding };
 }
 

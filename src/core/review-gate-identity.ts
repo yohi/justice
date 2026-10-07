@@ -6,7 +6,6 @@ export function canonicalizeArtifactPath(rawPath: string): string | null {
     rawPath.length === 0 ||
     rawPath.startsWith("/") ||
     rawPath.startsWith("./") ||
-    rawPath.includes("..") ||
     rawPath.includes("\\") ||
     rawPath.includes("\0") ||
     rawPath.includes("/./")
@@ -15,6 +14,7 @@ export function canonicalizeArtifactPath(rawPath: string): string | null {
   }
 
   const components = rawPath.split("/");
+  if (components.some((component) => component === "." || component === "..")) return null;
   if (components.at(-1) === "") return null;
 
   return components.filter((component) => component.length > 0).join("/");

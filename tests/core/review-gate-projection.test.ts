@@ -119,6 +119,15 @@ describe("projectReviewGateState", () => {
     expect(projectReviewGateState([created, complete, complete])).toMatchObject({ status: "completed", approvalBinding: binding });
   });
 
+  it("rejects non-completion events after completion", () => {
+    const complete = event<CompletedApprovalBindingV1>("COMPLETED_APPROVAL_BINDING", { approvalBinding: binding });
+    expect(() => projectReviewGateState([
+      created,
+      complete,
+      event("ORCHESTRATION_RESUMED", { resumedAt: "ignored" }),
+    ])).toThrow("review_gate_event_after_completion");
+  });
+
   it.each([
     ["REOPEN_REQUIRED", { phase: "design", lineageIds: [] }, "reopen_required"],
     ["ROUND_LIMIT_EXHAUSTED", { phase: "design", roundLimit: 5 }, "round_limit_exhausted"],
