@@ -33,7 +33,7 @@ describe("registerJusticeCommands", () => {
       agent: JUSTICE_REVIEW_CONTROLLER_AGENT,
       subtask: true,
     });
-    // Task 10 compatibility window: the four canonical Review Gate agents are
+    // Task 10 compatibility window: the canonical Review Gate agents are
     // registered with exact permissions.
     expect(config.agent?.[JUSTICE_REVIEW_CONTROLLER_AGENT]).toMatchObject({
       mode: "subagent",
@@ -47,10 +47,7 @@ describe("registerJusticeCommands", () => {
       mode: "subagent",
       permission: { "*": "deny", read: "allow" },
     });
-    expect(config.agent?.["justice-review-remediator"]).toMatchObject({
-      mode: "subagent",
-      permission: { "*": "deny", read: "allow", edit: "allow", write: "allow", apply_patch: "allow" },
-    });
+    expect(config.agent?.["justice-review-remediator"]).toBeUndefined();
     // TASK-12 REMOVAL EXPECTATION (not a permanent contract): the legacy
     // justice-review-worker stays temporarily registered/read-only until
     // Task 12 migrates PlanBridge and removes it atomically.
@@ -158,13 +155,7 @@ describe("registerJusticeCommands", () => {
       "*": "deny",
       read: "allow",
     });
-    expect(config.agent?.["justice-review-remediator"]?.permission).toEqual({
-      "*": "deny",
-      read: "allow",
-      edit: "allow",
-      write: "allow",
-      apply_patch: "allow",
-    });
+    expect(config.agent?.["justice-review-remediator"]).toBeUndefined();
   });
 
 

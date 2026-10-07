@@ -399,6 +399,10 @@ describe("planReviewGateNextOperation — state-machine scenarios", () => {
 
   it("reaches the PLAN_CLEAR terminal through pre-clear validation and completion", () => {
     const projection = projectReviewGate([created, designClear]);
+    const registry = createDefaultDeterministicValidatorRegistry();
+    const dispatch = referenceConsistencyDispatch("docs/requirements.md", "pre-clear-plan-pass");
+    const evidence = executeValidationDispatch(registry, dispatch, "2026-10-08T00:00:02.000Z");
+    expect(evidence).toMatchObject({ stage: "PRE_CLEAR", kind: "semantic", result: "PASS" });
 
     const clearing = planReviewGateNextOperation(
       projection,
@@ -406,8 +410,8 @@ describe("planReviewGateNextOperation — state-machine scenarios", () => {
         reviewObserved: { phase: "plan", candidates: [] },
         preClearValidationObserved: {
           validationEventId: "pre-clear-plan-1",
-          registry: createDefaultDeterministicValidatorRegistry(),
-          evidences: [],
+          registry,
+          evidences: [evidence],
         },
         preparedApprovalBinding: binding,
       }),
@@ -423,6 +427,32 @@ describe("planReviewGateNextOperation — state-machine scenarios", () => {
       kind: "completed",
       approvalBinding: binding,
     });
+  });
+
+  it.each([
+    ["a non-PRE_CLEAR stage", { stage: "BASELINE_ADMISSION" as const }],
+    ["indeterminate evidence", { result: "INDETERMINATE" as const }],
+  ])("suspends before PLAN_CLEAR for %s", (_description, overrides) => {
+    const projection = projectReviewGate([created, designClear]);
+    const registry = createDefaultDeterministicValidatorRegistry();
+    const dispatch = referenceConsistencyDispatch("docs/requirements.md", "pre-clear-plan-pass");
+    const evidence = executeValidationDispatch(registry, dispatch, "2026-10-08T00:00:02.000Z");
+    const observedEvidence = { ...evidence, ...overrides };
+
+    expect(
+      planReviewGateNextOperation(
+        projection,
+        planningContext({
+          reviewObserved: { phase: "plan", candidates: [] },
+          preClearValidationObserved: {
+            validationEventId: "pre-clear-plan-1",
+            registry,
+            evidences: [observedEvidence],
+          },
+          preparedApprovalBinding: binding,
+        }),
+      ),
+    ).toEqual({ kind: "suspended", reason: "execution_suspended" });
   });
 
   it("maps suspended gates to their suspension operation and reentry validation", () => {

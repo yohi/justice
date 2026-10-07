@@ -546,7 +546,8 @@ export class ReviewGateGit {
           expectingPath = false;
           if (record.length === 0) continue;
           const canonical = canonicalizeArtifactPath(record);
-          if (canonical !== null && !changedPaths.includes(canonical)) changedPaths.push(canonical);
+          if (canonical === null) throw verificationFailed("commit contains an invalid changed path");
+          if (!changedPaths.includes(canonical)) changedPaths.push(canonical);
           continue;
         }
         if (DIFF_RAW_STATUS_RECORD.test(record)) expectingPath = true;

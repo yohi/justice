@@ -532,6 +532,9 @@ function planPreClear(
 ): ReviewGateNextOperation {
   const observed = context.preClearValidationObserved;
   if (observed !== undefined) {
+    if (observed.evidences.some((evidence) => evidence.stage !== "PRE_CLEAR")) {
+      return freezeOperation({ kind: "suspended", reason: "execution_suspended" });
+    }
     const bridged = bridgeDeterministicFindings({
       validationEventId: observed.validationEventId,
       evidences: observed.evidences,
@@ -547,6 +550,14 @@ function planPreClear(
         kind: "commit_finding_reconciliation",
         batch: Object.freeze({ findings: Object.freeze(batch) }),
       });
+    }
+    if (
+      observed.evidences.length === 0 ||
+      observed.evidences.some(
+        (evidence) => evidence.kind !== "semantic" || evidence.result !== "PASS",
+      )
+    ) {
+      return freezeOperation({ kind: "suspended", reason: "execution_suspended" });
     }
     return appendClearOperation(projection, context);
   }
