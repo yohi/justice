@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -58,9 +58,21 @@ describe("ReviewGateRecoveryStore — CAS blob publication (RO1 interim layout)"
     const second = createReviewGateRecoveryStore(root);
     expect(await second.read(DIGEST_OK)).toEqual(SAMPLE_BYTES);
     // CAS: a conflicting publish never overwrites existing bytes
-    await expect(second.publish(DIGEST_OK, Buffer.from("conflict"))).rejects.toThrow("review_gate_recovery_digest_mismatch");
+    await expect(second.publish(DIGEST_OK, Buffer.from("conflict"))).rejects.toThrow(
+      "review_gate_recovery_digest_mismatch",
+    );
     expect(await second.read(DIGEST_OK)).toEqual(SAMPLE_BYTES);
     second.close();
+  });
+
+  it("rejects stored bytes whose digest does not match the requested key", async () => {
+    const root = await freshRoot();
+    const recoveryDir = path.join(root, ".justice", "review-gates", "recovery");
+    await mkdir(recoveryDir, { recursive: true });
+    await writeFile(path.join(recoveryDir, DIGEST_OK), OTHER_BYTES);
+    const store = createReviewGateRecoveryStore(root);
+    await expect(store.read(DIGEST_OK)).rejects.toThrow("review_gate_recovery_digest_mismatch");
+    store.close();
   });
 
   it("reads a missing digest as null", async () => {
@@ -76,6 +88,31 @@ describe("ReviewGateRecoveryStore — CAS blob publication (RO1 interim layout)"
     await store.publish(DIGEST_OK, SAMPLE_BYTES);
 
     expect(await store.list()).toEqual([DIGEST_OK, DIGEST_OTHER].sort());
+    store.close();
+  });
+
+  it("excludes temporary and malformed filenames from the listing", async () => {
+    const root = await freshRoot();
+    const recoveryDir = path.join(root, ".justice", "review-gates", "recovery");
+    await mkdir(recoveryDir, { recursive: true });
+    await writeFile(path.join(recoveryDir, "z".repeat(64)), "bad-name");
+    await writeFile(path.join(recoveryDir, `${DIGEST_OK}.tmp`), "temporary");
+    const store = createReviewGateRecoveryStore(root);
+    expect(await store.list()).toEqual([]);
+    store.close();
+  });
+
+  it("reports a collision without replacing bytes already at the digest path", async () => {
+    const root = await freshRoot();
+    const recoveryDir = path.join(root, ".justice", "review-gates", "recovery");
+    const existingBytes = Buffer.from("corrupt existing bytes");
+    await mkdir(recoveryDir, { recursive: true });
+    await writeFile(path.join(recoveryDir, DIGEST_OK), existingBytes);
+    const store = createReviewGateRecoveryStore(root);
+    await expect(store.publish(DIGEST_OK, SAMPLE_BYTES)).rejects.toThrow(
+      "review_gate_recovery_collision",
+    );
+    expect(await readFile(path.join(recoveryDir, DIGEST_OK))).toEqual(existingBytes);
     store.close();
   });
 

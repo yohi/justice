@@ -32,8 +32,16 @@ function gateCreatedEvent(gateId: string): ReviewGateEvent {
     emittedAt: "2026-10-08T00:00:00.000Z",
     payload: Object.freeze({
       reviewScopeId: "scope-1",
-      designArtifact: Object.freeze({ canonicalPath: "docs/design.md", digest: "d1", gitMode: "100644" }),
-      planArtifact: Object.freeze({ canonicalPath: "docs/plan.md", digest: "p1", gitMode: "100644" }),
+      designArtifact: Object.freeze({
+        canonicalPath: "docs/design.md",
+        digest: "d1",
+        gitMode: "100644",
+      }),
+      planArtifact: Object.freeze({
+        canonicalPath: "docs/plan.md",
+        digest: "p1",
+        gitMode: "100644",
+      }),
       requirementsResolution: Object.freeze({
         source: "explicit",
         canonicalPath: "requirements.md",
@@ -92,6 +100,31 @@ describe("ReviewGateEventStore — durable events", () => {
     store.close();
   });
 
+  it("keeps stored events independent and recursively frozen", async () => {
+    const store = createReviewGateEventStore(freshRoot());
+    const mutableEvent = {
+      ...gateCreatedEvent("gate-a"),
+      payload: {
+        ...gateCreatedEvent("gate-a").payload,
+        designArtifact: {
+          canonicalPath: "docs/design.md",
+          digest: "d1",
+          gitMode: "100644" as const,
+        },
+      },
+    };
+    await store.appendEvents("gate-a", [mutableEvent]);
+    mutableEvent.payload.designArtifact.canonicalPath = "changed.md";
+
+    const firstRead = await store.readEvents("gate-a");
+    const event = firstRead[0];
+    expect(event?.payload.designArtifact.canonicalPath).toBe("docs/design.md");
+    expect(Object.isFrozen(event?.payload.designArtifact)).toBe(true);
+    expect(Object.isFrozen(event?.payload)).toBe(true);
+    expect(Object.isFrozen(event)).toBe(true);
+    store.close();
+  });
+
   it("persists events durably across store instances on the same root", async () => {
     const root = freshRoot();
     const first = createReviewGateEventStore(root);
@@ -123,9 +156,9 @@ describe("ReviewGateEventStore — durable events", () => {
   it("rejects appending an event bound to a different gate", async () => {
     const store = createReviewGateEventStore(freshRoot());
 
-    await expect(
-      store.appendEvents("gate-a", [gateCreatedEvent("gate-b")]),
-    ).rejects.toThrow("review_gate_event_gate_mismatch");
+    await expect(store.appendEvents("gate-a", [gateCreatedEvent("gate-b")])).rejects.toThrow(
+      "review_gate_event_gate_mismatch",
+    );
     store.close();
   });
 
@@ -133,9 +166,7 @@ describe("ReviewGateEventStore — durable events", () => {
     const root = freshRoot();
     const store = createReviewGateEventStore(root);
 
-    await expect(store.appendEvents("gate-a", [])).rejects.toThrow(
-      "review_gate_event_batch_empty",
-    );
+    await expect(store.appendEvents("gate-a", [])).rejects.toThrow("review_gate_event_batch_empty");
     await expect(readdir(path.join(root, ".justice", "review-gates"))).rejects.toThrow();
     store.close();
   });
@@ -167,9 +198,9 @@ describe("ReviewGateEventStore — durable events", () => {
     store.close(); // idempotent
 
     await expect(store.readEvents("gate-a")).rejects.toThrow("review_gate_store_closed");
-    await expect(
-      store.appendEvents("gate-a", [gateCreatedEvent("gate-a")]),
-    ).rejects.toThrow("review_gate_store_closed");
+    await expect(store.appendEvents("gate-a", [gateCreatedEvent("gate-a")])).rejects.toThrow(
+      "review_gate_store_closed",
+    );
   });
 });
 
@@ -272,6 +303,14 @@ describe("ReviewGateEventStore — scope index", () => {
     second.close();
   });
 
+  it("returns null for inherited scope-index keys", async () => {
+    const root = freshRoot();
+    const store = createReviewGateEventStore(root);
+    await store.writeScopeIndex("scope-1", "gate-a");
+    expect(await store.readScopeIndex("toString")).toBeNull();
+    store.close();
+  });
+
   it("persists the scope index as JSON under .justice/review-gates/", async () => {
     const root = freshRoot();
     const store = createReviewGateEventStore(root);
@@ -288,17 +327,15 @@ describe("ReviewGateEventStore — scope index", () => {
   it.each(["", "a/b", "..", "/abs"])("rejects invalid scope id %j", async (reviewScopeId) => {
     const store = createReviewGateEventStore(freshRoot());
     await expect(store.readScopeIndex(reviewScopeId)).rejects.toThrow("review_gate_invalid_id");
-    await expect(
-      store.writeScopeIndex(reviewScopeId, "gate-a"),
-    ).rejects.toThrow("review_gate_invalid_id");
+    await expect(store.writeScopeIndex(reviewScopeId, "gate-a")).rejects.toThrow(
+      "review_gate_invalid_id",
+    );
     store.close();
   });
 
   it("rejects writing a scope index entry with an invalid gate id", async () => {
     const store = createReviewGateEventStore(freshRoot());
-    await expect(store.writeScopeIndex("scope-1", "a/b")).rejects.toThrow(
-      "review_gate_invalid_id",
-    );
+    await expect(store.writeScopeIndex("scope-1", "a/b")).rejects.toThrow("review_gate_invalid_id");
     store.close();
   });
 });
