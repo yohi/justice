@@ -26,3 +26,5 @@ Thumbs.db
 
 # 一時検証・実験ディレクトリ
 /tmp/
+native/review-artifact-linux/target/
+dist/native/

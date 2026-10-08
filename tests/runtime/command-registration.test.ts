@@ -55,7 +55,7 @@ describe("registerJusticeCommands", () => {
         read: "allow",
         edit: "allow",
         write: "allow",
-        apply_patch: "allow",
+      apply_patch: "allow",
       },
     });
     // TASK-12 REMOVAL EXPECTATION (not a permanent contract): the legacy
