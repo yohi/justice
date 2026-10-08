@@ -237,7 +237,7 @@ export function projectReviewGate(events: readonly ReviewGateEvent[]): ReviewGat
     if (finding.status !== "open" && finding.status !== "reopened") continue;
     if (scopeDepth >= phaseDepth) {
       currentRemediableBlockers.push(finding.lineageId);
-    } else if (finding.status === "open") {
+    } else {
       currentUpstreamBlockers.push(finding.lineageId);
     }
   }
