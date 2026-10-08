@@ -85,6 +85,8 @@ import {
   type DeterministicValidationState,
   type MandatoryValidationDispatch,
   type ValidationEvidence,
+  type ValidationInputKind,
+  type ValidationInputValue,
 } from "../core/review-gate/deterministic-validation";
 import {
   canonicalizeArtifactPath,
@@ -505,22 +507,45 @@ export function createReviewGateCoordinator(
     const registry = createDefaultDeterministicValidatorRegistry();
     const gateCreated = requireGateCreated(session.gateId);
     const dispatches: MandatoryValidationDispatch[] = [];
-    for (const validatorId of ["design-requirements-reference-consistency-v1"] as const) {
+    for (const validatorId of [
+      "review-input-binding-integrity-v1",
+      "design-requirements-reference-consistency-v1",
+    ] as const) {
       const registered = registry.resolve(validatorId);
       if (registered === undefined) continue;
       if (!registered.descriptor.mandatoryStages.includes("PRE_CLEAR")) continue;
       if (!registered.descriptor.applicablePhases.includes(projection.phase)) continue;
-      dispatches.push({
-        validatorId,
-        stage: "PRE_CLEAR",
-        phase: projection.phase,
-        logicalOperationId: newId(),
-        binding: {
-          validatorId,
-          validatorContractVersion: registered.descriptor.validatorContractVersion,
-          resultSchemaVersion: registered.descriptor.resultSchemaVersion,
-          stage: "PRE_CLEAR",
-          declaredInputs: {
+      const pinnedInputDigests = {
+        [session.designPath]: session.designDigest,
+        [session.planPath]: session.planDigest,
+      };
+      const approvalBinding = {
+        designArtifactPath: session.designPath,
+        designArtifactDigest: session.designDigest,
+        planArtifactPath: session.planPath,
+        planArtifactDigest: session.planDigest,
+      };
+      const declaredInputs: Partial<Record<ValidationInputKind, ValidationInputValue>> =
+        validatorId === "review-input-binding-integrity-v1"
+          ? {
+              PINNED_INPUT_DIGESTS: {
+                digest: computeCanonicalJsonFingerprint(pinnedInputDigests),
+                entries: pinnedInputDigests,
+              },
+              APPROVAL_BINDING: {
+                digest: computeCanonicalJsonFingerprint(approvalBinding),
+                entries: approvalBinding,
+              },
+              DESIGN_ARTIFACT: {
+                digest: session.designDigest,
+                entries: {},
+              },
+              PLAN_ARTIFACT: {
+                digest: session.planDigest,
+                entries: {},
+              },
+            }
+          : {
             DESIGN_ARTIFACT: {
               digest: session.designDigest,
               entries: {
@@ -531,7 +556,18 @@ export function createReviewGateCoordinator(
               digest: gateCreated.payload.requirementsResolution.digest,
               entries: { path: gateCreated.payload.requirementsResolution.canonicalPath },
             },
-          },
+          };
+      dispatches.push({
+        validatorId,
+        stage: "PRE_CLEAR",
+        phase: projection.phase,
+        logicalOperationId: newId(),
+        binding: {
+          validatorId,
+          validatorContractVersion: registered.descriptor.validatorContractVersion,
+          resultSchemaVersion: registered.descriptor.resultSchemaVersion,
+          stage: "PRE_CLEAR",
+          declaredInputs,
           executionEnvironment: {
             runtimeId: "justice-review-gate-coordinator",
             runtimeVersion: "1",

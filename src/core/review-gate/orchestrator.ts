@@ -532,7 +532,6 @@ function planPreClear(
 ): ReviewGateNextOperation {
   const observed = context.preClearValidationObserved;
   if (observed !== undefined) {
-    if (observed.evidences.length === 0) return appendClearOperation(projection, context);
     if (observed.evidences.some((evidence) => evidence.stage !== "PRE_CLEAR")) {
       return freezeOperation({ kind: "suspended", reason: "execution_suspended" });
     }

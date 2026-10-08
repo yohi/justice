@@ -455,6 +455,26 @@ describe("planReviewGateNextOperation — state-machine scenarios", () => {
     ).toEqual({ kind: "suspended", reason: "execution_suspended" });
   });
 
+  it("suspends before PLAN_CLEAR when pre-clear validation returns no evidence", () => {
+    const projection = projectReviewGate([created, designClear]);
+    const registry = createDefaultDeterministicValidatorRegistry();
+
+    expect(
+      planReviewGateNextOperation(
+        projection,
+        planningContext({
+          reviewObserved: { phase: "plan", candidates: [] },
+          preClearValidationObserved: {
+            validationEventId: "pre-clear-plan-empty",
+            registry,
+            evidences: [],
+          },
+          preparedApprovalBinding: binding,
+        }),
+      ),
+    ).toEqual({ kind: "suspended", reason: "execution_suspended" });
+  });
+
   it("maps suspended gates to their suspension operation and reentry validation", () => {
     const nonConvergent = projectReviewGate([
       created,
