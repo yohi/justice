@@ -307,7 +307,6 @@ describe("planReviewGateNextOperation — state-machine scenarios", () => {
       resumeCursor: { kind: "await_material_progress" },
     });
 
-    // Absolute round exhaustion: all five Design rounds spent, blocker reopened.
     const exhaustedEvents: ReviewGateEvent[] = [created, discover(lineageA, "f-a", "design")];
     for (let ordinal = 1; ordinal <= 5; ordinal += 1) {
       exhaustedEvents.push(remediated(lineageA, { phase: "design", ordinal }));
@@ -316,8 +315,9 @@ describe("planReviewGateNextOperation — state-machine scenarios", () => {
     const exhausted = projectReviewGate(exhaustedEvents);
     expect(planReviewGateNextOperation(exhausted, planningContext())).toEqual({
       kind: "suspended",
-      reason: "round_limit_exhausted",
-      resumeCursor: { kind: "await_external_change" },
+      reason: "review_non_convergent",
+      nonConvergent: { phase: "design", lineageIds: [lineageA] },
+      resumeCursor: { kind: "await_material_progress" },
     });
 
     // A coordinator-provided non-convergent disposition is honored verbatim.

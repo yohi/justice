@@ -108,8 +108,10 @@ export function evaluateNonConvergence(
     return freezeDecision("remediation_oscillation", oscillating);
   }
 
-const stalled = blockers.filter((lineage) =>
-    isInLastTwoPhaseRounds(projection, lineage) && lineage.status !== "reopened",
+  const stalled = blockers.filter(
+    (lineage) =>
+      lineage.status === "reopened" &&
+      isInLastTwoPhaseRounds(projection, lineage),
   );
   if (stalled.length > 0) {
     return freezeDecision(
