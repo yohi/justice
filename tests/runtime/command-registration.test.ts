@@ -3,6 +3,7 @@ import {
   JUSTICE_COMMAND_DEFINITIONS,
   JUSTICE_REVIEW_CONTROLLER_AGENT,
   JUSTICE_REVIEW_CONTROLLER_DEFINITION,
+  JUSTICE_REVIEW_REMEDIATOR_AGENT,
   buildJusticeCommandSystemContext,
   listJusticeCommandNames,
   registerJusticeCommands,
@@ -33,7 +34,7 @@ describe("registerJusticeCommands", () => {
       agent: JUSTICE_REVIEW_CONTROLLER_AGENT,
       subtask: true,
     });
-    // Task 10 compatibility window: the four canonical Review Gate agents are
+    // Task 10 compatibility window: the canonical Review Gate agents are
     // registered with exact permissions.
     expect(config.agent?.[JUSTICE_REVIEW_CONTROLLER_AGENT]).toMatchObject({
       mode: "subagent",
@@ -47,9 +48,15 @@ describe("registerJusticeCommands", () => {
       mode: "subagent",
       permission: { "*": "deny", read: "allow" },
     });
-    expect(config.agent?.["justice-review-remediator"]).toMatchObject({
+    expect(config.agent?.[JUSTICE_REVIEW_REMEDIATOR_AGENT]).toMatchObject({
       mode: "subagent",
-      permission: { "*": "deny", read: "allow", edit: "allow", write: "allow", apply_patch: "allow" },
+      permission: {
+        "*": "deny",
+        read: "allow",
+        edit: "allow",
+        write: "allow",
+      apply_patch: "allow",
+      },
     });
     // TASK-12 REMOVAL EXPECTATION (not a permanent contract): the legacy
     // justice-review-worker stays temporarily registered/read-only until
@@ -138,6 +145,10 @@ describe("registerJusticeCommands", () => {
           model: "amazon-bedrock/global.anthropic.claude-opus-5",
           permission: { "*": "allow", read: "allow", shell: "allow" },
         },
+        [JUSTICE_REVIEW_REMEDIATOR_AGENT]: {
+          model: "amazon-bedrock/global.anthropic.claude-haiku-5",
+          permission: { "*": "allow", shell: "allow" },
+        },
       },
     };
 
@@ -158,7 +169,11 @@ describe("registerJusticeCommands", () => {
       "*": "deny",
       read: "allow",
     });
-    expect(config.agent?.["justice-review-remediator"]?.permission).toEqual({
+    expect(config.agent?.[JUSTICE_REVIEW_REMEDIATOR_AGENT]).toMatchObject({
+      model: "amazon-bedrock/global.anthropic.claude-haiku-5",
+      mode: "subagent",
+    });
+    expect(config.agent?.[JUSTICE_REVIEW_REMEDIATOR_AGENT]?.permission).toEqual({
       "*": "deny",
       read: "allow",
       edit: "allow",

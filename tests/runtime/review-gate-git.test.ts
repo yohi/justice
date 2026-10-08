@@ -265,6 +265,7 @@ describe("GIT1 — inspectTarget/classifyTargetClean on a real repo", () => {
   });
 
   it("treats an index-only mode change as not clean", async () => {
+    currentRoot = await initFixture();
     const blobSha = (
       await runGitCli(currentRoot, ["--literal-pathspecs", "ls-tree", "HEAD", "--", TARGET])
     )

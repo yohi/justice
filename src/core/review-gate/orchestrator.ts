@@ -197,13 +197,13 @@ export type ReviewGateNextOperation =
   | Readonly<{
       readonly kind: "dispatch_reviewer";
       readonly phase: ReviewGatePhase;
-      readonly redispachedOperationId?: string;
+      readonly redispatchedOperationId?: string;
     }>
   | Readonly<{
       readonly kind: "dispatch_finding_validator";
       readonly phase: ReviewGatePhase;
       readonly candidate: ReviewCandidateObservationV1;
-      readonly redispachedOperationId?: string;
+      readonly redispatchedOperationId?: string;
     }>
   | Readonly<{
       readonly kind: "commit_finding_reconciliation";
@@ -212,7 +212,7 @@ export type ReviewGateNextOperation =
   | Readonly<{
       readonly kind: "dispatch_lineage_revalidation";
       readonly lineageId: LineageId;
-      readonly redispachedOperationId?: string;
+      readonly redispatchedOperationId?: string;
     }>
   | Readonly<{
       readonly kind: "start_remediation";
@@ -231,7 +231,7 @@ export type ReviewGateNextOperation =
       readonly phase: ReviewGatePhase;
       readonly round: RemediationRound;
       readonly lineageIds: ReadonlyArray<LineageId>;
-      readonly redispachedOperationId?: string;
+      readonly redispatchedOperationId?: string;
     }>
   | Readonly<{
       readonly kind: "prepare_restore";
@@ -278,7 +278,7 @@ export type ReviewGateNextOperation =
   | Readonly<{
       readonly kind: "validate_non_convergence_reentry";
       readonly phase: ReviewGatePhase;
-      readonly redispachedOperationId?: string;
+      readonly redispatchedOperationId?: string;
     }>
   | Readonly<{
       readonly kind: "suspended";
@@ -398,7 +398,7 @@ function redispatchExternalOperation(
       return freezeOperation({
         kind: "dispatch_reviewer",
         phase: intent.phase,
-        redispachedOperationId: intent.operationId,
+        redispatchedOperationId: intent.operationId,
       });
     case "finding_validator":
       if (intent.candidate === undefined) {
@@ -408,7 +408,7 @@ function redispatchExternalOperation(
         kind: "dispatch_finding_validator",
         phase: intent.phase,
         candidate: intent.candidate,
-        redispachedOperationId: intent.operationId,
+        redispatchedOperationId: intent.operationId,
       });
     case "lineage_revalidation":
       if (intent.lineageId === undefined) {
@@ -417,7 +417,7 @@ function redispatchExternalOperation(
       return freezeOperation({
         kind: "dispatch_lineage_revalidation",
         lineageId: intent.lineageId,
-        redispachedOperationId: intent.operationId,
+        redispatchedOperationId: intent.operationId,
       });
     case "self_review":
       if (intent.round === undefined || intent.lineageIds === undefined) {
@@ -428,13 +428,13 @@ function redispatchExternalOperation(
         phase: intent.phase,
         round: intent.round,
         lineageIds: intent.lineageIds,
-        redispachedOperationId: intent.operationId,
+        redispatchedOperationId: intent.operationId,
       });
     case "non_convergence_reentry":
       return freezeOperation({
         kind: "validate_non_convergence_reentry",
         phase: intent.phase,
-        redispachedOperationId: intent.operationId,
+        redispatchedOperationId: intent.operationId,
       });
   }
 }
@@ -532,6 +532,9 @@ function planPreClear(
 ): ReviewGateNextOperation {
   const observed = context.preClearValidationObserved;
   if (observed !== undefined) {
+    if (observed.evidences.some((evidence) => evidence.stage !== "PRE_CLEAR")) {
+      return freezeOperation({ kind: "suspended", reason: "execution_suspended" });
+    }
     const bridged = bridgeDeterministicFindings({
       validationEventId: observed.validationEventId,
       evidences: observed.evidences,
@@ -547,6 +550,14 @@ function planPreClear(
         kind: "commit_finding_reconciliation",
         batch: Object.freeze({ findings: Object.freeze(batch) }),
       });
+    }
+    if (
+      observed.evidences.length === 0 ||
+      observed.evidences.some(
+        (evidence) => evidence.kind !== "semantic" || evidence.result !== "PASS",
+      )
+    ) {
+      return freezeOperation({ kind: "suspended", reason: "execution_suspended" });
     }
     return appendClearOperation(projection, context);
   }
