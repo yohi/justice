@@ -7,6 +7,7 @@ import {
 } from "../../src/core/plan-authorization";
 import { createMockFileSystem } from "../helpers/mock-file-system";
 import * as planFingerprintModule from "../../src/core/plan-fingerprint";
+import type { ReviewGateApprovalLookup } from "../../src/runtime/review-gate-approval";
 
 const plan = "## Task 1: Approved\n- [ ] implement\n";
 
@@ -755,5 +756,72 @@ describe("PlanBridge authorization restoration", () => {
     expect(maximumActiveOperations).toBe(1);
     expect((await store.hydrate()).filter((binding) => binding.sessionId === "s1" && binding.status === "active"))
       .toHaveLength(1);
+  });
+});
+
+describe("PlanBridge authorization — durable Review Gate approval gating (Task 14)", () => {
+  it("keeps the plain approved flow when no durable completed approval exists", async () => {
+    const { bridge, store } = createFixture();
+    bridge.setReviewGateApprovalLookup({
+      findCurrentCompletedApproval: async () => {
+        throw new Error("must not be consulted without completed history");
+      },
+      listCompletedApprovalCandidates: async () => [],
+    } as unknown as ReviewGateApprovalLookup);
+
+    const result = await bridge.handleImplementationArm("s1", {
+      source: "command",
+      planPath: "docs/plan.md",
+      approved: true,
+    });
+
+    expect(result).toMatchObject({ armed: true, planPath: "docs/plan.md" });
+    expect((await store.hydrate()).some((binding) => binding.status === "active")).toBe(true);
+  });
+
+  it("refuses the arm after a restart when durable completed history drifts", async () => {
+    const { bridge, store } = createFixture();
+    bridge.setReviewGateApprovalLookup({
+      findCurrentCompletedApproval: async () => ({ kind: "not_approved" }),
+      listCompletedApprovalCandidates: async () => [
+        { gateId: "gate-stale", binding: { planArtifact: { canonicalPath: "docs/plan.md" } } },
+      ] as unknown as Awaited<
+        ReturnType<ReviewGateApprovalLookup["listCompletedApprovalCandidates"]>
+      >,
+    } as unknown as ReviewGateApprovalLookup);
+
+    const result = await bridge.handleImplementationArm("s1", {
+      source: "command",
+      planPath: "docs/plan.md",
+      approved: true,
+    });
+
+    expect(result.armed).toBe(false);
+    expect((await store.hydrate()).some((binding) => binding.status === "active")).toBe(false);
+  });
+
+  it("arms after a restart when the durable completed binding is an exact current match", async () => {
+    const { bridge, store } = createFixture();
+    bridge.setReviewGateApprovalLookup({
+      findCurrentCompletedApproval: async () => ({
+        kind: "approved",
+        gateId: "gate-restart",
+        binding: { planArtifact: { canonicalPath: "docs/plan.md" } },
+      }),
+      listCompletedApprovalCandidates: async () => [
+        { gateId: "gate-restart", binding: { planArtifact: { canonicalPath: "docs/plan.md" } } },
+      ] as unknown as Awaited<
+        ReturnType<ReviewGateApprovalLookup["listCompletedApprovalCandidates"]>
+      >,
+    } as unknown as ReviewGateApprovalLookup);
+
+    const result = await bridge.handleImplementationArm("s1", {
+      source: "command",
+      planPath: "docs/plan.md",
+      approved: true,
+    });
+
+    expect(result.armed).toBe(true);
+    expect((await store.hydrate()).some((binding) => binding.status === "active")).toBe(true);
   });
 });

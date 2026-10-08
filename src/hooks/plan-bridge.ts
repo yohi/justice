@@ -33,6 +33,7 @@ import type {
   ReviewGateCoordinatorLockPhase,
   ScopedReviewToolUse,
 } from "../runtime/review-gate-coordinator";
+import type { ReviewGateApprovalLookup } from "../runtime/review-gate-approval";
 import { PlanBridgeCore } from "../core/plan-bridge-core";
 import { PlanParser } from "../core/plan-parser";
 import { ProgressReporter } from "../core/progress-reporter";
@@ -223,6 +224,7 @@ export class PlanBridge {
   private readonly learningExtractor: LearningExtractor;
   private readonly telemetry?: TelemetryStore;
   private authorizationDependencies: PlanBridgeAuthorizationDependencies | null = null;
+  private reviewGateApprovalLookup: ReviewGateApprovalLookup | null = null;
   private cancelReviewDispatchesForTerminalAuthorizationWithinParentSessionClaim:
     ((parentSessionId: string, authorizationId: string) => Promise<void>) | null = null;
   private observationHandler: ObservationHandler | null = null;
@@ -468,6 +470,15 @@ export class PlanBridge {
    * runtime graph installs its coordinator during initialization, and tests
    * may replace it with an injected instance.
    */
+  /**
+   * Task 14: inject the durable completed-approval lookup built from the same
+   * shared Review Gate runtime graph as the coordinator. Optional: without it
+   * the arm keeps the legacy in-memory digest verification.
+   */
+  setReviewGateApprovalLookup(lookup: ReviewGateApprovalLookup): void {
+    this.reviewGateApprovalLookup = lookup;
+  }
+
   setReviewGateCoordinator(coordinator: ReviewGateCoordinator): void {
     this.reviewGateCoordinator = coordinator;
   }
@@ -896,35 +907,57 @@ export class PlanBridge {
       if (
         reviewGateLock.designPath === null ||
         reviewGateLock.planPath === null ||
-        reviewGateLock.designDigest === null ||
-        reviewGateLock.planDigest === null ||
         requestedPlanPath !== reviewGateLock.planPath ||
         this.getActivePlan(sessionId) !== reviewGateLock.planPath
       ) {
         return this.implementationArmRequiredResult();
       }
 
-      let reviewedDesign: string | null;
-      let reviewedPlan: string | null;
-      try {
-        reviewedDesign = await this.readPlanFile(reviewGateLock.designPath);
-        reviewedPlan = await this.readPlanFile(reviewGateLock.planPath);
-      } catch {
-        this.reviewGateLocks.set(sessionId, { ...reviewGateLock, phase: "remediation" });
-        return this.implementationArmRequiredResult();
-      }
-      const currentDesignDigest =
-        reviewedDesign === null
-          ? null
-          : createHash("sha256").update(reviewedDesign).digest("hex");
-      const currentPlanDigest =
-        reviewedPlan === null ? null : createHash("sha256").update(reviewedPlan).digest("hex");
-      if (
-        currentDesignDigest !== reviewGateLock.designDigest ||
-        currentPlanDigest !== reviewGateLock.planDigest
-      ) {
-        this.reviewGateLocks.set(sessionId, { ...reviewGateLock, phase: "remediation" });
-        return this.implementationArmRequiredResult();
+      const approvalLookup = this.reviewGateApprovalLookup;
+      if (approvalLookup !== null) {
+        // Task 14: the durable completed approval replaces the process-local
+        // reviewGateLock.designDigest/planDigest authority. The plan snapshot
+        // and fingerprint flow in AuthorizationStore stays unchanged below.
+        const outcome = await approvalLookup.findCurrentCompletedApproval(requestedPlanPath);
+        if (outcome.kind !== "approved") {
+          if (outcome.kind !== "history_unavailable") {
+            // Drift or identity conflict requires re-review; a transient
+            // durable-history outage keeps the lock awaiting (retryable
+            // without discarding review progress).
+            this.reviewGateLocks.set(sessionId, { ...reviewGateLock, phase: "remediation" });
+          }
+          return this.implementationArmRequiredResult();
+        }
+      } else {
+        // Legacy in-memory digest verification (no durable lookup wired).
+        if (
+          reviewGateLock.designDigest === null ||
+          reviewGateLock.planDigest === null
+        ) {
+          return this.implementationArmRequiredResult();
+        }
+        let reviewedDesign: string | null;
+        let reviewedPlan: string | null;
+        try {
+          reviewedDesign = await this.readPlanFile(reviewGateLock.designPath);
+          reviewedPlan = await this.readPlanFile(reviewGateLock.planPath);
+        } catch {
+          this.reviewGateLocks.set(sessionId, { ...reviewGateLock, phase: "remediation" });
+          return this.implementationArmRequiredResult();
+        }
+        const currentDesignDigest =
+          reviewedDesign === null
+            ? null
+            : createHash("sha256").update(reviewedDesign).digest("hex");
+        const currentPlanDigest =
+          reviewedPlan === null ? null : createHash("sha256").update(reviewedPlan).digest("hex");
+        if (
+          currentDesignDigest !== reviewGateLock.designDigest ||
+          currentPlanDigest !== reviewGateLock.planDigest
+        ) {
+          this.reviewGateLocks.set(sessionId, { ...reviewGateLock, phase: "remediation" });
+          return this.implementationArmRequiredResult();
+        }
       }
     }
 
@@ -936,6 +969,27 @@ export class PlanBridge {
         directiveStage: "implementation_arm_required",
         guidance: formatWorkflowDirective({ stage: "implementation_arm_required" }),
       };
+    }
+
+    // Task 14: restart-safe durable completed-approval gating. Without any
+    // in-memory Review Gate lock, a plan whose durable completed approval
+    // history exists must still satisfy the exact binding; a plan with no
+    // completed Review Gate history keeps the plain approved flow.
+    if (reviewGateLock === undefined && this.reviewGateApprovalLookup !== null && request.approved) {
+      const approvalLookup = this.reviewGateApprovalLookup;
+      let hasDurableHistory: boolean;
+      try {
+        const candidates = await approvalLookup.listCompletedApprovalCandidates(planPath);
+        hasDurableHistory = candidates.length > 0;
+      } catch {
+        return this.implementationArmRequiredResult();
+      }
+      if (hasDurableHistory) {
+        const outcome = await approvalLookup.findCurrentCompletedApproval(planPath);
+        if (outcome.kind !== "approved") {
+          return this.implementationArmRequiredResult();
+        }
+      }
     }
 
     const activePlanPath = this.getActivePlan(sessionId);

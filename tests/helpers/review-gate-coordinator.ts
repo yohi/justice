@@ -10,6 +10,7 @@ import type {
   ReviewGateEventStore,
 } from "../../src/runtime/review-gate-event-store";
 import { createReviewGateLockManager } from "../../src/runtime/review-gate-lock-manager";
+import { createReviewGateApprovalLookup } from "../../src/runtime/review-gate-approval";
 import { createReviewGateProtocolDescriptor } from "../../src/runtime/review-gate-protocol";
 import {
   createReviewGateCoordinator,
@@ -75,6 +76,7 @@ export function createInMemoryReviewGateEventStore(): InMemoryReviewGateEventSto
     writeScopeIndex: async (reviewScopeId, gateId) => {
       scopeIndex.set(reviewScopeId, gateId);
     },
+    listGateIds: async () => [...gates.keys()].sort((left, right) => left.localeCompare(right)),
     close: () => undefined,
   };
   return store;
@@ -102,17 +104,34 @@ export type TestReviewGateCoordinatorOptions = {
   readonly mutationSubstrate?: ReviewGateMutationSubstrate | null;
 };
 
-export function createTestReviewGateCoordinator(options: TestReviewGateCoordinatorOptions) {
+export type TestReviewGateServices = {
+  /** The ONE shared in-memory event store behind both services. */
+  readonly eventStore: InMemoryReviewGateEventStore;
+  readonly coordinator: ReturnType<typeof createReviewGateCoordinator>;
+  readonly approval: ReturnType<typeof createReviewGateApprovalLookup>;
+};
+
+/**
+ * Task 14 harness: build the coordinator and the durable approval lookup over
+ * the SAME in-memory event store — never a second store — mirroring the
+ * shared runtime graph assembled by the OpenCode adapter.
+ */
+export function createTestReviewGateServices(
+  options: TestReviewGateCoordinatorOptions,
+): TestReviewGateServices {
   idCounter += 1;
   const prefix = `test${idCounter}`;
   let serial = 0;
-  return createReviewGateCoordinator({
-    eventStore: createInMemoryReviewGateEventStore(),
+  const eventStore = createInMemoryReviewGateEventStore();
+  const protocol = createReviewGateProtocolDescriptor();
+  const workspaceReader = createMapReviewWorkspaceReader(options.files);
+  const coordinator = createReviewGateCoordinator({
+    eventStore,
     lockManager: createReviewGateLockManager("/nonexistent-justice-test-root", {
       provider: null,
     }),
-    protocol: createReviewGateProtocolDescriptor(),
-    workspaceReader: createMapReviewWorkspaceReader(options.files),
+    protocol,
+    workspaceReader,
     mutationSubstrate: options.mutationSubstrate ?? null,
     ...(options.inspectTargets === undefined ? {} : { inspectTargets: options.inspectTargets }),
     now: () => {
@@ -128,6 +147,16 @@ export function createTestReviewGateCoordinator(options: TestReviewGateCoordinat
     })(),
     newWriterId: () => `${prefix}-writer`,
   });
+  const approval = createReviewGateApprovalLookup({
+    eventStore,
+    workspaceReader,
+    protocol,
+  });
+  return { eventStore, coordinator, approval };
+}
+
+export function createTestReviewGateCoordinator(options: TestReviewGateCoordinatorOptions) {
+  return createTestReviewGateServices(options).coordinator;
 }
 
 /** Parse the operation payload object appended after the packet marker. */
