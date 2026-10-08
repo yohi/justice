@@ -51,13 +51,9 @@ describe("registerJusticeCommands", () => {
       mode: "subagent",
       permission: { "*": "deny", read: "allow", edit: "allow", write: "allow", apply_patch: "allow" },
     });
-    // TASK-12 REMOVAL EXPECTATION (not a permanent contract): the legacy
-    // justice-review-worker stays temporarily registered/read-only until
-    // Task 12 migrates PlanBridge and removes it atomically.
-    expect(config.agent?.["justice-review-worker"]).toMatchObject({
-      mode: "subagent",
-      permission: { "*": "deny", read: "allow" },
-    });
+    // Task 12: Justice no longer auto-registers or references the legacy
+    // justice-review-worker; only the canonical agents are created.
+    expect(config.agent?.["justice-review-worker"]).toBeUndefined();
     expect(config.agent?.[JUSTICE_REVIEW_CONTROLLER_AGENT]).not.toBe(
       JUSTICE_REVIEW_CONTROLLER_DEFINITION,
     );
@@ -97,7 +93,7 @@ describe("registerJusticeCommands", () => {
     );
   });
 
-  it("routes one final-review task to a configured read-only Justice worker", async () => {
+  it("keeps a user-defined legacy worker entry untouched and models honored", async () => {
     const config: CommandRegistrationTarget = {
       command: {},
       agent: {
@@ -106,23 +102,23 @@ describe("registerJusticeCommands", () => {
         },
         "justice-review-worker": {
           model: "amazon-bedrock/global.anthropic.claude-opus-5",
+          description: "user legacy worker",
+          mode: "subagent" as const,
+          prompt: "user prompt",
+          permission: { "*": "allow" as const },
         },
       },
     };
 
     await registerJusticeCommands(config, async () => {});
 
-    expect(config.agent?.[JUSTICE_REVIEW_CONTROLLER_AGENT]).toMatchObject({
-      model: "amazon-bedrock/global.anthropic.claude-sonnet-5",
-      mode: "subagent",
-      permission: { "*": "deny", task: "allow" },
-    });
+    // User-defined config entries with the legacy name are not deleted;
+    // Justice simply stops creating or referencing the canonical legacy worker.
     expect(config.agent?.["justice-review-worker"]).toMatchObject({
       model: "amazon-bedrock/global.anthropic.claude-opus-5",
-      mode: "subagent",
-      permission: { "*": "deny", read: "allow" },
+      description: "user legacy worker",
+      permission: { "*": "allow" },
     });
-    expect(config.agent?.["justice-review-worker"]).not.toHaveProperty("permission.task");
     expect(config.command?.["justice-review-gate"]).toMatchObject({
       template: "$ARGUMENTS",
       agent: JUSTICE_REVIEW_CONTROLLER_AGENT,

@@ -270,7 +270,7 @@ export type ReviewGateOperationCorrelationSetupV1 = Readonly<{
   readonly dispatchSerial: number;
 }>;
 
-const PACKET_PAYLOAD_MARKER = "[JUSTICE: REVIEW GATE OPERATION PAYLOAD]";
+export const PACKET_PAYLOAD_MARKER = "[JUSTICE: REVIEW GATE OPERATION PAYLOAD]";
 
 export type ReviewGateOperationPacketV1 = Readonly<{
   readonly packetVersion: 1;
@@ -419,7 +419,15 @@ function buildOperationPacket(
   if (workerAgent === undefined) {
     throw new Error(`review_gate_operation_unknown: ${operation}`);
   }
-  const payloadJson = JSON.stringify({ ...payload, requiredResultKind: operation });
+  const payloadJson = JSON.stringify({
+    ...payload,
+    operationId: correlation.operationId,
+    gateId: correlation.gateId,
+    phase: correlation.phase,
+    reviewAttemptId: correlation.reviewAttemptId,
+    remediationRound: correlation.remediationRound,
+    requiredResultKind: operation,
+  });
   const workerPrompt = [
     REVIEW_GATE_STATIC_PROMPT_CONTRACTS[contractKey],
     "",

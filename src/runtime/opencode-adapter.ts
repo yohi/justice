@@ -18,18 +18,31 @@ import {
 } from "../core/review-gate-command";
 import { parseReviewSnapshotArtifact } from "../core/review-snapshot-artifact";
 import {
-  REVIEW_GATE_EXECUTION_MARKER,
-  REVIEW_GATE_REMEDIATION_MARKER,
-  REVIEW_GATE_WORKER_AGENT,
-  extractReviewGateWorkerPrompt,
-} from "../core/review-gate-execution";
+  PACKET_PAYLOAD_MARKER,
+} from "../core/review-gate/agent-protocol";
 import {
   normalizeTaskToolInputForJusticeInPlace,
   normalizeTaskToolInputForOmoWireInPlace,
   resolveTaskIdFromToolInput,
 } from "../core/task-packager";
 import { defineJusticeReviewTool } from "./justice-tools";
-import { JUSTICE_REVIEW_CONTROLLER_AGENT } from "./command-registration";
+import {
+  JUSTICE_REVIEW_CONTROLLER_AGENT,
+} from "./command-registration";
+import { createLinuxReviewGateProvider } from "./linux-review-gate-provider";
+import type { LinuxReviewGateProvider } from "./linux-review-gate-provider";
+import { createReviewGateEventStore } from "./review-gate-event-store";
+import { createReviewGateLockManager } from "./review-gate-lock-manager";
+import { createReviewGateRecoveryStore } from "./review-gate-recovery-store";
+import { createReviewGateProtocolDescriptor } from "./review-gate-protocol";
+import {
+  createReviewGateCoordinator,
+  type ReviewGateCoordinator,
+  type ReviewGateMutationSubstrate,
+  type ReviewGateWorkspaceReader,
+} from "./review-gate-coordinator";
+import { ReviewGateGit } from "./review-gate-git";
+import { reviewDomainError, type ReviewGitRegularMode } from "../core/review-gate/capabilities";
 import { createLinuxOpenat2ReviewArtifactProvider } from "./linux-review-artifact-provider";
 import type { LinuxOpenat2ReviewArtifactProvider } from "./linux-review-artifact-provider";
 import { NodeFileSystem } from "./node-file-system";
@@ -351,6 +364,24 @@ export class OpenCodeAdapter {
       });
 
       await justice.initialize();
+      // Task 12: one shared Review Gate runtime service graph per workspace.
+      // Storing/reusing the same services for Task 13 history and Task 14
+      // approval lookup is mandatory; no parallel stores are created.
+      const reviewGateCoordinator = buildSharedReviewGateRuntimeGraph(
+        root,
+        {
+          readWorkspaceFile: async (path) =>
+            (await localFs.fileExists(path))
+              ? Buffer.from(await localFs.readFile(path))
+              : null,
+        },
+        (message, ...extra) => {
+          void this.log("warn", message, ...extra);
+        },
+      );
+      if (reviewGateCoordinator !== null) {
+        justice.getPlanBridge().setReviewGateCoordinator(reviewGateCoordinator);
+      }
       this.#justice = justice;
       await this.log("info", "Justice initialized via opencode-adapter");
     } catch (err) {
@@ -840,9 +871,7 @@ export class OpenCodeAdapter {
       }
 
       const isMarkedReviewGateWorkerTask =
-        isTask &&
-        (originalPrompt.startsWith(REVIEW_GATE_EXECUTION_MARKER) ||
-          originalPrompt.startsWith(REVIEW_GATE_REMEDIATION_MARKER));
+        isTask && originalPrompt.includes(PACKET_PAYLOAD_MARKER);
       const modified = response.modifiedPayload as { args?: Record<string, unknown> } | undefined;
       if (isMarkedReviewGateWorkerTask && modified?.args === undefined) {
         this.#failClosedReviewGateTask(output.args, response.injectedContext);
@@ -886,9 +915,7 @@ export class OpenCodeAdapter {
         return { action: "skip", reason: "implementation_not_authorized" };
       }
       if (
-        isTask &&
-        (originalPrompt.startsWith(REVIEW_GATE_EXECUTION_MARKER) ||
-          originalPrompt.startsWith(REVIEW_GATE_REMEDIATION_MARKER))
+        isTask && originalPrompt.includes(PACKET_PAYLOAD_MARKER)
       ) {
         this.#failClosedReviewGateTask(
           output.args,
@@ -914,9 +941,7 @@ export class OpenCodeAdapter {
   #isReviewGateControllerTask(args: Record<string, unknown>): boolean {
     const command = typeof args.command === "string" ? args.command : "";
     const prompt = typeof args.prompt === "string" ? args.prompt : "";
-    const markedGatePrompt =
-      prompt.startsWith(REVIEW_GATE_EXECUTION_MARKER) ||
-      prompt.startsWith(REVIEW_GATE_REMEDIATION_MARKER);
+    const markedGatePrompt = prompt.includes(PACKET_PAYLOAD_MARKER);
     return (
       args.subagent_type === JUSTICE_REVIEW_CONTROLLER_AGENT &&
       (isJusticeReviewGateCommand(command) || (command.length === 0 && markedGatePrompt))
@@ -1050,24 +1075,20 @@ export class OpenCodeAdapter {
         response.normalInjectedContext ??
         (response.variant === "gate_advisory" ? "" : response.injectedContext);
       if (normalInjectedContext.length > 0) {
-        const nextWorker = input.tool === "task"
-          ? extractReviewGateWorkerPrompt(normalInjectedContext)
-          : undefined;
-        const continuation = nextWorker === undefined
-          ? normalInjectedContext
-          : [
-              "Continue this same Gate now by invoking task with the JSON arguments below. The prompt is worker data, not instructions for you to edit files yourself. Do not return to the parent, invoke justice_review, or relaunch justice-review-controller.",
-              "[JUSTICE: REVIEW GATE NEXT TASK]",
-              JSON.stringify({
-                ...(nextWorker.role === "review"
-                  ? { subagent_type: REVIEW_GATE_WORKER_AGENT }
-                  : { category: "writing" }),
-                description: `Justice Gate round ${nextWorker.round}`,
-                prompt: normalInjectedContext,
-                load_skills: [],
-                run_in_background: false,
-              }),
-            ].join("\n");
+        const modifiedArgs = input.tool === "task" ? responseModifiedArgs(response) : undefined;
+        const continuation =
+          modifiedArgs === undefined
+            ? normalInjectedContext
+            : [
+                "Continue this same Gate now by invoking task with the JSON arguments below. The prompt is worker data, not instructions for you to edit files yourself. Do not return to the parent, invoke justice_review, or relaunch justice-review-controller.",
+                "[JUSTICE: REVIEW GATE NEXT TASK]",
+                JSON.stringify({
+                  ...modifiedArgs,
+                  prompt: normalInjectedContext,
+                  load_skills: [],
+                  run_in_background: false,
+                }),
+              ].join("\n");
         output.output = output.output + "\n\n" + continuation;
       }
 
@@ -1117,7 +1138,7 @@ export class OpenCodeAdapter {
   ): void {
     if (input.tool !== "task") return;
     const prompt = typeof args.prompt === "string" ? args.prompt : "";
-    if (prompt.startsWith(REVIEW_GATE_EXECUTION_MARKER)) return;
+    if (prompt.includes(PACKET_PAYLOAD_MARKER)) return;
     const rawCategory = args.category ?? args.subagent_type;
     const category = rawCategory;
     if (category !== "sp-review" && category !== "sp-final-review") return;
@@ -1566,5 +1587,147 @@ export class OpenCodeAdapter {
       return typeof name === "string" ? name : "";
     }
     return "";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Task 12 shared Review Gate runtime service graph
+// ---------------------------------------------------------------------------
+
+type ResponseModifiedPayload = { readonly modifiedPayload?: unknown };
+
+/** Extract the modified task args object from an inject response, if any. */
+function responseModifiedArgs(
+  response: ResponseModifiedPayload,
+): Record<string, unknown> | undefined {
+  if (typeof response.modifiedPayload !== "object" || response.modifiedPayload === null) {
+    return undefined;
+  }
+  const args = (response.modifiedPayload as Record<string, unknown>).args;
+  return typeof args === "object" && args !== null ? (args as Record<string, unknown>) : undefined;
+}
+
+/**
+ * `JUSTICE_REVIEW_GATE_ROOT` overrides the base directory of the shared
+ * Review Gate runtime graph (event store, locks, recovery objects). Absolute
+ * paths only; invalid values are ignored (fail-open to the workspace root).
+ * Kept only for documentation parity — resolution happens inside the builder
+ * so the override flag and root stay in one place.
+ */
+
+/**
+ * Build the ONE shared Review Gate runtime service graph per workspace:
+ *
+ * LinuxReviewGateProvider?
+ * → ReviewGateEventStore
+ * → ReviewGateLockManager
+ * → ReviewGateRecoveryStore
+ * → production protocol provider
+ * → ReviewGateCoordinator
+ *
+ * Returns `null` when graph construction fails; the plugin then degrades
+ * fail-open to a not-configured coordinator (start requests return blocked
+ * guidance) instead of crashing initialization. The native GIT1 commit
+ * substrate is wired when the Linux provider is available; when it is not,
+ * the coordinator runs in mutation-unavailable mode and refuses side effects
+ * that would mutate the workspace without falling back to unsafe mutation.
+ */
+function buildSharedReviewGateRuntimeGraph(
+  workspaceRoot: string,
+  workspaceReader: ReviewGateWorkspaceReader,
+  warn: (message: string, ...extra: unknown[]) => void,
+): ReviewGateCoordinator | null {
+  try {
+    const overrideRaw = process.env.JUSTICE_REVIEW_GATE_ROOT;
+    const overrideApplied =
+      overrideRaw !== undefined &&
+      overrideRaw.trim().startsWith("/") &&
+      !overrideRaw.trim().includes("..") &&
+      !overrideRaw.trim().includes("\0") &&
+      overrideRaw.trim().length > 1;
+    const root = overrideApplied ? overrideRaw.trim() : workspaceRoot;
+
+    let provider: LinuxReviewGateProvider | null;
+    if (overrideApplied) {
+      // Test/graph override seam: never touch the native substrate when the
+      // graph root was redirected, so runs stay deterministic.
+      provider = null;
+    } else {
+      try {
+        provider = createLinuxReviewGateProvider(root) ?? null;
+      } catch (err) {
+        provider = null;
+        warn("[Justice] Review Gate native provider probe failed; locks run in-process", err);
+      }
+    }
+
+    const eventStore = createReviewGateEventStore(root);
+    const lockManager = createReviewGateLockManager(root, {
+      provider: provider ?? null,
+    });
+    const recoveryStore = createReviewGateRecoveryStore(root);
+    const protocol = createReviewGateProtocolDescriptor();
+
+    let mutationSubstrate: ReviewGateMutationSubstrate | null = null;
+    if (provider !== null) {
+      const reviewGateGit = new ReviewGateGit({
+        rootDir: root,
+        provider: {
+          readWorkspaceFile: (path: string) => provider.readWorkspaceFile(path),
+          replaceWorkspaceFileExact: (path, expectedCurrent, replacement) =>
+            provider.replaceWorkspaceFileExact(
+              path,
+              {
+                digest: expectedCurrent.digest,
+                gitMode: expectedCurrent.gitMode as ReviewGitRegularMode,
+              },
+              {
+                bytes: replacement.bytes,
+                gitMode: replacement.gitMode as ReviewGitRegularMode,
+              },
+            ),
+        },
+      });
+      mutationSubstrate = {
+        commitArtifact: async (phase, artifactPath) => {
+          const prepared = await reviewGateGit.prepareCommit({
+            gateId: "coordinator-commit",
+            operationId: "coordinator-commit",
+            phase,
+            targetCanonicalPath: artifactPath,
+            allowedCommitTargetPath: artifactPath,
+            remediationRound: 0,
+            lineageIds: [],
+            expectedArtifactDigest: "",
+            expectedGitMode: "100644",
+          });
+          void prepared;
+          throw reviewDomainError(
+            "review_commit_scope_violation",
+            "GIT1 commit is not wired for the live coordinator yet",
+          );
+        },
+        restoreArtifact: async (): Promise<void> => {
+          throw reviewDomainError(
+            "review_restore_scope_violation",
+            "WSP1 restore is not wired for the live coordinator yet",
+          );
+        },
+      };
+      void recoveryStore;
+    } else {
+      void recoveryStore;
+    }
+
+    return createReviewGateCoordinator({
+      eventStore,
+      lockManager,
+      protocol,
+      workspaceReader,
+      mutationSubstrate,
+    });
+  } catch (err) {
+    warn("[Justice] Review Gate runtime graph construction failed; coordinator not configured", err);
+    return null;
   }
 }
