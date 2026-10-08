@@ -86,13 +86,13 @@ function generatedEvents(
   return [created, ...patched];
 }
 
-function seedGate(
+async function seedGate(
   store: ReviewGateEventStore,
   gateId: string,
   scopeId: string,
   extra: readonly ReviewGateEvent[] = [],
-): void {
-  void store.appendEvents(gateId, generatedEvents(gateId, scopeId, extra)).then(() => {});
+): Promise<void> {
+  await store.appendEvents(gateId, generatedEvents(gateId, scopeId, extra));
 }
 
 function countingProxy(store: ReviewGateEventStore): {
@@ -135,7 +135,7 @@ describe("OpenCodeAdapter — /justice-review-history wiring", () => {
   it("replaces host parts with the durable history display", async () => {
     const root = freshRoot();
     const store = createReviewGateEventStore(root);
-    seedGate(store, "gate-adapter", SCOPE_ID);
+    await seedGate(store, "gate-adapter", SCOPE_ID);
     await store.writeScopeIndex(SCOPE_ID, "gate-adapter");
 
     const adapter = new OpenCodeAdapter(fakeInit({ directory: root, worktree: root }));
@@ -177,11 +177,33 @@ describe("OpenCodeAdapter — /justice-review-history wiring", () => {
 });
 
 describe("ReviewGateHistoryService — scope tip selection", () => {
+  it("conflicts across scopes when a non-empty history has no genesis event", async () => {
+    const root = freshRoot();
+    const store = createReviewGateEventStore(root);
+    await seedGate(store, "gate-broken", SCOPE_ID, [approvalBinding(PLAN_PATH, "p")]);
+    const brokenStore: ReviewGateEventStore = {
+      ...store,
+      readEvents: async (gateId) => {
+        const events = await store.readEvents(gateId);
+        return gateId === "gate-broken" ? events.slice(1) : events;
+      },
+    };
+
+    const service = createReviewGateHistoryService({ eventStore: brokenStore, rootDir: root });
+    const result = await service.queryScope("docs/unrelated-design.md", "docs/unrelated-plan.md", {
+      view: "summary",
+      allGenerations: false,
+    });
+
+    expect(result.kind === "failure" ? result.failure : "").toBe("conflict");
+    store.close();
+  });
+
   it("selects a unique ACTIVE tip by default", async () => {
     const root = freshRoot();
     const store = createReviewGateEventStore(root);
-    seedGate(store, "gate-gen1", SCOPE_ID, [approvalBinding(PLAN_PATH, "p")]);
-    seedGate(store, "gate-gen2", SCOPE_ID);
+    await seedGate(store, "gate-gen1", SCOPE_ID, [approvalBinding(PLAN_PATH, "p")]);
+    await seedGate(store, "gate-gen2", SCOPE_ID);
     await store.writeScopeIndex(SCOPE_ID, "gate-gen2");
 
     const service = createReviewGateHistoryService({ eventStore: store, rootDir: root });
@@ -197,8 +219,8 @@ describe("ReviewGateHistoryService — scope tip selection", () => {
   it("selects the unique completed chain tip when no active/suspended tip exists", async () => {
     const root = freshRoot();
     const store = createReviewGateEventStore(root);
-    seedGate(store, "gate-old", SCOPE_ID, [approvalBinding(PLAN_PATH, "older")]);
-    seedGate(store, "gate-new", SCOPE_ID, [approvalBinding(PLAN_PATH, "p")]);
+    await seedGate(store, "gate-old", SCOPE_ID, [approvalBinding(PLAN_PATH, "older")]);
+    await seedGate(store, "gate-new", SCOPE_ID, [approvalBinding(PLAN_PATH, "p")]);
     await store.writeScopeIndex(SCOPE_ID, "gate-new");
 
     const service = createReviewGateHistoryService({ eventStore: store, rootDir: root });
@@ -213,8 +235,8 @@ describe("ReviewGateHistoryService — scope tip selection", () => {
   it("reports a conflict for two simultaneous ACTIVE tips of one scope", async () => {
     const root = freshRoot();
     const store = createReviewGateEventStore(root);
-    seedGate(store, "gate-a", SCOPE_ID);
-    seedGate(store, "gate-b", SCOPE_ID);
+    await seedGate(store, "gate-a", SCOPE_ID);
+    await seedGate(store, "gate-b", SCOPE_ID);
     await store.writeScopeIndex(SCOPE_ID, "gate-a");
 
     const service = createReviewGateHistoryService({ eventStore: store, rootDir: root });
@@ -258,7 +280,7 @@ describe("ReviewGateHistoryService — gate query", () => {
   it("--gate locates the gate namespace without decoding genesis for membership", async () => {
     const root = freshRoot();
     const store = createReviewGateEventStore(root);
-    seedGate(store, "gate-iso", SCOPE_ID);
+    await seedGate(store, "gate-iso", SCOPE_ID);
 
     const spy = countingProxy(store);
     const service = createReviewGateHistoryService({ eventStore: spy.store, rootDir: root });
@@ -297,7 +319,7 @@ describe("ReviewGateHistoryService — views and generations", () => {
   it("renders the requested views without changings shape", async () => {
     const root = freshRoot();
     const store = createReviewGateEventStore(root);
-    seedGate(store, "gate-a", SCOPE_ID);
+    await seedGate(store, "gate-a", SCOPE_ID);
 
     const service = createReviewGateHistoryService({ eventStore: store, rootDir: root });
     const rounds = await service.queryGate("gate-a", { view: "rounds" });
@@ -311,8 +333,8 @@ describe("ReviewGateHistoryService — views and generations", () => {
   it("lists every generation of the scope oldest → newest with --all-generations", async () => {
     const root = freshRoot();
     const store = createReviewGateEventStore(root);
-    seedGate(store, "gate-gen1", SCOPE_ID, [approvalBinding(PLAN_PATH, "older")]);
-    seedGate(store, "gate-gen2", SCOPE_ID);
+    await seedGate(store, "gate-gen1", SCOPE_ID, [approvalBinding(PLAN_PATH, "older")]);
+    await seedGate(store, "gate-gen2", SCOPE_ID);
     await store.writeScopeIndex(SCOPE_ID, "gate-gen2");
 
     const service = createReviewGateHistoryService({ eventStore: store, rootDir: root });
@@ -332,7 +354,7 @@ describe("ReviewGateHistoryService — views and generations", () => {
   it("never mutates durable history across a query", async () => {
     const root = freshRoot();
     const store = createReviewGateEventStore(root);
-    seedGate(store, "gate-a", SCOPE_ID);
+    await seedGate(store, "gate-a", SCOPE_ID);
     await store.writeScopeIndex(SCOPE_ID, "gate-a");
     const before = listWorkspaceFiles(root);
 
@@ -353,8 +375,8 @@ describe("ReviewGateHistoryService — storage diagnostics", () => {
   it("reports non-authoritative counts, bytes, and recovery objects", async () => {
     const root = freshRoot();
     const store = createReviewGateEventStore(root);
-    seedGate(store, "gate-a", SCOPE_ID, [approvalBinding(PLAN_PATH, "p")]);
-    seedGate(store, "gate-b", computeReviewScopeId("docs/design.md", "docs/other.md"));
+    await seedGate(store, "gate-a", SCOPE_ID, [approvalBinding(PLAN_PATH, "p")]);
+    await seedGate(store, "gate-b", computeReviewScopeId("docs/design.md", "docs/other.md"));
     await store.writeScopeIndex(SCOPE_ID, "gate-a");
     const recovery = createReviewGateRecoveryStore(root);
     const bytesOne = Buffer.from("recovery-bytes-1");

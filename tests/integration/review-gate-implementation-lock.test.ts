@@ -338,24 +338,29 @@ describe("Review Gate implementation lock integration — durable approval (Task
 
     // The workspace plan changes after completion: the stale completed Gate is
     // never mutated; the restarted arm is refused.
-    FILES.set(PLAN_PATH, "## Task 1: Setup\n- [ ] drifted work\n");
+    const originalPlan = FILES.get(PLAN_PATH);
+    try {
+      FILES.set(PLAN_PATH, "## Task 1: Setup\n- [ ] drifted work\n");
 
-    const restartedBridge = createRestartedBridge(fs, services);
-    const arm = await restartedBridge.handleImplementationArm("main", {
-      source: "command",
-      planPath: PLAN_PATH,
-      approved: true,
-    });
-    expect(arm.armed).toBe(false);
+      const restartedBridge = createRestartedBridge(fs, services);
+      const arm = await restartedBridge.handleImplementationArm("main", {
+        source: "command",
+        planPath: PLAN_PATH,
+        approved: true,
+      });
+      expect(arm.armed).toBe(false);
 
-    const ledgerBytesAfter = JSON.stringify(
-      await Promise.all(
-        completedGateIds.map(async (gateId) => ({
-          gateId,
-          events: await services.eventStore.readEvents(gateId),
-        })),
-      ),
-    );
-    expect(ledgerBytesAfter).toBe(ledgerBytesBefore);
+      const ledgerBytesAfter = JSON.stringify(
+        await Promise.all(
+          completedGateIds.map(async (gateId) => ({
+            gateId,
+            events: await services.eventStore.readEvents(gateId),
+          })),
+        ),
+      );
+      expect(ledgerBytesAfter).toBe(ledgerBytesBefore);
+    } finally {
+      if (originalPlan !== undefined) FILES.set(PLAN_PATH, originalPlan);
+    }
   });
 });
