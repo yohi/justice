@@ -3,6 +3,7 @@ import {
   JUSTICE_COMMAND_DEFINITIONS,
   JUSTICE_REVIEW_CONTROLLER_AGENT,
   JUSTICE_REVIEW_CONTROLLER_DEFINITION,
+  JUSTICE_REVIEW_REMEDIATOR_AGENT,
   buildJusticeCommandSystemContext,
   listJusticeCommandNames,
   registerJusticeCommands,
@@ -33,10 +34,33 @@ describe("registerJusticeCommands", () => {
       agent: JUSTICE_REVIEW_CONTROLLER_AGENT,
       subtask: true,
     });
+    // Task 10 compatibility window: the canonical Review Gate agents are
+    // registered with exact permissions.
     expect(config.agent?.[JUSTICE_REVIEW_CONTROLLER_AGENT]).toMatchObject({
       mode: "subagent",
       permission: { "*": "deny", task: "allow" },
     });
+    expect(config.agent?.["justice-review-reviewer"]).toMatchObject({
+      mode: "subagent",
+      permission: { "*": "deny", read: "allow" },
+    });
+    expect(config.agent?.["justice-review-finding-validator"]).toMatchObject({
+      mode: "subagent",
+      permission: { "*": "deny", read: "allow" },
+    });
+    expect(config.agent?.[JUSTICE_REVIEW_REMEDIATOR_AGENT]).toMatchObject({
+      mode: "subagent",
+      permission: {
+        "*": "deny",
+        read: "allow",
+        edit: "allow",
+        write: "allow",
+        apply_patch: "allow",
+      },
+    });
+    // TASK-12 REMOVAL EXPECTATION (not a permanent contract): the legacy
+    // justice-review-worker stays temporarily registered/read-only until
+    // Task 12 migrates PlanBridge and removes it atomically.
     expect(config.agent?.["justice-review-worker"]).toMatchObject({
       mode: "subagent",
       permission: { "*": "deny", read: "allow" },
@@ -113,6 +137,51 @@ describe("registerJusticeCommands", () => {
       subtask: true,
     });
   });
+  it("registers staged Review Gate agents with canonical permissions; models honored", async () => {
+    const config: CommandRegistrationTarget = {
+      command: {},
+      agent: {
+        "justice-review-reviewer": {
+          model: "amazon-bedrock/global.anthropic.claude-opus-5",
+          permission: { "*": "allow", read: "allow", shell: "allow" },
+        },
+        [JUSTICE_REVIEW_REMEDIATOR_AGENT]: {
+          model: "amazon-bedrock/global.anthropic.claude-haiku-5",
+          permission: { "*": "allow", shell: "allow" },
+        },
+      },
+    };
+
+    await registerJusticeCommands(config, async () => {});
+
+    // User-configured model choice is preserved…
+    expect(config.agent?.["justice-review-reviewer"]).toMatchObject({
+      model: "amazon-bedrock/global.anthropic.claude-opus-5",
+      mode: "subagent",
+    });
+    // …but the canonical read-only permission always wins (no shell may be
+    // gained through user config).
+    expect(config.agent?.["justice-review-reviewer"]?.permission).toEqual({
+      "*": "deny",
+      read: "allow",
+    });
+    expect(config.agent?.["justice-review-finding-validator"]?.permission).toEqual({
+      "*": "deny",
+      read: "allow",
+    });
+    expect(config.agent?.[JUSTICE_REVIEW_REMEDIATOR_AGENT]).toMatchObject({
+      model: "amazon-bedrock/global.anthropic.claude-haiku-5",
+      mode: "subagent",
+    });
+    expect(config.agent?.[JUSTICE_REVIEW_REMEDIATOR_AGENT]?.permission).toEqual({
+      "*": "deny",
+      read: "allow",
+      edit: "allow",
+      write: "allow",
+      apply_patch: "allow",
+    });
+  });
+
 
   it("does not overwrite existing user-defined commands and logs a warning", async () => {
     const config: CommandRegistrationTarget = {

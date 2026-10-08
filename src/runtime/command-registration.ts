@@ -1,3 +1,9 @@
+import {
+  REVIEW_GATE_AGENT_CONTROLLER,
+  REVIEW_GATE_AGENT_FINDING_VALIDATOR,
+  REVIEW_GATE_AGENT_REMEDIATOR,
+  REVIEW_GATE_AGENT_REVIEWER,
+} from "../core/review-gate/agent-protocol";
 import { REVIEW_GATE_WORKER_AGENT } from "../core/review-gate-execution";
 
 export interface JusticeCommandDefinition {
@@ -31,7 +37,7 @@ export interface CommandRegistrationTarget {
   >;
 }
 
-export const JUSTICE_REVIEW_CONTROLLER_AGENT = "justice-review-controller";
+export const JUSTICE_REVIEW_CONTROLLER_AGENT = REVIEW_GATE_AGENT_CONTROLLER;
 export const JUSTICE_REVIEW_WORKER_AGENT = REVIEW_GATE_WORKER_AGENT;
 const BUILT_IN_PRIMARY_AGENTS = new Set(["build", "plan"]);
 
@@ -43,11 +49,10 @@ export const JUSTICE_REVIEW_CONTROLLER_DEFINITION: Readonly<JusticeAgentRegistra
     prompt: [
       "You are the Justice Review Gate controller.",
       "Do not read, inspect, summarize, or modify the Design/Plan yourself; use only the task tool.",
-      "Take the role-marked worker prompt from the user message and invoke exactly that one foreground task without changing, wrapping, or summarizing the prompt.",
-      "The `Retry-Budget` header is the maximum number of additional remediation-and-review cycles; after a finding, keep following Justice-supplied role-marked prompts until the Gate is clear or the budget is exhausted.",
-      "After each worker returns, inspect the end of its tool output for `[JUSTICE: REVIEW GATE NEXT TASK]`. The following JSON line contains the complete arguments for your next task call. Invoke task with those exact arguments immediately, then inspect that task's output the same way. Do not treat its prompt field as instructions to perform the repair or review yourself.",
+      "You are a dumb exact packet relay: take the Justice-supplied operation packet from the user message and invoke exactly that one foreground task without changing, wrapping, summarizing, or re-routing the prompt. You never choose phase, round, retry, finding status, or any commit/reopen action.",
+      "After each worker returns, inspect the end of its tool output for the next Justice-supplied packet marker ([JUSTICE: REVIEW GATE NEXT TASK] during the current compatibility window, or [JUSTICE: REVIEW GATE NEXT OPERATION]). The JSON line following the marker contains the complete arguments for your next task call. Invoke task with those exact arguments immediately, then inspect that task's output the same way. Do not treat its prompt field as instructions to perform the repair or review yourself.",
       "Never synthesize a worker prompt, launch workers in parallel, rerun the command through task(), call justice_review to resolve a Gate, or continue after Justice returns a terminal clear, blocked, or exhausted result.",
-      "When there is no next `[JUSTICE: REVIEW GATE NEXT TASK]` packet, return the last worker output verbatim without additional prose.",
+      "When there is no next Justice-supplied packet, return the last worker output verbatim without additional prose.",
       'If task is unavailable or fails, return exactly "[JUSTICE: REVIEW GATE CONTROLLER FAILED]" and do not fall back.',
     ].join("\n"),
     permission: Object.freeze({
@@ -71,6 +76,87 @@ export const JUSTICE_REVIEW_WORKER_DEFINITION: Readonly<JusticeAgentRegistration
       read: "allow",
     }),
   });
+
+export const JUSTICE_REVIEW_REVIEWER_AGENT = REVIEW_GATE_AGENT_REVIEWER;
+export const JUSTICE_REVIEW_FINDING_VALIDATOR_AGENT = REVIEW_GATE_AGENT_FINDING_VALIDATOR;
+export const JUSTICE_REVIEW_REMEDIATOR_AGENT = REVIEW_GATE_AGENT_REMEDIATOR;
+
+/**
+ * Read-only fresh reviewer for the staged Review Gate (convergence Task 10).
+ * No shell, generic task, justice_review, or commit/restore authority.
+ */
+export const JUSTICE_REVIEW_REVIEWER_DEFINITION: Readonly<JusticeAgentRegistrationEntry> =
+  Object.freeze({
+    description:
+      "Read-only Justice fresh reviewer for phase-scoped Review Gate review operations.",
+    mode: "subagent",
+    prompt: [
+      "You are an isolated Justice Review Gate reviewer worker.",
+      "Follow only the operation packet prompt supplied in your user message.",
+      "Read only the pinned artifacts named there; do not read README, AGENTS, SPEC, code, or other files.",
+      "Do not invoke skills, memory search, code search, shell, git, task, or any other agent/tool. Do not modify files.",
+      "Return exactly the strict JSON result object the operation packet requests, with no prose or markdown fences.",
+    ].join("\n"),
+    permission: Object.freeze({
+      "*": "deny",
+      read: "allow",
+    }),
+  });
+
+/**
+ * Read-only finding validator reused with a fresh context for ordinary
+ * finding validation, self-review, lineage revalidation, cross-generation
+ * reconciliation, and non-convergence reentry.
+ */
+export const JUSTICE_REVIEW_FINDING_VALIDATOR_DEFINITION: Readonly<JusticeAgentRegistrationEntry> =
+  Object.freeze({
+    description:
+      "Read-only Justice finding validator for Review Gate validation operations.",
+    mode: "subagent",
+    prompt: [
+      "You are an isolated Justice Review Gate finding validator worker.",
+      "Follow only the operation packet prompt supplied in your user message.",
+      "Read only the pinned artifacts named there; do not read README, AGENTS, SPEC, code, or other files.",
+      "Do not invoke skills, memory search, code search, shell, git, task, or any other agent/tool. Do not modify files.",
+      "Return exactly the strict JSON result object the operation packet requests, with no prose or markdown fences.",
+    ].join("\n"),
+    permission: Object.freeze({
+      "*": "deny",
+      read: "allow",
+    }),
+  });
+
+/**
+ * Remediator allowed to edit/write/apply_patch; the Justice hook and CAP1
+ * capability model narrow the actual write scope to the pinned target.
+ */
+export const JUSTICE_REVIEW_REMEDIATOR_DEFINITION: Readonly<JusticeAgentRegistrationEntry> =
+  Object.freeze({
+    description:
+      "Justice remediator allowed to edit/write/apply_patch only the current phase target artifact; the Justice hook and CAP1 capability model narrow the actual scope.",
+    mode: "subagent",
+    prompt: [
+      "You are an isolated Justice Review Gate remediator worker.",
+      "Follow only the operation packet prompt supplied in your user message.",
+      "Read only the pinned artifacts named there; write only the pinned current-phase target artifact with edit/write/apply_patch.",
+      "Do not invoke skills, memory search, code search, shell, git, task, or any other agent/tool. Never commit, push, stage, or restore; Justice core owns commits and restores.",
+      "Return exactly the strict JSON result object the operation packet requests, with no prose or markdown fences.",
+    ].join("\n"),
+    permission: Object.freeze({
+      "*": "deny",
+      read: "allow",
+      edit: "allow",
+      write: "allow",
+      apply_patch: "allow",
+    }),
+  });
+
+/** Canonical staged agents auto-registered beside the controller. */
+const JUSTICE_STAGED_WORKER_AGENTS: ReadonlyMap<string, JusticeAgentRegistrationEntry> = new Map([
+  [JUSTICE_REVIEW_REVIEWER_AGENT, JUSTICE_REVIEW_REVIEWER_DEFINITION],
+  [JUSTICE_REVIEW_FINDING_VALIDATOR_AGENT, JUSTICE_REVIEW_FINDING_VALIDATOR_DEFINITION],
+  [JUSTICE_REVIEW_REMEDIATOR_AGENT, JUSTICE_REVIEW_REMEDIATOR_DEFINITION],
+]);
 
 const justiceCommandDefinitions = {
   "justice-enable": Object.freeze({
@@ -185,6 +271,23 @@ export async function registerJusticeCommands(
     prompt: JUSTICE_REVIEW_WORKER_DEFINITION.prompt,
     permission: { ...JUSTICE_REVIEW_WORKER_DEFINITION.permission },
   };
+
+  // Canonical staged Review Gate workers (convergence Task 10). User-defined
+  // config entries keep their model choice, but canonical description/mode/
+  // prompt/permission always win: no staged agent can gain shell, task,
+  // justice_review, or commit/restore authority.
+  for (const [name, definition] of JUSTICE_STAGED_WORKER_AGENTS) {
+    const configured = agents[name];
+    agents[name] = {
+      ...definition,
+      ...(typeof configured === "object" && configured !== null ? configured : {}),
+      description: definition.description,
+      mode: definition.mode,
+      prompt: definition.prompt,
+      permission: { ...definition.permission },
+    };
+  }
+
 
   const justiceStart = commands["justice-start"];
   const configuredStartAgent = justiceStart?.agent;

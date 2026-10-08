@@ -35,6 +35,20 @@ describe("extractReviewGateToolPaths", () => {
     ]);
   });
 
+  it("extracts read tool targets for CAP1 scope enforcement", () => {
+    expect(extractReviewGateToolPaths("read", { filePath: "docs/design.md" })).toEqual([
+      "docs/design.md",
+    ]);
+    expect(extractReviewGateToolPaths("read", { path: "./requirements.md" })).toEqual([
+      "requirements.md",
+    ]);
+  });
+
+  it("returns null for a read with an unsafe path", () => {
+    expect(extractReviewGateToolPaths("read", { filePath: "/tmp/plan.md" })).toBeNull();
+    expect(extractReviewGateToolPaths("read", { filePath: "../../outside.md" })).toBeNull();
+  });
+
   it("returns null for absolute paths, traversal, and missing mutation targets", () => {
     expect(extractReviewGateToolPaths("write", { filePath: "/tmp/plan.md" })).toBeNull();
     expect(extractReviewGateToolPaths("edit", { filePath: "../../outside.md" })).toBeNull();
@@ -42,7 +56,8 @@ describe("extractReviewGateToolPaths", () => {
     expect(extractReviewGateToolPaths("apply_patch", { patchText: "not a file patch" })).toBeNull();
   });
 
-  it("does not classify non-mutating tools as file writes", () => {
-    expect(extractReviewGateToolPaths("read", { filePath: "docs/plans/plan.md" })).toEqual([]);
+  it("does not classify non-mutating non-read tools as file writes", () => {
+    expect(extractReviewGateToolPaths("bash", { command: "echo docs/plans/plan.md" })).toEqual([]);
+    expect(extractReviewGateToolPaths("task", { filePath: "docs/plans/plan.md" })).toEqual([]);
   });
 });
