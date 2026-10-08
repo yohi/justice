@@ -508,6 +508,7 @@ export class PlanBridge {
     this.reviewGateCoordinator?.releaseSession(sessionId);
     this.reviewGateLocks.delete(sessionId);
     this.pendingPlanReviewGates.delete(sessionId);
+    this.clearReviewGateCallParents(sessionId);
     this.observationHandler?.setReviewGateScope(sessionId, null);
     this.clearSessionCompletionInputs(sessionId);
   }
@@ -597,6 +598,7 @@ export class PlanBridge {
     this.pendingPlanReviewGates.delete(sessionId);
     this.observationHandler?.setReviewGateScope(sessionId, null);
     this.setActivePlan(sessionId, null);
+    this.clearReviewGateCallParents(sessionId);
 
     const result = await coordinator.startOrResume(sessionId, request);
     const planPath = result.planPath;
@@ -647,6 +649,8 @@ export class PlanBridge {
 
     if (result.lockPhase !== "awaiting_implementation_authorization") {
       this.setActivePlan(sessionId, null);
+    } else {
+      this.setActivePlan(sessionId, result.planPath);
     }
     return {
       dispatched: false,
@@ -682,6 +686,12 @@ export class PlanBridge {
     string,
     { readonly parentSessionId: string; readonly gateId: string }
   >();
+
+  private clearReviewGateCallParents(parentSessionId: string): void {
+    for (const [callId, claim] of this.reviewGateCallParents) {
+      if (claim.parentSessionId === parentSessionId) this.reviewGateCallParents.delete(callId);
+    }
+  }
 
   async handlePlanReviewGatePreToolUse(
     event: Extract<HookEvent, { readonly type: "PreToolUse" }>,

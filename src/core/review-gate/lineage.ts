@@ -382,7 +382,7 @@ export function commitLineageRevalidation(
     payload: {
       lineageId: evidence.lineageId,
       findingId: tracked.findingId,
-      remediationRound: nextRemediationRound(projection),
+      remediationRound: tracked.remediationRound ?? nextRemediationRound(projection),
     },
   };
   const events: ReviewGateEvent[] = [event];

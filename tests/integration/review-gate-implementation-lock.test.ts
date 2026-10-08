@@ -100,11 +100,35 @@ describe("Review Gate implementation lock integration", () => {
   it("cancels implementation tasks after a clear result while allowing skill loading and reads", async () => {
     const { justice } = await createLockedJustice();
     const reviewerPrompt = await startGate(justice, "main");
-    const framing = await claimAndSubmit(justice, "review-1", reviewerPrompt, () => ({
+    const planReview = await claimAndSubmit(justice, "review-1", reviewerPrompt, (payload) => ({
       schemaVersion: 1,
+      operationId: payload.operationId,
+      gateId: payload.gateId,
+      phase: payload.phase,
+      reviewAttemptId: payload.reviewAttemptId,
+      remediationRound: null,
       candidates: [],
     }));
-    expect(framing).toMatchObject({ action: "inject" });
+    expect(planReview).toMatchObject({ action: "inject" });
+    const nextPrompt = (
+      planReview as {
+        readonly modifiedPayload?: { readonly args?: { readonly prompt?: string } };
+      }
+    ).modifiedPayload?.args?.prompt;
+    if (nextPrompt === undefined) throw new Error("plan reviewer was not dispatched");
+    const clear = await claimAndSubmit(justice, "review-2", nextPrompt, (payload) => ({
+      schemaVersion: 1,
+      operationId: payload.operationId,
+      gateId: payload.gateId,
+      phase: payload.phase,
+      reviewAttemptId: payload.reviewAttemptId,
+      remediationRound: null,
+      candidates: [],
+    }));
+    expect(clear).toMatchObject({ action: "inject" });
+    expect((clear as { injectedContext?: string }).injectedContext).toContain(
+      "[JUSTICE: REVIEW GATE CLEAR]",
+    );
 
     const taskResponse = await justice.handleEvent({
       type: "PreToolUse",

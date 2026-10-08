@@ -41,8 +41,6 @@ import {
   type ReviewGateMutationSubstrate,
   type ReviewGateWorkspaceReader,
 } from "./review-gate-coordinator";
-import { ReviewGateGit } from "./review-gate-git";
-import { reviewDomainError, type ReviewGitRegularMode } from "../core/review-gate/capabilities";
 import { createLinuxOpenat2ReviewArtifactProvider } from "./linux-review-artifact-provider";
 import type { LinuxOpenat2ReviewArtifactProvider } from "./linux-review-artifact-provider";
 import { NodeFileSystem } from "./node-file-system";
@@ -1668,56 +1666,8 @@ function buildSharedReviewGateRuntimeGraph(
     const recoveryStore = createReviewGateRecoveryStore(root);
     const protocol = createReviewGateProtocolDescriptor();
 
-    let mutationSubstrate: ReviewGateMutationSubstrate | null = null;
-    if (provider !== null) {
-      const reviewGateGit = new ReviewGateGit({
-        rootDir: root,
-        provider: {
-          readWorkspaceFile: (path: string) => provider.readWorkspaceFile(path),
-          replaceWorkspaceFileExact: (path, expectedCurrent, replacement) =>
-            provider.replaceWorkspaceFileExact(
-              path,
-              {
-                digest: expectedCurrent.digest,
-                gitMode: expectedCurrent.gitMode as ReviewGitRegularMode,
-              },
-              {
-                bytes: replacement.bytes,
-                gitMode: replacement.gitMode as ReviewGitRegularMode,
-              },
-            ),
-        },
-      });
-      mutationSubstrate = {
-        commitArtifact: async (phase, artifactPath) => {
-          const prepared = await reviewGateGit.prepareCommit({
-            gateId: "coordinator-commit",
-            operationId: "coordinator-commit",
-            phase,
-            targetCanonicalPath: artifactPath,
-            allowedCommitTargetPath: artifactPath,
-            remediationRound: 0,
-            lineageIds: [],
-            expectedArtifactDigest: "",
-            expectedGitMode: "100644",
-          });
-          void prepared;
-          throw reviewDomainError(
-            "review_commit_scope_violation",
-            "GIT1 commit is not wired for the live coordinator yet",
-          );
-        },
-        restoreArtifact: async (): Promise<void> => {
-          throw reviewDomainError(
-            "review_restore_scope_violation",
-            "WSP1 restore is not wired for the live coordinator yet",
-          );
-        },
-      };
-      void recoveryStore;
-    } else {
-      void recoveryStore;
-    }
+    const mutationSubstrate: ReviewGateMutationSubstrate | null = null;
+    void recoveryStore;
 
     return createReviewGateCoordinator({
       eventStore,

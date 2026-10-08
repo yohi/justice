@@ -367,6 +367,13 @@ describe("PlanBridge Review Gate implementation lock (coordinator)", () => {
       "awaiting_implementation_authorization",
     );
     expect(bridge.isImplementationArmed("parent")).toBe(false);
+    expect(bridge.getActivePlan("parent")).toBe(PLAN_PATH);
+    await expect(bridge.handleImplementationArm("parent", {
+      source: "command",
+      action: "approve",
+      planPath: PLAN_PATH,
+      approved: true,
+    })).resolves.toMatchObject({ armed: true });
   });
 
   it("arms implementation after an explicit approval once the gate is clear", async () => {

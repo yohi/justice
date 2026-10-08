@@ -108,7 +108,7 @@ export function createTestReviewGateCoordinator(options: TestReviewGateCoordinat
   let serial = 0;
   return createReviewGateCoordinator({
     eventStore: createInMemoryReviewGateEventStore(),
-    lockManager: createReviewGateLockManager("/nonexistent-justice-test-root", {
+    lockManager: createReviewGateLockManager(`/nonexistent-justice-test-root-${prefix}`, {
       provider: null,
     }),
     protocol: createReviewGateProtocolDescriptor(),

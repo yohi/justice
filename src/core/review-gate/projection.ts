@@ -47,6 +47,8 @@ export function projectReviewGateState(events: readonly ReviewGateEvent[]): Revi
     switch (event.eventType) {
       case "GATE_CREATED":
         throw new Error("review_gate_duplicate_gate_creation");
+      case "ARTIFACT_BINDINGS_UPDATED":
+        break;
       case "ORCHESTRATION_RESUMED":
         state = {
           ...state,
