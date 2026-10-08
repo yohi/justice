@@ -303,6 +303,44 @@ describe("ReviewGateEventStore — scope index", () => {
   });
 });
 
+describe("ReviewGateEventStore — gate namespace enumeration (Task 13/14)", () => {
+  it("lists gate namespaces without decoding events", async () => {
+    const root = freshRoot();
+    const store = createReviewGateEventStore(root);
+
+    expect(await store.listGateIds()).toEqual([]);
+
+    await store.appendEvents("gate-b", [gateCreatedEvent("gate-b")]);
+    await store.writeScopeIndex("scope-1", "gate-b");
+    await store.appendEvents("gate-a", [gateCreatedEvent("gate-a")]);
+
+    expect(await store.listGateIds()).toEqual(["gate-a", "gate-b"]);
+
+    // The recovery base directory is never a Gate namespace.
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(path.join(root, ".justice", "review-gates", "recovery"), { recursive: true });
+    expect(await store.listGateIds()).toEqual(["gate-a", "gate-b"]);
+    store.close();
+  });
+
+  it("keeps enumeration available after stores are reopened on the same root", async () => {
+    const root = freshRoot();
+    const first = createReviewGateEventStore(root);
+    await first.appendEvents("gate-a", [gateCreatedEvent("gate-a")]);
+    first.close();
+
+    const second = createReviewGateEventStore(root);
+    expect(await second.listGateIds()).toEqual(["gate-a"]);
+    second.close();
+  });
+
+  it("rejects enumeration after close", async () => {
+    const store = createReviewGateEventStore(freshRoot());
+    store.close();
+    await expect(store.listGateIds()).rejects.toThrow("review_gate_store_closed");
+  });
+});
+
 describe("ReviewGateEventStore — concurrent append interleaving", () => {
   it("serializes interleaved appends for one gate without losing events", async () => {
     const store = createReviewGateEventStore(freshRoot());

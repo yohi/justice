@@ -17,8 +17,10 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { validateStorageGateId } from "../core/review-gate/identity";
+import { REVIEW_GATE_RECOVERY_NAMESPACE } from "./review-gate-recovery-store";
 import type {
   ReviewGateEvent,
   ReviewGatePhase,
@@ -49,6 +51,12 @@ export type ReviewGateEventStore = Readonly<{
   readonly listDispatches: (gateId: string) => Promise<readonly ReviewGateDispatchRecordV1[]>;
   readonly readScopeIndex: (reviewScopeId: string) => Promise<string | null>;
   readonly writeScopeIndex: (reviewScopeId: string, gateId: string) => Promise<void>;
+  /**
+   * Durable gate namespace enumeration (Task 13/14 seam, read-only): sorted
+   * gate ids of every directory under `.justice/review-gates/` that passes the
+   * gate-id contract. Namespaces are listed without decoding any events.
+   */
+  readonly listGateIds: () => Promise<readonly string[]>;
   readonly close: () => void;
 }>;
 
@@ -80,13 +88,7 @@ export function createReviewGateEventStore(rootDir: string): ReviewGateEventStor
   };
 
   const assertStorageId = (id: string): void => {
-    if (
-      id === "" ||
-      id.includes("/") ||
-      id.includes("\\") ||
-      id.includes("..") ||
-      id.includes("\u0000")
-    ) {
+    if (!validateStorageGateId(id)) {
       throw new Error("review_gate_invalid_id");
     }
   };
@@ -252,6 +254,31 @@ export function createReviewGateEventStore(rootDir: string): ReviewGateEventStor
         scopeIndex = map;
         writeAtomicUtf8(join(rootDir, SCOPE_INDEX_FILE), `${JSON.stringify(map)}\n`);
         return undefined;
+      }),
+
+    listGateIds: () =>
+      serialize(() => {
+        assertOpen();
+        let entries: string[];
+        try {
+          entries = readdirSync(join(rootDir, REVIEW_GATES_DIR), { withFileTypes: true }).map(
+            (entry) => entry.name,
+          );
+        } catch (err) {
+          if (isEnoent(err)) return Object.freeze([]);
+          throw err;
+        }
+        return Object.freeze(
+          entries
+            .filter((name) => validateStorageGateId(name))
+            .filter(
+              (name) =>
+                // eslint-disable-next-line security/detect-non-literal-fs-filename -- readdirSync entries, joined via node:path
+                statSync(join(rootDir, REVIEW_GATES_DIR, name)).isDirectory(),
+            )
+            .filter((name) => name !== REVIEW_GATE_RECOVERY_NAMESPACE)
+            .sort((left, right) => left.localeCompare(right)),
+        );
       }),
 
     close: () => {

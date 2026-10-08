@@ -11,6 +11,12 @@ export interface ReviewGateRecoveryStore {
 
 const DIGEST_REGEX = /^[a-f0-9]{64}$/u;
 
+/** Durable recovery-object layout, relative to the workspace root (Task 13/14 display). */
+export const REVIEW_GATE_RECOVERY_DIR = ".justice/review-gates/recovery";
+
+/** The recovery base directory name inside `.justice/review-gates/`. */
+export const REVIEW_GATE_RECOVERY_NAMESPACE = "recovery";
+
 /**
  * Create a content-addressed recovery object store under
  * `.justice/review-gates/recovery/` inside the workspace root.
@@ -18,7 +24,7 @@ const DIGEST_REGEX = /^[a-f0-9]{64}$/u;
  * digest; the store also validates that the digest matches the bytes.
  */
 export function createReviewGateRecoveryStore(workspaceRoot: string): ReviewGateRecoveryStore {
-  const recoveryDir = join(workspaceRoot, ".justice", "review-gates", "recovery");
+  const recoveryDir = join(workspaceRoot, ".justice", "review-gates", REVIEW_GATE_RECOVERY_NAMESPACE);
   let closed = false;
 
   const digestPath = (digest: string): string => join(recoveryDir, digest);

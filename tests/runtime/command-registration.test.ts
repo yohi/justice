@@ -59,7 +59,7 @@ describe("registerJusticeCommands", () => {
     );
     expect(log).toHaveBeenCalledWith(
       "info",
-      "[Justice] Auto-registered Justice commands: justice-enable, justice-disable, justice-start, justice-implement, justice-review-gate.",
+      "[Justice] Auto-registered Justice commands: justice-enable, justice-disable, justice-start, justice-implement, justice-review-gate, justice-review-history.",
     );
     expect(log).toHaveBeenCalledTimes(1);
   });
@@ -189,7 +189,7 @@ describe("registerJusticeCommands", () => {
     });
     expect(log).toHaveBeenCalledWith(
       "info",
-      "[Justice] Auto-registered Justice commands: justice-start, justice-enable, justice-disable, justice-implement, justice-review-gate.",
+      "[Justice] Auto-registered Justice commands: justice-start, justice-enable, justice-disable, justice-implement, justice-review-gate, justice-review-history.",
     );
     expect(log).toHaveBeenCalledTimes(2);
   });
@@ -275,7 +275,14 @@ describe("registerJusticeCommands", () => {
       "justice-start",
       "justice-implement",
       "justice-review-gate",
+      "justice-review-history",
     ]);
+    // Task 13: history is a pure display command — no agent, no subtask.
+    expect(JUSTICE_COMMAND_DEFINITIONS["justice-review-history"]).toMatchObject({
+      template: "$ARGUMENTS",
+    });
+    expect(JUSTICE_COMMAND_DEFINITIONS["justice-review-history"]).not.toHaveProperty("agent");
+    expect(JUSTICE_COMMAND_DEFINITIONS["justice-review-history"]).not.toHaveProperty("subtask");
     expect(JUSTICE_COMMAND_DEFINITIONS["justice-start"].template).toBe(
       "$ARGUMENTS",
     );
@@ -379,7 +386,7 @@ describe("registerJusticeCommands logging", () => {
     expect(config.command?.["justice-review-gate"]).toBeDefined();
     expect(log).toHaveBeenCalledWith(
       "info",
-      "[Justice] Auto-registered Justice commands: justice-enable, justice-disable, justice-start, justice-implement, justice-review-gate.",
+      "[Justice] Auto-registered Justice commands: justice-enable, justice-disable, justice-start, justice-implement, justice-review-gate, justice-review-history.",
     );
   });
 
@@ -397,7 +404,7 @@ describe("registerJusticeCommands logging", () => {
     );
     expect(log).toHaveBeenCalledWith(
       "info",
-      "[Justice] Auto-registered Justice commands: justice-implement, justice-enable, justice-disable, justice-start, justice-review-gate.",
+      "[Justice] Auto-registered Justice commands: justice-implement, justice-enable, justice-disable, justice-start, justice-review-gate, justice-review-history.",
     );
   });
 });
