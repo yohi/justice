@@ -162,6 +162,76 @@ async function runValidatorStep(
 }
 
 describe("PlanBridge Review Gate implementation lock (coordinator)", () => {
+  it("blocks Gate creation when a target inspector omits a target", async () => {
+    const files = new Map<string, string>([
+      [DESIGN_PATH, DESIGN_CONTENT],
+      [PLAN_PATH, PLAN_CONTENT],
+    ]);
+    const bridge = new PlanBridge({
+      readFile: async (path: string) => {
+        const content = files.get(path);
+        if (content === undefined) throw new Error(`ENOENT: ${path}`);
+        return content;
+      },
+      fileExists: async (path: string) => files.has(path),
+      listFiles: async () => [...files.keys()],
+      readFileStats: async () => null,
+    } as unknown as FileReader);
+    wirePlanBridgeAuthorization(bridge);
+    bridge.setReviewGateCoordinator(
+      createTestReviewGateCoordinator({
+        files,
+        inspectTargets: async () => new Map([[DESIGN_PATH, "clean_committed"]]),
+      }),
+    );
+
+    const result = await bridge.handleReviewGateStart("missing-target", {
+      source: "command",
+      designPath: DESIGN_PATH,
+      planPath: PLAN_PATH,
+      retryBudget: 0,
+    });
+
+    expect(result.dispatched).toBe(false);
+    expect(bridge.getReviewGateLock("missing-target")).toBeUndefined();
+  });
+
+  it("blocks Gate creation when target inspection fails", async () => {
+    const files = new Map<string, string>([
+      [DESIGN_PATH, DESIGN_CONTENT],
+      [PLAN_PATH, PLAN_CONTENT],
+    ]);
+    const bridge = new PlanBridge({
+      readFile: async (path: string) => {
+        const content = files.get(path);
+        if (content === undefined) throw new Error(`ENOENT: ${path}`);
+        return content;
+      },
+      fileExists: async (path: string) => files.has(path),
+      listFiles: async () => [...files.keys()],
+      readFileStats: async () => null,
+    } as unknown as FileReader);
+    wirePlanBridgeAuthorization(bridge);
+    bridge.setReviewGateCoordinator(
+      createTestReviewGateCoordinator({
+        files,
+        inspectTargets: async () => {
+          throw new Error("inspection unavailable");
+        },
+      }),
+    );
+
+    const result = await bridge.handleReviewGateStart("inspection-failed", {
+      source: "command",
+      designPath: DESIGN_PATH,
+      planPath: PLAN_PATH,
+      retryBudget: 0,
+    });
+
+    expect(result.dispatched).toBe(false);
+    expect(bridge.getReviewGateLock("inspection-failed")).toBeUndefined();
+  });
+
   it("locks implementation as soon as a valid Gate is dispatched and pins the pending prompt", async () => {
     const { bridge } = createLockHarness(false);
     const started = await bridge.handleReviewGateStart("parent", {

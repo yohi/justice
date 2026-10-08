@@ -1,4 +1,5 @@
-import { mkdtempSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -14,18 +15,36 @@ import { parseNextTaskArgs, parsePacketPayload } from "../helpers/review-gate-co
 afterEach(() => {
   vi.restoreAllMocks();
   delete process.env.JUSTICE_REVIEW_GATE_ROOT;
+  for (const root of workspaceRoots) rmSync(root, { recursive: true, force: true });
+  workspaceRoots.clear();
 });
 
 const DESIGN_PATH = "docs/specs/design.md";
 const PLAN_PATH = "docs/plans/plan.md";
 const DESIGN_CONTENT = "# Design\nAcceptance boundary.\n";
 const PLAN_CONTENT = "## Task 1: Verification\n- [ ] Verify the boundary\n";
+const workspaceRoots = new Set<string>();
 
 async function createAdapter(): Promise<{
   readonly adapter: OpenCodeAdapter;
   readonly fs: ReturnType<typeof createMockFileSystem>;
 }> {
-  process.env.JUSTICE_REVIEW_GATE_ROOT = mkdtempSync(join(tmpdir(), "justice-rg-"));
+  const graphRoot = mkdtempSync(join(tmpdir(), "justice-rg-"));
+  const workspaceRoot = mkdtempSync(join(tmpdir(), "justice-rg-workspace-"));
+  workspaceRoots.add(graphRoot);
+  workspaceRoots.add(workspaceRoot);
+  process.env.JUSTICE_REVIEW_GATE_ROOT = graphRoot;
+  mkdirSync(join(workspaceRoot, "docs/specs"), { recursive: true });
+  mkdirSync(join(workspaceRoot, "docs/plans"), { recursive: true });
+  writeFileSync(join(workspaceRoot, DESIGN_PATH), DESIGN_CONTENT);
+  writeFileSync(join(workspaceRoot, PLAN_PATH), PLAN_CONTENT);
+  execFileSync("git", ["init", "-q"], { cwd: workspaceRoot });
+  execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: workspaceRoot });
+  execFileSync("git", ["config", "user.name", "Justice Test"], { cwd: workspaceRoot });
+  execFileSync("git", ["add", DESIGN_PATH, PLAN_PATH], { cwd: workspaceRoot });
+  execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-q", "-m", "test baseline"], {
+    cwd: workspaceRoot,
+  });
   const fs = createMockFileSystem({
     [DESIGN_PATH]: DESIGN_CONTENT,
     [PLAN_PATH]: PLAN_CONTENT,
@@ -38,7 +57,13 @@ async function createAdapter(): Promise<{
   vi.spyOn(NodeFileSystem.prototype, "mkdir").mockImplementation(fs.mkdir);
   vi.spyOn(NodeFileSystem.prototype, "rename").mockImplementation(fs.rename);
 
-  const adapter = new OpenCodeAdapter(fakeInit());
+  const adapter = new OpenCodeAdapter(
+    fakeInit({
+      project: { root: workspaceRoot },
+      directory: workspaceRoot,
+      worktree: workspaceRoot,
+    }),
+  );
   await adapter.ensureInitialized();
   await adapter.onEvent({
     event: {

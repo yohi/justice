@@ -163,8 +163,7 @@ export interface ReviewGateCoordinatorOptions {
   readonly protocol: ReviewGateProtocolDescriptor;
   readonly workspaceReader: ReviewGateWorkspaceReader;
   readonly mutationSubstrate?: ReviewGateMutationSubstrate | null;
-  /** Workspace state probe; defaults to a WSP1 all-clean stub. */
-  readonly inspectTargets?: (
+  readonly inspectTargets: (
     paths: readonly string[],
   ) => Promise<ReadonlyMap<string, ReviewTargetWorkspaceState>>;
   readonly now?: () => string;
@@ -254,14 +253,7 @@ export function createReviewGateCoordinator(
   const protocol = options.protocol;
   const reader = options.workspaceReader;
   const mutation = options.mutationSubstrate ?? null;
-  const inspectTargets =
-    options.inspectTargets ??
-    ((paths: readonly string[]) =>
-      Promise.resolve(
-        new Map<string, ReviewTargetWorkspaceState>(
-          paths.map((path) => [path, "clean_committed" as const]),
-        ),
-      ));
+  const inspectTargets = options.inspectTargets;
   const now = options.now ?? ((): string => new Date().toISOString());
   const randomId = options.newId ?? ((): string => globalThis.crypto.randomUUID());
   const newId = randomId;
@@ -1397,8 +1389,24 @@ export function createReviewGateCoordinator(
     planDigest: string,
   ): Promise<ReviewGateCommandResult> => {
     // RR1 + target-clean admission BEFORE GATE_CREATED.
-    const workspaceStates = await inspectTargets([designPath, planPath]);
-    const designState = workspaceStates.get(designPath) ?? "clean_committed";
+    let workspaceStates: ReadonlyMap<string, ReviewTargetWorkspaceState>;
+    try {
+      workspaceStates = await inspectTargets([designPath, planPath]);
+    } catch {
+      return blockedResult(
+        designPath,
+        planPath,
+        "[JUSTICE: REVIEW GATE BLOCKED] The Design and Implementation Plan targets could not be inspected; retry after workspace inspection is available.",
+      );
+    }
+    const designState = workspaceStates.get(designPath);
+    if (designState === undefined) {
+      return blockedResult(
+        designPath,
+        planPath,
+        "[JUSTICE: REVIEW GATE BLOCKED] The Design target could not be verified; retry after workspace inspection is available.",
+      );
+    }
     if (designState !== "clean_committed") {
       return blockedResult(
         designPath,
@@ -1406,7 +1414,14 @@ export function createReviewGateCoordinator(
         `[JUSTICE: REVIEW GATE BLOCKED] The Design target is not clean/committed (${designState}); commit or restore it before starting the Review Gate.`,
       );
     }
-    const planState = workspaceStates.get(planPath) ?? "clean_committed";
+    const planState = workspaceStates.get(planPath);
+    if (planState === undefined) {
+      return blockedResult(
+        designPath,
+        planPath,
+        "[JUSTICE: REVIEW GATE BLOCKED] The Implementation Plan target could not be verified; retry after workspace inspection is available.",
+      );
+    }
     if (planState !== "clean_committed") {
       return blockedResult(
         designPath,

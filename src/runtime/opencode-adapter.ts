@@ -31,6 +31,7 @@ import {
 } from "./command-registration";
 import { createLinuxReviewGateProvider } from "./linux-review-gate-provider";
 import type { LinuxReviewGateProvider } from "./linux-review-gate-provider";
+import { createReviewGateGit } from "./review-gate-git";
 import { createReviewGateEventStore } from "./review-gate-event-store";
 import { createReviewGateLockManager } from "./review-gate-lock-manager";
 import { createReviewGateRecoveryStore } from "./review-gate-recovery-store";
@@ -1668,6 +1669,15 @@ function buildSharedReviewGateRuntimeGraph(
 
     const mutationSubstrate: ReviewGateMutationSubstrate | null = null;
     void recoveryStore;
+    const reviewGateGit = createReviewGateGit({
+      rootDir: workspaceRoot,
+      provider: {
+        readWorkspaceFile: workspaceReader.readWorkspaceFile,
+        replaceWorkspaceFileExact: async () => {
+          throw new Error("review_gate_mutation_unavailable");
+        },
+      },
+    });
 
     return createReviewGateCoordinator({
       eventStore,
@@ -1675,6 +1685,20 @@ function buildSharedReviewGateRuntimeGraph(
       protocol,
       workspaceReader,
       mutationSubstrate,
+      inspectTargets: async (paths) =>
+        new Map(
+          await Promise.all(
+            paths.map(async (targetPath) => {
+              const binding = await reviewGateGit.inspectTarget(targetPath);
+              return [
+                targetPath,
+                reviewGateGit.classifyTargetClean(binding) === "clean"
+                  ? "clean_committed"
+                  : "known_dirty",
+              ] as const;
+            }),
+          ),
+        ),
     });
   } catch (err) {
     warn("[Justice] Review Gate runtime graph construction failed; coordinator not configured", err);
