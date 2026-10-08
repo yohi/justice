@@ -75,7 +75,7 @@ export function createReviewGateRecoveryStore(workspaceRoot: string): ReviewGate
       assertOpen();
       if (!existsSync(recoveryDir)) return [];
       // eslint-disable-next-line security/detect-non-literal-fs-filename
-      return import("node:fs").then(({ readdirSync }) => readdirSync(recoveryDir));
+      return import("node:fs").then(({ readdirSync }) => readdirSync(recoveryDir).sort());
     },
     close: () => {
       closed = true;
