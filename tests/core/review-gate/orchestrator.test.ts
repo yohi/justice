@@ -10,6 +10,10 @@ import {
   planReviewGateNextOperation,
   type ReviewGatePlanningContext,
 } from "../../../src/core/review-gate/orchestrator.js";
+import {
+  buildLineageResolution,
+  commitLineageRevalidation,
+} from "../../../src/core/review-gate/lineage.js";
 import type {
   ArtifactDigest,
   CompletedApprovalBindingV1,
@@ -303,7 +307,6 @@ describe("planReviewGateNextOperation — state-machine scenarios", () => {
       resumeCursor: { kind: "await_material_progress" },
     });
 
-    // Absolute round exhaustion: all five Design rounds spent, blocker reopened.
     const exhaustedEvents: ReviewGateEvent[] = [created, discover(lineageA, "f-a", "design")];
     for (let ordinal = 1; ordinal <= 5; ordinal += 1) {
       exhaustedEvents.push(remediated(lineageA, { phase: "design", ordinal }));
@@ -312,8 +315,9 @@ describe("planReviewGateNextOperation — state-machine scenarios", () => {
     const exhausted = projectReviewGate(exhaustedEvents);
     expect(planReviewGateNextOperation(exhausted, planningContext())).toEqual({
       kind: "suspended",
-      reason: "round_limit_exhausted",
-      resumeCursor: { kind: "await_external_change" },
+      reason: "review_non_convergent",
+      nonConvergent: { phase: "design", lineageIds: [lineageA] },
+      resumeCursor: { kind: "await_material_progress" },
     });
 
     // A coordinator-provided non-convergent disposition is honored verbatim.
@@ -455,6 +459,26 @@ describe("planReviewGateNextOperation — state-machine scenarios", () => {
     ).toEqual({ kind: "suspended", reason: "execution_suspended" });
   });
 
+  it("suspends before PLAN_CLEAR when pre-clear validation returns no evidence", () => {
+    const projection = projectReviewGate([created, designClear]);
+    const registry = createDefaultDeterministicValidatorRegistry();
+
+    expect(
+      planReviewGateNextOperation(
+        projection,
+        planningContext({
+          reviewObserved: { phase: "plan", candidates: [] },
+          preClearValidationObserved: {
+            validationEventId: "pre-clear-plan-empty",
+            registry,
+            evidences: [],
+          },
+          preparedApprovalBinding: binding,
+        }),
+      ),
+    ).toEqual({ kind: "suspended", reason: "execution_suspended" });
+  });
+
   it("maps suspended gates to their suspension operation and reentry validation", () => {
     const nonConvergent = projectReviewGate([
       created,
@@ -489,6 +513,66 @@ describe("planReviewGateNextOperation — state-machine scenarios", () => {
     ).toThrow();
     expect(() => projectReviewGate([created, { ...created }])).toThrow();
     expect(() => projectReviewGate([created, designClear, { ...designClear }])).toThrow();
+  });
+});
+
+describe("lineage revalidation rounds", () => {
+  const remediationRound = { phase: "design", ordinal: 4 } as const;
+  const resolvedFindingEvents = [
+    created,
+    discover(lineageA, "finding-a", "design"),
+    remediated(lineageA, remediationRound),
+  ];
+  const resolvedFindingProjection = projectReviewGate(resolvedFindingEvents);
+  const unremediatedFindingProjection = projectReviewGate([
+    created,
+    discover(lineageA, "finding-a", "design"),
+  ]);
+
+  it("reuses the tracked round for committed lineage revalidation", () => {
+    const result = commitLineageRevalidation(resolvedFindingProjection, {
+      lineageId: lineageA,
+      result: "resolved",
+      verifiedCommitBinding: designArtifact,
+    });
+
+    expect(result.events[0]?.payload).toMatchObject({ remediationRound });
+    expect(
+      projectReviewGate([...resolvedFindingEvents, ...result.events]).designRemediationRounds,
+    ).toEqual([remediationRound]);
+  });
+
+  it("rejects committed lineage revalidation without a prior remediation round", () => {
+    expect(() =>
+      commitLineageRevalidation(unremediatedFindingProjection, {
+        lineageId: lineageA,
+        result: "resolved",
+        verifiedCommitBinding: designArtifact,
+      }),
+    ).toThrow("lineage_revalidation_requires_remediation_round");
+  });
+
+  it("reuses the tracked round for external-change lineage resolution", () => {
+    const result = buildLineageResolution(resolvedFindingProjection, {
+      lineageId: lineageA,
+      resolutionKind: "external_change_revalidation",
+      verifiedCommitBinding: designArtifact,
+    });
+
+    expect(result.events[0]?.payload).toMatchObject({ remediationRound });
+    expect(
+      projectReviewGate([...resolvedFindingEvents, ...result.events]).designRemediationRounds,
+    ).toEqual([remediationRound]);
+  });
+
+  it("rejects external-change lineage resolution without a prior remediation round", () => {
+    expect(() =>
+      buildLineageResolution(unremediatedFindingProjection, {
+        lineageId: lineageA,
+        resolutionKind: "external_change_revalidation",
+        verifiedCommitBinding: designArtifact,
+      }),
+    ).toThrow("lineage_revalidation_requires_remediation_round");
   });
 });
 

@@ -137,6 +137,10 @@ export type GateCreatedV1 = EventBase<"GATE_CREATED", Readonly<{
   readonly requirementsResolution: RequirementsResolutionV1;
   readonly reviewProtocolFingerprint: string;
 }>>;
+export type ArtifactBindingsUpdatedV1 = EventBase<"ARTIFACT_BINDINGS_UPDATED", Readonly<{
+  readonly designArtifact: ReviewArtifactBinding;
+  readonly planArtifact: ReviewArtifactBinding;
+}>>;
 export type OrchestrationResumedV1 = EventBase<"ORCHESTRATION_RESUMED", Readonly<{ readonly resumedAt: string }>>;
 export type DesignClearV1 = EventBase<"DESIGN_CLEAR", Readonly<{ readonly designProtocolFingerprint: string }>>;
 export type PlanClearV1 = EventBase<"PLAN_CLEAR", Readonly<{ readonly completedApprovalBinding: ReviewApprovalBindingV1 }>>;
@@ -152,6 +156,7 @@ export type CompletedApprovalBindingV1 = EventBase<"COMPLETED_APPROVAL_BINDING",
 
 export type ReviewGateEvent =
   | GateCreatedV1
+  | ArtifactBindingsUpdatedV1
   | OrchestrationResumedV1
   | DesignClearV1
   | PlanClearV1

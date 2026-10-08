@@ -1,13 +1,19 @@
 import type {
   CompletedApprovalBindingV1,
+  DesignClearMilestone,
   FindingState,
   GateCreatedV1,
   LineageId,
+  PlanClearMilestone,
   RemediationRound,
   ReviewApprovalBindingV1,
   ReviewGateEvent,
+  ReviewGatePhase,
+  ReviewGateProjection,
   ReviewGateState,
-} from "./review-gate-types.js";
+  ReviewTargetWorkspaceState,
+} from "./types.js";
+import { computeCanonicalJsonFingerprint } from "./identity.js";
 
 export function getInitialReviewGateState(gateCreated: GateCreatedV1): ReviewGateState {
   return {
@@ -38,14 +44,6 @@ export function projectReviewGateState(events: readonly ReviewGateEvent[]): Revi
 
   let state = getInitialReviewGateState(firstEvent);
   for (const event of events.slice(1)) {
-    if (state.status === "completed") {
-      if (event.eventType === "COMPLETED_APPROVAL_BINDING" && state.approvalBinding !== null) {
-        if (sameBinding(state.approvalBinding, event.payload.approvalBinding)) continue;
-        throw new Error("review_gate_completed_binding_conflict");
-      }
-      throw new Error("review_gate_event_after_completion");
-    }
-
     switch (event.eventType) {
       case "GATE_CREATED":
         throw new Error("review_gate_duplicate_gate_creation");
@@ -153,6 +151,141 @@ export function projectReviewGateState(events: readonly ReviewGateEvent[]): Revi
   return state;
 }
 
+/**
+ * Owner-scope depth order for OSC1 precedence: requirements < design < plan.
+ * The current phase sits at the design/plan depth; scopes at or below it are
+ * remediable, and strictly shallower scopes are upstream blockers.
+ */
+type OwnerScope = FindingState["ownerScope"];
+
+const OWNER_SCOPE_DEPTH: ReadonlyMap<OwnerScope, number> = new Map([
+  ["requirements", 0],
+  ["design", 1],
+  ["plan", 2],
+]);
+
+const PHASE_DEPTH: ReadonlyMap<ReviewGatePhase, number> = new Map([
+  ["design", 1],
+  ["plan", 2],
+]);
+
+/**
+ * Full Review Gate projection: the base state-machine state plus the derived
+ * workspace, milestone, blocker, and context-identity fields. Invalid event
+ * histories are rejected by `projectReviewGateState` before anything else.
+ *
+ * Cross-generation seam (not implemented yet): when a GATE_CREATED supersedes a
+ * predecessor generation with an exact completed Design approval binding, the
+ * new generation should start with an inherited Design clear. Cross-generation
+ * histories are not loaded here, so the inherited clear stays absent:
+ * `effectiveDesignClear` is non-null only when the current history contains a
+ * DESIGN_CLEAR event. A later task supplies the predecessor generation load.
+ */
+export function projectReviewGate(events: readonly ReviewGateEvent[]): ReviewGateProjection {
+  const baseState = projectReviewGateState(events);
+  const gateCreated = getGateCreatedEvent(events);
+
+  let effectiveDesignClear: DesignClearMilestone | null = null;
+  let planClearMilestone: PlanClearMilestone | null = null;
+  let phaseBaselineRevision = 0;
+
+  for (const event of events) {
+    switch (event.eventType) {
+      case "DESIGN_CLEAR":
+        // The base reducer rejects DESIGN_CLEAR outside the design phase, so in
+        // a valid history the first DESIGN_CLEAR is the only one: it is recorded
+        // as the effective clear and never reset within the generation.
+        if (effectiveDesignClear === null) {
+          effectiveDesignClear = {
+            epochId: event.epochId,
+            emittedAt: event.emittedAt,
+            designProtocolFingerprint: event.payload.designProtocolFingerprint,
+          };
+        }
+        break;
+      case "PLAN_CLEAR":
+        // Plan clear is terminal: the first PLAN_CLEAR event establishes the
+        // milestone and later replays or updates never move it.
+        if (planClearMilestone === null) {
+          planClearMilestone = {
+            epochId: event.epochId,
+            emittedAt: event.emittedAt,
+            completedApprovalBinding: event.payload.completedApprovalBinding,
+          };
+        }
+        break;
+      case "FINDING_REOPENED":
+        phaseBaselineRevision += 1;
+        break;
+      default:
+        break;
+    }
+  }
+
+  const currentRemediableBlockers: LineageId[] = [];
+  const currentUpstreamBlockers: LineageId[] = [];
+  const pendingRevalidationBlockers: LineageId[] = [];
+
+  for (const finding of baseState.findings.values()) {
+    const scopeDepth = OWNER_SCOPE_DEPTH.get(finding.ownerScope);
+    const phaseDepth = PHASE_DEPTH.get(baseState.phase);
+    if (scopeDepth === undefined || phaseDepth === undefined) {
+      throw new Error("review_gate_unexpected_scope_or_phase");
+    }
+    if (finding.status === "remediated") {
+      pendingRevalidationBlockers.push(finding.lineageId);
+      continue;
+    }
+    if (finding.status !== "open" && finding.status !== "reopened") continue;
+    if (scopeDepth >= phaseDepth) {
+      currentRemediableBlockers.push(finding.lineageId);
+    } else {
+      currentUpstreamBlockers.push(finding.lineageId);
+    }
+  }
+
+  // WSP1 stub: real worktree inspection lands in a later task, so every review
+  // target of the gate scope currently projects as "clean_committed".
+  const workspaceStates = new Map<string, ReviewTargetWorkspaceState>([
+    [gateCreated.payload.designArtifact.canonicalPath, "clean_committed"],
+    [gateCreated.payload.planArtifact.canonicalPath, "clean_committed"],
+  ]);
+
+  const phaseReviewContextIdentity = computeCanonicalJsonFingerprint({
+    reviewProtocolFingerprint: gateCreated.payload.reviewProtocolFingerprint,
+    designProtocolFingerprint:
+      effectiveDesignClear?.designProtocolFingerprint ??
+      baseState.approvalBinding?.designProtocolFingerprint ??
+      "",
+    planProtocolFingerprint:
+      planClearMilestone?.completedApprovalBinding.planProtocolFingerprint ??
+      baseState.approvalBinding?.planProtocolFingerprint ??
+      "",
+    phaseBaselineRevision,
+  });
+
+  return Object.freeze({
+    ...baseState,
+    effectiveDesignClear,
+    planClearMilestone,
+    workspaceStates,
+    currentRemediableBlockers: Object.freeze(currentRemediableBlockers),
+    currentUpstreamBlockers: Object.freeze(currentUpstreamBlockers),
+    pendingRevalidationBlockers: Object.freeze(pendingRevalidationBlockers),
+    phaseBaselineRevision,
+    phaseReviewContextIdentity,
+  });
+}
+
+function getGateCreatedEvent(events: readonly ReviewGateEvent[]): GateCreatedV1 {
+  const firstEvent = events[0];
+  if (firstEvent === undefined) throw new Error("review_gate_empty_history");
+  if (firstEvent.eventType !== "GATE_CREATED") {
+    throw new Error("review_gate_history_must_start_with_gate_created");
+  }
+  return firstEvent;
+}
+
 function getFinding(
   findings: ReadonlyMap<LineageId, FindingState>,
   lineageId: LineageId,
@@ -180,6 +313,9 @@ function completeState(
   event: CompletedApprovalBindingV1,
 ): ReviewGateState {
   const { approvalBinding } = event.payload;
+  if (state.status === "completed" && state.approvalBinding !== null && !sameBinding(state.approvalBinding, approvalBinding)) {
+    throw new Error("review_gate_completed_binding_conflict");
+  }
   return { ...state, status: "completed", approvalBinding };
 }
 

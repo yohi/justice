@@ -6,10 +6,12 @@ import {
 import { OpenCodeNotifier } from "../../src/runtime/opencode-notifier";
 import { JusticePlugin } from "../../src/core/justice-plugin";
 import {
-  REVIEW_GATE_EXECUTION_MARKER,
-  REVIEW_GATE_REMEDIATION_MARKER,
-  REVIEW_GATE_WORKER_AGENT,
-} from "../../src/core/review-gate-execution";
+  PACKET_PAYLOAD_MARKER,
+  REVIEW_GATE_AGENT_REVIEWER,
+} from "../../src/core/review-gate/agent-protocol";
+import {
+  createTestReviewGateCoordinator,
+} from "../helpers/review-gate-coordinator";
 import { fakeInit } from "../helpers/fake-opencode-init";
 
 describe("OpenCodeAdapter skeleton", () => {
@@ -479,15 +481,14 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
     const justice = adapter.getJustice() as JusticePlugin;
-    const prompt = `${REVIEW_GATE_EXECUTION_MARKER}\nGate-ID: gate-123`;
+    const prompt = `${PACKET_PAYLOAD_MARKER}\n{"operationId":"op-1","gateId":"gate-123"}`;
     vi.spyOn(justice, "handleEvent").mockResolvedValue({
       action: "inject",
       injectedContext: "[JUSTICE: PLAN REVIEW GATE CLAIMED]",
       modifiedPayload: {
         args: {
           prompt,
-          subagent_type: REVIEW_GATE_WORKER_AGENT,
-          category: "sp-final-review",
+          subagent_type: REVIEW_GATE_AGENT_REVIEWER,
           run_in_background: false,
         },
       },
@@ -495,7 +496,7 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
     const output: { args: Record<string, unknown> } = {
       args: {
         prompt,
-        subagent_type: REVIEW_GATE_WORKER_AGENT,
+        subagent_type: REVIEW_GATE_AGENT_REVIEWER,
         load_skills: [],
         run_in_background: false,
       },
@@ -507,7 +508,7 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
     );
 
     expect(output.args).toMatchObject({
-      subagent_type: REVIEW_GATE_WORKER_AGENT,
+      subagent_type: REVIEW_GATE_AGENT_REVIEWER,
       run_in_background: false,
     });
     expect(output.args).not.toHaveProperty("category");
@@ -697,16 +698,28 @@ describe("OpenCodeAdapter.onToolExecuteBefore", () => {
 
 describe("OpenCodeAdapter.onToolExecuteAfter", () => {
   it.each([
-    { marker: REVIEW_GATE_REMEDIATION_MARKER, routing: { category: "writing" } },
-    { marker: REVIEW_GATE_EXECUTION_MARKER, routing: { subagent_type: REVIEW_GATE_WORKER_AGENT } },
-  ])("delivers an executable next task when Justice supplies $marker", async ({ marker, routing }) => {
-    // Given: the hook has advanced the Gate to another correlated worker.
+    { routing: { subagent_type: REVIEW_GATE_AGENT_REVIEWER } },
+    { routing: { category: "writing" } },
+  ])("delivers an executable next task when Justice supplies modified task args ($routing)", async ({ routing }) => {
+    // Given: the coordinator advanced the Gate to another correlated worker.
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
     const justice = adapter.getJustice();
     if (justice === null) throw new Error("Justice was not initialized");
-    const prompt = `${marker}\nGate-ID: gate-next\nReview-Round: 2\nRetry-Budget: 4\nFindings: [{"summary":"repair this"}]`;
-    vi.spyOn(justice, "handleEvent").mockResolvedValue({ action: "inject", injectedContext: prompt });
+    const prompt = `${PACKET_PAYLOAD_MARKER}\n{"operationId":"op-next","gateId":"gate-next","phase":"design"}`;
+    vi.spyOn(justice, "handleEvent").mockResolvedValue({
+      action: "inject",
+      injectedContext: prompt,
+      modifiedPayload: {
+        args: {
+          ...routing,
+          description: "Justice Gate operation op-next",
+          prompt,
+          load_skills: [],
+          run_in_background: false,
+        },
+      },
+    });
     const output = { output: '{"complete":true}' };
 
     // When: the completed worker output is delivered to its controller.
@@ -721,11 +734,31 @@ describe("OpenCodeAdapter.onToolExecuteAfter", () => {
     if (payload === undefined) return;
     expect(JSON.parse(payload)).toEqual({
       ...routing,
-      description: "Justice Gate round 2",
+      description: "Justice Gate operation op-next",
       prompt,
       load_skills: [],
       run_in_background: false,
     });
+  });
+
+  it("appends plain guidance without a next-task payload when no modified task args are supplied", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const justice = adapter.getJustice();
+    if (justice === null) throw new Error("Justice was not initialized");
+    vi.spyOn(justice, "handleEvent").mockResolvedValue({
+      action: "inject",
+      injectedContext: "[JUSTICE: REVIEW GATE BLOCKED] terminal guidance",
+    });
+    const output = { output: '{"complete":true}' };
+
+    await adapter.onToolExecuteAfter(
+      { tool: "task", sessionID: "controller", callID: "worker", args: { prompt: "previous" } },
+      output,
+    );
+
+    expect(output.output).toContain("[JUSTICE: REVIEW GATE BLOCKED] terminal guidance");
+    expect(output.output).not.toContain("[JUSTICE: REVIEW GATE NEXT TASK]");
   });
 
   beforeEach(() => {
@@ -1158,11 +1191,8 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     const justice = adapter.getJustice() as JusticePlugin;
     const planBridge = justice.getPlanBridge();
     const prompt = [
-      REVIEW_GATE_REMEDIATION_MARKER,
-      "Gate-ID: gate-repair",
-      "Review-Round: 1",
-      "Design: docs/design.md",
-      "Implementation-Plan: docs/plan.md",
+      PACKET_PAYLOAD_MARKER,
+      '{"operationId":"op-repair","gateId":"gate-repair","phase":"design"}',
     ].join("\n");
     vi.spyOn(planBridge, "isPendingReviewGatePrompt").mockReturnValue(true);
     vi.spyOn(planBridge, "getReviewGateLock").mockReturnValue({
@@ -1210,16 +1240,13 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     expect(args.category).toBe("writing");
   });
 
-  it("fails closed on an unclaimed remediation marker instead of preserving write authority", async () => {
+  it("fails closed on an unclaimed operation packet instead of preserving write authority", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
-    const prompt = [
-      REVIEW_GATE_REMEDIATION_MARKER,
-      "Gate-ID: forged-gate",
-      "Review-Round: 1",
-      "Design: docs/design.md",
-      "Implementation-Plan: docs/plan.md",
-    ].join("\n");
+    (adapter.getJustice() as JusticePlugin)
+      .getPlanBridge()
+      .setReviewGateCoordinator(createTestReviewGateCoordinator({ files: new Map() }));
+    const prompt = `${PACKET_PAYLOAD_MARKER}\n{"operationId":"op-forged","gateId":"forged-gate","phase":"design"}`;
     const args: Record<string, unknown> = {
       prompt,
       category: "writing",
@@ -1275,9 +1302,12 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();
     const justice = adapter.getJustice() as JusticePlugin;
+    justice
+      .getPlanBridge()
+      .setReviewGateCoordinator(createTestReviewGateCoordinator({ files: new Map() }));
     vi.spyOn(justice.getPlanBridge(), "isPendingReviewGatePrompt").mockReturnValue(false);
     const args = {
-      prompt: "[JUSTICE: PLAN REVIEW GATE EXECUTION]\nGate-ID: stale-gate",
+      prompt: `${PACKET_PAYLOAD_MARKER}\n{"operationId":"op-stale","gateId":"stale-gate","phase":"design"}`,
       description: "Justice plan review gate",
       subagent_type: "justice-review-controller",
       command: "/justice-review-gate",
@@ -1289,7 +1319,8 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
     );
 
     expect(response).toMatchObject({ action: "inject" });
-    expect(args.prompt).toContain("[JUSTICE: REVIEW GATE CLAIM BLOCKED]");
+    expect(args.prompt).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
+    expect(args.run_in_background).toBe(false);
   });
 
   it("fails the pending Gate when the outer controller returns without an inner terminal worker", async () => {
@@ -1462,7 +1493,7 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
         sessionID: "parent-review",
         callID: "outer-call",
         args: {
-          prompt: "[JUSTICE: PLAN REVIEW GATE EXECUTION]\nGate-ID: gate-current\nReview-Round: 1",
+          prompt: `${PACKET_PAYLOAD_MARKER}\n{"operationId":"op-current","gateId":"gate-current","phase":"design"}`,
           subagent_type: "justice-review-controller",
         },
       },

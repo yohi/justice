@@ -4,7 +4,6 @@ import {
   REVIEW_GATE_AGENT_REMEDIATOR,
   REVIEW_GATE_AGENT_REVIEWER,
 } from "../core/review-gate/agent-protocol";
-import { REVIEW_GATE_WORKER_AGENT } from "../core/review-gate-execution";
 
 export interface JusticeCommandDefinition {
   readonly template: string;
@@ -38,7 +37,6 @@ export interface CommandRegistrationTarget {
 }
 
 export const JUSTICE_REVIEW_CONTROLLER_AGENT = REVIEW_GATE_AGENT_CONTROLLER;
-export const JUSTICE_REVIEW_WORKER_AGENT = REVIEW_GATE_WORKER_AGENT;
 const BUILT_IN_PRIMARY_AGENTS = new Set(["build", "plan"]);
 
 export const JUSTICE_REVIEW_CONTROLLER_DEFINITION: Readonly<JusticeAgentRegistrationEntry> =
@@ -260,20 +258,10 @@ export async function registerJusticeCommands(
     };
   }
 
-  const configuredWorker = agents[JUSTICE_REVIEW_WORKER_AGENT];
-  agents[JUSTICE_REVIEW_WORKER_AGENT] = {
-    ...JUSTICE_REVIEW_WORKER_DEFINITION,
-    ...(typeof configuredWorker === "object" && configuredWorker !== null
-      ? configuredWorker
-      : {}),
-    description: JUSTICE_REVIEW_WORKER_DEFINITION.description,
-    mode: JUSTICE_REVIEW_WORKER_DEFINITION.mode,
-    prompt: JUSTICE_REVIEW_WORKER_DEFINITION.prompt,
-    permission: { ...JUSTICE_REVIEW_WORKER_DEFINITION.permission },
-  };
-
-  // Canonical staged Review Gate workers (convergence Task 10). User-defined
-  // config entries keep their model choice, but canonical description/mode/
+  // Canonical Review Gate workers (convergence Task 12): the legacy
+  // justice-review-worker is no longer auto-registerd or referenced by
+  // Justice; user-defined config entries with that name are left untouched.
+  // Canonical worker entries keep their model choice, but canonical description/mode/
   // prompt/permission always win: no staged agent can gain shell, task,
   // justice_review, or commit/restore authority.
   for (const [name, definition] of JUSTICE_STAGED_WORKER_AGENTS) {

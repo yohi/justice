@@ -106,10 +106,11 @@ describe("OpenCodePlugin (integration)", () => {
       mode: "subagent",
       permission: { "*": "deny", task: "allow" },
     });
-    expect(config.agent?.["justice-review-worker"]).toMatchObject({
-      mode: "subagent",
-      permission: { "*": "deny", read: "allow" },
-    });
+    // Task 12: the legacy justice-review-worker is no longer auto-registered.
+    expect(config.agent?.["justice-review-reviewer"]).toBeDefined();
+    expect(config.agent?.["justice-review-finding-validator"]).toBeDefined();
+    expect(config.agent?.["justice-review-remediator"]).toBeDefined();
+    expect(config.agent?.["justice-review-worker"]).toBeUndefined();
   });
 
   it("does not overwrite existing commands via the config hook", async () => {
