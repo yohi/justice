@@ -1,7 +1,64 @@
 /* eslint-disable security/detect-object-injection -- Test helper intentionally indexes fixture maps by dynamic path. */
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { normalizeTaskToolInputWithCategory, PlanBridge } from "../../src/hooks/plan-bridge";
-import { extractReviewGateWorkerPrompt } from "../../src/core/review-gate-execution";
+import {
+  createTestReviewGateCoordinator,
+  parsePacketPayload,
+} from "../helpers/review-gate-coordinator";
+import type { ReviewGateCoordinator } from "../../src/runtime/review-gate-coordinator";
+
+function wireTestReviewGateCoordinator(
+  bridge: { setReviewGateCoordinator: (c: ReviewGateCoordinator) => void },
+  files: Record<string, string> | Map<string, string>,
+): ReviewGateCoordinator {
+  const map = files instanceof Map ? files : new Map(Object.entries(files));
+  const coordinator = createTestReviewGateCoordinator({ files: map });
+  bridge.setReviewGateCoordinator(coordinator);
+  return coordinator;
+}
+
+type RgHarness = {
+  readonly bridge: PlanBridge;
+  readonly files: Map<string, string>;
+};
+
+type RgStep = { readonly input: { type: "PreToolUse"; sessionId: string; callId: string; payload: { toolName: string; toolInput: { prompt: string } } } };
+
+async function rgStart(harness: RgHarness, sessionId: string, retryBudget = 0): Promise<string> {
+  const started = await harness.bridge.handleReviewGateStart(sessionId, {
+    source: "command",
+    designPath: "docs/specs/design.md",
+    planPath: "docs/plans/implementation-plan.md",
+    retryBudget,
+  });
+  if (started.reviewerPrompt === undefined) throw new Error(started.guidance);
+  return started.reviewerPrompt;
+}
+
+async function rgClaim(harness: RgHarness, sessionId: string, callId: string, prompt: string) {
+  const input: RgStep["input"] = {
+    type: "PreToolUse",
+    sessionId: `${callId}-worker`,
+    callId,
+    payload: { toolName: "task", toolInput: { prompt } },
+  };
+  const response = await harness.bridge.handlePlanReviewGatePreToolUse(input);
+  return { input, response };
+}
+
+async function rgSubmit(harness: RgHarness, input: RgStep["input"], toolResult: string) {
+  return harness.bridge.handlePlanReviewGatePostToolUse({
+    type: "PostToolUse",
+    sessionId: input.sessionId,
+    callId: input.callId,
+    payload: { toolName: "task", callId: input.callId, toolResult, error: false },
+  });
+}
+
+function rgPayload(harness: RgHarness, prompt: string): Record<string, unknown> {
+  void harness;
+  return parsePacketPayload(prompt);
+}
 import type {
   FileReader,
   HookEvent,
@@ -1266,24 +1323,21 @@ describe("PlanBridge", () => {
     });
 
     it("moves a pending review lock to remediation when its gate is cancelled", async () => {
-      const reader = createMockFileReader({
-        "docs/specs/design.md": "# Design",
-        "docs/plans/implementation-plan.md": samplePlanContent,
-      });
-      const bridge = new PlanBridge(reader, createLoopHandler(reader));
-      const started = await bridge.handleReviewGateStart("s-review-cancel", {
-        source: "command",
-        designPath: "docs/specs/design.md",
-        planPath: "docs/plans/implementation-plan.md",
-        retryBudget: 0,
-      });
-      expect(started.dispatched).toBe(true);
+      const files = new Map<string, string>([
+        ["docs/specs/design.md", "# Design"],
+        ["docs/plans/implementation-plan.md", samplePlanContent],
+      ]);
+      const bridge = new PlanBridge(createMockFileReader(Object.fromEntries(files)), createLoopHandler(Object.fromEntries(files)));
+      const harness = { bridge, files };
+      wireTestReviewGateCoordinator(bridge, files);
+      const prompt = await rgStart(harness, "s-review-cancel");
       expect(bridge.getReviewGateLock("s-review-cancel")?.phase).toBe("reviewing");
 
       bridge.cancelPendingPlanReviewGate("s-review-cancel");
 
       expect(bridge.hasPendingPlanReviewGate("s-review-cancel")).toBe(false);
       expect(bridge.getReviewGateLock("s-review-cancel")?.phase).toBe("remediation");
+      void prompt;
     });
 
     it("dispatches the Design / Implementation Plan review gate standalone when both artifacts are readable", async () => {
@@ -1294,6 +1348,10 @@ describe("PlanBridge", () => {
       const observationHandler = createObservationHandler();
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
       bridge.setObservationHandler(observationHandler);
+      wireTestReviewGateCoordinator(bridge, {
+        "docs/specs/design.md": "# Design",
+        "docs/plans/implementation-plan.md": samplePlanContent,
+      });
 
       expect(bridge.getWorkflowBootstrap("s-review-gate")).toBeNull();
       const result = await bridge.handleReviewGateStart("s-review-gate", {
@@ -1308,11 +1366,10 @@ describe("PlanBridge", () => {
       expect(result.planPath).toBe("docs/plans/implementation-plan.md");
       expect(bridge.getActivePlan("s-review-gate")).toBe("docs/plans/implementation-plan.md");
       expect(result.reviewerPrompt).toBeDefined();
-      expect(extractReviewGateWorkerPrompt(result.reviewerPrompt)).toMatchObject({
-        role: "review",
-        round: 1,
-        retryBudget: 0,
-      });
+      const reviewerPayload = parsePacketPayload(result.reviewerPrompt as string);
+      expect(typeof reviewerPayload.gateId).toBe("string");
+      expect(typeof reviewerPayload.reviewAttemptId).toBe("string");
+      expect(bridge.getReviewGateLock("s-review-gate")?.phase).toBe("reviewing");
       expect(observationHandler.setReviewGateScope).toHaveBeenCalledWith(
         "s-review-gate",
         JSON.stringify(["docs/specs/design.md", "docs/plans/implementation-plan.md"]),
@@ -1320,389 +1377,186 @@ describe("PlanBridge", () => {
     });
 
     it("does not invalidate a pending Review Gate when /justice-start runs later", async () => {
-      const files = {
-        "docs/specs/design.md": "# Design",
-        "docs/plans/implementation-plan.md": samplePlanContent,
-        "docs/plans/other-plan.md": samplePlanContent,
-      };
-      const reader = createMockFileReader(files);
+      const files = new Map<string, string>([
+        ["docs/specs/design.md", "# Design"],
+        ["docs/plans/implementation-plan.md", samplePlanContent],
+        ["docs/plans/other-plan.md", samplePlanContent],
+      ]);
+      const bridge = new PlanBridge(createMockFileReader(Object.fromEntries(files)), createLoopHandler(Object.fromEntries(files)));
       const observationHandler = createObservationHandler();
-      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      const bridge2 = bridge;
+      void bridge2;
       bridge.setObservationHandler(observationHandler);
-
-      const started = await bridge.handleReviewGateStart("s-review-independent", {
-        source: "command",
-        designPath: "docs/specs/design.md",
-        planPath: "docs/plans/implementation-plan.md",
-        retryBudget: 0,
-      });
-      const prompt = started.guidance.match(/```text\n([\s\S]*?)\n```/u)?.[1];
-      expect(prompt).toBeDefined();
+      wireTestReviewGateCoordinator(bridge, files);
+      const harness = { bridge, files };
+      const prompt = await rgStart(harness, "s-review-independent");
 
       await bridge.handleWorkflowStart(
         "s-review-independent",
         createWorkflowStartRequest({ planPath: "docs/plans/other-plan.md" }),
       );
 
-      const claim = await bridge.handlePlanReviewGatePreToolUse({
-        type: "PreToolUse",
-        sessionId: "s-review-independent",
-        callId: "call-review-independent",
-        payload: { toolName: "task", toolInput: { prompt } },
-      });
+      const { response: claim } = await rgClaim(harness, "s-review-independent", "call-review-independent", prompt);
 
       expect(claim).toMatchObject({
         action: "inject",
         modifiedPayload: {
           args: {
-            subagent_type: "justice-review-worker",
-            category: "sp-final-review",
+            subagent_type: "justice-review-reviewer",
             run_in_background: false,
           },
         },
       });
     });
 
-    it("pins a single foreground sp-final-review executor and accepts its structured result", async () => {
-      const reader = createMockFileReader({
-        "docs/specs/design.md": "# Design",
-        "docs/plans/implementation-plan.md": samplePlanContent,
-      });
-      const observationHandler = createObservationHandler();
-      const bridge = new PlanBridge(reader, createLoopHandler(reader));
-      bridge.setObservationHandler(observationHandler);
-      await startPlanReadyReviewWorkflow(
-        bridge,
-        "s-review-exec",
-        "docs/specs/design.md",
-        "docs/plans/implementation-plan.md",
-      );
-
-      const started = await bridge.handleReviewGateStart("s-review-exec", {
-        source: "command",
-        designPath: "docs/specs/design.md",
-        planPath: "docs/plans/implementation-plan.md",
-        retryBudget: 0,
-      });
-      const gateId = started.guidance.match(/\*\*Gate ID\*\*: ([A-Za-z0-9-]+)/u)?.[1];
-      const reviewerPrompt = started.guidance.match(/```text\n([\s\S]*?)\n```/u)?.[1];
-      expect(gateId).toBeDefined();
-      if (reviewerPrompt === undefined) throw new Error("Review Gate did not provide a prompt");
-      const prompt = reviewerPrompt;
-      expect(extractReviewGateWorkerPrompt(prompt)).toEqual({
-        role: "review",
-        gateId,
-        round: 1,
-        retryBudget: 0,
-      });
-
-      const reviewScope = JSON.stringify([
-        "docs/specs/design.md",
-        "docs/plans/implementation-plan.md",
+    it("pins one foreground reviewer worker and completes the gate without consulting the legacy observation seam", async () => {
+      const files = new Map<string, string>([
+        ["docs/specs/design.md", "# Design"],
+        ["docs/plans/implementation-plan.md", samplePlanContent],
       ]);
-      const pre = await bridge.handlePlanReviewGatePreToolUse({
-        type: "PreToolUse",
-        sessionId: "s-review-controller-child",
-        callId: "call-plan-review",
-        payload: {
-          toolName: "task",
-          toolInput: {
-            category: "quick",
-            subagent_type: "explore",
-            prompt,
-            run_in_background: true,
-          },
-        },
-      });
-      expect(pre).toMatchObject({
-        action: "inject",
-        modifiedPayload: {
-          args: {
-            subagent_type: "justice-review-worker",
-            category: "sp-final-review",
-            run_in_background: false,
-          },
-        },
-      });
-
-      const post = await bridge.handlePlanReviewGatePostToolUse({
-        type: "PostToolUse",
-        sessionId: "s-review-controller-child",
-        callId: "call-plan-review",
-        payload: {
-          toolName: "task",
-          toolInput: { category: "sp-final-review", prompt },
-          toolResult: JSON.stringify({
-            schemaVersion: 1,
-            gateId,
-            complete: true,
-            findings: [],
-          }),
-          error: false,
-        },
-      });
-      expect(post).toMatchObject({
-        action: "inject",
-        injectedContext: expect.stringContaining(
-          "/justice-implement --plan docs/plans/implementation-plan.md --approved",
-        ),
-      });
-      expect(observationHandler.handlePlanReviewGateResult).toHaveBeenCalledWith({
-        sessionId: "s-review-exec",
-        reviewScope,
-        findings: [],
-      });
-    });
-
-    it("blocks a superseded reviewer completion without clearing the replacement Gate", async () => {
-      const files = {
-        "docs/specs/design-v1.md": "# Design v1",
-        "docs/plans/plan-v1.md": samplePlanContent,
-        "docs/specs/design-v2.md": "# Design v2",
-        "docs/plans/plan-v2.md": `${samplePlanContent}\n- [ ] v2`,
-      };
-      const reader = createMockFileReader(files);
+      const bridge = new PlanBridge(createMockFileReader(Object.fromEntries(files)), createLoopHandler(Object.fromEntries(files)));
       const observationHandler = createObservationHandler();
-      const bridge = new PlanBridge(reader, createLoopHandler(reader));
       bridge.setObservationHandler(observationHandler);
-      await startPlanReadyReviewWorkflow(
-        bridge,
-        "s-review-supersede",
-        "docs/specs/design-v1.md",
-        "docs/plans/plan-v1.md",
-      );
+      wireTestReviewGateCoordinator(bridge, files);
+      const harness = { bridge, files };
+      const prompt = await rgStart(harness, "s-review-strict");
 
-      const first = await bridge.handleReviewGateStart("s-review-supersede", {
-        source: "command",
-        designPath: "docs/specs/design-v1.md",
-        planPath: "docs/plans/plan-v1.md",
-        retryBudget: 0,
-      });
-      const firstGateId = first.guidance.match(/\*\*Gate ID\*\*: ([A-Za-z0-9-]+)/u)?.[1];
-      const firstPrompt = first.guidance.match(/```text\n([\s\S]*?)\n```/u)?.[1];
-      expect(firstGateId).toBeDefined();
-      expect(firstPrompt).toBeDefined();
-      await bridge.handlePlanReviewGatePreToolUse({
-        type: "PreToolUse",
-        sessionId: "s-review-supersede",
-        callId: "call-review-v1",
-        payload: { toolName: "task", toolInput: { prompt: firstPrompt } },
-      });
-
-      await startPlanReadyReviewWorkflow(
-        bridge,
-        "s-review-supersede",
-        "docs/specs/design-v2.md",
-        "docs/plans/plan-v2.md",
-      );
-      const second = await bridge.handleReviewGateStart("s-review-supersede", {
-        source: "command",
-        designPath: "docs/specs/design-v2.md",
-        planPath: "docs/plans/plan-v2.md",
-        retryBudget: 0,
-      });
-      const secondPrompt = second.guidance.match(/```text\n([\s\S]*?)\n```/u)?.[1];
-      if (secondPrompt === undefined) throw new Error("Replacement Gate did not provide a prompt");
-
-      const stale = await bridge.handlePlanReviewGatePostToolUse({
-        type: "PostToolUse",
-        sessionId: "s-review-supersede",
-        callId: "call-review-v1",
-        payload: {
-          toolName: "task",
-          toolInput: { prompt: firstPrompt },
-          toolResult: JSON.stringify({
-            schemaVersion: 1,
-            gateId: firstGateId,
-            complete: true,
-            findings: [],
-          }),
-          error: false,
-        },
-      });
-      expect(stale?.action).toBe("inject");
-      expect(bridge.getReviewGateLock("s-review-supersede")?.gateId).not.toBe(firstGateId);
-      expect(bridge.isPendingReviewGatePrompt("s-review-supersede", secondPrompt)).toBe(true);
-
-      const replacementClaim = await bridge.handlePlanReviewGatePreToolUse({
-        type: "PreToolUse",
-        sessionId: "s-review-supersede",
-        callId: "call-review-v2",
-        payload: { toolName: "task", toolInput: { prompt: secondPrompt } },
-      });
-      expect(replacementClaim).toMatchObject({
-        action: "inject",
-        modifiedPayload: {
-          args: {
-            subagent_type: "justice-review-worker",
-            category: "sp-final-review",
-            run_in_background: false,
-          },
-        },
-      });
-    });
-    it("blocks a plan review result when either artifact changes during review", async () => {
-      const files = {
-        "docs/specs/design.md": "# Design",
-        "docs/plans/implementation-plan.md": samplePlanContent,
-      };
-      const reader = createMockFileReader(files);
-      const observationHandler = createObservationHandler();
-      const bridge = new PlanBridge(reader, createLoopHandler(reader));
-      bridge.setObservationHandler(observationHandler);
-      await startPlanReadyReviewWorkflow(
-        bridge,
-        "s-review-stale",
-        "docs/specs/design.md",
-        "docs/plans/implementation-plan.md",
-      );
-
-      const started = await bridge.handleReviewGateStart("s-review-stale", {
-        source: "command",
-        designPath: "docs/specs/design.md",
-        planPath: "docs/plans/implementation-plan.md",
-        retryBudget: 0,
-      });
-      const gateId = started.guidance.match(/\*\*Gate ID\*\*: ([A-Za-z0-9-]+)/u)?.[1];
-      const prompt = started.guidance.match(/```text\n([\s\S]*?)\n```/u)?.[1];
-      expect(gateId).toBeDefined();
-      expect(prompt).toBeDefined();
-
-      await bridge.handlePlanReviewGatePreToolUse({
-        type: "PreToolUse",
-        sessionId: "s-review-stale",
-        callId: "call-review-stale",
-        payload: {
-          toolName: "task",
-          toolInput: { category: "sp-final-review", prompt },
-        },
-      });
-      files["docs/plans/implementation-plan.md"] = `${samplePlanContent}\n- [ ] changed during review`;
-
-      const response = await bridge.handlePlanReviewGatePostToolUse({
-        type: "PostToolUse",
-        sessionId: "s-review-stale",
-        callId: "call-review-stale",
-        payload: {
-          toolName: "task",
-          toolInput: { category: "sp-final-review", prompt },
-          toolResult: JSON.stringify({
-            schemaVersion: 1,
-            gateId,
-            complete: true,
-            findings: [],
-          }),
-          error: false,
-        },
-      });
-
+      const { input, response } = await rgClaim(harness, "s-review-strict", "call-strict", prompt);
       expect(response).toMatchObject({
         action: "inject",
-        injectedContext: expect.stringContaining("changed during review"),
+        modifiedPayload: { args: { subagent_type: "justice-review-reviewer", run_in_background: false } },
       });
+
+      const payload = rgPayload(harness, prompt);
+      const clear = await rgSubmit(harness, input, JSON.stringify({
+        schemaVersion: 1,
+        operationId: payload.operationId,
+        gateId: payload.gateId,
+        phase: payload.phase,
+        reviewAttemptId: payload.reviewAttemptId,
+        remediationRound: null,
+        candidates: [],
+      }));
+      expect(clear).toMatchObject({ action: "inject" });
       expect(observationHandler.handlePlanReviewGateResult).not.toHaveBeenCalled();
     });
-    it("blocks and clears a plan review when artifact revalidation throws", async () => {
-      const reader = createMockFileReader({
-        "docs/specs/design.md": "# Design",
-        "docs/plans/implementation-plan.md": samplePlanContent,
-      });
-      const observationHandler = createObservationHandler();
-      const bridge = new PlanBridge(reader, createLoopHandler(reader));
-      bridge.setObservationHandler(observationHandler);
-      await startPlanReadyReviewWorkflow(
-        bridge,
-        "s-review-read-error",
-        "docs/specs/design.md",
-        "docs/plans/implementation-plan.md",
+
+    it("blocks a stale claim whose packet no longer matches a pending operation", async () => {
+      const files = new Map<string, string>([
+        ["docs/specs/design.md", "# Design"],
+        ["docs/plans/implementation-plan.md", samplePlanContent],
+      ]);
+      const bridge = new PlanBridge(createMockFileReader(Object.fromEntries(files)), createLoopHandler(Object.fromEntries(files)));
+      wireTestReviewGateCoordinator(bridge, files);
+      const harness = { bridge, files };
+      await rgStart(harness, "s-review-stale");
+
+      const stale = await rgClaim(harness, "s-review-stale", "claim-stale",
+        `stale prompt\n[JUSTICE: REVIEW GATE OPERATION PAYLOAD]\n{"operationId":"op-old","gateId":"old-gate","phase":"design","reviewAttemptId":"attempt-old","remediationRound":null}`);
+      expect(stale.response).toMatchObject({ action: "inject" });
+      expect((stale.response as { injectedContext?: string }).injectedContext).toContain(
+        "[JUSTICE: REVIEW GATE BLOCKED] no pending operation packet matches this claimed prompt.",
       );
+    });
 
-      const started = await bridge.handleReviewGateStart("s-review-read-error", {
-        source: "command",
-        designPath: "docs/specs/design.md",
-        planPath: "docs/plans/implementation-plan.md",
-        retryBudget: 0,
-      });
-      const gateId = started.guidance.match(/\*\*Gate ID\*\*: ([A-Za-z0-9-]+)/u)?.[1];
-      const prompt = started.guidance.match(/```text\n([\s\S]*?)\n```/u)?.[1];
-      expect(gateId).toBeDefined();
-      expect(prompt).toBeDefined();
+    it("blocks a worker result whose correlation does not match the durable dispatch", async () => {
+      const files = new Map<string, string>([
+        ["docs/specs/design.md", "# Design"],
+        ["docs/plans/implementation-plan.md", samplePlanContent],
+      ]);
+      const bridge = new PlanBridge(createMockFileReader(Object.fromEntries(files)), createLoopHandler(Object.fromEntries(files)));
+      wireTestReviewGateCoordinator(bridge, files);
+      const harness = { bridge, files };
+      const prompt = await rgStart(harness, "s-review-stale-result");
+      const { input } = await rgClaim(harness, "s-review-stale-result", "call-stale-result", prompt);
 
-      await bridge.handlePlanReviewGatePreToolUse({
-        type: "PreToolUse",
-        sessionId: "s-review-read-error",
-        callId: "call-review-read-error",
-        payload: { toolName: "task", toolInput: { prompt } },
-      });
-      vi.spyOn(reader, "readFile").mockRejectedValueOnce(new Error("disk read failed"));
+      const payload = rgPayload(harness, prompt);
+      const stale = await rgSubmit(harness, input, JSON.stringify({
+        schemaVersion: 1,
+        operationId: "different-operation",
+        gateId: payload.gateId,
+        phase: payload.phase,
+        reviewAttemptId: payload.reviewAttemptId,
+        remediationRound: null,
+        candidates: [],
+      }));
+      expect(stale).toMatchObject({ action: "inject" });
+      expect((stale as { injectedContext?: string }).injectedContext).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
+      expect(bridge.hasPendingPlanReviewGate("s-review-stale-result")).toBe(false);
+    });
 
-      const response = await bridge.handlePlanReviewGatePostToolUse({
+    it("blocks the worker result and keeps the lock on worker execution failure", async () => {
+      const files = new Map<string, string>([
+        ["docs/specs/design.md", "# Design"],
+        ["docs/plans/implementation-plan.md", samplePlanContent],
+      ]);
+      const bridge = new PlanBridge(createMockFileReader(Object.fromEntries(files)), createLoopHandler(Object.fromEntries(files)));
+      wireTestReviewGateCoordinator(bridge, files);
+      const harness = { bridge, files };
+      const prompt = await rgStart(harness, "s-review-error");
+      const { input } = await rgClaim(harness, "s-review-error", "call-error", prompt);
+
+      const blocked = await harness.bridge.handlePlanReviewGatePostToolUse({
         type: "PostToolUse",
-        sessionId: "s-review-read-error",
-        callId: "call-review-read-error",
+        sessionId: input.sessionId,
+        callId: input.callId,
+        payload: { toolName: "task", callId: input.callId, toolResult: "boom", error: true },
+      });
+      expect(blocked).toMatchObject({ action: "inject" });
+      expect((blocked as { injectedContext?: string }).injectedContext).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
+      expect(bridge.handleImplementationArm("s-review-error", {
+        source: "command",
+        action: "approve",
+        planPath: "docs/plans/implementation-plan.md",
+        approved: true,
+      })).resolves.toMatchObject({ armed: false });
+    });
+
+    it("ignores a result for an unclaimed call and never accepts declared completion", async () => {
+      const files = new Map<string, string>([
+        ["docs/specs/design.md", "# Design"],
+        ["docs/plans/implementation-plan.md", samplePlanContent],
+      ]);
+      const bridge = new PlanBridge(createMockFileReader(Object.fromEntries(files)), createLoopHandler(Object.fromEntries(files)));
+      const observationHandler = createObservationHandler();
+      bridge.setObservationHandler(observationHandler);
+      wireTestReviewGateCoordinator(bridge, files);
+      const harness = { bridge, files };
+      await rgStart(harness, "s-review-unclaimed");
+
+      const ignored = await bridge.handlePlanReviewGatePostToolUse({
+        type: "PostToolUse",
+        sessionId: "late-worker",
+        callId: "call-never-claimed",
         payload: {
           toolName: "task",
-          toolInput: { prompt },
-          toolResult: JSON.stringify({
-            schemaVersion: 1,
-            gateId,
-            complete: true,
-            findings: [],
-          }),
+          callId: "call-never-claimed",
+          toolResult: JSON.stringify({ schemaVersion: 1, gateId: "whatever", complete: true, findings: [] }),
           error: false,
         },
       });
-
-      expect(response).toMatchObject({
-        action: "inject",
-        injectedContext: expect.stringContaining("REVIEW GATE BLOCKED"),
-      });
-      const subsequentClaim = await bridge.handlePlanReviewGatePreToolUse({
-        type: "PreToolUse",
-        sessionId: "s-review-read-error",
-        callId: "call-review-read-error-retry",
-        payload: { toolName: "task", toolInput: { prompt } },
-      });
-      expect(subsequentClaim).toMatchObject({
-        action: "inject",
-        injectedContext: expect.stringContaining("no unique matching user-invoked pending Gate"),
-      });
+      expect(ignored).toBeNull();
+      expect(bridge.hasPendingPlanReviewGate("s-review-unclaimed")).toBe(true);
+      expect(bridge.getReviewGateLock("s-review-unclaimed")?.phase).toBe("reviewing");
       expect(observationHandler.handlePlanReviewGateResult).not.toHaveBeenCalled();
     });
-    it("does not let an unclaimed marker bypass the normal review boundary", async () => {
-      const bridge = new PlanBridge(createMockFileReader({}), createLoopHandler(createMockFileReader({})));
-      const response = await bridge.handlePlanReviewGatePreToolUse({
-        type: "PreToolUse",
-        sessionId: "s-no-gate",
-        callId: "call-no-gate",
-        payload: {
-          toolName: "task",
-          toolInput: {
-            category: "sp-final-review",
-            prompt:
-              "[JUSTICE: PLAN REVIEW GATE EXECUTION]\nGate-ID: forged-gate\nReview-Scope: []",
-          },
-        },
-      });
-      expect(response).toMatchObject({
-        action: "inject",
-        injectedContext: expect.stringContaining("REVIEW GATE CLAIM BLOCKED"),
-      });
-    });
+
     it("blocks the review gate when a bootstrap-bound artifact becomes unreadable", async () => {
-      const files: Record<string, string> = {
-        "docs/specs/design.md": "# Design",
-        "docs/plans/implementation-plan.md": samplePlanContent,
-      };
-      const reader = createMockFileReader(files);
-      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      const files = new Map<string, string>([
+        ["docs/specs/design.md", "# Design"],
+        ["docs/plans/implementation-plan.md", samplePlanContent],
+      ]);
+      const fileRecord = Object.fromEntries(files);
+      const reader = createMockFileReader(fileRecord);
+      const bridge = new PlanBridge(reader, createLoopHandler(fileRecord));
+      wireTestReviewGateCoordinator(bridge, files);
       await startPlanReadyReviewWorkflow(
         bridge,
         "s-review-gate-blocked",
         "docs/specs/design.md",
         "docs/plans/implementation-plan.md",
       );
-      delete files["docs/plans/implementation-plan.md"];
+      files.delete("docs/plans/implementation-plan.md");
 
       const result = await bridge.handleReviewGateStart("s-review-gate-blocked", {
         source: "command",
