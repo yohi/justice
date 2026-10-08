@@ -439,19 +439,32 @@ OpenCode の file-reference 記法も利用できます。
 ```
 
 - `--design` と `--plan` はともに必須。
-- 両成果物が読み取り可能な場合だけ `[JUSTICE: REVIEW GATE REQUESTED]` を注入する。この時点で Justice はランダムな Gate ID、正規化済み review scope、Design/Plan の SHA-256 digest、reviewer prompt 全文を pending state として固定する。
-- `/justice-review-gate` 自体を review-controller entrypoint とし、実行後に `requesting-code-review` や別の review Skill を起動しない。
-- canonical command registration は `agent="justice-review-controller"` + `subtask: true`。controller は内側で exact reviewer prompt を `subagent_type="justice-review-worker"` として一度だけ委譲する。OmO task に `category` を渡すと Sisyphus-Junior に route されるため、Justice は Gate 内部で `sp-final-review` として記録しつつ、wire から category を除去する。worker は read-only、`task`/skill/shell は禁止。
-- 実レビューは、pending Gate と完全一致する Justice marker / Gate ID / reviewer prompt を持つ **1回だけの foreground `task()`** として実行する。profile ごとに指定した Justice worker model を使用し、結果は `PostToolUse` の terminal task result として Gate が検証する。
-- `code-review` Skill、CodeRabbit CLI、`justice_review` をこの Gate の executor として使用しない。`justice_review` は既存 review state の参照・人間承認済み resolve 用のまま。
-- reviewer は prose ではなく、Gate ID / `complete` / findings を含む strict JSON を返す。OmO sync `task` はこの JSON を既知の completion wrapper と `<task_metadata>` で包むため、Justice は raw JSON またはその既知 wrapper の reviewer payload だけを抽出・検証する。reviewScope は Justice-owned pending state を正本とする。
-- complete findings があれば exact Gate scope の `review_observed` を永続化して `review_remediation`、complete zero findings なら同じ scope で `review_clear` に遷移する。remediation 後の再レビューも同じ Design/Plan を指定して `/justice-review-gate` を再実行する。
-- malformed / incomplete / scope不一致 / Gate ID不一致 / review中の成果物変更 / reviewer実行失敗は `[JUSTICE: REVIEW GATE BLOCKED]` とし、pending Gate を破棄して再実行を要求する。
-- marker だけを偽装しても、対応する user-invoked pending Gate がなければ claim できず、通常の mandatory `sp-final-review` authorization boundary を迂回できない。
-- `review_clear` はレビュー条件を満たしたことだけを示し、実装許可ではない。Review Gate 開始後は session lock を有効にし、実装可能な tool を拒否する。findings がある間は Design/Plan の修正と再レビューだけが可能。
-- findings が空でも、Review Gate の結果後に実装へ自動移行しません。現在の応答を終了し、利用者が `/justice-implement --approved` を実行するまで、読み取りと再レビュー以外の操作を拒否します。lock は同一 OpenCode process 内に限り、再起動後の維持は対象外です。
+- Gate は **イベントソーシング** で駆動します。開始時に durable な `GATE_CREATED` イベントへ Design/Plan の正規化済みパス・SHA-256 digest・Git mode・Requirements 解決結果・review protocol fingerprint が固定され、以降のすべての状態は `.justice/review-gates/` 配下の追記型イベント履歴から再構成されます。プロセス内のリトライ状態やチェックポイントファイルは正本ではありません。
+- Requirements は RR1 自動解決 (auto design reference) で Design 成果物そのものに解約され、`GATE_CREATED` に永続化されます。既存 generation の再開時に `--requirements` を明示しても永続 binding は置き換わりません (コマンド表面には `--requirements` フラグ自体が存在しません)。
+- レビューは **段階的 (staged)** に進みます: Design フェーズの reviewer dispatch → finding validation → 指摘があれば remediation ラウンド → self-review → 対象成果物の exact-artifact commit → fresh review → `DESIGN_CLEAR`、その後 Plan フェーズが同じサイクルで `PLAN_CLEAR` と完了承認 binding へ進みます。Design の CLEAR は同一 generation 内で保持されます。
+- remediation の上限は generation ごとに **Design 5 回 / Plan 3回の絶対値** です。epoch の更新で上限は回復しません。収束しない場合は NC1 (non-convergence) 判定が優先され `REVIEW_NON_CONVERGENT` で、余力がない場合は `ROUND_LIMIT_EXHAUSTED` で suspend します。upstream scope (Requirements/Design) の指摘は OSC1 優先で該当フェーズの reopen に昇格します。
+- suspend 状態 (`reopen_required` / `round_limit_exhausted` / `review_non_convergent` / `execution_suspended`) は durable であり、同じ Design/Plan でコマンドを再実行すると durable 履歴から正確に再開します。crash window は durable dispatch ledger と prepared restore/commit recovery により「正確に一度」回復され、未知の部分的な書き込みを上書き・復元・chmod することはありません。
+- 成果物の Git 操作は **actor 分離** されています: `review_mutation` は remediator worker のみ、`review_restore` と `review_commit` は Justice コアのみが実行できます。コミットは GIT1 exact-artifact 契約 (literal pathspec、対象 1 パスのみ、unrelated な staged/dirty 状態を保全) に従い、push は行いません。
+- ワークスペースの変異 (commit/restore) には **Linux Review Gate ネイティブ基盤** (Linux x64 + glibc + `openat2` + `renameat2` + non-blocking `flock` + sync semantics) の実行能力が必要です。能力が不足する環境では安全でないフォールバックを行わず、該当する副作用を `EXECUTION_SUSPENDED` で fail-closed に停止します。
+- reviewer を偽装しても、対応する durable dispatch がなければ claim できず、通常の mandatory `sp-final-review` authorization boundary を迂回できません。
+- `PLAN_CLEAR` はレビュー条件を満たしたことだけを示し、実装許可ではありません。Review Gate 開始後は session lock が有効になり、実装可能な tool は拒否されます。実装認可は明示的な `/justice-implement --approved` が必要です。
+- malformed / incomplete / 成果物変更 / worker 実行失敗は `[JUSTICE: REVIEW GATE BLOCKED]` として扱われ、Gate は typed な理由付きで suspend します。
 
-成果物が読めない場合は `[JUSTICE: REVIEW GATE BLOCKED]` を返し、レビューを dispatch しません。不正文法は `[JUSTICE: COMMAND REJECTED]` として扱われます。
+成果物が読めない場合は `[JUSTICE: REVIEW GATE BLOCKED]` を返し、レビューを dispatch しません。不正文法は `[JUSTICE: COMMAND REJECTED]` として扱われます。`--retry N` は後方互換のための解析のみを受け付ける deprecated な no-op です (`legacyRetryOption` として記録され、予算としては機能しません)。
+
+## `/justice-review-history` コマンド
+
+durable な Review Gate 履歴を **読み取り専用** で照会するコマンドです。
+
+```bash
+/justice-review-history --design <designPath> --plan <planPath> [--view summary|rounds|findings] [--all-generations]
+/justice-review-history --gate <gateId> [--view summary|rounds|findings]
+```
+
+- `--design` + `--plan` による scope 指定と `--gate` による Gate ID 指定は排他です。
+- 既定ではスコープの live (active/suspended) tip を、存在しなければ最新の completed tip を 1 件返します。`--all-generations` で世代チェーン全体を oldest → newest 順に表示します。
+- `summary` は ID/状態/フェーズ/epoch、Design CLEAR authority、blocker 数、remediation 使用量と残数 (絶対上限 5/3 対比)、最終遷移、ResumeCursor、gate revision を含みます。`rounds` / `findings` はラウンド序数と finding lineage の詳細を表示します。
+- 履歴照会は Gate lock を取得せず、イベントを追記せず、validator や成果物の再解決も行いません。破損・複数 tip・未対応イベントバージョンの場合は部分的な表示を行わず fail-closed に失敗します。
 
 ## `/justice-implement` コマンド
 
@@ -475,7 +488,7 @@ OpenCode の file-reference 記法も利用できます。
 ### 動作
 
 - コマンドは `task()` やスキルを起動しません。次の `task()` 呼び出しに対して、Justice が計画コンテキストと実装 directive を注入する権利を 1 回だけ付与します。
-- Review Gate lock がある場合、clear 済みの最新 Review Gate と未変更の Plan に限って lock を解除します。findings が残る場合、Gate が未完了の場合、または Design/Plan digest が変わっている場合は arm されません。
+- Review Gate lock がある場合、durable な完了承認 binding が現在のワークスペースと **正確に一致** する場合に限り arm されます。一致判定には、durable な `COMPLETED_APPROVAL_BINDING` に固定された Requirements/Design/Plan の canonical path + 現在の SHA-256 digest と現在の review protocol fingerprint の全件一致が必要です。findings が残る場合、Gate が未完了の場合、成果物のいずれかが drift している場合、一致する完了承認が複数ある場合は fail-closed に arm されません。この照会は durable 履歴のみから行われるため、プロセス再起動後も成立します。
 - active Review Gate lock の外では、未アーム状態で active plan に対して `task()` が呼ばれた場合に `[JUSTICE: IMPLEMENTATION UNAUTHORIZED]` advisory が注入されます。lock 中は advisory ではなく tool 実行をキャンセルし、task は worker execution へ到達しません。
 - 許可は 1 回の `task()` 呼び出しで消費されます。追加のタスクを委譲する場合は、再度 `/justice-implement --plan <planPath> --approved` を実行してください。
 - active plan が別のパスへ変更またはクリアされると、未消費の許可も失効します。`/justice-start` を再実行した場合は、同じ plan パスでも再アームが必要です。

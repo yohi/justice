@@ -1042,7 +1042,7 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
       source: "command",
       designPath: "docs/specs/design.md",
       planPath: "docs/plans/implementation-plan.md",
-      retryBudget: 4,
+      legacyRetryOption: 4,
     });
     expect(output.parts).toHaveLength(1);
     expect(output.parts[0]).not.toBe(hostSubtaskPart);
@@ -1424,7 +1424,6 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
       source: "command",
       designPath: "docs/specs/design.md",
       planPath: "docs/plans/implementation-plan.md",
-      retryBudget: 0,
     });
 
     const response = await adapter.onToolExecuteBefore(

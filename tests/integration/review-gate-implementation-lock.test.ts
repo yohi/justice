@@ -75,7 +75,6 @@ async function startGate(justice: JusticePlugin, sessionId: string): Promise<str
       source: "command",
       designPath: DESIGN_PATH,
       planPath: PLAN_PATH,
-      retryBudget: 0,
     });
   if (started.reviewerPrompt === undefined) throw new Error(started.guidance);
   return started.reviewerPrompt;
@@ -293,7 +292,6 @@ describe("Review Gate implementation lock integration — durable approval (Task
       source: "command",
       designPath: DESIGN_PATH,
       planPath: PLAN_PATH,
-      retryBudget: 0,
     });
     const review1 = await runReviewerStep(bridge, started.reviewerPrompt as string, "review-1");
     expect(review1.nextPrompt).not.toBeNull();
@@ -319,7 +317,6 @@ describe("Review Gate implementation lock integration — durable approval (Task
       source: "command",
       designPath: DESIGN_PATH,
       planPath: PLAN_PATH,
-      retryBudget: 0,
     });
     const review1 = await runReviewerStep(bridge, started.reviewerPrompt as string, "review-1");
     const review2 = await runReviewerStep(bridge, review1.nextPrompt as string, "review-2");

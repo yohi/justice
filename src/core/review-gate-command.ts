@@ -3,11 +3,17 @@ import { normalizeCommandArtifactPath } from "./trigger-detector";
 export const JUSTICE_REVIEW_GATE_COMMAND = "justice-review-gate";
 export const MAX_REVIEW_GATE_RETRIES = 10;
 
+/**
+ * RTY1: `--retry N` stays parser-compatible but is deprecated and a no-op.
+ * The parsed value is retained as `legacyRetryOption` for compatibility
+ * assertions only; it never alters Design/Plan budgets, creates an epoch,
+ * bypasses NON_CONVERGENT, alters protocol fingerprints, or mutates history.
+ */
 export interface ReviewGateRequest {
   readonly source: "command";
   readonly designPath: string;
   readonly planPath: string;
-  readonly retryBudget: number;
+  readonly legacyRetryOption?: number;
 }
 
 export function isJusticeReviewGateCommand(commandName: string | undefined): boolean {
@@ -24,8 +30,7 @@ export function parseJusticeReviewGateCommandArguments(
 
   let designPath: string | null = null;
   let planPath: string | null = null;
-  let retryBudget = 0;
-  let retryBudgetSeen = false;
+  let legacyRetryOption: number | undefined;
   let i = 0;
 
   while (i < args.length) {
@@ -51,16 +56,15 @@ export function parseJusticeReviewGateCommandArguments(
     if (value === undefined || value.startsWith("-")) return null;
 
     if (target === "retry") {
-      if (retryBudgetSeen || !/^\d+$/u.test(value)) return null;
-      const parsedRetryBudget = Number(value);
+      if (legacyRetryOption !== undefined || !/^\d+$/u.test(value)) return null;
+      const parsedLegacyRetryOption = Number(value);
       if (
-        !Number.isSafeInteger(parsedRetryBudget) ||
-        parsedRetryBudget > MAX_REVIEW_GATE_RETRIES
+        !Number.isSafeInteger(parsedLegacyRetryOption) ||
+        parsedLegacyRetryOption > MAX_REVIEW_GATE_RETRIES
       ) {
         return null;
       }
-      retryBudget = parsedRetryBudget;
-      retryBudgetSeen = true;
+      legacyRetryOption = parsedLegacyRetryOption;
       i += 2;
       continue;
     }
@@ -80,5 +84,10 @@ export function parseJusticeReviewGateCommandArguments(
   }
 
   if (designPath === null || planPath === null) return null;
-  return { source: "command", designPath, planPath, retryBudget };
+  return {
+    source: "command",
+    designPath,
+    planPath,
+    ...(legacyRetryOption === undefined ? {} : { legacyRetryOption }),
+  };
 }

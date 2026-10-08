@@ -507,6 +507,73 @@ Adapter の共通 sanitize・canonicalize は適用される。
 
 ---
 
+### 4.1c Review Gate ランタイム — イベントソーシング調停 (Issue #297)
+
+Design / Implementation Plan の pre-implementation Review Gate は、Issue #297 以降
+**イベントソーシング型のコーディネータ** で駆動される。`PlanBridge` は Gate 状態を
+所有せず `ReviewGateCoordinator` へ委譲する。以下は出荷済みアーキテクチャの要約であり
+設計仕様書の全文ではない。
+
+**共有ランタイムサービスグラフ (ワークスペースにつき 1 系統):**
+
+```text
+LinuxReviewGateProvider? (ネイティブ flock / durable replace / workspace replace)
+  → ReviewGateEventStore   (.justice/review-gates/<gateId>/events.jsonl + dispatches.jsonl + scope-index.json)
+  → ReviewGateLockManager  (scope → gate の順序連鎖)
+  → ReviewGateRecoveryStore (recovery CAS)
+  → ReviewGateCoordinator  (純粋オーケストレータ + 投影 + agent protocol)
+  → ReviewGateHistoryService / ReviewGateApprovalLookup (同一 store を再利用、第二 store は作らない)
+```
+
+**状態モデル:** 正本は versioned な追記型イベント履歴のみ。`GATE_CREATED` (paths,
+digests, Git modes, RR1 Requirements 解決, review protocol fingerprint を固定) を起点に、
+`DESIGN_CLEAR` / `PLAN_CLEAR` / `COMPLETED_APPROVAL_BINDING` / `REOPEN_REQUIRED` /
+`ROUND_LIMIT_EXHAUSTED` / `REVIEW_NON_CONVERGENT` / `EXECUTION_SUSPENDED` /
+`FINDING_*` / `ORCHESTRATION_RESUMED` が投影される。実行状態を可変ファイルで持たない。
+
+**段階的承認:** Design フェーズ (review → finding validation → remediation →
+self-review → exact-artifact commit → fresh review) → `DESIGN_CLEAR` → Plan フェーズ →
+`PLAN_CLEAR` + 完了承認 binding。remediation の絶対上限は generation ごとに Design 5 /
+Plan 3 ラウンドで、epoch 更新では回復しない。現在フェーズの disposition 優先順位は
+OSC1 upstream 先行、次いで NC1、次いで絶対ラウンド枯渇、最後に remediation 継続。
+
+**再起動・クラッシュ回復:** 再開は durable 履歴の再投影のみから行う。未完了の durable
+dispatch は同一 logical operation id で正確に一度だけ再駆動され、remediation /
+finding validation の evidence が復元できない場合は `EXECUTION_SUSPENDED`
+(REDISPATCH_EVIDENCE_UNAVAILABLE) で fail-closed になる。prepared restore/commit は
+source / destination / conflict の 3 値分類で exactly-once 回復される。`REMEDIATION_STARTED`
+後の未知の部分的バイトは上書き・復元・chmod されない。
+
+**actor 分離:** `review_mutation` は remediator worker のみ。`review_restore` と
+`review_commit` は Justice コアのみ。コミットは GIT1 exact-artifact 契約
+(`--literal-pathspecs`、対象 1 パス、unrelated な index/worktree 状態の保全、push なし)。
+Git target の同一性は content + tree entry mode で、正規ファイルモードは `100644` /
+`100755` のみ。worktree の Git mode は owner execute bit のみから導出される
+(POSIX `0655` は `100644` に正規化される)。
+
+**Linux 変異能力要件:** commit/restore などワークスペースを変異する副作用は、
+Linux x64 + glibc + `openat2` + `renameat2` + non-blocking `flock` + sync
+semantics を実証したネイティブ基盤が利用可能な場合に限り実行される。不足環境では
+安全でない Node フォールバックに縮退せず、該当副作用を `EXECUTION_SUSPENDED`
+(mutation_unavailable) で fail-closed に停止する。
+
+**実装認可:** `/justice-implement --approved` は durable な
+`COMPLETED_APPROVAL_BINDING` を列挙し、Requirements/Design/Plan の canonical path +
+現在 digest + 現在の `reviewProtocolFingerprint` の全件一致が **ちょうど 1 件** の場合に
+のみ arm する。zero match は `not_approved`、複数 match は `identity_conflict` で
+fail-closed。照会は読み取り専用で、stale な完了 Gate に無効化イベントを追記しない。
+
+**履歴照会:** `/justice-review-history` は同一共有 store 上で読み取り専用の DTO
+表示 (summary / rounds / findings、`--all-generations`) を行う。Gate lock 取得・
+イベント追記・validator 呼び出しは行わない。破損 / 複数 live tip / 未対応
+イベントバージョンは部分表示ではなく fail-closed に失敗する。
+
+**`--retry` 互換 (RTY1):** `--retry N` は解析互換のみの deprecated no-op で、
+`legacyRetryOption` として記録される。予算への反映、epoch 生成、NC1 バイパス、
+protocol fingerprint への影響、履歴変異は一切行わない。
+
+---
+
 ### 4.2 `task-feedback` — フィードバックループ
 
 | プロパティ | 設定値 |

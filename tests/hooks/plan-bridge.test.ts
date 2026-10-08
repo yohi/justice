@@ -24,12 +24,11 @@ type RgHarness = {
 
 type RgStep = { readonly input: { type: "PreToolUse"; sessionId: string; callId: string; payload: { toolName: string; toolInput: { prompt: string } } } };
 
-async function rgStart(harness: RgHarness, sessionId: string, retryBudget = 0): Promise<string> {
+async function rgStart(harness: RgHarness, sessionId: string): Promise<string> {
   const started = await harness.bridge.handleReviewGateStart(sessionId, {
     source: "command",
     designPath: "docs/specs/design.md",
     planPath: "docs/plans/implementation-plan.md",
-    retryBudget,
   });
   if (started.reviewerPrompt === undefined) throw new Error(started.guidance);
   return started.reviewerPrompt;
@@ -1358,7 +1357,6 @@ describe("PlanBridge", () => {
         source: "command",
         designPath: "docs/specs/design.md",
         planPath: "docs/plans/implementation-plan.md",
-        retryBudget: 0,
       });
 
       expect(result.dispatched).toBe(true);
@@ -1562,7 +1560,6 @@ describe("PlanBridge", () => {
         source: "command",
         designPath: "docs/specs/design.md",
         planPath: "docs/plans/implementation-plan.md",
-        retryBudget: 0,
       });
 
       expect(result.dispatched).toBe(false);
