@@ -1691,6 +1691,18 @@ export function createReviewGateCoordinator(
         if (lineageIds.some((lineageId) => !projection.findings.has(lineageId))) {
           return suspendAndBlock(session, "UNKNOWN_REMEDIATION_LINEAGE", "remediation referenced an unknown lineage.");
         }
+        const artifactPath = packet.phase === "design" ? session.designPath : session.planPath;
+        const artifactBytes = await reader.readWorkspaceFile(artifactPath);
+        if (artifactBytes === null) {
+          return suspendAndBlock(
+            session,
+            "REMEDIATED_ARTIFACT_UNREADABLE",
+            "the remediated artifact could not be reread; the Gate remains blocked.",
+          );
+        }
+        const artifactDigest = computeArtifactDigest(artifactBytes);
+        if (packet.phase === "design") session.designDigest = artifactDigest;
+        else session.planDigest = artifactDigest;
         await appendEvents(
           session,
           lineageIds.map((lineageId) => ({

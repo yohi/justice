@@ -6,6 +6,7 @@ import { NodeFileSystem } from "../../src/runtime/node-file-system";
 import { OpenCodeAdapter } from "../../src/runtime/opencode-adapter";
 import { REVIEW_GATE_AGENT_REVIEWER } from "../../src/core/review-gate/agent-protocol";
 import type { ReviewCandidatesResultV1 } from "../../src/core/review-gate/agent-protocol";
+import { computeArtifactDigest } from "../../src/core/review-gate/identity";
 import { fakeInit } from "../helpers/fake-opencode-init";
 import { createMockFileSystem } from "../helpers/mock-file-system";
 import { parseNextTaskArgs, parsePacketPayload } from "../helpers/review-gate-coordinator";
@@ -249,13 +250,22 @@ it("routes remediation and self-review, then blocks safely when the mutation sub
   expect(worker.subagent_type).toBe("justice-review-remediator");
 
   const remediationArgs = { prompt: worker.prompt as string };
-  await fs.writeFile(PLAN_PATH, `${PLAN_CONTENT}\n- [x] Verify the lifecycle\n`);
+  const remediatedDesign = `${DESIGN_CONTENT}\n- [x] Verify the lifecycle\n`;
+  await fs.writeFile(DESIGN_PATH, remediatedDesign);
   worker = parseNextTaskArgs(
     await deliver("rem1", remediationArgs, remediationResult(remediationArgs, "COMPLETED")),
   );
   // Self review follows the durable FINDING_REMEDIATED append.
   expect(worker.subagent_type).toBe("justice-review-finding-validator");
   const selfReviewArgs = { prompt: worker.prompt as string };
+  const selfReviewArtifacts = parsePacketPayload(selfReviewArgs.prompt).artifacts as readonly {
+    readonly role: string;
+    readonly canonicalPath: string;
+    readonly digest: string;
+  }[];
+  expect(selfReviewArtifacts.find((artifact) => artifact.role === "design")?.digest).toBe(
+    computeArtifactDigest(new TextEncoder().encode(remediatedDesign)),
+  );
   const lineageId = ((parsePacketPayload(selfReviewArgs.prompt).targetLineageRefs as string[]) ?? [])[0] as string;
 
   const tail = await deliver("sr1", selfReviewArgs, selfReviewResult(selfReviewArgs, [
