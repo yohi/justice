@@ -355,7 +355,7 @@ function sameValidatedFinding(left: ValidatedFinding, right: ValidatedFinding): 
 /**
  * Commit a lineage revalidation observation. `resolved` requires a verified
  * commit binding and emits `FINDING_SELF_REVIEWED` on the current epoch with
- * the next remediation round; `still_present` emits nothing (the lineage is
+ * the tracked remediation round; `still_present` emits nothing (the lineage is
  * already tracked); `indeterminate` blocks the clear by throwing so the
  * caller can suspend the gate.
  */
@@ -382,7 +382,7 @@ export function commitLineageRevalidation(
     payload: {
       lineageId: evidence.lineageId,
       findingId: tracked.findingId,
-      remediationRound: nextRemediationRound(projection),
+      remediationRound: requireRemediationRound(tracked),
     },
   };
   const events: ReviewGateEvent[] = [event];
@@ -428,7 +428,7 @@ export function buildLineageResolution(
     payload: {
       lineageId: input.lineageId,
       findingId: tracked.findingId,
-      remediationRound: nextRemediationRound(projection),
+      remediationRound: requireRemediationRound(tracked),
     },
   };
   const events: ReviewGateEvent[] = [event];
@@ -476,6 +476,13 @@ function requireTrackedFinding(
     throw new Error("unknown_lineage");
   }
   return tracked;
+}
+
+function requireRemediationRound(tracked: FindingState): RemediationRound {
+  if (tracked.remediationRound === null) {
+    throw new Error("lineage_revalidation_requires_remediation_round");
+  }
+  return tracked.remediationRound;
 }
 
 /**

@@ -261,9 +261,10 @@ describe("default v4 validators", () => {
     ).not.toBeNull();
   });
 
-  it("pins the integrity validator to BASELINE_ADMISSION with PRECONDITION policy", () => {
+  it("requires integrity validation at baseline admission and pre-clear", () => {
     expect(REVIEW_INPUT_BINDING_INTEGRITY_V1.mandatoryStages).toEqual([
       "BASELINE_ADMISSION",
+      "PRE_CLEAR",
     ]);
     expect(REVIEW_INPUT_BINDING_INTEGRITY_V1.stageFailurePolicy).toEqual({
       BASELINE_ADMISSION: "PRECONDITION",

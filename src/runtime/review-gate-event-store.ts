@@ -17,14 +17,11 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import type { Dirent } from "node:fs";
 import { dirname, join } from "node:path";
 import { validateStorageGateId } from "../core/review-gate/identity";
-import { REVIEW_GATE_RECOVERY_NAMESPACE } from "./review-gate-recovery-store";
-import type {
-  ReviewGateEvent,
-  ReviewGatePhase,
-} from "../core/review-gate-types";
+import type { ReviewGateEvent, ReviewGatePhase } from "../core/review-gate-types";
 import type { ReviewGateOperationKind } from "../core/review-gate/agent-protocol";
 
 const REVIEW_GATES_DIR = ".justice/review-gates";
@@ -43,20 +40,12 @@ export type ReviewGateDispatchRecordV1 = Readonly<{
 export type ReviewGateEventStore = Readonly<{
   readonly appendEvents: (gateId: string, events: readonly ReviewGateEvent[]) => Promise<void>;
   readonly readEvents: (gateId: string) => Promise<readonly ReviewGateEvent[]>;
-  readonly recordDispatch: (
-    gateId: string,
-    dispatch: ReviewGateDispatchRecordV1,
-  ) => Promise<void>;
+  readonly recordDispatch: (gateId: string, dispatch: ReviewGateDispatchRecordV1) => Promise<void>;
   readonly markDispatchCompleted: (gateId: string, operationId: string) => Promise<void>;
   readonly listDispatches: (gateId: string) => Promise<readonly ReviewGateDispatchRecordV1[]>;
+  readonly listGateIds: () => Promise<readonly string[]>;
   readonly readScopeIndex: (reviewScopeId: string) => Promise<string | null>;
   readonly writeScopeIndex: (reviewScopeId: string, gateId: string) => Promise<void>;
-  /**
-   * Durable gate namespace enumeration (Task 13/14 seam, read-only): sorted
-   * gate ids of every directory under `.justice/review-gates/` that passes the
-   * gate-id contract. Namespaces are listed without decoding any events.
-   */
-  readonly listGateIds: () => Promise<readonly string[]>;
   readonly close: () => void;
 }>;
 
@@ -106,7 +95,9 @@ export function createReviewGateEventStore(rootDir: string): ReviewGateEventStor
 
   const readJsonlLines = (file: string): readonly string[] => {
     try {
-      return readFileSync(file, "utf8").split("\n").filter((line) => line.length > 0);
+      return readFileSync(file, "utf8")
+        .split("\n")
+        .filter((line) => line.length > 0);
     } catch (err) {
       if (isEnoent(err)) return [];
       throw err;
@@ -119,7 +110,7 @@ export function createReviewGateEventStore(rootDir: string): ReviewGateEventStor
     const events: ReviewGateEvent[] = readJsonlLines(eventsFile(gateId)).map((line) =>
       castEvent(JSON.parse(line)),
     );
-    const frozen = Object.freeze(events);
+    const frozen = Object.freeze(events.map((event) => deepFreeze(event)));
     eventsByGate.set(gateId, frozen);
     return frozen;
   };
@@ -148,7 +139,7 @@ export function createReviewGateEventStore(rootDir: string): ReviewGateEventStor
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       throw new Error("review_gate_scope_index_corrupt");
     }
-    const map: Record<string, string> = {};
+    const map = Object.create(null) as Record<string, string>;
     for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
       if (typeof value !== "string") throw new Error("review_gate_scope_index_corrupt");
       // Key originates from an already-persisted scope index entry.
@@ -160,8 +151,9 @@ export function createReviewGateEventStore(rootDir: string): ReviewGateEventStor
   };
 
   const store: ReviewGateEventStore = {
-    appendEvents: (gateId, events) =>
-      serialize(() => {
+    appendEvents: (gateId, events) => {
+      const snapshots = events.map((event) => deepFreeze(structuredClone(event)));
+      return serialize(() => {
         assertOpen();
         assertStorageId(gateId);
         if (events.length === 0) throw new Error("review_gate_event_batch_empty");
@@ -169,11 +161,15 @@ export function createReviewGateEventStore(rootDir: string): ReviewGateEventStor
           assertEventShape(event);
           if (event.gateId !== gateId) throw new Error("review_gate_event_gate_mismatch");
         }
-        const next: readonly ReviewGateEvent[] = [...loadEvents(gateId), ...events];
+        const next: readonly ReviewGateEvent[] = Object.freeze([
+          ...loadEvents(gateId),
+          ...snapshots,
+        ]);
         writeAtomicUtf8(eventsFile(gateId), toJsonl(next));
         eventsByGate.set(gateId, next);
         return undefined;
-      }),
+      });
+    },
 
     readEvents: (gateId) =>
       serialize(() => {
@@ -231,6 +227,30 @@ export function createReviewGateEventStore(rootDir: string): ReviewGateEventStor
         return Object.freeze([...loadDispatches(gateId)]);
       }),
 
+    listGateIds: () =>
+      serialize(() => {
+        assertOpen();
+        const gatesRoot = join(rootDir, REVIEW_GATES_DIR);
+        let entries: Dirent[];
+        try {
+          entries = readdirSync(gatesRoot, { withFileTypes: true, encoding: "utf8" });
+        } catch (err) {
+          if (isEnoent(err)) return Object.freeze([]);
+          throw err;
+        }
+        return Object.freeze(
+          entries
+            .filter(
+              (entry) =>
+                entry.isDirectory() &&
+                entry.name !== "recovery" &&
+                validateStorageGateId(entry.name),
+            )
+            .map((entry) => entry.name)
+            .sort((left, right) => left.localeCompare(right)),
+        );
+      }),
+
     readScopeIndex: (reviewScopeId) =>
       serialize(() => {
         assertOpen();
@@ -238,7 +258,7 @@ export function createReviewGateEventStore(rootDir: string): ReviewGateEventStor
         const map = readScopeIndexMap();
         // Key originates from the validated caller scope id.
         // eslint-disable-next-line security/detect-object-injection
-        const gateId = map[reviewScopeId];
+        const gateId = Object.hasOwn(map, reviewScopeId) ? map[reviewScopeId] : undefined;
         return gateId === undefined ? null : gateId;
       }),
 
@@ -247,38 +267,16 @@ export function createReviewGateEventStore(rootDir: string): ReviewGateEventStor
         assertOpen();
         assertStorageId(reviewScopeId);
         assertStorageId(gateId);
-        const map = { ...readScopeIndexMap() };
+        const map = Object.assign(
+          Object.create(null) as Record<string, string>,
+          readScopeIndexMap(),
+        );
         // Both keys originate from validated caller ids (checked above).
         // eslint-disable-next-line security/detect-object-injection
         map[reviewScopeId] = gateId;
         scopeIndex = map;
         writeAtomicUtf8(join(rootDir, SCOPE_INDEX_FILE), `${JSON.stringify(map)}\n`);
         return undefined;
-      }),
-
-    listGateIds: () =>
-      serialize(() => {
-        assertOpen();
-        let entries: string[];
-        try {
-          entries = readdirSync(join(rootDir, REVIEW_GATES_DIR), { withFileTypes: true }).map(
-            (entry) => entry.name,
-          );
-        } catch (err) {
-          if (isEnoent(err)) return Object.freeze([]);
-          throw err;
-        }
-        return Object.freeze(
-          entries
-            .filter((name) => validateStorageGateId(name))
-            .filter(
-              (name) =>
-                // eslint-disable-next-line security/detect-non-literal-fs-filename -- readdirSync entries, joined via node:path
-                statSync(join(rootDir, REVIEW_GATES_DIR, name)).isDirectory(),
-            )
-            .filter((name) => name !== REVIEW_GATE_RECOVERY_NAMESPACE)
-            .sort((left, right) => left.localeCompare(right)),
-        );
       }),
 
     close: () => {
@@ -337,6 +335,12 @@ function castEvent(record: unknown): ReviewGateEvent {
   return record as ReviewGateEvent;
 }
 
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value;
+  for (const nested of Object.values(value)) deepFreeze(nested);
+  return Object.freeze(value);
+}
+
 function assertDispatchShape(record: unknown): ReviewGateDispatchRecordV1 {
   if (typeof record !== "object" || record === null) {
     throw new Error("review_gate_dispatch_schema_invalid");
@@ -360,9 +364,5 @@ function assertDispatchShape(record: unknown): ReviewGateDispatchRecordV1 {
 }
 
 function isEnoent(err: unknown): boolean {
-  return (
-    err instanceof Error &&
-    "code" in err &&
-    (err as NodeJS.ErrnoException).code === "ENOENT"
-  );
+  return err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT";
 }

@@ -470,17 +470,12 @@ export class PlanBridge {
    * runtime graph installs its coordinator during initialization, and tests
    * may replace it with an injected instance.
    */
-  /**
-   * Task 14: inject the durable completed-approval lookup built from the same
-   * shared Review Gate runtime graph as the coordinator. Optional: without it
-   * the arm keeps the legacy in-memory digest verification.
-   */
-  setReviewGateApprovalLookup(lookup: ReviewGateApprovalLookup): void {
-    this.reviewGateApprovalLookup = lookup;
-  }
-
   setReviewGateCoordinator(coordinator: ReviewGateCoordinator): void {
     this.reviewGateCoordinator = coordinator;
+  }
+
+  setReviewGateApprovalLookup(lookup: ReviewGateApprovalLookup): void {
+    this.reviewGateApprovalLookup = lookup;
   }
 
   getReviewGateLock(sessionId: string): ReviewGateLockSnapshot | undefined {
@@ -519,6 +514,7 @@ export class PlanBridge {
     this.reviewGateCoordinator?.releaseSession(sessionId);
     this.reviewGateLocks.delete(sessionId);
     this.pendingPlanReviewGates.delete(sessionId);
+    this.clearReviewGateCallParents(sessionId);
     this.observationHandler?.setReviewGateScope(sessionId, null);
     this.clearSessionCompletionInputs(sessionId);
   }
@@ -608,6 +604,7 @@ export class PlanBridge {
     this.pendingPlanReviewGates.delete(sessionId);
     this.observationHandler?.setReviewGateScope(sessionId, null);
     this.setActivePlan(sessionId, null);
+    this.clearReviewGateCallParents(sessionId);
 
     const result = await coordinator.startOrResume(sessionId, request);
     const planPath = result.planPath;
@@ -658,6 +655,8 @@ export class PlanBridge {
 
     if (result.lockPhase !== "awaiting_implementation_authorization") {
       this.setActivePlan(sessionId, null);
+    } else {
+      this.setActivePlan(sessionId, result.planPath);
     }
     return {
       dispatched: false,
@@ -693,6 +692,12 @@ export class PlanBridge {
     string,
     { readonly parentSessionId: string; readonly gateId: string }
   >();
+
+  private clearReviewGateCallParents(parentSessionId: string): void {
+    for (const [callId, claim] of this.reviewGateCallParents) {
+      if (claim.parentSessionId === parentSessionId) this.reviewGateCallParents.delete(callId);
+    }
+  }
 
   async handlePlanReviewGatePreToolUse(
     event: Extract<HookEvent, { readonly type: "PreToolUse" }>,
@@ -915,25 +920,15 @@ export class PlanBridge {
 
       const approvalLookup = this.reviewGateApprovalLookup;
       if (approvalLookup !== null) {
-        // Task 14: the durable completed approval replaces the process-local
-        // reviewGateLock.designDigest/planDigest authority. The plan snapshot
-        // and fingerprint flow in AuthorizationStore stays unchanged below.
         const outcome = await approvalLookup.findCurrentCompletedApproval(requestedPlanPath);
         if (outcome.kind !== "approved") {
           if (outcome.kind !== "history_unavailable") {
-            // Drift or identity conflict requires re-review; a transient
-            // durable-history outage keeps the lock awaiting (retryable
-            // without discarding review progress).
             this.reviewGateLocks.set(sessionId, { ...reviewGateLock, phase: "remediation" });
           }
           return this.implementationArmRequiredResult();
         }
       } else {
-        // Legacy in-memory digest verification (no durable lookup wired).
-        if (
-          reviewGateLock.designDigest === null ||
-          reviewGateLock.planDigest === null
-        ) {
+        if (reviewGateLock.designDigest === null || reviewGateLock.planDigest === null) {
           return this.implementationArmRequiredResult();
         }
         let reviewedDesign: string | null;
@@ -971,24 +966,17 @@ export class PlanBridge {
       };
     }
 
-    // Task 14: restart-safe durable completed-approval gating. Without any
-    // in-memory Review Gate lock, a plan whose durable completed approval
-    // history exists must still satisfy the exact binding; a plan with no
-    // completed Review Gate history keeps the plain approved flow.
     if (reviewGateLock === undefined && this.reviewGateApprovalLookup !== null && request.approved) {
       const approvalLookup = this.reviewGateApprovalLookup;
       let hasDurableHistory: boolean;
       try {
-        const candidates = await approvalLookup.listCompletedApprovalCandidates(planPath);
-        hasDurableHistory = candidates.length > 0;
+        hasDurableHistory = (await approvalLookup.listCompletedApprovalCandidates(planPath)).length > 0;
       } catch {
         return this.implementationArmRequiredResult();
       }
       if (hasDurableHistory) {
         const outcome = await approvalLookup.findCurrentCompletedApproval(planPath);
-        if (outcome.kind !== "approved") {
-          return this.implementationArmRequiredResult();
-        }
+        if (outcome.kind !== "approved") return this.implementationArmRequiredResult();
       }
     }
 

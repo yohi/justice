@@ -25,7 +25,6 @@
 import type {
   ArtifactDigest,
   EpochId,
-  FindingId,
   GateId,
   LineageId,
   RemediationRound,
@@ -86,6 +85,8 @@ import {
   type DeterministicValidationState,
   type MandatoryValidationDispatch,
   type ValidationEvidence,
+  type ValidationInputKind,
+  type ValidationInputValue,
 } from "../core/review-gate/deterministic-validation";
 import {
   canonicalizeArtifactPath,
@@ -162,8 +163,7 @@ export interface ReviewGateCoordinatorOptions {
   readonly protocol: ReviewGateProtocolDescriptor;
   readonly workspaceReader: ReviewGateWorkspaceReader;
   readonly mutationSubstrate?: ReviewGateMutationSubstrate | null;
-  /** Workspace state probe; defaults to a WSP1 all-clean stub. */
-  readonly inspectTargets?: (
+  readonly inspectTargets: (
     paths: readonly string[],
   ) => Promise<ReadonlyMap<string, ReviewTargetWorkspaceState>>;
   readonly now?: () => string;
@@ -218,8 +218,8 @@ interface MutableSessionState {
   readonly gateId: GateId;
   readonly designPath: string;
   readonly planPath: string;
-  readonly designDigest: string;
-  readonly planDigest: string;
+  designDigest: string;
+  planDigest: string;
   writerId: WriterId;
   epochId: EpochId;
   lockPhase: ReviewGateCoordinatorLockPhase;
@@ -253,14 +253,7 @@ export function createReviewGateCoordinator(
   const protocol = options.protocol;
   const reader = options.workspaceReader;
   const mutation = options.mutationSubstrate ?? null;
-  const inspectTargets =
-    options.inspectTargets ??
-    ((paths: readonly string[]) =>
-      Promise.resolve(
-        new Map<string, ReviewTargetWorkspaceState>(
-          paths.map((path) => [path, "clean_committed" as const]),
-        ),
-      ));
+  const inspectTargets = options.inspectTargets;
   const now = options.now ?? ((): string => new Date().toISOString());
   const randomId = options.newId ?? ((): string => globalThis.crypto.randomUUID());
   const newId = randomId;
@@ -369,6 +362,41 @@ export function createReviewGateCoordinator(
     return cached;
   };
 
+  const recordCurrentArtifactBindings = async (
+    session: MutableSessionState,
+    phase: ReviewGatePhase,
+    artifactPath: string,
+  ): Promise<void> => {
+    const [events, bytes] = await Promise.all([
+      eventStore.readEvents(session.gateId),
+      reader.readWorkspaceFile(artifactPath),
+    ]);
+    if (bytes === null) throw new Error("review_gate_committed_artifact_unreadable");
+    const initial = requireGateCreated(session.gateId).payload;
+    const latest = events
+      .filter((event) => event.eventType === "ARTIFACT_BINDINGS_UPDATED")
+      .at(-1);
+    const designArtifact = latest?.eventType === "ARTIFACT_BINDINGS_UPDATED"
+      ? latest.payload.designArtifact
+      : initial.designArtifact;
+    const planArtifact = latest?.eventType === "ARTIFACT_BINDINGS_UPDATED"
+      ? latest.payload.planArtifact
+      : initial.planArtifact;
+    const updatedArtifact = {
+      canonicalPath: artifactPath,
+      digest: computeArtifactDigest(bytes),
+      gitMode: "100644" as const,
+    };
+    if (phase === "design") session.designDigest = updatedArtifact.digest;
+    else session.planDigest = updatedArtifact.digest;
+    await appendEvents(session, [{
+      eventType: "ARTIFACT_BINDINGS_UPDATED",
+      payload: phase === "design"
+        ? { designArtifact: updatedArtifact, planArtifact }
+        : { designArtifact, planArtifact: updatedArtifact },
+    }]);
+  };
+
   const phaseArtifactBinding = (
     session: MutableSessionState,
     phase: ReviewGatePhase,
@@ -447,9 +475,16 @@ export function createReviewGateCoordinator(
     return Object.freeze({
       reviewScopeId: gateCreated.payload.reviewScopeId,
       gateId: projection.gateId,
-      designArtifact: gateCreated.payload.designArtifact,
-      planArtifact: gateCreated.payload.planArtifact,
-      requirementsResolution: gateCreated.payload.requirementsResolution,
+      designArtifact: phaseArtifactBinding(session, "design"),
+      planArtifact: phaseArtifactBinding(session, "plan"),
+      requirementsResolution:
+        gateCreated.payload.requirementsResolution.source === "auto_design_reference"
+          ? {
+              ...gateCreated.payload.requirementsResolution,
+              canonicalPath: session.designPath,
+              digest: session.designDigest as ArtifactDigest,
+            }
+          : gateCreated.payload.requirementsResolution,
       reviewProtocolFingerprint: protocol.reviewProtocolFingerprint,
       designProtocolFingerprint: protocol.designProtocolFingerprint,
       planProtocolFingerprint: protocol.planProtocolFingerprint,
@@ -464,22 +499,45 @@ export function createReviewGateCoordinator(
     const registry = createDefaultDeterministicValidatorRegistry();
     const gateCreated = requireGateCreated(session.gateId);
     const dispatches: MandatoryValidationDispatch[] = [];
-    for (const validatorId of ["design-requirements-reference-consistency-v1"] as const) {
+    for (const validatorId of [
+      "review-input-binding-integrity-v1",
+      "design-requirements-reference-consistency-v1",
+    ] as const) {
       const registered = registry.resolve(validatorId);
       if (registered === undefined) continue;
       if (!registered.descriptor.mandatoryStages.includes("PRE_CLEAR")) continue;
       if (!registered.descriptor.applicablePhases.includes(projection.phase)) continue;
-      dispatches.push({
-        validatorId,
-        stage: "PRE_CLEAR",
-        phase: projection.phase,
-        logicalOperationId: newId(),
-        binding: {
-          validatorId,
-          validatorContractVersion: registered.descriptor.validatorContractVersion,
-          resultSchemaVersion: registered.descriptor.resultSchemaVersion,
-          stage: "PRE_CLEAR",
-          declaredInputs: {
+      const pinnedInputDigests = {
+        [session.designPath]: session.designDigest,
+        [session.planPath]: session.planDigest,
+      };
+      const approvalBinding = {
+        designArtifactPath: session.designPath,
+        designArtifactDigest: session.designDigest,
+        planArtifactPath: session.planPath,
+        planArtifactDigest: session.planDigest,
+      };
+      const declaredInputs: Partial<Record<ValidationInputKind, ValidationInputValue>> =
+        validatorId === "review-input-binding-integrity-v1"
+          ? {
+              PINNED_INPUT_DIGESTS: {
+                digest: computeCanonicalJsonFingerprint(pinnedInputDigests),
+                entries: pinnedInputDigests,
+              },
+              APPROVAL_BINDING: {
+                digest: computeCanonicalJsonFingerprint(approvalBinding),
+                entries: approvalBinding,
+              },
+              DESIGN_ARTIFACT: {
+                digest: session.designDigest,
+                entries: {},
+              },
+              PLAN_ARTIFACT: {
+                digest: session.planDigest,
+                entries: {},
+              },
+            }
+          : {
             DESIGN_ARTIFACT: {
               digest: session.designDigest,
               entries: {
@@ -490,7 +548,18 @@ export function createReviewGateCoordinator(
               digest: gateCreated.payload.requirementsResolution.digest,
               entries: { path: gateCreated.payload.requirementsResolution.canonicalPath },
             },
-          },
+          };
+      dispatches.push({
+        validatorId,
+        stage: "PRE_CLEAR",
+        phase: projection.phase,
+        logicalOperationId: newId(),
+        binding: {
+          validatorId,
+          validatorContractVersion: registered.descriptor.validatorContractVersion,
+          resultSchemaVersion: registered.descriptor.resultSchemaVersion,
+          stage: "PRE_CLEAR",
+          declaredInputs,
           executionEnvironment: {
             runtimeId: "justice-review-gate-coordinator",
             runtimeVersion: "1",
@@ -579,12 +648,12 @@ export function createReviewGateCoordinator(
   ): ReviewGateOperationPacketV1 => {
     switch (op.kind) {
       case "dispatch_reviewer": {
-        if (op.redispachedOperationId === undefined) {
+        if (op.redispatchedOperationId === undefined) {
           session.reviewAttemptId = newId();
         }
         return buildReviewerOperationPacket({
           correlation: correlationFor(session, {
-            operationId: op.redispachedOperationId ?? newId(),
+            operationId: op.redispatchedOperationId ?? newId(),
             phase: op.phase,
             reviewAttemptId: session.reviewAttemptId,
             remediationRound: null,
@@ -595,31 +664,31 @@ export function createReviewGateCoordinator(
       case "dispatch_finding_validator":
         return buildFindingValidatorOperationPacket({
           correlation: correlationFor(session, {
-            operationId: op.redispachedOperationId ?? newId(),
+            operationId: op.redispatchedOperationId ?? newId(),
             phase: op.phase,
             reviewAttemptId: session.reviewAttemptId,
             remediationRound: null,
           }),
           candidate: op.candidate,
           artifactRefs: artifactRefsFor(session, op.phase),
-          opaqueExistingLineageRefs: [],
+          opaqueExistingLineageRefs: [...projection.currentRemediableBlockers],
         });
       case "dispatch_self_review":
         return buildSelfReviewOperationPacket({
           correlation: correlationFor(session, {
-            operationId: op.redispachedOperationId ?? newId(),
+            operationId: op.redispatchedOperationId ?? newId(),
             phase: op.phase,
             reviewAttemptId: null,
             remediationRound: op.round,
           }),
           targetLineageRefs: [...op.lineageIds],
-          existingLineageCandidateRefs: [],
+          existingLineageCandidateRefs: [...projection.currentRemediableBlockers],
           artifactRefs: artifactRefsFor(session, op.phase),
         });
       case "dispatch_lineage_revalidation":
         return buildLineageRevalidationOperationPacket({
           correlation: correlationFor(session, {
-            operationId: op.redispachedOperationId ?? newId(),
+            operationId: op.redispatchedOperationId ?? newId(),
             phase: projection.phase,
             reviewAttemptId: null,
             remediationRound: null,
@@ -630,7 +699,7 @@ export function createReviewGateCoordinator(
       case "validate_non_convergence_reentry":
         return buildNonConvergenceReentryOperationPacket({
           correlation: correlationFor(session, {
-            operationId: op.redispachedOperationId ?? newId(),
+            operationId: op.redispatchedOperationId ?? newId(),
             phase: op.phase,
             reviewAttemptId: null,
             remediationRound: null,
@@ -825,7 +894,17 @@ export function createReviewGateCoordinator(
           return response;
         }
         case "commit_finding_reconciliation": {
-          const payload = reconcileFindingBatch(projection, op.batch);
+          let payload: ReturnType<typeof reconcileFindingBatch>;
+          try {
+            payload = reconcileFindingBatch(projection, op.batch);
+          } catch (error: unknown) {
+            const reason = error instanceof Error ? error.message : String(error);
+            return suspendAndBlock(
+              session,
+              reason === "validator_result_conflict" ? "VALIDATOR_RESULT_CONFLICT" : "FINDING_RECONCILIATION_FAILED",
+              "the validated finding batch conflicts with tracked lineage state; the Gate is suspended.",
+            );
+          }
           await appendEvents(
             session,
             payload.events.map((event) => ({
@@ -855,6 +934,7 @@ export function createReviewGateCoordinator(
               `the exact-artifact commit failed: ${err instanceof Error ? err.message : String(err)}`,
             );
           }
+          await recordCurrentArtifactBindings(session, op.phase, op.artifactPath);
           session.commitCompleted = Object.freeze({
             phase: op.phase,
             artifactPath: op.artifactPath,
@@ -884,6 +964,7 @@ export function createReviewGateCoordinator(
               `the exact-artifact commit recovery failed: ${err instanceof Error ? err.message : String(err)}`,
             );
           }
+          await recordCurrentArtifactBindings(session, op.phase, op.artifactPath);
           session.commitCompleted = Object.freeze({
             phase: op.phase,
             artifactPath: op.artifactPath,
@@ -1089,11 +1170,22 @@ export function createReviewGateCoordinator(
       const existingGateId = existingGateIdRaw as GateId;
       const projection = await loadProjection(existingGateId);
       const gateCreated = requireGateCreated(existingGateId);
+      const latestBindingEvent = (await eventStore.readEvents(existingGateId))
+        .filter((event) => event.eventType === "ARTIFACT_BINDINGS_UPDATED")
+        .at(-1);
+      const latestDesignArtifact =
+        latestBindingEvent?.eventType === "ARTIFACT_BINDINGS_UPDATED"
+          ? latestBindingEvent.payload.designArtifact
+          : gateCreated.payload.designArtifact;
+      const latestPlanArtifact =
+        latestBindingEvent?.eventType === "ARTIFACT_BINDINGS_UPDATED"
+          ? latestBindingEvent.payload.planArtifact
+          : gateCreated.payload.planArtifact;
       const bindingsMatch =
-        gateCreated.payload.designArtifact.digest === designDigest &&
-        gateCreated.payload.planArtifact.digest === planDigest &&
-        gateCreated.payload.designArtifact.canonicalPath === designPath &&
-        gateCreated.payload.planArtifact.canonicalPath === planPath;
+        latestDesignArtifact.digest === designDigest &&
+        latestPlanArtifact.digest === planDigest &&
+        latestDesignArtifact.canonicalPath === designPath &&
+        latestPlanArtifact.canonicalPath === planPath;
 
       if (projection.status === "completed" && bindingsMatch) {
         // Exact completed binding: read-only reuse — no lock acquisition, no
@@ -1277,6 +1369,7 @@ export function createReviewGateCoordinator(
       case "remediation":
         // The candidate/target evidence is not reconstructable from the
         // durable dispatch record alone; suspend instead of guessing.
+        await eventStore.markDispatchCompleted(session.gateId, latest.operationId);
         await appendEvents(session, [
           {
             eventType: "EXECUTION_SUSPENDED",
@@ -1296,8 +1389,24 @@ export function createReviewGateCoordinator(
     planDigest: string,
   ): Promise<ReviewGateCommandResult> => {
     // RR1 + target-clean admission BEFORE GATE_CREATED.
-    const workspaceStates = await inspectTargets([designPath, planPath]);
-    const designState = workspaceStates.get(designPath) ?? "clean_committed";
+    let workspaceStates: ReadonlyMap<string, ReviewTargetWorkspaceState>;
+    try {
+      workspaceStates = await inspectTargets([designPath, planPath]);
+    } catch {
+      return blockedResult(
+        designPath,
+        planPath,
+        "[JUSTICE: REVIEW GATE BLOCKED] The Design and Implementation Plan targets could not be inspected; retry after workspace inspection is available.",
+      );
+    }
+    const designState = workspaceStates.get(designPath);
+    if (designState === undefined) {
+      return blockedResult(
+        designPath,
+        planPath,
+        "[JUSTICE: REVIEW GATE BLOCKED] The Design target could not be verified; retry after workspace inspection is available.",
+      );
+    }
     if (designState !== "clean_committed") {
       return blockedResult(
         designPath,
@@ -1305,7 +1414,14 @@ export function createReviewGateCoordinator(
         `[JUSTICE: REVIEW GATE BLOCKED] The Design target is not clean/committed (${designState}); commit or restore it before starting the Review Gate.`,
       );
     }
-    const planState = workspaceStates.get(planPath) ?? "clean_committed";
+    const planState = workspaceStates.get(planPath);
+    if (planState === undefined) {
+      return blockedResult(
+        designPath,
+        planPath,
+        "[JUSTICE: REVIEW GATE BLOCKED] The Implementation Plan target could not be verified; retry after workspace inspection is available.",
+      );
+    }
     if (planState !== "clean_committed") {
       return blockedResult(
         designPath,
@@ -1315,6 +1431,8 @@ export function createReviewGateCoordinator(
     }
 
     const gateId = newId() as GateId;
+    const previous = dropSession(sessionId);
+    if (previous !== undefined) releaseHandles(previous);
     const chain = await acquireGateLockChain(lockManager, reviewScopeId, gateId);
     if (chain.kind === "occupied") {
       return Object.freeze({
@@ -1584,13 +1702,33 @@ export function createReviewGateCoordinator(
           );
         }
         const lineageIds = remediationLineageIds(session, intent);
+        const projection = await loadProjection(session.gateId);
+        if (lineageIds.some((lineageId) => !projection.findings.has(lineageId))) {
+          return suspendAndBlock(session, "UNKNOWN_REMEDIATION_LINEAGE", "remediation referenced an unknown lineage.");
+        }
+        const artifactPath = packet.phase === "design" ? session.designPath : session.planPath;
+        const artifactBytes = await reader.readWorkspaceFile(artifactPath);
+        if (artifactBytes === null) {
+          return suspendAndBlock(
+            session,
+            "REMEDIATED_ARTIFACT_UNREADABLE",
+            "the remediated artifact could not be reread; the Gate remains blocked.",
+          );
+        }
+        const artifactDigest = computeArtifactDigest(artifactBytes);
+        if (packet.phase === "design") session.designDigest = artifactDigest;
+        else session.planDigest = artifactDigest;
         await appendEvents(
           session,
           lineageIds.map((lineageId) => ({
             eventType: "FINDING_REMEDIATED" as const,
             payload: {
               lineageId,
-              findingId: `${lineageId}-finding` as FindingId,
+              findingId: (() => {
+                const finding = projection.findings.get(lineageId);
+                if (finding === undefined) throw new Error("review_gate_unknown_lineage");
+                return finding.findingId;
+              })(),
               remediationRound: round,
             },
           })),
@@ -1617,13 +1755,21 @@ export function createReviewGateCoordinator(
         }
         const round = packet.remediationRound ?? { phase: packet.phase, ordinal: 1 };
         const lineageIds = remediationLineageIds(session, intent);
+        const projection = await loadProjection(session.gateId);
+        if (lineageIds.some((lineageId) => !projection.findings.has(lineageId))) {
+          return suspendAndBlock(session, "UNKNOWN_SELF_REVIEW_LINEAGE", "self-review referenced an unknown lineage.");
+        }
         await appendEvents(
           session,
           lineageIds.map((lineageId) => ({
             eventType: "FINDING_SELF_REVIEWED" as const,
             payload: {
               lineageId,
-              findingId: `${lineageId}-finding` as FindingId,
+              findingId: (() => {
+                const finding = projection.findings.get(lineageId);
+                if (finding === undefined) throw new Error("review_gate_unknown_lineage");
+                return finding.findingId;
+              })(),
               remediationRound: round,
             },
           })),
@@ -1678,12 +1824,21 @@ export function createReviewGateCoordinator(
                 "the reentry reopen outcome carried no lineage id.",
               );
             }
+            const projection = await loadProjection(session.gateId);
+            const finding = projection.findings.get(reentryResult.lineageId as LineageId);
+            if (finding === undefined) {
+              return suspendAndBlock(
+                session,
+                "REENTRY_UNKNOWN_LINEAGE",
+                "the reentry reopen outcome referenced an unknown lineage.",
+              );
+            }
             await appendEvents(session, [
               {
                 eventType: "FINDING_REOPENED",
                 payload: {
                   lineageId: reentryResult.lineageId as LineageId,
-                  findingId: `${reentryResult.lineageId}-finding` as FindingId,
+                  findingId: finding.findingId,
                   reopenedBy: session.epochId,
                 },
               },

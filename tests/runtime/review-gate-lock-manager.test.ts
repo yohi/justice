@@ -1,8 +1,22 @@
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import type { LinuxReviewGateProvider, ReviewGateLockHandle } from "../../src/runtime/linux-review-gate-provider";
-import { createReviewGateLockManager } from "../../src/runtime/review-gate-lock-manager";
+import type * as LinuxProviderModule from "../../src/runtime/linux-review-gate-provider";
+import type {
+  LinuxReviewGateProvider,
+  ReviewGateLockHandle,
+} from "../../src/runtime/linux-review-gate-provider";
+import {
+  acquireGateLockChain,
+  createReviewGateLockManager,
+  type ReviewGateLockManager,
+} from "../../src/runtime/review-gate-lock-manager";
+
+const { nativeProviderFactory } = vi.hoisted(() => ({ nativeProviderFactory: vi.fn() }));
+vi.mock("../../src/runtime/linux-review-gate-provider", async (importOriginal) => {
+  const actual = await importOriginal<typeof LinuxProviderModule>();
+  return { ...actual, createLinuxReviewGateProvider: nativeProviderFactory };
+});
 
 const tempRoots: string[] = [];
 
@@ -115,6 +129,18 @@ describe("ReviewGateLockManager — in-memory fallback (no in-memory contaminati
     next.close();
   });
 
+  it("shares in-process locks across managers for the same workspace", async () => {
+    const root = freshRoot();
+    const first = createReviewGateLockManager(root, { provider: null });
+    const second = createReviewGateLockManager(root, { provider: null });
+    const handle = await first.acquireScopeLock("shared-scope");
+    expect(await second.acquireScopeLock("shared-scope")).toBe("occupied");
+    if (handle !== "occupied") handle.release();
+    expect(await second.acquireScopeLock("shared-scope")).not.toBe("occupied");
+    first.close();
+    second.close();
+  });
+
   it("handles re-entrant scope/gate acquisition across ids concurrently", async () => {
     const manager = createReviewGateLockManager(freshRoot(), { provider: null });
 
@@ -154,14 +180,58 @@ describe("ReviewGateLockManager — native provider delegation", () => {
     manager.close();
     expect(calls).not.toContain("provider.close");
   });
+
+  it("releases provider handles on close and rejects acquisitions afterward", async () => {
+    const calls: string[] = [];
+    const provider = makeProviderMock(calls);
+    const manager = createReviewGateLockManager(freshRoot(), { provider });
+    await manager.acquireScopeLock("scope-close");
+    manager.close();
+    expect(calls).toContain("release:scope:scope-close");
+    await expect(manager.acquireGateLock("gate-after-close")).rejects.toThrow(
+      "review_gate_lock_manager_closed",
+    );
+    expect(calls).not.toContain("provider.close");
+  });
+
+  it("closes an automatically created provider", async () => {
+    const provider = makeProviderMock([]);
+    nativeProviderFactory.mockReturnValue(provider);
+    const manager = createReviewGateLockManager(freshRoot());
+    manager.close();
+    expect(provider.close).toHaveBeenCalledOnce();
+    nativeProviderFactory.mockReset();
+  });
 });
 
 describe("ReviewGateLockManager — auto substrate probe", () => {
-  it("serves acquisitions without an explicit provider choice", async () => {
-    const manager = createReviewGateLockManager(freshRoot());
-    const handle = await manager.acquireScopeLock("scope-e");
-    expect(handle).not.toBe("occupied");
-    if (handle !== "occupied") handle.release();
-    manager.close();
+  it("rejects when the native provider is unavailable by default", () => {
+    nativeProviderFactory.mockReturnValue(undefined);
+    expect(() => createReviewGateLockManager(freshRoot())).toThrow(
+      "review_gate_lock_provider_unavailable",
+    );
+    nativeProviderFactory.mockReset();
+  });
+});
+
+describe("acquireGateLockChain", () => {
+  it("releases the scope lock when Gate-lock acquisition rejects", async () => {
+    const calls: string[] = [];
+    const scopeLock: ReviewGateLockHandle = {
+      release: () => calls.push("scope.release"),
+      verifyCloexec: () => true,
+    };
+    const manager: ReviewGateLockManager = {
+      acquireScopeLock: async () => scopeLock,
+      acquireGateLock: async () => {
+        throw new Error("gate-acquire-failed");
+      },
+      close: () => undefined,
+    };
+
+    await expect(acquireGateLockChain(manager, "scope", "gate")).rejects.toThrow(
+      "gate-acquire-failed",
+    );
+    expect(calls).toEqual(["scope.release"]);
   });
 });
