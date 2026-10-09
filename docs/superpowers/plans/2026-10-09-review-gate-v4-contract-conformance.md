@@ -248,7 +248,7 @@ The following five user-visible input/failure classes have explicit owner tests 
 - Test: `tests/core/review-gate/convergence.test.ts`
 
 **Interfaces:**
-- Produces: `evaluateNonConvergenceCycles(cycles: readonly VerifiedSemanticCycle[]): {kind:"convergent"}|{kind:"non_convergent";primaryReason:NonConvergenceKind;allReasons:readonly NonConvergenceKind[]}`.
+- Produces: `evaluateNonConvergenceCycles(cycles: readonly VerifiedSemanticCycle[]): {kind:"convergent"}|{kind:"non_convergent";primaryReason:NonConvergenceKind;allReasons:readonly NonConvergenceKind[]}|{kind:"indeterminate";reason:string;missingEvidence:readonly string[]}`.
 - Define `VerifiedSemanticCycle = Readonly<{phase:ReviewGatePhase;baselineDigest:string;protocolFingerprint:string;roundOrdinal:number;targetedLineages:readonly LineageId[];preBlockers:readonly string[];postBlockers:readonly string[];preCount:number;postCount:number;preFingerprint:string;postFingerprint:string;commitReference:string|null}>`; grouping also uses validated owner/type/reference/contract semantic keys. Comparison is **same phase baseline + protocol**, and incomplete cycle proof BLOCKS.
 
 - [ ] **Step 1: Write RED table tests** — each of six: resolved regression, A→B→A oscillation, two-round same-lineage stall, repeated owner/type/reference/contract conflict, unchanged landscape, two consecutive non-improving counts; assert all fired reasons and normative primary order.
