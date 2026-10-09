@@ -1,0 +1,402 @@
+# Justice v4 Review Gate Contract Conformance Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Deliver a restart-safe, fail-closed Justice v4 `/justice-review-gate` whose durable authority, finite remediation budget, semantic resolution, Requirements selection, completed approval and production integration satisfy ratified Issue #297/#310 without importing v5 architecture.
+
+**Architecture:** Preserve existing v4 coordinator, Linux native provider and OpenCode/Superpowers/OmO integration. Introduce deterministic Core admission/transition planners, protected workspace-wide scope witness, versioned causally linked JSONL evidence, verified legacy bridge and exact Git operation recovery. A new completed successor *always* receives a fresh Design Gate; original Requirements V2 admission provenance remains immutable while current authority advances only through verified durable events.
+
+**Tech Stack:** TypeScript, Bun, Vitest, OpenCode v1.18.x, Node Git process APIs with `--literal-pathspecs`, existing Linux x86_64/glibc native N-API addon and Git; devcontainer from `.devcontainer/devcontainer.json`.
+
+**Spec:** `docs/superpowers/specs/2026-10-09-review-gate-v4-contract-conformance-design.md` at commit `b573874f426e221eb50bf242a3f27662efb18842`, Design blob `fe072b444534b1cc58f1c5b9d2e60494f66158c3`. **Ratified upstream:** `SPEC.md` §4.1c, #297 and #310 at amendment commit `5b33b79bb27a26c00e79f950c7211a625b4727bf` (DEP-01 RATIFIED).
+
+**Planning status:** PLAN DRAFT / REVIEW REQUIRED. This document grants **no** permission to edit production code, execute tasks, deploy, merge or claim Implementation Ready. Human review/approval of this Implementation Plan and an independent implementation authorization are required before Task 1.
+
+## Global Constraints
+
+- **Authority:** Justice Core owns admission, budgets, transitions, resolution and CLEAR; agent assertions, hook session maps, partial event replays and unverified cache state do not.
+- **Budget:** at most **Design 5, Plan 3** remediation rounds *per generation*. Crash, SUSPENDED resume, NC1 reentry, changed path pair, legacy migration or `--retry 0..10` never replenish spent rounds.
+- **Admission:** validate independently protected workspace-wide continuity before new scope enrollment; only one verified immediate **completed** predecessor permits a successor; even Plan-only change triggers a **fresh Design Gate**. No `DESIGN_CLEAR_INHERITED` event for new v4 Gates.
+- **Persistence:** writer-sharded `.justice/review-gates/events/<reviewScopeId>/<gateId>/<writerId>.jsonl`, typed/versioned causal events with an independently durable scope frontier; schema-policy max **64 KiB UTF-8/event**, **256-byte ID**, **4096-byte canonical path**, **128 refs/event**. No prompts, raw worker results, secrets or content bodies in the ledger.
+- **Scope witness:** separate OS-protected host-state security boundary with verified monotone publication and fsync properties. Do **not** claim whole-volume/root/adversary-with-both-writes rollback protection. Missing/untrusted witness => BLOCK.
+- **Legacy:** never mutate `<gateId>/events.jsonl`, `dispatches.jsonl` or original recovery objects. Only independently anchored, provably complete authority can pass verified bridge; otherwise preserve and BLOCK.
+- **Requirements:** optional `--requirements <path>` or exactly one valid Design preamble marker `<!-- justice-review-gate:requirements="docs/requirements/feature.md" -->`. Separate, committed Git-tracked Requirements file. New `RequirementsResolutionV2.source = "explicit" | "design_declared_reference"`; historical V1 remains versioned, `auto_design_reference` is **not** new authority.
+- **Historical/current binding:** `committedBaselineOid` is immutable admission Git commit H0. Current Requirements/Design and declaration are separately durably revalidated/rebased; unrelated HEAD changes do not cause drift. Completed approval references **both** historical V2 and verified current-effective authority.
+- **Review/commit:** mandatory `BASELINE_ADMISSION`, `POST_REMEDIATION_SELF_REVIEW`, `PRE_CLEAR`; self-review discoveries reconciled before commit; verified exact-artifact Git success before lineage resolution; only one predeclared target. No Requirements/prod/test/CI edits by remediator.
+- **NC1:** evaluate all six rules in normative priority, upstream precedence before stale revalidation before NC1 before round exhaustion. NC1 resume requires both eligible committed change and independently verified `MATERIAL_PROGRESS`.
+- **Compatibility:** all caller-specified string `subagent_type` values including `"general"` are caller-owned; preserve `PlanTask.rawBody`, `task-N` isolation, actual `ses_...` continuations and implementation lock. Shared language-info-aware Markdown fence scanner.
+- **Verification:** run in configured devcontainer as `remoteUser`. **Before declaring EACH task complete**, run all four fresh: `bun run test`, `bun run typecheck`, `bun run lint`, `bun run build`, in addition to its targeted RED/GREEN command. Report failures, warnings and skipped tests separately. Rust/native verification as applicable. `BLOCKED`, `SKIPPED`, `NOT RUN` never count as PASS.
+- **No automatic implementation:** Task steps are instructions for a future approved worker; no source/test/config changes during writing-plans. Do not reopen ratified DEP-01 or silently amend upstream contracts. Any normative incompatibility is a new explicit approval dependency.
+
+## Review Focus
+
+The following five user-visible input/failure classes have explicit owner tests in Tasks 2, 5, 7, 10, 15 and 16:
+
+1. User passes `--requirements` and an agreeing **or disagreeing** Design marker; identical selectors succeed, disagreement blocks before `GATE_CREATED` (Tasks 2–3).
+2. User relabels Design/Plan to change scope ID while an unfinished Gate consumed rounds; workspace-wide witness refuses new-budget enrollment (Tasks 5 and 7).
+3. Process crashes between a real single-target Git commit and authority revalidation; same commit/round is recovered, original V2 intact (Tasks 10 and 15).
+4. Design remediation moves an otherwise valid marker within preamble; fresh D1 proof succeeds while a changed target path blocks commit (Task 15).
+5. Unrelated Git HEAD-only change after completed approval must not create a successor, whereas a stale Requirements blob or selector must block approval (Task 16).
+
+## File/Responsibility Map
+
+- **Pure Core additions:** `src/core/markdown-fence-scanner.ts`; `src/core/review-gate/{requirements-resolution,event-schema,admission,cycle-evidence,reentry,requirements-authority}.ts`.
+- **Pure Core focused modifications:** `src/core/{review-gate-command,review-gate-types,plan-parser,dependency-analyzer}.ts`; `src/core/review-gate/{projection,orchestrator,lineage,convergence,deterministic-validation,resume-cursor,types}.ts`.
+- **Runtime additions:** `src/runtime/review-gate-{requirements,scope-witness,scope-admission,legacy-bridge}.ts`.
+- **Runtime focused modifications:** `src/runtime/review-gate-{event-store,lock-manager,recovery-store,git,approval,history,protocol,coordinator}.ts`; `src/runtime/linux-review-gate-provider.ts` only if required by proven native capability interface.
+- **Hook/adapter:** `src/hooks/plan-bridge.ts` and final host adapter where existing wire normalization is implemented.
+- **Tests:** exact matching tests under `tests/core`, `tests/core/review-gate`, `tests/runtime`, `tests/hooks`, `tests/integration`. Prefer extending existing test files and adding focused files for new modules. Actual host opt-in: `tests/integration/review-artifact-linux-host-e2e.test.ts`, `tests/runtime/linux-review-gate-provider-e2e.test.ts`.
+- **Scope boundary:** do not alter Design Spec or ratified `SPEC.md` as part of implementation without separate review; no bulk coordinator rewrite, host-independent Core I/O, or generalized v5 framework.
+
+---
+
+### Task 1: Shared Markdown Fence Grammar
+
+**Files:**
+- Create: `src/core/markdown-fence-scanner.ts`
+- Modify: `src/core/plan-parser.ts`, `src/core/dependency-analyzer.ts`
+- Test: `tests/core/plan-parser.test.ts`, `tests/core/dependency-analyzer.test.ts` (create parser test if absent)
+
+**Interfaces:**
+- Produces: `scanMarkdownFenceLines(text: string): ReadonlyArray<{ line: string; lineNumber: number; insideFence: boolean }>`; both consumers use this scanner.
+- Contract: 0..3 spaces, backtick/tilde fences, valid language info, matching close length/character, LF/CRLF; preserve original raw task body.
+
+- [ ] **Step 1: Write RED tests** — `it("ignores language-fenced Interfaces and task headings")`: a fenced `**Interfaces:**` / `### Task 99` yields no dependency/task, but an unfenced exact `**Interfaces:**` still enforces sequential execution. Assert `PlanTask.rawBody` equals source slice.
+- [ ] **Step 2: Verify RED** — `bun run vitest run tests/core/dependency-analyzer.test.ts tests/core/plan-parser.test.ts`; expect at least the new assertions FAIL.
+- [ ] **Step 3: Implement scanner and replace both independent fence detectors** — reuse one typed `scanMarkdownFenceLines` result, never normalize PlanTask body or change task identity.
+- [ ] **Step 4: Verify GREEN** — same focused command, then all four global checks; expect 0 failing tests, type errors or lint errors.
+- [ ] **Step 5: Commit** — `git add src/core/markdown-fence-scanner.ts src/core/plan-parser.ts src/core/dependency-analyzer.ts tests/core/plan-parser.test.ts tests/core/dependency-analyzer.test.ts && git commit -m "fix: share review plan Markdown fence grammar"`.
+
+### Task 2: Requirements Public CLI and Declaration Parser
+
+**Files:**
+- Create: `src/core/review-gate/requirements-resolution.ts`, `tests/core/review-gate/requirements-resolution.test.ts`
+- Modify: `src/core/review-gate-command.ts`
+- Test: `tests/core/review-gate-command.test.ts`, new requirements-resolution test
+
+**Interfaces:**
+- Produces: `ReviewGateRequest.requirementsPath?: string`; `parseDesignRequirementsDeclaration(design: string): { kind: "none" } | { kind: "selected"; canonicalPath: string; line: number; markerDigest: string } | { kind: "invalid"; reason: string }`; `selectRequirementsSource(input: { explicitPath?: string; declaration: ReturnType<typeof parseDesignRequirementsDeclaration> }): {kind:"selected";source:"explicit"|"design_declared_reference";canonicalPath:string}|{kind:"blocked";reason:"REQUIREMENTS_RESOLUTION_REQUIRED"}`.
+- Consumes: `scanMarkdownFenceLines` (Task 1); existing `normalizeCommandArtifactPath`.
+
+- [ ] **Step 1: Write RED tests** — valid `--requirements docs/r.md`, valid marker `<!-- justice-review-gate:requirements="docs/r.md" -->`, zero marker with CLI, both equal, both conflict, two same markers, late/fenced marker, issue URL prose, malformed/duplicate flags. Assert exact discriminants; `--retry` remains no-op.
+- [ ] **Step 2: Verify RED** — `bun run vitest run tests/core/review-gate-command.test.ts tests/core/review-gate/requirements-resolution.test.ts`; expect new assertions FAIL.
+- [ ] **Step 3: Implement parser/selector** — marker must be exactly one unfenced preamble comment (first 64 physical lines before first unfenced H2/H3); case/punctuation fixed, path ASCII regex `[A-Za-z0-9][A-Za-z0-9._/-]*\.md`, max 4096 bytes; reject malformed reserved marker even when CLI supplied.
+- [ ] **Step 4: Verify GREEN** — focused tests plus four global commands; assert no behavior regression for existing two-required-flags and `@path`.
+- [ ] **Step 5: Commit** — `git add src/core/review-gate-command.ts src/core/review-gate/requirements-resolution.ts tests/core/review-gate-command.test.ts tests/core/review-gate/requirements-resolution.test.ts && git commit -m "feat: specify Requirements command and Design reference parser"`.
+
+### Task 3: Independent Git-tracked Requirements Resolver and V2
+
+**Files:**
+- Create: `src/runtime/review-gate-requirements.ts`, `tests/runtime/review-gate-requirements.test.ts`
+- Modify: `src/core/review-gate-types.ts`, `src/core/review-gate/identity.ts`
+- Test: `tests/core/review-gate-types.test.ts`, new runtime test
+
+**Interfaces:**
+- Produces: `RequirementsResolutionV2` with `schemaVersion:2`, `source:"explicit"|"design_declared_reference"`, `canonicalPath,digest,gitMode,requirementsGitBlobOid,committedBaselineOid,workspaceIdentity,selectionEvidence`; `resolveRequirementsForAdmission(input: {workspaceRoot:string;designPath:string;designBytes:Uint8Array;explicitPath?:string}): Promise<RequirementsResolutionV2>`.
+- Historical `RequirementsResolutionV1` is distinct and unchanged; `committedBaselineOid` is **admission HEAD H0 Git commit OID** not future HEAD equality.
+
+- [ ] **Step 1: Write RED tests** — temporary Git repository with clean committed Requirements, absent/untracked/dirty/symlink/alias/`../`/wrong mode/URL paths, Design marker and explicit agreement; assert returned R0 bytes SHA-256/Git blob/mode/H0, no Design-as-Requirements fallback.
+- [ ] **Step 2: Verify RED** — `bun run vitest run tests/runtime/review-gate-requirements.test.ts tests/core/review-gate-types.test.ts`; expect RED for V2 behavior.
+- [ ] **Step 3: Implement resolver using literal Git queries and native safe file reads** — compare same committed snapshot and worktree; never shell-execute arguments or treat external Issue URL as artifact; emit `REQUIREMENTS_RESOLUTION_REQUIRED` before gate create on failed authority.
+- [ ] **Step 4: Verify GREEN** — focused tests and four global commands. Confirm V1 stored events can still be parsed by historical type but not mistaken for new V2.
+- [ ] **Step 5: Commit** — `git add src/runtime/review-gate-requirements.ts src/core/review-gate-types.ts src/core/review-gate/identity.ts tests/runtime/review-gate-requirements.test.ts tests/core/review-gate-types.test.ts && git commit -m "feat: resolve independently committed Requirements with V2 provenance"`.
+
+### Task 4: Versioned Typed Event Schema and Protocol Authority
+
+**Files:**
+- Create: `src/core/review-gate/event-schema.ts`, `tests/core/review-gate/event-schema.test.ts`
+- Modify: `src/core/review-gate/types.ts`, `src/core/review-gate-types.ts`, `src/runtime/review-gate-protocol.ts`
+- Test: `tests/runtime/review-gate-protocol.test.ts`
+
+**Interfaces:**
+- Produces: `validateReviewGateEventRecord(record: unknown): VerifiedReviewGateEvent`; `encodeReviewGateEventRecord(event: VerifiedReviewGateEvent): string`; `VerifiedReviewGateEvent` is a branded, read-only versioned causal record with event-specific bounded payload.
+- Requirement: schema/version discrimination for historical V1 and new V2; `requirementsResolutionPolicyVersion` and historical/current authority policy enter Design and global fingerprints; payload limits **64KiB/256B/4096B/128 refs**.
+
+- [ ] **Step 1: Write RED tests** — reject event with raw worker text, secret, unsupported enum, overlimit payload, duplicate/conflicting ID or fabricated V2 source; preserve historical V1 type on decoding; assert fingerprint changes when Requirements policy/version changes but not provider identity.
+- [ ] **Step 2: Verify RED** — `bun run vitest run tests/core/review-gate/event-schema.test.ts tests/runtime/review-gate-protocol.test.ts`; expect new schema tests FAIL.
+- [ ] **Step 3: Implement bounded deterministic event codec and descriptor** — event-specific field allowlists, causal pointers, canonical encoding, strict versioned decoding; forbid authority-bearing silent redaction and replay-only relaxed checks.
+- [ ] **Step 4: Verify GREEN** — focused tests plus all four global checks; no persisted raw prompts/absolute paths.
+- [ ] **Step 5: Commit** — `git add src/core/review-gate/event-schema.ts src/core/review-gate/types.ts src/core/review-gate-types.ts src/runtime/review-gate-protocol.ts tests/core/review-gate/event-schema.test.ts tests/runtime/review-gate-protocol.test.ts && git commit -m "feat: enforce typed Review Gate event and protocol contracts"`.
+
+### Task 5: Trusted Workspace-wide Witness and Security Prerequisite
+
+**Files:**
+- Create: `src/runtime/review-gate-scope-witness.ts`, `tests/runtime/review-gate-scope-witness.test.ts`
+- Modify: `src/runtime/review-gate-lock-manager.ts`
+- Test: `tests/runtime/review-gate-lock-manager.test.ts`
+
+**Interfaces:**
+- Produces: `ReviewGateScopeWitness` with `readWorkspaceScopeFrontier(workspaceIdentity:string): Promise<VerifiedScopeFrontier>`, `compareAndAdvance(input:{workspaceIdentity:string;expectedFrontier:string;newFrontier:VerifiedScopeFrontier;operationId:string}):Promise<"advanced"|"already_committed">`, `acquireWorkspaceAdmissionGuard(workspaceIdentity:string):Promise<ReviewGateLockHandle|"occupied">`.
+- Registry is an **independently protected host-state** location outside mutable workspace history; reject insecure/missing deployment trust configuration rather than fallback to same-writer directories.
+
+- [ ] **Step 1: Write RED tests** — missing/untrusted anchor BLOCK; malicious removal of Gate directory/index cannot appear as virgin workspace; concurrent first enrollment yields one winner; incomplete frontier update after crash is recoverable or BLOCK; documented both-state rollback cannot be claimed detected.
+- [ ] **Step 2: Verify RED** — `bun run vitest run tests/runtime/review-gate-scope-witness.test.ts tests/runtime/review-gate-lock-manager.test.ts`; expect new protection tests FAIL.
+- [ ] **Step 3: Implement native-lock/serialized compare-and-swap frontier and durable publication** — explicit deployment config and validated permissions/isolated identity, fsync file+parent, immutable enrollment and expected shard heads. No unprotected “demo mode” in production.
+- [ ] **Step 4: Verify GREEN** — focused tests, native capability checks where required, four global commands; **DEP-02 deployment proof remains PENDING** until isolation and rollback threat assumptions are demonstrated on target host.
+- [ ] **Step 5: Commit** — `git add src/runtime/review-gate-scope-witness.ts src/runtime/review-gate-lock-manager.ts tests/runtime/review-gate-scope-witness.test.ts tests/runtime/review-gate-lock-manager.test.ts && git commit -m "feat: anchor workspace-wide Review Gate scope frontiers"`.
+
+### Task 6: Versioned Causal JSONL Writer Shards and Read Validation
+
+**Files:**
+- Modify: `src/runtime/review-gate-event-store.ts`, `src/runtime/review-gate-recovery-store.ts`
+- Test: `tests/runtime/review-gate-event-store.test.ts`, `tests/runtime/review-gate-recovery-store.test.ts`
+
+**Interfaces:**
+- Preserve `createReviewGateEventStore(rootDir:string):ReviewGateEventStore`, but extend verified reads/append to consume Task 4 schema and Task 5 trusted witness; consumers must receive only fully anchored causal history. Make `scope-index.json` a non-authoritative cache.
+- New layout: `.justice/review-gates/events/<reviewScopeId>/<gateId>/<writerId>.jsonl`; legacy `events.jsonl` remains immutable read input (Task 8).
+
+- [ ] **Step 1: Write RED tests** — append under writer shards, verify sequence/hash/causal parents/frontier, disallow corrupt/duplicate/truncated/unsupported records, orphan Gate discovery, replay cache tampering, wrong witness, partially written unanchored tail and rollback; prove read-only history does not mutate any file.
+- [ ] **Step 2: Verify RED** — `bun run vitest run tests/runtime/review-gate-event-store.test.ts tests/runtime/review-gate-recovery-store.test.ts`; expect new cases FAIL.
+- [ ] **Step 3: Implement strict dual-read append/replay** — append+sync shard before witness CAS; ack only after anchored frontier; recognize trusted prepared-tail recoverability, otherwise BLOCK. Keep legacy writes disabled and never reset history from lost index.
+- [ ] **Step 4: Verify GREEN** — tests and four global commands; preserve all historical records without pruning/compaction.
+- [ ] **Step 5: Commit** — `git add src/runtime/review-gate-event-store.ts src/runtime/review-gate-recovery-store.ts tests/runtime/review-gate-event-store.test.ts tests/runtime/review-gate-recovery-store.test.ts && git commit -m "feat: persist causally verified Review Gate writer shards"`.
+
+### Task 7: Pure Generation Admission and Atomic Scope Selection
+
+**Files:**
+- Create: `src/core/review-gate/admission.ts`, `src/runtime/review-gate-scope-admission.ts`, `tests/core/review-gate/admission.test.ts`, `tests/runtime/review-gate-scope-admission.test.ts`
+- Modify: `src/core/review-gate/identity.ts`
+- Test: `tests/core/review-gate-identity.test.ts`
+
+**Interfaces:**
+- Produces: `planReviewGateAdmission(input: VerifiedAdmissionSnapshot): AdmissionDecision` with `RESUME | REENTRY_CANDIDATE | REVALIDATE_OR_BLOCK | REUSE_COMPLETED | CREATE_SUCCESSOR | CREATE_GENESIS | BLOCK`; `admitReviewGateScope(input:ScopeAdmissionRequest):Promise<AdmissionDecision>` holds workspace guard then scope/Gate locks.
+- `VerifiedAdmissionSnapshot` includes workspace-wide membership, unique tip, exact Requirements/Design/Plan modes/digests and global/phase protocol, projected generation/rounds and suspension reason.
+
+- [ ] **Step 1: Write RED tests** — one verified completed tip/changed Plan → new generation with predecessor and fresh Design; active/suspended drift → **no successor**; Design/Plan path alias to new scope ID → BLOCK; exact completed match → read-only reuse; multiple tips/corruption/index loss → BLOCK.
+- [ ] **Step 2: Verify RED** — `bun run vitest run tests/core/review-gate/admission.test.ts tests/runtime/review-gate-scope-admission.test.ts`; expect new cases FAIL.
+- [ ] **Step 3: Implement pure selection and lock-owned admission** — under workspace continuity guard and scope lock, independently scan witness/member shards, verify bindings again, then persist genesis/successor or select one existing Gate. Do not confuse NC1 suspension with ordinary resume.
+- [ ] **Step 4: Verify GREEN** — focused tests and four global commands; no double Gate creation under concurrent admission.
+- [ ] **Step 5: Commit** — `git add src/core/review-gate/admission.ts src/runtime/review-gate-scope-admission.ts src/core/review-gate/identity.ts tests/core/review-gate/admission.test.ts tests/runtime/review-gate-scope-admission.test.ts tests/core/review-gate-identity.test.ts && git commit -m "feat: admit Review Gates from verified workspace continuity"`.
+
+### Task 8: Immutable Legacy Snapshot and Atomic Continuation Bridge
+
+**Files:**
+- Create: `src/runtime/review-gate-legacy-bridge.ts`, `tests/runtime/review-gate-legacy-bridge.test.ts`
+- Modify: `src/core/review-gate/legacy-execution.ts`
+- Test: `tests/integration/review-gate-restart-recovery.test.ts`
+
+**Interfaces:**
+- Produces: `verifyLegacyContinuation(input:LegacyGateSnapshot): LegacyVerificationResult` with `VERIFIED | BLOCK`; `publishVerifiedLegacyBridge(input:VerifiedLegacyGate, store:ReviewGateEventStore):Promise<"committed"|"already_committed">`.
+- Evidence: independent **pre-existing** frontier, immutable snapshot digest, exact epoch/rounds/dispatch/recovery/commits/protocol/scope/Requirements provenance and idempotent `LEGACY_BRIDGE_PREPARED` → `LEGACY_BRIDGE_COMMITTED`.
+
+- [ ] **Step 1: Write RED tests** — structurally well-formed but unanchored legacy history BLOCK; ambiguous partial round/commit BLOCK; old V1 `auto_design_reference` without genuinely independent original Requirements proof BLOCK; valid old `DESIGN_CLEAR_INHERITED` can be read/validated without becoming new authority; bridge crash does not double rounds.
+- [ ] **Step 2: Verify RED** — `bun run vitest run tests/runtime/review-gate-legacy-bridge.test.ts tests/integration/review-gate-restart-recovery.test.ts`; expect newly added cases FAIL.
+- [ ] **Step 3: Implement immutable verification and single-witness bridge commit** — NEVER rewrite old JSONL or invent lineage/epoch/round/Requirements provenance; fail closed when complete authority is not provable.
+- [ ] **Step 4: Verify GREEN** — focused tests and four global commands. Preserve **DEP-03 PROOF PENDING** for real legacy corpus until evidence actually exists.
+- [ ] **Step 5: Commit** — `git add src/runtime/review-gate-legacy-bridge.ts src/core/review-gate/legacy-execution.ts tests/runtime/review-gate-legacy-bridge.test.ts tests/integration/review-gate-restart-recovery.test.ts && git commit -m "feat: bridge only independently verified legacy Review Gates"`.
+
+### Task 9: Pure Projection, Round Consumption and Resume Cursor
+
+**Files:**
+- Modify: `src/core/review-gate/projection.ts`, `src/core/review-gate/resume-cursor.ts`, `src/core/review-gate/types.ts`
+- Test: `tests/core/review-gate/projection.test.ts`, `tests/core/review-gate-projection.test.ts`, new `tests/core/review-gate/resume-cursor.test.ts`
+
+**Interfaces:**
+- Preserve `projectReviewGate(events: readonly ReviewGateEvent[]): ReviewGateProjection`; extend typed verified events with `REMEDIATION_STARTED`, actual epoch/round projection, suspended reason and prepared operation identity. `deriveResumeCursor` must distinguish normal crash, NC1, exhaustion, upstream reopen, invalidation.
+
+- [ ] **Step 1: Write RED tests** — Design ordinal 1..5, Plan 1..3; duplicate conflicting ordinal BLOCK; crash resume same epoch/round; NC1 → `await_material_progress`; exhausted → `await_external_change`; Design CLEAR cannot be inherited from prior generation.
+- [ ] **Step 2: Verify RED** — `bun run vitest run tests/core/review-gate/projection.test.ts tests/core/review-gate-projection.test.ts tests/core/review-gate/resume-cursor.test.ts`; expect new state assertions FAIL.
+- [ ] **Step 3: Implement strict pure event application and deterministic cursor** — count spent round from durable start *before mutation*; only valid suspension transition creates new epoch; forbid generic SUSPENDED resume for NC1/exhaustion.
+- [ ] **Step 4: Verify GREEN** — targeted tests and four global commands; replay same events twice must produce same projection.
+- [ ] **Step 5: Commit** — `git add src/core/review-gate/projection.ts src/core/review-gate/resume-cursor.ts src/core/review-gate/types.ts tests/core/review-gate/projection.test.ts tests/core/review-gate-projection.test.ts tests/core/review-gate/resume-cursor.test.ts && git commit -m "feat: project durable budgets and suspension cursors"`.
+
+### Task 10: Exact Git Commit Intent, Recovery and Resolution Barrier
+
+**Files:**
+- Modify: `src/runtime/review-gate-git.ts`, `src/runtime/review-gate-recovery-store.ts`, `src/core/review-gate/capabilities.ts`
+- Test: `tests/runtime/review-gate-git.test.ts`, `tests/integration/review-gate-restart-recovery.test.ts`
+
+**Interfaces:**
+- Reuse `ReviewGateGit.prepareCommit(input):Promise<ReviewCommitPreparedPayload>` and `executePreparedCommit(payload):Promise<VerifiedReviewCommit>`.
+- Produces complete `REVIEW_COMMIT_PREPARED` → verified `REMEDIATION_COMMIT_SUCCEEDED` → `LINEAGE_RESOLUTION_COMMITTED`; targets exact one literal artifact path/blob/mode/parent and operation ID.
+
+- [ ] **Step 1: Write RED tests** — crash before/after commit, changed HEAD, unrelated staged files and executable mode owner-bit (0655 → 100644), commit failure, newly discovered blocker, exact post-image recovery; assert only one commit and no resolution before verified commit.
+- [ ] **Step 2: Verify RED** — `bun run vitest run tests/runtime/review-gate-git.test.ts tests/integration/review-gate-restart-recovery.test.ts`; expect new assertions FAIL.
+- [ ] **Step 3: Implement commit intent recovery barrier** — durable prepared operation required before native/Git side effect; replay matches expected parent, sole path, SHA/blob/mode and never commits twice. Preserve unrelated index/worktree state.
+- [ ] **Step 4: Verify GREEN** — focused tests and four global commands. Any unresolved Git source/destination conflict must BLOCK, not overwrite or reattempt blindly.
+- [ ] **Step 5: Commit** — `git add src/runtime/review-gate-git.ts src/runtime/review-gate-recovery-store.ts src/core/review-gate/capabilities.ts tests/runtime/review-gate-git.test.ts tests/integration/review-gate-restart-recovery.test.ts && git commit -m "feat: recover exact-artifact Review Gate commits idempotently"`.
+
+### Task 11: Semantic Occurrence/Reconciliation and Commit-bound Lineages
+
+**Files:**
+- Modify: `src/core/review-gate/lineage.ts`, `src/core/review-gate/agent-protocol.ts`
+- Test: `tests/core/review-gate/lineage.test.ts`, `tests/core/review-gate/agent-protocol.test.ts`
+
+**Interfaces:**
+- Preserve `reconcileFindingBatch` / `buildLineageResolution`; store generation-local immutable basis `(violationType, governingReference, semanticLocation, violatedContract, ownerScope)`, occurrence IDs, independently validated relations and commit-bound resolutions.
+- For independently verified predecessor semantic relation, successor **MUST** store `(predecessorGateId, predecessorLineageId)` as historic durable link, without inheriting predecessor resolution.
+
+- [ ] **Step 1: Write RED tests** — duplicate observation collapses to one blocker; invalid/minor does not automatically block; `STILL_PRESENT` plus discovered EXISTING conflict; new upstream blocker prohibits commit; resolved predecessor is not successor resolution; independently verified relation requires durable link, unverified does not invent one.
+- [ ] **Step 2: Verify RED** — `bun run vitest run tests/core/review-gate/lineage.test.ts tests/core/review-gate/agent-protocol.test.ts`; expect new authority tests FAIL.
+- [ ] **Step 3: Implement durable occurrence/proof relations and commit-bound transitions** — final lineage resolution references exact verified Git commit; no model-originated lineage ID/source truth.
+- [ ] **Step 4: Verify GREEN** — focused tests and four global commands; historic lineage and current generation authority remain separate.
+- [ ] **Step 5: Commit** — `git add src/core/review-gate/lineage.ts src/core/review-gate/agent-protocol.ts tests/core/review-gate/lineage.test.ts tests/core/review-gate/agent-protocol.test.ts && git commit -m "feat: validate semantic lineage and commit-bound resolution"`.
+
+### Task 12: Durable Cycle Evidence and Six-rule NC1
+
+**Files:**
+- Create: `src/core/review-gate/cycle-evidence.ts`, `tests/core/review-gate/cycle-evidence.test.ts`
+- Modify: `src/core/review-gate/convergence.ts`
+- Test: `tests/core/review-gate/convergence.test.ts`
+
+**Interfaces:**
+- Produces: `evaluateNonConvergenceCycles(cycles: readonly VerifiedSemanticCycle[]): {kind:"convergent"}|{kind:"non_convergent";primaryReason:NonConvergenceKind;allReasons:readonly NonConvergenceKind[]}`.
+- Comparison is **same phase baseline + protocol**, with durable pre/post blocking fingerprints, counts, targets, commit-bound resolution and semantic contract-conflict grouping.
+
+- [ ] **Step 1: Write RED table tests** — each of six: resolved regression, A→B→A oscillation, two-round same-lineage stall, repeated owner/type/reference/contract conflict, unchanged landscape, two consecutive non-improving counts; assert all fired reasons and normative primary order.
+- [ ] **Step 2: Verify RED** — `bun run vitest run tests/core/review-gate/cycle-evidence.test.ts tests/core/review-gate/convergence.test.ts`; expect predicate tests FAIL.
+- [ ] **Step 3: Implement evidence builder/evaluator** — incompletely pinned cycle yields INDETERMINATE/BLOCK, not convergent. Disposition is upstream → stale lineage revalidation → NC1 → exhaustion → remediation → review/CLEAR.
+- [ ] **Step 4: Verify GREEN** — focused tests and four global checks; one plateau must not imply two-round stall.
+- [ ] **Step 5: Commit** — `git add src/core/review-gate/cycle-evidence.ts src/core/review-gate/convergence.ts tests/core/review-gate/cycle-evidence.test.ts tests/core/review-gate/convergence.test.ts && git commit -m "feat: detect semantic non-convergence from durable cycles"`.
+
+### Task 13: Stage-aware Validation and Persisted Evidence Reuse
+
+**Files:**
+- Modify: `src/core/review-gate/deterministic-validation.ts`, `src/runtime/review-gate-protocol.ts`
+- Test: `tests/core/review-gate/deterministic-validation.test.ts`, `tests/runtime/review-gate-protocol.test.ts`
+
+**Interfaces:**
+- Preserve `scheduleMandatoryValidations` and `computeValidationCacheKey`; add typed durable `DETERMINISTIC_VALIDATION_COMPLETED` and `DETERMINISTIC_VALIDATION_REUSED` references to original checked evidence.
+- Stage names are **`BASELINE_ADMISSION`, `POST_REMEDIATION_SELF_REVIEW`, `PRE_CLEAR`**. Cache binds validator/contract/schema, phase, declared inputs and executable/runtime identity.
+
+- [ ] **Step 1: Write RED tests** — baseline admission failing prevents dispatch and finding; POST FAIL triggers DVF1 while fresh self-review still happens, cannot commit; PRE_CLEAR invalid/missing evidence never CLEAR; same exact PASS reuse, semantic FAIL reuse not accepted as PASS; environment change under one operation BLOCK.
+- [ ] **Step 2: Verify RED** — `bun run vitest run tests/core/review-gate/deterministic-validation.test.ts tests/runtime/review-gate-protocol.test.ts`; expect stage/evidence cases FAIL.
+- [ ] **Step 3: Implement stage-aware pure planner and durable reuse reference validation** — registry owns rule severity/owner; dedupe by `(validationEventId,ruleId)`; never cache execution failure as semantic truth.
+- [ ] **Step 4: Verify GREEN** — focused tests and four global checks; protocol fingerprint changes when stage/rule semantics change.
+- [ ] **Step 5: Commit** — `git add src/core/review-gate/deterministic-validation.ts src/runtime/review-gate-protocol.ts tests/core/review-gate/deterministic-validation.test.ts tests/runtime/review-gate-protocol.test.ts && git commit -m "feat: enforce all mandatory Review Gate validation stages"`.
+
+### Task 14: Two-Key Reentry and Phase Reopen State Machine
+
+**Files:**
+- Create: `src/core/review-gate/reentry.ts`, `tests/core/review-gate/reentry.test.ts`
+- Modify: `src/core/review-gate/orchestrator.ts`, `src/core/review-gate/resume-cursor.ts`
+- Test: `tests/core/review-gate/orchestrator.test.ts`
+
+**Interfaces:**
+- Produces: `planNonConvergenceReentry(input: VerifiedReentryInput): ReentryDecision` with `STAY_SUSPENDED | REENTER_SAME_GENERATION | REQUIREMENTS_REOPEN_REQUIRED | DESIGN_REOPEN_REQUIRED | BLOCK`.
+- Requires independent verified eligible **clean committed** change and independently validated `NON_CONVERGENCE_REENTRY_VALIDATION` outcome `MATERIAL_PROGRESS`; cannot allocate new budget/generation.
+
+- [ ] **Step 1: Write RED tests** — provider/model-only change, claimed progress without independent validator, invalid lineage reference, conflicting external Git context => no reentry; valid two-key returns same generation/remaining rounds; exhaustion permits external revalidation but no new remediation ordinal.
+- [ ] **Step 2: Verify RED** — `bun run vitest run tests/core/review-gate/reentry.test.ts tests/core/review-gate/orchestrator.test.ts`; expect new cases FAIL.
+- [ ] **Step 3: Implement planner/typed transition and OSC1 precedence** — Requirements reopen then Design reopen; invalid downstream Plan work restores exact approved bindings. NC1 stop cannot pass ordinary SUSPENDED.
+- [ ] **Step 4: Verify GREEN** — focused tests and four global checks; verify crash reentry idempotency via existing epoch/event state.
+- [ ] **Step 5: Commit** — `git add src/core/review-gate/reentry.ts src/core/review-gate/orchestrator.ts src/core/review-gate/resume-cursor.ts tests/core/review-gate/reentry.test.ts tests/core/review-gate/orchestrator.test.ts && git commit -m "feat: gate NC1 reentry on verified material progress"`.
+
+### Task 15: Immutable V2 Versus Current Requirements Authority
+
+**Files:**
+- Create: `src/core/review-gate/requirements-authority.ts`, `tests/core/review-gate/requirements-authority.test.ts`
+- Modify: `src/core/review-gate/projection.ts`, `src/runtime/review-gate-requirements.ts`, `src/core/review-gate-types.ts`
+- Test: `tests/integration/review-gate-restart-recovery.test.ts`, `tests/runtime/review-gate-requirements.test.ts`
+
+**Interfaces:**
+- Produces: `RequirementsAuthoritySnapshotV1`; `planRequirementsAuthorityTransition(input: {historical:RequirementsResolutionV2;effective:RequirementsAuthoritySnapshotV1;proposed:VerifiedRequirementsContext;origin:"justice_remediation_commit"|"external_committed_change"}): RequirementsAuthorityDecision`.
+- Durable event types: `REQUIREMENTS_AUTHORITY_REVALIDATED`, `REQUIREMENTS_AUTHORITY_REBASED`. New completed binding points to historical V2 **and** latest current-effective authority. Justice-origin revalidation references the verified prepared/committed operation; external-origin points to verified external change evidence.
+
+- [ ] **Step 1: Write RED tests** — H0/D0 marker M0, Justice commit H1/D1 marker M1/R0 => current R0 approval valid and H0 immutable; marker moved line within preamble accepted with new proof; deleted/duplicated/path-changed marker blocks commit; unrelated HEAD-only commit no drift; external R1 needs invalidation+rebase; restart after H1 before event recovers same intent.
+- [ ] **Step 2: Verify RED** — `bun run vitest run tests/core/review-gate/requirements-authority.test.ts tests/runtime/review-gate-requirements.test.ts tests/integration/review-gate-restart-recovery.test.ts`; expect new stale-authority tests FAIL.
+- [ ] **Step 3: Implement pure effective snapshot/transition planner and runtime verification** — verify historical H0 tree separately from current D1/R0 committed tree; never compare latest HEAD to `committedBaselineOid`, never overwrite V2, and never make self-review PASS a selector-change authorization.
+- [ ] **Step 4: Verify GREEN** — targeted tests and all four global commands; new authority proof is durably anchored before fresh review and CLEAR, including after crash.
+- [ ] **Step 5: Commit** — `git add src/core/review-gate/requirements-authority.ts src/core/review-gate/projection.ts src/core/review-gate-types.ts src/runtime/review-gate-requirements.ts tests/core/review-gate/requirements-authority.test.ts tests/runtime/review-gate-requirements.test.ts tests/integration/review-gate-restart-recovery.test.ts && git commit -m "feat: track current Requirements authority without rewriting provenance"`.
+
+### Task 16: Completed Successor and Read-only Approval Lookup
+
+**Files:**
+- Modify: `src/runtime/review-gate-approval.ts`, `src/runtime/review-gate-history.ts`, `src/core/review-gate/history.ts`
+- Test: `tests/runtime/review-gate-approval.test.ts`, `tests/runtime/review-gate-history.test.ts`, `tests/core/review-gate/history.test.ts`
+
+**Interfaces:**
+- Preserve `createReviewGateApprovalLookup(options).findCurrentCompletedApproval(planPath:string)`, `listCompletedApprovalCandidates(planPath:string)` and read-only history DTO contract.
+- Exact reuse checks current independently verified Requirements resolution, Design and Plan path/digest/Git mode, global protocol and unique completed tip; successor never emits `DESIGN_CLEAR_INHERITED`, runs Design fresh.
+
+- [ ] **Step 1: Write RED tests** — Plan-only successor fresh Design; missing/ambiguous immediate completed predecessor BLOCK; actual valid same-generation Plan resume preserves *its own* CLEAR; unrelated HEAD-only commit keeps completed lookup read-only approved; stale Requirements blob/marker or global protocol mismatch rejects completed lookup.
+- [ ] **Step 2: Verify RED** — `bun run vitest run tests/runtime/review-gate-approval.test.ts tests/runtime/review-gate-history.test.ts tests/core/review-gate/history.test.ts`; expect stale-authority cases FAIL.
+- [ ] **Step 3: Implement exact verified lookup and durable predecessor link** — read-only queries cannot initialize/mutate state or run validator/lock side effects; always compare historical V2 proof + latest verified effective authority against current artifacts.
+- [ ] **Step 4: Verify GREEN** — focused tests and four global checks; corrupt scope and unsupported history yield `history_unavailable`/identity conflict, never false approval.
+- [ ] **Step 5: Commit** — `git add src/runtime/review-gate-approval.ts src/runtime/review-gate-history.ts src/core/review-gate/history.ts tests/runtime/review-gate-approval.test.ts tests/runtime/review-gate-history.test.ts tests/core/review-gate/history.test.ts && git commit -m "feat: verify completed approval against current exact bindings"`.
+
+### Task 17: Caller-owned Routing and Host Adapter Compatibility
+
+**Files:**
+- Modify: `src/hooks/plan-bridge.ts`, final host adapter implementation where TaskTool wire is formed
+- Test: `tests/hooks/plan-bridge.test.ts`, `tests/hooks/plan-bridge-review-lock.test.ts`, `tests/integration/review-gate-adapter-orchestration.test.ts`
+
+**Interfaces:**
+- Preserve existing `normalizeTaskToolInputWithCategory`, `PlanBridge` and final OpenCode adapter wire shape.
+- `typeof subagent_type === "string"` always caller-owned (including `"general"`); when caller-owned, **no** final `category`; only genuine `ses_...` continuation may reach wire `task_id` (never `task-N`).
+
+- [ ] **Step 1: Write RED tests** — `subagent_type:"general"` bypasses Justice category and preserves object identity; arbitrary caller strings, absent type, `task-N`, real `ses_...`, field sanitization and implementation-not-authorized boundary; exact `PlanTask.rawBody` to worker.
+- [ ] **Step 2: Verify RED** — `bun run vitest run tests/hooks/plan-bridge.test.ts tests/hooks/plan-bridge-review-lock.test.ts tests/integration/review-gate-adapter-orchestration.test.ts`; expect the new `general` case FAIL.
+- [ ] **Step 3: Patch routing ownership and actual last-mile adapter** — preserve review locks, parent-session task correlation and foreground mandatory review. Do not change worker privileges or add unsupported model/provider/reasoning fields.
+- [ ] **Step 4: Verify GREEN** — focused tests and four global commands.
+- [ ] **Step 5: Commit** — stage **only** the actual touched `src/hooks/plan-bridge.ts`, host adapter file and matching three test files; `git commit -m "fix: preserve caller-owned Review Gate routing"`.
+
+### Task 18: Production Coordinator End-to-end Authority Wiring
+
+**Files:**
+- Modify: `src/runtime/review-gate-coordinator.ts`, `src/hooks/plan-bridge.ts`, `src/runtime/review-gate-protocol.ts`
+- Test: `tests/integration/review-gate-event-sourced-flow.test.ts`, `tests/integration/review-gate-restart-recovery.test.ts`, `tests/integration/review-gate-implementation-lock.test.ts`
+
+**Interfaces:**
+- Preserve `createReviewGateCoordinator`/`PlanBridge.setReviewGateCoordinator` public seams. Wire Tasks 2–16 into one runtime loop; coordinator owns I/O, mutation, locks, dispatch only; Core owns next-step decisions.
+- Admission path uses verified scope witness/ledger; all three mandatory validation stages must be enforced *in production*, and `REVIEW_COMMIT_PREPARED` is witnessed before Git; no authority from `session.materialProgressObserved` or legacy mutable flags.
+
+- [ ] **Step 1: Write RED production-path scenarios** — actual coordinator admission with real committed Requirements, Design/Plan validation, reviewer→validator→remediator→self-review discovery→commit→fresh review→Design CLEAR→Plan CLEAR→completed binding; restart at prepared and committed phases; NC1 reentry, exhaustion and upstream reopen.
+- [ ] **Step 2: Verify RED** — `bun run vitest run tests/integration/review-gate-event-sourced-flow.test.ts tests/integration/review-gate-restart-recovery.test.ts tests/integration/review-gate-implementation-lock.test.ts`; expect new authority cases FAIL.
+- [ ] **Step 3: Connect pure planners and durable services to coordinator** — remove competing mutable authority, reuse existing native/provider adapter; one phase at a time, exact binding per operation, preserve user command UX and `/justice-implement --approved` separate human authorization.
+- [ ] **Step 4: Verify GREEN** — focused tests + all four global commands. No mocked-only helper success counts as proof of coordinator-path acceptance.
+- [ ] **Step 5: Commit** — `git add src/runtime/review-gate-coordinator.ts src/hooks/plan-bridge.ts src/runtime/review-gate-protocol.ts tests/integration/review-gate-event-sourced-flow.test.ts tests/integration/review-gate-restart-recovery.test.ts tests/integration/review-gate-implementation-lock.test.ts && git commit -m "feat: integrate verified Review Gate authority into coordinator"`.
+
+### Task 19: G2 Devcontainer Production-path Negative Matrix
+
+**Files:**
+- Modify: `tests/integration/review-gate-adapter-orchestration.test.ts`, `tests/integration/review-gate-event-sourced-flow.test.ts`, `tests/integration/review-gate-restart-recovery.test.ts`
+- Test: `tests/integration/review-artifact-linux-e2e.test.ts`, `tests/runtime/linux-review-gate-provider-e2e.test.ts`
+- Artifact: capture test logs/coverage and dependency proof in implementation report **only after approved execution**; do not edit spec/plan during this task without review.
+
+**Interfaces:**
+- G2 acceptance consumes actual provider/coordinator/adapters and recorded durable evidence. Tests must inject process death or fsync/publication gap at each critical boundary, then reconstruct from disk; mocks are permitted only for non-security network worker transport, not for core commit/ledger/lock evidence.
+
+- [ ] **Step 1: Add RED integration matrix** — simultaneous scope first enrollment, path-pair budget bypass, missing/wrong witness, writer shard loss, invalid V1 bridge, NC1 six cases and precedence, self-review discovered blocker, fail-before-commit, post-commit crash, stale deterministic PASS, marker D0→D1/R0, stale approval, read-only history mutation, implementation authorization lock.
+- [ ] **Step 2: Verify RED** — `bun run vitest run tests/integration/review-gate-adapter-orchestration.test.ts tests/integration/review-gate-event-sourced-flow.test.ts tests/integration/review-gate-restart-recovery.test.ts tests/integration/review-artifact-linux-e2e.test.ts`; expect newly introduced failing coverage before fixes.
+- [ ] **Step 3: Fix only failures attributable to earlier contracts** — each fix gets its own RED/GREEN check and focused commit; **STOP** for upstream normative conflict, insecure witness on target deployment, or unverifiable required legacy authority. Never weaken tests to turn BLOCK into PASS.
+- [ ] **Step 4: Verify GREEN** — run focused G2 suite and fresh `bun run test`, `bun run typecheck`, `bun run lint`, `bun run build` from configured devcontainer remoteUser. Record exact commands/outcomes, any skipped test, DEP-02 trust-model proof and DEP-03 actual legacy corpus classification. Unproven proofs remain BLOCKED.
+- [ ] **Step 5: Commit** — stage only added/changed integration tests and implementation fixes reviewed against original task owners; `git commit -m "test: prove Review Gate authority through production integration"`.
+
+### Task 20: G3 Real-host E2E and Final Evidence-based Review
+
+**Files:**
+- Modify: `tests/integration/review-artifact-linux-host-e2e.test.ts`, `tests/runtime/linux-review-gate-provider-e2e.test.ts` (only add necessary live-host cases)
+- Reference: `.devcontainer/devcontainer.json`, `docs/agents/review-artifact-linux-provider.md`
+- Report: create `docs/reports/2026-10-09-issue-310-review-gate-v4-implementation-verification.md` **only after authorized implementation and actual runs**.
+
+**Interfaces:**
+- Supported host requirements: Linux x86_64/glibc native addon and supported OpenCode v1.18.x with Superpowers/OmO. `JUSTICE_RUN_LIVE_HOST_E2E=1` opt-in must actually execute; real provider, actual TaskTool routing/prompt and exact scoped Git mutation must be observed.
+- Acceptance state is `G1 PASS && G2 PASS && G3 PASS && DEP-02 DEPLOYMENT PROVEN && DEP-03 LEGACY PROOF OR EXPLICIT FAIL-CLOSED CLASSIFICATION && DEP-04 IMPLEMENTATION PROVEN`. No automatic `Implementation Ready` declaration.
+
+- [ ] **Step 1: Write live E2E cases** — valid command with Requirements source, caller `"general"`, controller→worker foreground dispatch, clean Design/Plan review/commit/approval path, crash/restart, unauthorized implementation rejected, sanctioned `--approved` path checks binding.
+- [ ] **Step 2: Execute actual opt-in native/host RED/GREEN** — `bun run build:native:review-artifact` if required, `JUSTICE_RUN_LIVE_HOST_E2E=1 bun run vitest run tests/integration/review-artifact-linux-host-e2e.test.ts tests/runtime/linux-review-gate-provider-e2e.test.ts`; expect real host execution, not skips or mere imports. If environment unavailable, record `BLOCKED`, **not** PASS.
+- [ ] **Step 3: Fix only tested integration defects under review** — preserve exact permission/read-only contract, bounded events and fail-closed semantics; do not change ratified Design or upstream scope without approval.
+- [ ] **Step 4: Verify complete acceptance** — all four global commands freshly, both real-host cases actually PASS, native capability security checks, exact source/test/protocol diff, DEP-02/03/04 proof artifacts. Report `SKIPPED/BLOCKED/NOT RUN` explicitly as blockers. Request an independent whole-branch code/security review before any completion claim.
+- [ ] **Step 5: Commit report and tests** — `git add tests/integration/review-artifact-linux-host-e2e.test.ts tests/runtime/linux-review-gate-provider-e2e.test.ts docs/reports/2026-10-09-issue-310-review-gate-v4-implementation-verification.md && git commit -m "test: record live Review Gate contract-conformance evidence"` **only when the report records actual results**.
+
+---
+
+## Task dependencies and PR review checkpoints
+
+- Tasks 1–4: parser/Requirements/protocol **pure contract foundation**; no new durable approval can be asserted until Tasks 5–8.
+- Tasks 5–9: anchored persistence, legacy read, admission and replay **durable authority foundation**; untrusted witness is always BLOCK.
+- Tasks 10–15: Git/recovery, semantic lifecycle, NC1, validation, reentry and Requirements current binding **safe Review Gate operation**.
+- Tasks 16–18: completed approval, adapter compatibility and **fully wired production coordinator**; no shadow state or mock-only completion.
+- Tasks 19–20: complete G2/G3 evidence, actual security boundary proof and independent whole-branch review. Do not create many tiny PRs: preferred review checkpoints are **foundation (Tasks 1–9)**, **authority engine (Tasks 10–15)** and **end-to-end integration (Tasks 16–20)**, each with no partial Implementation Ready claim. PR creation/merge still needs human authorization and adherence to normal branch policy.
+
+## Final Plan Self-review and Authorization Boundary
+
+- **Coverage mapping:** §1–3 Tasks 4–9,18; §4 Tasks 5,7,9,14,16; §5 Tasks 4–6,10; §6 Task 8; §7 Tasks 10–11,15,18; §8 Task 12; §9 Tasks 13–14; §10.1 Task 16; §10.2 Tasks 2–4,15; §11 Tasks 1,17; §12 Tasks 19–20; §13 dependency gates Tasks 5,8,15,19–20.
+- **TDD:** Every task has RED assertion, focused RED command, change, focused GREEN plus four global commands, and a scoped commit.
+- **Review Focus:** five input/failure classes pinned in Tasks 2–3, 5/7, 10/15, 15 and 16.
+- **Type/ownership:** Core pure planners never call host; runtime witnesses/ledger/native handle all side effects. Shared V2/authority/event types and exact operations are introduced before coordinator wiring.
+- **No false ready:** DEP-01 RATIFIED, DEP-02/03 proof pending, DEP-04 implementation proof pending, DEP-05 actual host E2E pending. `BLOCKED`, `SKIPPED`, `NOT RUN` are not PASS.
+- **Next formal gate:** Independent Implementation Plan Review Gate and explicit execution authorization. No source/test/CI/config changes were made to create this plan.
+
+**Plan status: AUTHORED FOR REVIEW — NOT IMPLEMENTATION-READY. Production work NOT AUTHORIZED.**
