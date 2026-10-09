@@ -114,14 +114,7 @@ export function createReviewGateApprovalLookup(
     const gateIds = await eventStore.listGateIds();
     const candidates: CompletedApprovalCandidate[] = [];
     for (const gateId of gateIds) {
-      let events: readonly ReviewGateEvent[];
-      try {
-        events = await eventStore.readEvents(gateId);
-      } catch {
-        // An unreadable gate namespace contributes no candidate; the current
-        // match against the remaining durable history still runs exactly.
-        continue;
-      }
+      const events = await eventStore.readEvents(gateId);
       const binding = completedBindingOf(events);
       if (binding === null) continue;
       const bindingPlan = canonicalizeArtifactPath(binding.planArtifact.canonicalPath);

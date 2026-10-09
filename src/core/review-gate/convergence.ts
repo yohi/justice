@@ -108,8 +108,10 @@ export function evaluateNonConvergence(
     return freezeDecision("remediation_oscillation", oscillating);
   }
 
-const stalled = blockers.filter((lineage) =>
-    isInLastTwoPhaseRounds(projection, lineage) && lineage.status !== "reopened",
+  const stalled = blockers.filter(
+    (lineage) =>
+      lineage.status === "reopened" &&
+      isInLastTwoPhaseRounds(projection, lineage),
   );
   if (stalled.length > 0) {
     return freezeDecision(
@@ -214,7 +216,6 @@ function readSeamCount(
 ): number {
   const extended = (finding as unknown) as FindingStateWithSeamCounters;
   const value = key === "regressionCount" ? extended.regressionCount : extended.alreadyResolvedObservationCount;
-  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
   if (typeof value !== "number" || !Number.isFinite(value)) return 0;
   return Math.max(0, value);
 }

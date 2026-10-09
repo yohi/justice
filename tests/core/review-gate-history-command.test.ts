@@ -92,6 +92,7 @@ describe("parseJusticeReviewHistoryCommandArguments", () => {
     ["--gate and --design are mutually exclusive", "--gate gate-a --design docs/design.md --plan docs/plan.md"],
     ["--gate and --plan are mutually exclusive", "--gate gate-a --plan docs/plan.md"],
     ["--all-generations is not valid with --gate", "--gate gate-a --all-generations"],
+    ["--all-generations before --gate is invalid", "--all-generations --gate gate-a"],
     ["--view is an enum", "--gate gate-a --view enhanced"],
     ["a scope requires --plan as well", "--design docs/design.md"],
     ["a scope requires --design as well", "--plan docs/plan.md"],

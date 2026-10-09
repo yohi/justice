@@ -24,6 +24,16 @@ export function isValidArtifactPath(path: string): boolean {
   return canonicalizeArtifactPath(path) !== null;
 }
 
+export function validateStorageGateId(gateId: string): boolean {
+  return (
+    gateId.length > 0 &&
+    !gateId.includes("/") &&
+    !gateId.includes("\\") &&
+    !gateId.includes("..") &&
+    !gateId.includes("\0")
+  );
+}
+
 export function computeReviewScopeId(designPath: string, planPath: string): ReviewScopeId {
   const canonicalDesignPath = canonicalizeArtifactPath(designPath);
   const canonicalPlanPath = canonicalizeArtifactPath(planPath);
@@ -38,20 +48,6 @@ export function computeReviewScopeId(designPath: string, planPath: string): Revi
 
 export function computeArtifactDigest(bytes: Uint8Array): ArtifactDigest {
   return createHash("sha256").update(bytes).digest("hex") as ArtifactDigest;
-}
-
-/**
- * Durable storage gate-id contract shared by the event store and history
- * enumeration: an id is never empty and never contains `/`, `\\`, `..`, or NUL.
- */
-export function validateStorageGateId(gateId: string): boolean {
-  return (
-    gateId.length > 0 &&
-    !gateId.includes("/") &&
-    !gateId.includes("\\") &&
-    !gateId.includes("..") &&
-    !gateId.includes("\u0000")
-  );
 }
 
 const textEncoder = new TextEncoder();

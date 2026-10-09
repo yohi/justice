@@ -570,9 +570,9 @@ const REVIEW_INPUT_BINDING_INTEGRITY_RULE: DeterministicValidationRuleDescriptor
   });
 
 /**
- * BASELINE_ADMISSION precondition validator: verifies that the pinned
- * artifact paths/digests and the approved Design binding can be reconstructed
- * against each other before any review work is admitted.
+ * BASELINE_ADMISSION and PRE_CLEAR precondition validator: verifies that the
+ * pinned artifact paths/digests and approved bindings can be reconstructed
+ * before review work is admitted or a phase is cleared.
  */
 export const REVIEW_INPUT_BINDING_INTEGRITY_V1: DeterministicValidatorDescriptor =
   Object.freeze({
@@ -587,7 +587,7 @@ export const REVIEW_INPUT_BINDING_INTEGRITY_V1: DeterministicValidatorDescriptor
       "DESIGN_ARTIFACT",
       "PLAN_ARTIFACT",
     ] as const),
-    mandatoryStages: Object.freeze(["BASELINE_ADMISSION"] as const),
+    mandatoryStages: Object.freeze(["BASELINE_ADMISSION", "PRE_CLEAR"] as const),
     stageFailurePolicy: Object.freeze({
       BASELINE_ADMISSION: "PRECONDITION" as const,
       POST_REMEDIATION_SELF_REVIEW: "PRECONDITION" as const,

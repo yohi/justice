@@ -355,7 +355,7 @@ function sameValidatedFinding(left: ValidatedFinding, right: ValidatedFinding): 
 /**
  * Commit a lineage revalidation observation. `resolved` requires a verified
  * commit binding and emits `FINDING_SELF_REVIEWED` on the current epoch with
- * the next remediation round; `still_present` emits nothing (the lineage is
+ * the tracked remediation round; `still_present` emits nothing (the lineage is
  * already tracked); `indeterminate` blocks the clear by throwing so the
  * caller can suspend the gate.
  */
@@ -377,10 +377,6 @@ export function commitLineageRevalidation(
   // lineage's own pending remediation round — never a newly minted round:
   // minting one would breach the absolute Design 5 / Plan 3 ceilings and
   // double-count a round that already consumed capacity.
-  const validatedRound = tracked.remediationRound;
-  if (validatedRound === null) {
-    throw new Error("revalidation_round_missing");
-  }
   const event: FindingSelfReviewedV1 = {
     eventType: "FINDING_SELF_REVIEWED",
     gateId: projection.gateId,
@@ -390,7 +386,7 @@ export function commitLineageRevalidation(
     payload: {
       lineageId: evidence.lineageId,
       findingId: tracked.findingId,
-      remediationRound: validatedRound,
+      remediationRound: requireRemediationRound(tracked),
     },
   };
   const events: ReviewGateEvent[] = [event];
@@ -436,7 +432,7 @@ export function buildLineageResolution(
     payload: {
       lineageId: input.lineageId,
       findingId: tracked.findingId,
-      remediationRound: nextRemediationRound(projection),
+      remediationRound: requireRemediationRound(tracked),
     },
   };
   const events: ReviewGateEvent[] = [event];
@@ -484,6 +480,13 @@ function requireTrackedFinding(
     throw new Error("unknown_lineage");
   }
   return tracked;
+}
+
+function requireRemediationRound(tracked: FindingState): RemediationRound {
+  if (tracked.remediationRound === null) {
+    throw new Error("lineage_revalidation_requires_remediation_round");
+  }
+  return tracked.remediationRound;
 }
 
 /**

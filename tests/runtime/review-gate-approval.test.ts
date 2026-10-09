@@ -238,7 +238,7 @@ describe("ReviewGateApprovalLookup — exact structured binding", () => {
     store.close();
   });
 
-  it("skips a broken unrelated gate when attributing candidates", async () => {
+  it("fails closed when an unrelated gate history is unreadable", async () => {
     const { root, files, store } = await createStandardWorkspace();
     await seedCompletedGate(store, root, files);
     // Corrupt an unrelated gate namespace.
@@ -248,7 +248,7 @@ describe("ReviewGateApprovalLookup — exact structured binding", () => {
 
     const lookup = createLookup(root, store);
     const outcome = await lookup.findCurrentCompletedApproval(PLAN_PATH);
-    expect(outcome.kind).toBe("approved");
+    expect(outcome).toEqual({ kind: "history_unavailable" });
     store.close();
   });
 

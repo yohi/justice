@@ -134,7 +134,7 @@ export function createReviewGateHistoryService(
     if (events.length === 0) return Object.freeze({ inspectKind: "empty" as const, gateId });
     const genesis = events[0];
     if (genesis === undefined || genesis.eventType !== "GATE_CREATED") {
-      return Object.freeze({ inspectKind: "empty" as const, gateId });
+      return Object.freeze({ inspectKind: "broken" as const, gateId, events, scopeId: null });
     }
     const scopeId = genesis.payload.reviewScopeId;
     if (events.some((event) => !KNOWN_EVENT_TYPES.has(event.eventType))) {
@@ -368,7 +368,7 @@ export function createReviewGateHistoryService(
           continue;
         }
         if (inspection.inspectKind === "broken") {
-          if (inspectionScopeId === scopeId || gateId === primaryGateId) {
+          if (inspectionScopeId === null || inspectionScopeId === scopeId || gateId === primaryGateId) {
             return failure("conflict", "review_history_projection_broken");
           }
           continue;
@@ -444,4 +444,3 @@ export function createReviewGateHistoryService(
     },
   };
 }
-

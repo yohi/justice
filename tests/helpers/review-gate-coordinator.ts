@@ -127,13 +127,15 @@ export function createTestReviewGateServices(
   const workspaceReader = createMapReviewWorkspaceReader(options.files);
   const coordinator = createReviewGateCoordinator({
     eventStore,
-    lockManager: createReviewGateLockManager("/nonexistent-justice-test-root", {
+    lockManager: createReviewGateLockManager(`/nonexistent-justice-test-root/${prefix}`, {
       provider: null,
     }),
     protocol,
     workspaceReader,
     mutationSubstrate: options.mutationSubstrate ?? null,
-    ...(options.inspectTargets === undefined ? {} : { inspectTargets: options.inspectTargets }),
+    inspectTargets:
+      options.inspectTargets ??
+      (async (paths) => new Map(paths.map((path) => [path, "clean_committed" as const]))),
     now: () => {
       serial += 1;
       return new Date(Date.UTC(2026, 9, 8, 0, 0, serial)).toISOString();
