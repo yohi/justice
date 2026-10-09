@@ -158,7 +158,7 @@ The following five user-visible input/failure classes have explicit owner tests 
 - [ ] **Step 4: Verify GREEN** — tests and four global commands; preserve all historical records without pruning/compaction.
 - [ ] **Step 5: Commit** — stage the event/recovery store, tests and only the existing factory call sites migrated for mandatory witness injection; `git commit -m "feat: persist causally verified Review Gate writer shards"`.
 
-### Task 7: Pure Generation Admission and Atomic Scope Selection
+### Task 7: Pure Generation Admission and Verified Approval Selection
 
 **Files:**
 - Create: `src/core/review-gate/admission.ts`, `src/runtime/review-gate-scope-admission.ts`, `tests/core/review-gate/admission.test.ts`, `tests/runtime/review-gate-scope-admission.test.ts`
