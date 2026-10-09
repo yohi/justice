@@ -98,7 +98,12 @@ export function parseJusticeReviewHistoryCommandArguments(
         continue;
       }
       case "--gate": {
-        if (state.designPath !== null || state.planPath !== null || state.gateId !== null) {
+        if (
+          state.designPath !== null ||
+          state.planPath !== null ||
+          state.gateId !== null ||
+          state.allGenerations
+        ) {
           return null;
         }
         const value = args[i + 1];
