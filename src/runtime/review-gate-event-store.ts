@@ -17,8 +17,10 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import type { Dirent } from "node:fs";
 import { dirname, join } from "node:path";
+import { validateStorageGateId } from "../core/review-gate/identity";
 import type { ReviewGateEvent, ReviewGatePhase } from "../core/review-gate-types";
 import type { ReviewGateOperationKind } from "../core/review-gate/agent-protocol";
 
@@ -41,6 +43,7 @@ export type ReviewGateEventStore = Readonly<{
   readonly recordDispatch: (gateId: string, dispatch: ReviewGateDispatchRecordV1) => Promise<void>;
   readonly markDispatchCompleted: (gateId: string, operationId: string) => Promise<void>;
   readonly listDispatches: (gateId: string) => Promise<readonly ReviewGateDispatchRecordV1[]>;
+  readonly listGateIds: () => Promise<readonly string[]>;
   readonly readScopeIndex: (reviewScopeId: string) => Promise<string | null>;
   readonly writeScopeIndex: (reviewScopeId: string, gateId: string) => Promise<void>;
   readonly close: () => void;
@@ -74,13 +77,7 @@ export function createReviewGateEventStore(rootDir: string): ReviewGateEventStor
   };
 
   const assertStorageId = (id: string): void => {
-    if (
-      id === "" ||
-      id.includes("/") ||
-      id.includes("\\") ||
-      id.includes("..") ||
-      id.includes("\u0000")
-    ) {
+    if (!validateStorageGateId(id)) {
       throw new Error("review_gate_invalid_id");
     }
   };
@@ -228,6 +225,30 @@ export function createReviewGateEventStore(rootDir: string): ReviewGateEventStor
         assertOpen();
         assertStorageId(gateId);
         return Object.freeze([...loadDispatches(gateId)]);
+      }),
+
+    listGateIds: () =>
+      serialize(() => {
+        assertOpen();
+        const gatesRoot = join(rootDir, REVIEW_GATES_DIR);
+        let entries: Dirent[];
+        try {
+          entries = readdirSync(gatesRoot, { withFileTypes: true, encoding: "utf8" });
+        } catch (err) {
+          if (isEnoent(err)) return Object.freeze([]);
+          throw err;
+        }
+        return Object.freeze(
+          entries
+            .filter(
+              (entry) =>
+                entry.isDirectory() &&
+                entry.name !== "recovery" &&
+                validateStorageGateId(entry.name),
+            )
+            .map((entry) => entry.name)
+            .sort((left, right) => left.localeCompare(right)),
+        );
       }),
 
     readScopeIndex: (reviewScopeId) =>

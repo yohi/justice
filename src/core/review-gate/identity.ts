@@ -24,6 +24,16 @@ export function isValidArtifactPath(path: string): boolean {
   return canonicalizeArtifactPath(path) !== null;
 }
 
+export function validateStorageGateId(gateId: string): boolean {
+  return (
+    gateId.length > 0 &&
+    !gateId.includes("/") &&
+    !gateId.includes("\\") &&
+    !gateId.includes("..") &&
+    !gateId.includes("\0")
+  );
+}
+
 export function computeReviewScopeId(designPath: string, planPath: string): ReviewScopeId {
   const canonicalDesignPath = canonicalizeArtifactPath(designPath);
   const canonicalPlanPath = canonicalizeArtifactPath(planPath);

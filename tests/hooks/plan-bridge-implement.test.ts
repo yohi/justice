@@ -14,6 +14,81 @@ import {
   wirePlanBridgeAuthorization,
 } from "../helpers/mock-file-system";
 import { createMockNotifier } from "../helpers/mock-notifier";
+import type { ReviewGateLockSnapshot } from "../../src/core/review-gate-lock";
+import type { ReviewGateApprovalLookup } from "../../src/runtime/review-gate-approval";
+import type { ReviewApprovalBindingV1 } from "../../src/core/review-gate-types";
+
+function stubApprovalBinding(): ReviewApprovalBindingV1 {
+  return {
+    reviewScopeId: "scope-stub",
+    gateId: "gate-stub",
+    designArtifact: { canonicalPath: "design.md", digest: "d".repeat(64), gitMode: "100644" },
+    planArtifact: { canonicalPath: "plan.md", digest: "p".repeat(64), gitMode: "100644" },
+    requirementsResolution: {
+      source: "explicit",
+      canonicalPath: "requirements.md",
+      digest: "r".repeat(64),
+    },
+    reviewProtocolFingerprint: "f".repeat(64),
+    designProtocolFingerprint: "e".repeat(64),
+    planProtocolFingerprint: "g".repeat(64),
+    approvedAt: "2026-10-08T00:10:00.000Z",
+  };
+}
+
+type StubOutcome =
+  | { kind: "approved"; gateId: string; binding: ReviewApprovalBindingV1 }
+  | { kind: "not_approved" }
+  | { kind: "identity_conflict" }
+  | { kind: "history_unavailable" };
+
+function stubLookup(overrides: {
+  readonly outcome?: StubOutcome;
+  readonly candidateCount?: number;
+}): ReviewGateApprovalLookup {
+  const outcome: StubOutcome = overrides.outcome ?? {
+    kind: "approved",
+    gateId: "gate-stub",
+    binding: stubApprovalBinding(),
+  };
+  const candidateCount = overrides.candidateCount ?? 1;
+  return {
+    findCurrentCompletedApproval: async () => outcome,
+    listCompletedApprovalCandidates: async () =>
+      Array.from({ length: candidateCount }, () => ({
+        gateId: "gate-stub",
+        binding: stubApprovalBinding(),
+      })),
+  } as unknown as ReviewGateApprovalLookup;
+}
+
+function armWithLookup(
+  bridge: PlanBridge,
+  overrides?: {
+    readonly outcome?: StubOutcome;
+    readonly candidateCount?: number;
+  },
+): void {
+  bridge.setReviewGateApprovalLookup(stubLookup(overrides));
+}
+
+function setReviewGateLock(bridge: PlanBridge, sessionId: string, phase: string): void {
+  const lockMap = (
+    bridge as unknown as {
+      reviewGateLocks: Map<string, ReviewGateLockSnapshot>;
+    }
+  ).reviewGateLocks;
+  lockMap.set(sessionId, {
+    parentSessionId: sessionId,
+    gateId: "gate-stub",
+    phase: phase as never,
+    designPath: "design.md",
+    planPath: "plan.md",
+    designDigest: "stale-digest",
+    planDigest: "stale-digest",
+  });
+}
+
 
 const planContent = ["## Task 1: Implement", "- [ ] Add implementation arm state"].join("\n");
 
@@ -591,5 +666,131 @@ describe("PlanBridge.handleImplementationArm", () => {
     const bindings = await authorizationStore.hydrate();
     expect(bindings).toHaveLength(1);
     expect(bindings[0]?.status).toBe("released");
+  });
+});
+
+
+describe("PlanBridge.handleImplementationArm — durable Review Gate approval (Task 14)", () => {
+  it("arms through the durable completed approval, replacing the process-local digest authority", async () => {
+    const bridge = createBridge({ "plan.md": planContent });
+    armWithLookup(bridge, { candidateCount: 1 });
+    setReviewGateLock(bridge, "session-durable", "awaiting_implementation_authorization");
+    bridge.setActivePlan("session-durable", "plan.md");
+
+    const result = await bridge.handleImplementationArm("session-durable", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
+
+    // The stale in-memory digests would fail the legacy comparison; the durable
+    // exact-binding approval is the replacement authority.
+    expect(result.armed).toBe(true);
+    expect(bridge.getReviewGateLock("session-durable")).toBeUndefined();
+    expect(bridge.isImplementationArmed("session-durable")).toBe(true);
+  });
+
+  it("moves the lock back to remediation on durable not_approved", async () => {
+    const bridge = createBridge({ "plan.md": planContent });
+    armWithLookup(bridge, { outcome: { kind: "not_approved" }, candidateCount: 1 });
+    setReviewGateLock(bridge, "session-drift", "awaiting_implementation_authorization");
+    bridge.setActivePlan("session-drift", "plan.md");
+
+    const result = await bridge.handleImplementationArm("session-drift", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
+
+    expect(result.armed).toBe(false);
+    expect(bridge.getReviewGateLock("session-drift")?.phase).toBe("remediation");
+  });
+
+  it("keeps the lock awaiting and refuses the arm while durable history is unavailable", async () => {
+    const bridge = createBridge({ "plan.md": planContent });
+    armWithLookup(bridge, { outcome: { kind: "history_unavailable" }, candidateCount: 1 });
+    setReviewGateLock(bridge, "session-outage", "awaiting_implementation_authorization");
+    bridge.setActivePlan("session-outage", "plan.md");
+
+    const result = await bridge.handleImplementationArm("session-outage", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
+
+    expect(result.armed).toBe(false);
+    expect(bridge.getReviewGateLock("session-outage")?.phase).toBe(
+      "awaiting_implementation_authorization",
+    );
+  });
+
+  it("remediates on durable identity_conflict", async () => {
+    const bridge = createBridge({ "plan.md": planContent });
+    armWithLookup(bridge, { outcome: { kind: "identity_conflict" }, candidateCount: 2 });
+    setReviewGateLock(bridge, "session-conflict", "awaiting_implementation_authorization");
+    bridge.setActivePlan("session-conflict", "plan.md");
+
+    const result = await bridge.handleImplementationArm("session-conflict", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
+
+    expect(result.armed).toBe(false);
+    expect(bridge.getReviewGateLock("session-conflict")?.phase).toBe("remediation");
+  });
+
+  it("arms after a restart on an exact completed binding with no in-memory lock state", async () => {
+    const bridge = createBridge({ "plan.md": planContent });
+    armWithLookup(bridge, { outcome: { kind: "approved", gateId: "gate-restart", binding: stubApprovalBinding() }, candidateCount: 1 });
+
+    const result = await bridge.handleImplementationArm("session-restart", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
+
+    expect(result.armed).toBe(true);
+    expect(bridge.isImplementationArmed("session-restart")).toBe(true);
+  });
+
+  it("fails closed after a restart when the durable binding no longer matches", async () => {
+    const bridge = createBridge({ "plan.md": planContent });
+    armWithLookup(bridge, { outcome: { kind: "not_approved" }, candidateCount: 1 });
+
+    const result = await bridge.handleImplementationArm("session-restart-drift", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
+
+    expect(result.armed).toBe(false);
+    expect(bridge.isImplementationArmed("session-restart-drift")).toBe(false);
+  });
+
+  it("fails closed after a restart on a durable identity_conflict", async () => {
+    const bridge = createBridge({ "plan.md": planContent });
+    armWithLookup(bridge, { outcome: { kind: "identity_conflict" }, candidateCount: 2 });
+
+    const result = await bridge.handleImplementationArm("session-restart-conflict", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
+
+    expect(result.armed).toBe(false);
+  });
+
+  it("keeps the plain (never-gated) plan flow when no durable completed approval exists", async () => {
+    const bridge = createBridge({ "plan.md": planContent });
+    armWithLookup(bridge, { candidateCount: 0 });
+
+    const result = await bridge.handleImplementationArm("session-plain", {
+      source: "command",
+      planPath: "plan.md",
+      approved: true,
+    });
+
+    expect(result.armed).toBe(true);
   });
 });

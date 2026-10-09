@@ -16,6 +16,11 @@ import {
   isJusticeReviewGateCommand,
   parseJusticeReviewGateCommandArguments,
 } from "../core/review-gate-command";
+import {
+  isJusticeReviewHistoryCommand,
+  parseJusticeReviewHistoryCommandArguments,
+  renderReviewHistoryCommandGuidance,
+} from "../core/review-gate-history-command";
 import { parseReviewSnapshotArtifact } from "../core/review-snapshot-artifact";
 import {
   PACKET_PAYLOAD_MARKER,
@@ -31,8 +36,16 @@ import {
 } from "./command-registration";
 import { createLinuxReviewGateProvider } from "./linux-review-gate-provider";
 import type { LinuxReviewGateProvider } from "./linux-review-gate-provider";
+import {
+  createReviewGateApprovalLookup,
+  type ReviewGateApprovalLookup,
+} from "./review-gate-approval";
 import { createReviewGateGit } from "./review-gate-git";
-import { createReviewGateEventStore } from "./review-gate-event-store";
+import { createReviewGateEventStore, type ReviewGateEventStore } from "./review-gate-event-store";
+import {
+  createReviewGateHistoryService,
+  type ReviewGateHistoryService,
+} from "./review-gate-history";
 import { createReviewGateLockManager } from "./review-gate-lock-manager";
 import { createReviewGateRecoveryStore } from "./review-gate-recovery-store";
 import { createReviewGateProtocolDescriptor } from "./review-gate-protocol";
@@ -113,6 +126,14 @@ interface GenericEventInput {
   };
 }
 
+interface SharedReviewGateRuntimeGraph {
+  readonly root: string;
+  readonly eventStore: ReviewGateEventStore;
+  readonly coordinator: ReviewGateCoordinator;
+  readonly history: ReviewGateHistoryService;
+  readonly approval: ReviewGateApprovalLookup;
+}
+
 export type ReplayRuntimeEvent =
   | {
       readonly kind: "tool.execute.before";
@@ -160,6 +181,7 @@ export class OpenCodeAdapter {
     string,
     { readonly parentSessionId: string; readonly category: "sp-review" | "sp-final-review" }
   >();
+  #reviewGateRuntimeGraph: SharedReviewGateRuntimeGraph | null = null;
   readonly #pendingChildRelations = new Map<
     string,
     {
@@ -366,7 +388,7 @@ export class OpenCodeAdapter {
       // Task 12: one shared Review Gate runtime service graph per workspace.
       // Storing/reusing the same services for Task 13 history and Task 14
       // approval lookup is mandatory; no parallel stores are created.
-      const reviewGateCoordinator = buildSharedReviewGateRuntimeGraph(
+      const reviewGateRuntimeGraph = buildSharedReviewGateRuntimeGraph(
         root,
         {
           readWorkspaceFile: async (path) =>
@@ -378,8 +400,10 @@ export class OpenCodeAdapter {
           void this.log("warn", message, ...extra);
         },
       );
-      if (reviewGateCoordinator !== null) {
-        justice.getPlanBridge().setReviewGateCoordinator(reviewGateCoordinator);
+      if (reviewGateRuntimeGraph !== null) {
+        justice.getPlanBridge().setReviewGateCoordinator(reviewGateRuntimeGraph.coordinator);
+        justice.getPlanBridge().setReviewGateApprovalLookup(reviewGateRuntimeGraph.approval);
+        this.#reviewGateRuntimeGraph = reviewGateRuntimeGraph;
       }
       this.#justice = justice;
       await this.log("info", "Justice initialized via opencode-adapter");
@@ -1326,7 +1350,8 @@ export class OpenCodeAdapter {
         if (
           isJusticeStartCommand(input.command) ||
           isJusticeReviewGateCommand(input.command) ||
-          isJusticeImplementCommand(input.command)
+          isJusticeImplementCommand(input.command) ||
+          isJusticeReviewHistoryCommand(input.command)
         ) {
           this.#replaceCommandPartsWithGuidance(
             output,
@@ -1349,6 +1374,11 @@ export class OpenCodeAdapter {
 
       if (isJusticeImplementCommand(input.command)) {
         await this.#handleImplementationArm(input, output);
+        return;
+      }
+
+      if (isJusticeReviewHistoryCommand(input.command)) {
+        await this.#handleReviewHistory(input, output);
         return;
       }
     } catch (err) {
@@ -1488,6 +1518,68 @@ export class OpenCodeAdapter {
 
     const result = await justice.getPlanBridge().handleImplementationArm(input.sessionID, request);
     this.#replaceCommandPartsWithGuidance(output, input.sessionID, result.guidance);
+  }
+
+  async #handleReviewHistory(
+    input: CommandExecuteBeforeInput,
+    output: CommandExecuteBeforeOutput,
+  ): Promise<void> {
+    const request = parseJusticeReviewHistoryCommandArguments(input.arguments);
+    if (request === null) {
+      await this.log("warn", "[Justice] /justice-review-history arguments rejected by parser");
+      this.#replaceCommandPartsWithGuidance(
+        output,
+        input.sessionID,
+        [
+          "[JUSTICE: COMMAND REJECTED]",
+          "`/justice-review-history` arguments were rejected; the original command parts were removed.",
+          "Expected: /justice-review-history --design <path> --plan <path> [--view summary|rounds|findings] [--all-generations],",
+          "or /justice-review-history --gate <gateId> [--view summary|rounds|findings].",
+        ].join("\n"),
+      );
+      return;
+    }
+
+    await this.ensureInitialized();
+    const graph = this.#reviewGateRuntimeGraph;
+    if (graph === null) {
+      this.#replaceCommandPartsWithGuidance(
+        output,
+        input.sessionID,
+        renderReviewHistoryCommandGuidance({
+          kind: "failure",
+          failure: "unavailable",
+          message: "review_history_service_not_configured",
+        }),
+      );
+      return;
+    }
+
+    try {
+      const result =
+        request.kind === "gate"
+          ? await graph.history.queryGate(request.gateId, { view: request.view })
+          : await graph.history.queryScope(request.designPath, request.planPath, {
+              view: request.view,
+              allGenerations: request.allGenerations,
+            });
+      this.#replaceCommandPartsWithGuidance(
+        output,
+        input.sessionID,
+        renderReviewHistoryCommandGuidance(result),
+      );
+    } catch (err) {
+      await this.log("error", "[Justice] review-history query failed", err);
+      this.#replaceCommandPartsWithGuidance(
+        output,
+        input.sessionID,
+        renderReviewHistoryCommandGuidance({
+          kind: "failure",
+          failure: "unavailable",
+          message: "review_history_query_failed",
+        }),
+      );
+    }
   }
 
   /**
@@ -1635,7 +1727,7 @@ function buildSharedReviewGateRuntimeGraph(
   workspaceRoot: string,
   workspaceReader: ReviewGateWorkspaceReader,
   warn: (message: string, ...extra: unknown[]) => void,
-): ReviewGateCoordinator | null {
+): SharedReviewGateRuntimeGraph | null {
   try {
     const overrideRaw = process.env.JUSTICE_REVIEW_GATE_ROOT;
     const overrideApplied =
@@ -1679,7 +1771,7 @@ function buildSharedReviewGateRuntimeGraph(
       },
     });
 
-    return createReviewGateCoordinator({
+    const coordinator = createReviewGateCoordinator({
       eventStore,
       lockManager,
       protocol,
@@ -1700,6 +1792,9 @@ function buildSharedReviewGateRuntimeGraph(
           ),
         ),
     });
+    const history = createReviewGateHistoryService({ rootDir: root, eventStore });
+    const approval = createReviewGateApprovalLookup({ eventStore, workspaceReader, protocol });
+    return Object.freeze({ root, eventStore, coordinator, history, approval });
   } catch (err) {
     warn("[Justice] Review Gate runtime graph construction failed; coordinator not configured", err);
     return null;

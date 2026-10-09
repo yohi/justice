@@ -180,6 +180,11 @@ const justiceCommandDefinitions = {
     agent: JUSTICE_REVIEW_CONTROLLER_AGENT,
     subtask: true,
   }),
+  "justice-review-history": Object.freeze({
+    template: "$ARGUMENTS",
+    description:
+      "Show the durable Review Gate history for a Design/Plan scope or a gate id (read-only)",
+  }),
 } satisfies Record<string, JusticeCommandDefinition>;
 
 export const JUSTICE_COMMAND_DEFINITIONS: Readonly<typeof justiceCommandDefinitions> =

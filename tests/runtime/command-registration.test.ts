@@ -3,7 +3,6 @@ import {
   JUSTICE_COMMAND_DEFINITIONS,
   JUSTICE_REVIEW_CONTROLLER_AGENT,
   JUSTICE_REVIEW_CONTROLLER_DEFINITION,
-  JUSTICE_REVIEW_REMEDIATOR_AGENT,
   buildJusticeCommandSystemContext,
   listJusticeCommandNames,
   registerJusticeCommands,
@@ -34,7 +33,7 @@ describe("registerJusticeCommands", () => {
       agent: JUSTICE_REVIEW_CONTROLLER_AGENT,
       subtask: true,
     });
-    // Task 10 compatibility window: the canonical Review Gate agents are
+    // Task 10 compatibility window: the four canonical Review Gate agents are
     // registered with exact permissions.
     expect(config.agent?.[JUSTICE_REVIEW_CONTROLLER_AGENT]).toMatchObject({
       mode: "subagent",
@@ -48,15 +47,9 @@ describe("registerJusticeCommands", () => {
       mode: "subagent",
       permission: { "*": "deny", read: "allow" },
     });
-    expect(config.agent?.[JUSTICE_REVIEW_REMEDIATOR_AGENT]).toMatchObject({
+    expect(config.agent?.["justice-review-remediator"]).toMatchObject({
       mode: "subagent",
-      permission: {
-        "*": "deny",
-        read: "allow",
-        edit: "allow",
-        write: "allow",
-      apply_patch: "allow",
-      },
+      permission: { "*": "deny", read: "allow", edit: "allow", write: "allow", apply_patch: "allow" },
     });
     // Task 12: Justice no longer auto-registers or references the legacy
     // justice-review-worker; only the canonical agents are created.
@@ -66,7 +59,7 @@ describe("registerJusticeCommands", () => {
     );
     expect(log).toHaveBeenCalledWith(
       "info",
-      "[Justice] Auto-registered Justice commands: justice-enable, justice-disable, justice-start, justice-implement, justice-review-gate.",
+      "[Justice] Auto-registered Justice commands: justice-enable, justice-disable, justice-start, justice-implement, justice-review-gate, justice-review-history.",
     );
     expect(log).toHaveBeenCalledTimes(1);
   });
@@ -141,10 +134,6 @@ describe("registerJusticeCommands", () => {
           model: "amazon-bedrock/global.anthropic.claude-opus-5",
           permission: { "*": "allow", read: "allow", shell: "allow" },
         },
-        [JUSTICE_REVIEW_REMEDIATOR_AGENT]: {
-          model: "amazon-bedrock/global.anthropic.claude-haiku-5",
-          permission: { "*": "allow", shell: "allow" },
-        },
       },
     };
 
@@ -165,11 +154,7 @@ describe("registerJusticeCommands", () => {
       "*": "deny",
       read: "allow",
     });
-    expect(config.agent?.[JUSTICE_REVIEW_REMEDIATOR_AGENT]).toMatchObject({
-      model: "amazon-bedrock/global.anthropic.claude-haiku-5",
-      mode: "subagent",
-    });
-    expect(config.agent?.[JUSTICE_REVIEW_REMEDIATOR_AGENT]?.permission).toEqual({
+    expect(config.agent?.["justice-review-remediator"]?.permission).toEqual({
       "*": "deny",
       read: "allow",
       edit: "allow",
@@ -204,7 +189,7 @@ describe("registerJusticeCommands", () => {
     });
     expect(log).toHaveBeenCalledWith(
       "info",
-      "[Justice] Auto-registered Justice commands: justice-start, justice-enable, justice-disable, justice-implement, justice-review-gate.",
+      "[Justice] Auto-registered Justice commands: justice-start, justice-enable, justice-disable, justice-implement, justice-review-gate, justice-review-history.",
     );
     expect(log).toHaveBeenCalledTimes(2);
   });
@@ -290,7 +275,14 @@ describe("registerJusticeCommands", () => {
       "justice-start",
       "justice-implement",
       "justice-review-gate",
+      "justice-review-history",
     ]);
+    // Task 13: history is a pure display command — no agent, no subtask.
+    expect(JUSTICE_COMMAND_DEFINITIONS["justice-review-history"]).toMatchObject({
+      template: "$ARGUMENTS",
+    });
+    expect(JUSTICE_COMMAND_DEFINITIONS["justice-review-history"]).not.toHaveProperty("agent");
+    expect(JUSTICE_COMMAND_DEFINITIONS["justice-review-history"]).not.toHaveProperty("subtask");
     expect(JUSTICE_COMMAND_DEFINITIONS["justice-start"].template).toBe(
       "$ARGUMENTS",
     );
@@ -394,7 +386,7 @@ describe("registerJusticeCommands logging", () => {
     expect(config.command?.["justice-review-gate"]).toBeDefined();
     expect(log).toHaveBeenCalledWith(
       "info",
-      "[Justice] Auto-registered Justice commands: justice-enable, justice-disable, justice-start, justice-implement, justice-review-gate.",
+      "[Justice] Auto-registered Justice commands: justice-enable, justice-disable, justice-start, justice-implement, justice-review-gate, justice-review-history.",
     );
   });
 
@@ -412,7 +404,7 @@ describe("registerJusticeCommands logging", () => {
     );
     expect(log).toHaveBeenCalledWith(
       "info",
-      "[Justice] Auto-registered Justice commands: justice-implement, justice-enable, justice-disable, justice-start, justice-review-gate.",
+      "[Justice] Auto-registered Justice commands: justice-implement, justice-enable, justice-disable, justice-start, justice-review-gate, justice-review-history.",
     );
   });
 });

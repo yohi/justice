@@ -1504,7 +1504,7 @@ describe("PlanBridge", () => {
       });
       expect(blocked).toMatchObject({ action: "inject" });
       expect((blocked as { injectedContext?: string }).injectedContext).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
-      await expect(bridge.handleImplementationArm("s-review-error", {
+      expect(bridge.handleImplementationArm("s-review-error", {
         source: "command",
         action: "approve",
         planPath: "docs/plans/implementation-plan.md",
