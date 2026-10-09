@@ -512,67 +512,122 @@ Adapter の共通 sanitize・canonicalize は適用される。
 ### 4.1c Review Gate ランタイム — イベントソーシング調停 (Issue #297)
 
 Design / Implementation Plan の pre-implementation Review Gate は、Issue #297 以降
-**イベントソーシング型のコーディネータ** で駆動される。`PlanBridge` は Gate 状態を
-所有せず `ReviewGateCoordinator` へ委譲する。以下は出荷済みアーキテクチャの要約であり
-設計仕様書の全文ではない。
+**イベントソーシング型の決定論的オーケストレータ (ARCH1)** で駆動される。`PlanBridge` は Gate 状態を
+所有せず `ReviewGateCoordinator` へ委譲する。エージェントは状態遷移の権限を持たず、証拠（Observation / Remediation）の生成のみを担当する。
 
 **共有ランタイムサービスグラフ (ワークスペースにつき 1 系統):**
 
 ```text
 LinuxReviewGateProvider? (ネイティブ flock / durable replace / workspace replace)
-  → ReviewGateEventStore   (.justice/review-gates/<gateId>/events.jsonl + dispatches.jsonl + scope-index.json)
-  → ReviewGateLockManager  (scope → gate の順序連鎖)
+  → ReviewGateEventStore   (.justice/review-gates/<gateId>/events/*.json + dispatches/*.json + indexes/scopes/<scopeId>.json)
+  → ReviewGateLockManager  (scope → gate の順序連鎖 flock)
   → ReviewGateRecoveryStore (recovery CAS)
   → ReviewGateCoordinator  (純粋オーケストレータ + 投影 + agent protocol)
   → ReviewGateHistoryService / ReviewGateApprovalLookup (同一 store を再利用、第二 store は作らない)
 ```
 
-**状態モデル:** 正本は versioned な追記型イベント履歴のみ。`GATE_CREATED` (paths,
-digests, Git modes, RR1 Requirements 解決, review protocol fingerprint を固定) を起点に、
-`DESIGN_CLEAR` / `PLAN_CLEAR` / `COMPLETED_APPROVAL_BINDING` / `REOPEN_REQUIRED` /
-`ROUND_LIMIT_EXHAUSTED` / `REVIEW_NON_CONVERGENT` / `EXECUTION_SUSPENDED` /
-`FINDING_*` / `ORCHESTRATION_RESUMED` が投影される。実行状態を可変ファイルで持たない。
+**論理イベントカタログ (EVC1):**
+正本は versioned な追記型イベント履歴のみ。各イベントは SHA-256 コーザルハッシュチェーンで連結され、不可逆かつ決定論的に投影される。
 
-**段階的承認:** Design フェーズ (review → finding validation → remediation →
-self-review → exact-artifact commit → fresh review) → `DESIGN_CLEAR` → Plan フェーズ →
-`PLAN_CLEAR` + 完了承認 binding。remediation の絶対上限は generation ごとに Design 5 /
-Plan 3 ラウンドで、epoch 更新では回復しない。現在フェーズの disposition 優先順位は
-OSC1 upstream 先行、次いで NC1、次いで絶対ラウンド枯渇、最後に remediation 継続。
+| カテゴリ | イベント種別 (`eventType`) | 発行権限 (Authority) | 役割とペイロード概要 |
+| --- | --- | --- | --- |
+| ライフサイクル | `GATE_CREATED` | Justice Core | ゲート初期化。正規化済み Design/Plan パス、SHA-256 ダイジェスト、Git モード (`100644`/`100755`)、RR1 要件解決結果、review protocol fingerprint を固定 |
+| ライフサイクル | `ORCHESTRATION_RESUMED` | Justice Core | 再開記録。新たな `writerId` と `epochId` を発行し、未完了ディスパッチの回復を開始 |
+| 成果物 | `ARTIFACT_BINDINGS_UPDATED` | Justice Core | 要件/設計/計画の再解決・バインディング更新を記録 |
+| レビュー観測 | `REVIEW_OBSERVED` | Reviewer Agent | フレッシュレビューによる指摘候補 (`ReviewCandidateObservationV1[]`) の観測結果 |
+| 指摘・系譜 | `FINDING_RECONCILED` | Coordinator | 独立バリデータ検証済み指摘の照合。セマンティック系譜 (Lineage) の新規登録・ステータス更新 |
+| 検証 | `VALIDATION_RECORDED` | Validator | 決定論的バリデータ (VAL1) またはエージェントによる検証結果の記録 |
+| 系譜状態 | `LINEAGE_STATUS_CHANGED` | Coordinator | 指摘系譜の解決・再オープン・ALREADY_RESOLVED 遷移 |
+| 修正作業 | `REMEDIATION_STARTED` | Remediator Agent | 修正ラウンドの開始。対象系譜 ID 群と事前イメージ（pre-image）を固定 |
+| 修正作業 | `REMEDIATION_COMPLETED` | Remediator Agent | 修正作業完了。成果物の事後イメージ（post-image）を記録 |
+| コミット/復元 | `COMMIT_PREPARED` | Justice Core | exact-artifact コミットの準備状態（クラッシュ回復用 CAS） |
+| コミット/復元 | `RESTORE_PREPARED` | Justice Core | ワークスペース復元の準備状態（クラッシュ回復用 CAS） |
+| コミット/復元 | `REMEDIATION_COMMITTED` | Justice Core | コアによる成果物のアトミック Git コミット完了（GIT1 契約） |
+| コミット/復元 | `WORKSPACE_RESTORED` | Justice Core | 承認スナップショットへの復元完了 |
+| マイルストーン | `DESIGN_CLEAR` | Orchestrator | Design フェーズの全ブロッカー解消と事前検証通過（同一 generation 内で保持） |
+| マイルストーン | `PLAN_CLEAR` | Orchestrator | Plan フェーズの全ブロッカー解消と事前検証通過 |
+| マイルストーン | `COMPLETED_APPROVAL_BINDING`| Orchestrator | 完了承認バインディング（Requirements/Design/Plan パス+ダイジェスト+プロトコル指紋）の固定 |
+| 状態変更 | `REOPEN_RECORDED` | Orchestrator | アップストリーム（Design/Requirements）指摘検出によるフェーズ再オープン |
+| 中断・停止 | `ROUND_LIMIT_EXHAUSTED` | Orchestrator | generation の絶対修正上限（Design 5 / Plan 3）到達による停止 |
+| 中断・停止 | `REVIEW_NON_CONVERGENT` | Orchestrator | NC1 セマンティック非収束検出による停止（マテリアルプログレス待機） |
+| 中断・停止 | `EXECUTION_SUSPENDED` | Coordinator | 実行基盤欠落（ネイティブ未サポート）、入力改変、証拠喪失等による fail-closed 停止 |
 
-**再起動・クラッシュ回復:** 再開は durable 履歴の再投影のみから行う。未完了の durable
-dispatch は同一 logical operation id で正確に一度だけ再駆動され、remediation /
-finding validation の evidence が復元できない場合は `EXECUTION_SUSPENDED`
-(REDISPATCH_EVIDENCE_UNAVAILABLE) で fail-closed になる。prepared restore/commit は
-source / destination / conflict の 3 値分類で exactly-once 回復される。`REMEDIATION_STARTED`
-後の未知の部分的バイトは上書き・復元・chmod されない。
+**段階的承認と絶対ラウンド上限:**
+- **Staged Approval**: Design フェーズ (review → finding validation → remediation → self-review → exact-artifact commit → fresh review) → `DESIGN_CLEAR` → Plan フェーズ → `PLAN_CLEAR` + `COMPLETED_APPROVAL_BINDING`。
+- **Remediation ラウンド上限**: generation ごとに **Design 5 回 / Plan 3 回** の絶対値。epoch 更新やコマンド再実行によって replenishment されることはない。いかなる実行パスも Design round 6 や Plan round 4 を生成してはならない。
 
-**actor 分離:** `review_mutation` は remediator worker のみ。`review_restore` と
-`review_commit` は Justice コアのみ。コミットは GIT1 exact-artifact 契約
-(`--literal-pathspecs`、対象 1 パス、unrelated な index/worktree 状態の保全、push なし)。
-Git target の同一性は content + tree entry mode で、正規ファイルモードは `100644` /
-`100755` のみ。worktree の Git mode は owner execute bit のみから導出される
-(POSIX `0655` は `100644` に正規化される)。
+**OSC1 アップストリーム先行と ResumeCursor 評価順序:**
+現在フェーズのディスポジション判定は以下の順序を厳密に遵守する（第一一致が勝つ）:
+1. **OSC1 Upstream Precedence**: `currentUpstreamBlockers.length > 0` の場合、Plan フェーズであっても最優先で `resolve_upstream`（Design フェーズ再オープン）へ分岐。Design 成果物が未コミット・変更状態（`clean_committed` 以外）であれば、即座に再オープンせず `prepare_restore`（exact restore）で承認済みバインディングに復元してから再オープンする。
+2. **RV1 Stale-lineage Revalidation**: `pendingRevalidationBlockers.length > 0` の場合、指摘の再検証ディスパッチへ分岐。
+3. **NC1 Non-Convergence**: 非収束が検出された場合、`non_convergent`（`REVIEW_NON_CONVERGENT` で suspend）へ分岐。
+4. **Round Limit Exhausted**: 残りラウンド数が 0 の場合、`round_limit`（`ROUND_LIMIT_EXHAUSTED` で suspend）へ分岐。
+5. **Remediation Continuation**: ブロッカーが存在し上限内であれば、通常修正ラウンド（`remediate`）へ分岐。
+6. **Clean Phase Review**: ブロッカーがなければフレッシュレビューまたは Pre-clear 検証へ進む。
 
-**Linux 変異能力要件:** commit/restore などワークスペースを変異する副作用は、
-Linux x64 + glibc + `openat2` + `renameat2` + non-blocking `flock` + sync
-semantics を実証したネイティブ基盤が利用可能な場合に限り実行される。不足環境では
-安全でない Node フォールバックに縮退せず、該当副作用を `EXECUTION_SUSPENDED`
-(mutation_unavailable) で fail-closed に停止する。
+**NC1 セマンティック非収束判定の 6 大トリガー:**
+単なるテキストの一致ではなく、セマンティック系譜の遷移に基づいて収束・非収束を判定する:
+1. `resolved_lineage_regressed`: 一度解決された指摘系譜の再発 (`regressionCount > 0`)。
+2. `remediation_oscillation`: 再オープンされた指摘系譜が直前ラウンド以外で振動 (`status === "reopened"` かつ not `isLastPhaseRound`)。
+3. `same_lineage_stall`: 直近 2 ラウンド連続で同一指摘が再オープン状態 (`isInLastTwoPhaseRounds`)。
+4. `contract_conflict_repeated`: `ALREADY_RESOLVED` 状態の指摘に対する再指摘・契約衝突の反復 (`alreadyResolvedObservationCount > 0`)。
+5. `blocker_landscape_repeated`: 現在のブロッカー指紋 (`computeBlockerLandscapeFingerprint`) が直前ラウンドと完全に同一で残存。
+6. `blocker_count_not_improving`: ブロッカー件数が直前ラウンドから減少せず停滞または増加。
 
-**実装認可:** `/justice-implement --approved` は durable な
-`COMPLETED_APPROVAL_BINDING` を列挙し、Requirements/Design/Plan の canonical path +
-現在 digest + 現在の `reviewProtocolFingerprint` の全件一致が **ちょうど 1 件** の場合に
-のみ arm する。zero match は `not_approved`、複数 match は `identity_conflict` で
-fail-closed。照会は読み取り専用で、stale な完了 Gate に無効化イベントを追記しない。
+**再起動・クラッシュ回復 (Crash-Window Recovery):**
+- 再開は durable 履歴の再投影のみから行う。
+- 未完了の durable dispatch は同一 `operationId` で正確に一度だけ再ディスパッチされる。
+- candidate/target 証拠が復元できない操作は `EXECUTION_SUSPENDED` (REDISPATCH_EVIDENCE_UNAVAILABLE) で fail-closed に停止する。
+- prepared restore/commit は source / destination / conflict の 3 値分類で exactly-once 回復され、第三の未定義状態は fail-closed に停止する。`REMEDIATION_STARTED` 後の未知の部分的変更を上書き・復元・chmod することはない。
 
-**履歴照会:** `/justice-review-history` は同一共有 store 上で読み取り専用の DTO
-表示 (summary / rounds / findings、`--all-generations`) を行う。Gate lock 取得・
-イベント追記・validator 呼び出しは行わない。破損 / 複数 live tip / 未対応
-イベントバージョンは部分表示ではなく fail-closed に失敗する。
+**Actor 分離と Linux 変異能力要件 (CAP1 / GIT1 / WSP1):**
+- **権限分離**: `review_mutation` は remediator worker のみ。`review_restore` と `review_commit` は Justice コアのみが実行可能。
+- **GIT1 exact-artifact コミット契約**: 対象成果物 1 パスのみを `--literal-pathspecs` でステージングし、`[Justice] remediation round <N>` でコミット。プッシュは行わず、他の変更や index/worktree 状態を一切巻き込まない。
+- **Git ファイルモード**: 正規ファイルモードは `100644` (一般) / `100755` (実行可能) のみ。worktree の Git モードは owner execute bit (`stat.mode & 0o100`) のみから導出され、POSIX `0655` / `0645` は `100644` に正規化される。
+- **WSP1 Linux ネイティブ基盤**: ワークスペース変異（commit/restore/exact replace）は、Linux x64 + glibc + `openat2` + `renameat2` + non-blocking `flock` + `fdatasync`/`fsync` を実証したネイティブ基盤が利用可能な場合に限り実行される。`replaceWorkspaceFileExact` は対象ファイルの現行ダイジェストと Git モードの一致を検証し、既存パーミッションを保持したテンポラリファイル作成 → `renameat2` アトミック置換を行う。ネイティブ機能不足環境では危険な Node フォールバックを行わず、`EXECUTION_SUSPENDED` (mutation_unavailable) で fail-closed に停止する。
 
-**`--retry` 互換 (RTY1):** `--retry N` は解析互換のみの deprecated no-op で、
-`legacyRetryOption` として記録される。予算への反映、epoch 生成、NC1 バイパス、
-protocol fingerprint への影響、履歴変異は一切行わない。
+**実装認可と承認バインディング照合 (CB1 / Task 14):**
+- レビューゲート通過後、セッションには実装ロックが掛かり、`task()` 等の実装ツールは遮断される。
+- 実装認可には明示的な `/justice-implement --plan <path> --approved` が必要。
+- 新設の専用関数 `findCurrentCompletedApproval` が durable な `COMPLETED_APPROVAL_BINDING` を照合し、現在の Requirements / Design / Plan の正準パス + SHA-256 ダイジェスト + 現在の `reviewProtocolFingerprint` の全件完全一致を検証する。
+- 一致 0 件は `not_approved`、複数件は `identity_conflict` で fail-closed。一致 1 件のみで実装ロックが解除（arm）される。照会は読み取り専用であり、stale な Gate に無効化イベントを追記しない。
+
+**履歴照会 (`/justice-review-history` / HQ1):**
+- 同一の共有 store 上で読み取り専用 DTO 表示（`summary` / `rounds` / `findings`、`--all-generations`）を提供。
+- Gate lock 取得、イベント追記、成果物解決、バリデータ呼び出しは行わない。
+- 破損、複数 live tip、未対応イベントバージョン検出時は部分表示を行わず fail-closed に失敗する。
+
+**`--retry` 互換 (RTY1):**
+- `--retry N` (0〜10) は旧構文との解析互換のみの deprecated no-op であり、内部で `legacyRetryOption` として保持される。
+- 予算、epoch、NC1 判定、protocol fingerprint、履歴、絶対上限（5/3）に一切影響を与えない。v5 で削除予定。
+
+**プロトコル記述子と決定論的指紋 (PF1):**
+レビュープロトコルの同一性はセマンティックな影響範囲に応じて構造化され、暗黙の変更を検知する:
+- `ReviewProtocolDescriptorV1` = `{ design: DesignProtocolDescriptorV1, plan: PlanProtocolDescriptorV1, crossPhase: CrossPhaseProtocolDescriptorV1 }`
+- `designProtocolFingerprint = sha256(canonicalJson(descriptor.design))`
+- `planProtocolFingerprint = sha256(canonicalJson(descriptor.plan))`
+- `reviewProtocolFingerprint = sha256(canonicalJson(descriptor))`
+- 含まれる要素: 各フェーズの契約バージョン、静的プロンプト契約ダイジェスト、決定論的バリデータルール定義、絶対上限（Design 5 / Plan 3）。モデル名・プロバイダー・動的タイムスタンプ等の実行時環境変数は意図的に除外され、決定論性を担保する。
+
+**指摘同一性とセマンティック系譜 (LNR1 / AR1 / XG1):**
+LLM は任意の系譜 ID を発行・変更できず、Justice コアが同一性を管理する:
+- `occurrenceId`: 1回の観測ごとに発行される一意な識別子。
+- `lineageId`: Gate generation 内で同一欠陥を追跡するセマンティックな系譜識別子。
+- `basisDigest`: 欠陥の不変の基底（`targetPath\0lineStart\0lineEnd\0ruleId\0category\0` の正規化ハッシュ）。
+- `ALREADY_RESOLVED` 遷移 (AR1): 過去に解決済みと判定された指摘が、成果物の変更なしに再観測された場合、モデルの誤指摘としてセマンティックに吸収する。この発生は `contract_conflict_repeated` 非収束トリガーとして記録され、ループを防止する。
+- 世代間系譜引き継ぎ (XG1 / XGR1): 同一スコープで新世代の Gate が作成された場合も、過去世代の系譜 ID と解決状態の連続性が追跡される。
+
+**決定論的バリデータと指摘ブリッジ (VAL1 / VSC1 / DVF1):**
+- 登録済みバリデータ (`validatorId`) により、純粋関数または隔離プロセスで Markdown 構造や必須見出し等を検証する。
+- DVF1 Bridged Findings: 決定論的ルールの違反は絶対的な欠陥存在権威を持ち、LLM はその重大度や有効性を上書きできない。検出された指摘は通常指摘と同じ系譜（Lineage）に合流し、同一のブロッカー・修正サイクルで処理される。Pre-clear 段階で全必須バリデーションが PASS しない限り、`DESIGN_CLEAR` / `PLAN_CLEAR` は発行されない。
+
+**共有ファイル配置構造 (P1 / PR1):**
+レビューゲートの永続化データは `.justice/review-gates/` 配下に厳格に配置される:
+- `events/<gateId>/writer-<writerId>.json`: ライターシャードごとの追記イベントログ（コーザルハッシュチェーン付き）。
+- `dispatches/<gateId>/disp-<operationId>.json`: 正確に一度の再駆動を担保する durable dispatch 台帳。
+- `indexes/scopes/<scopeId>.json`: スコープ ID から最新 Gate ID へのアトミック索引。
+- `locks/scopes/<scopeId>.lock` / `locks/gates/<gateId>.lock`: プロセス排他ロックファイル。
+- `recovery/<digest>.json`: アトミック復元・CAS 用の不変オブジェクトキャッシュ。
 
 ---
 

@@ -8,8 +8,8 @@
  * duplicate results, and malformed typed semantic bases fail closed, and raw
  * worker output is discarded after strict parsing.
  *
- * Handoff semantics follow the Review Gate Convergence design specification
- * (docs/superpowers/specs/2026-10-06-review-gate-convergence-design.md):
+ * Handoff semantics follow the Review Gate Convergence specification
+ * (SPEC.md §4.1c):
  * §16 LNR1, §17 AR1, §18 XG1/XGR1, §21 RV1, §22 RSL1/FR1, §23 AIM1, §24 SRF1,
  * §27.5 reentry guard, and §28 CAP1.
  *

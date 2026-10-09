@@ -434,8 +434,8 @@ OpenCode の file-reference 記法も利用できます。
 
 ```bash
 /justice-review-gate \
-  --design @docs/superpowers/specs/feature-design.md \
-  --plan @docs/superpowers/plans/feature-plan.md
+  --design @docs/specs/feature-design.md \
+  --plan @docs/plans/feature-plan.md
 ```
 
 - `--design` と `--plan` はともに必須。
