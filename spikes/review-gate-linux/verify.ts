@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -83,32 +83,6 @@ type SeedEvent = {
   readonly emittedAt: string;
   readonly payload: Record<string, unknown>;
 };
-
-/** The guarded exact-replace sequence shared by the two workspace cases. */
-async function replaceWorkspaceFileExact(
-  rootDir: string,
-  relativePath: string,
-  expectedDigest: string,
-  expectedMode: "100644" | "100755",
-  replacementBytes: Buffer,
-  replacementMode: "100644" | "100755",
-): Promise<void> {
-  const absolute = join(rootDir, relativePath);
-  const current = await readFile(absolute);
-  if (digestOf(current) !== expectedDigest) {
-    throw new Error("review_gate_current_digest_mismatch");
-  }
-  const currentStat = await stat(absolute);
-  const ownerExec = (currentStat.mode & 0o100) !== 0 ? "100755" : "100644";
-  if (ownerExec !== expectedMode) {
-    throw new Error("review_gate_current_git_mode_mismatch");
-  }
-  const tmp = `${absolute}.justice-replace`;
-  await writeFile(tmp, replacementBytes);
-  await chmod(tmp, replacementMode === "100755" ? 0o755 : 0o644);
-  await rm(absolute, { force: true });
-  await (await import("node:fs/promises")).rename(tmp, absolute);
-}
 
 async function runCases(
   root: JusticeLinuxNativeGateRoot,
@@ -247,7 +221,7 @@ async function runCases(
     return ok("recovery CAS publish is digest-keyed, create-if-absent, byte-exact");
   });
 
-  await run("workspace_exact_replace_guard", "host fs guarded replace", async () => {
+  await run("workspace_exact_replace_guard", "native gate root", async () => {
     const target = "docs/design.md";
     await mkdir(join(rootDir, "docs"), { recursive: true });
     const v1 = Buffer.from("design v1\n", "utf8");
@@ -256,8 +230,7 @@ async function runCases(
 
     let rejected = false;
     try {
-      await replaceWorkspaceFileExact(
-        rootDir,
+      root.replaceWorkspaceFileExact(
         target,
         digestOf(Buffer.from("wrong", "utf8")),
         "100644",
@@ -272,13 +245,13 @@ async function runCases(
       return fail("rejected replace must not mutate the target");
     }
 
-    await replaceWorkspaceFileExact(rootDir, target, digestOf(v1), "100644", v2, "100644");
+    root.replaceWorkspaceFileExact(target, digestOf(v1), "100644", v2, "100644");
     const after = await readFile(join(rootDir, target));
     if (!after.equals(v2)) return fail("guarded replace must publish the replacement bytes");
     return ok("workspace exact replace enforces the current-digest guard before publish");
   });
 
-  await run("workspace_exact_replace_mode_preserved", "host fs guarded replace", async () => {
+  await run("workspace_exact_replace_mode_preserved", "native gate root", async () => {
     const target = "docs/executable.md";
     const v1 = Buffer.from("executable design v1\n", "utf8");
     const v2 = Buffer.from("executable design v2\n", "utf8");
@@ -286,8 +259,7 @@ async function runCases(
 
     let rejected = false;
     try {
-      await replaceWorkspaceFileExact(
-        rootDir,
+      root.replaceWorkspaceFileExact(
         target,
         digestOf(v1),
         "100644",
@@ -299,7 +271,7 @@ async function runCases(
     }
     if (!rejected) return fail("git-mode mismatch against a 100755 target must be rejected");
 
-    await replaceWorkspaceFileExact(rootDir, target, digestOf(v1), "100755", v2, "100755");
+    root.replaceWorkspaceFileExact(target, digestOf(v1), "100755", v2, "100755");
     const stats = await stat(join(rootDir, target));
     if ((stats.mode & 0o100) === 0) {
       return fail("replacement must preserve the owner execute bit (100755)");

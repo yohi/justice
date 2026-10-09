@@ -1,13 +1,16 @@
 #![deny(clippy::all, clippy::pedantic)]
 
 use std::ffi::CString;
-use std::io;
+use std::io::{self, Read};
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use napi::bindgen_prelude::{Buffer, Either};
 use napi::{Error, Result};
 use napi_derive::napi;
+use sha2::{Digest, Sha256};
 
 const SYS_OPENAT2: libc::c_long = 437;
 const SYS_RENAMEAT2: libc::c_long = 316;
@@ -18,6 +21,7 @@ const AT_FDCWD: libc::c_int = -100;
 const AT_SYMLINK_FOLLOW: libc::c_int = 0x400;
 const RENAME_NOREPLACE: libc::c_uint = 1;
 const MAX_ARTIFACT_BYTES: usize = 1024 * 1024;
+static WORKSPACE_REPLACE_SERIAL: AtomicU64 = AtomicU64::new(0);
 
 #[repr(C)]
 struct OpenHow {
@@ -687,17 +691,18 @@ impl ReviewGateRoot {
     #[must_use]
     #[allow(clippy::needless_pass_by_value)]
     pub fn read_workspace_file(&self, path: String) -> Option<Buffer> {
-        let _ = self.directory_fds();
-        let _ = workspace_relative_path(&path);
-        // Skeleton: workspace reads arrive with the exact-replace primitive.
-        None
+        let (_, _, _, workspace_fd) = self.directory_fds().ok()?;
+        let path = workspace_relative_path(&path).ok()?;
+        let mut file = open_workspace_file(workspace_fd.as_raw_fd(), path).ok()?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).ok()?;
+        Some(Buffer::from(bytes))
     }
 
     #[napi]
     /// # Errors
-    /// Returns a stable N-API error when the root is closed or any path,
-    /// digest, or Git-mode argument is invalid; the guarded replace lands in
-    /// later tasks.
+    /// Returns a stable N-API error when the target does not match the expected
+    /// digest/mode or descriptor-relative atomic replacement fails.
     #[allow(clippy::needless_pass_by_value)]
     pub fn replace_workspace_file_exact(
         &self,
@@ -707,12 +712,85 @@ impl ReviewGateRoot {
         replacement_bytes: Buffer,
         replacement_git_mode: String,
     ) -> Result<()> {
-        self.directory_fds()?;
+        let (_, _, _, workspace_fd) = self.directory_fds()?;
         workspace_relative_path(&path)?;
+        if expected_current_digest.len() != 64 {
+            return Err(Error::from_reason("review_gate_invalid_digest"));
+        }
         recovery_digest(&expected_current_digest)?;
         workspace_git_mode(&expected_git_mode)?;
         workspace_git_mode(&replacement_git_mode)?;
-        let _ = replacement_bytes.len();
+
+        let (parent_path, leaf) = path.rsplit_once('/').unwrap_or((".", &path));
+        let parent_fd = open_relative(
+            workspace_fd.as_raw_fd(),
+            parent_path,
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+            0,
+        )
+        .map_err(|error| map_io_error(&error, "review_gate_workspace_replace_failed"))?;
+        let (current_digest, current_mode) = workspace_binding_at(parent_fd.as_raw_fd(), leaf)
+            .map_err(|error| map_io_error(&error, "review_gate_workspace_replace_failed"))?;
+        if current_digest != expected_current_digest {
+            return Err(Error::from_reason("review_gate_current_digest_mismatch"));
+        }
+        if current_mode != expected_git_mode {
+            return Err(Error::from_reason("review_gate_current_git_mode_mismatch"));
+        }
+        let (temporary_leaf, temporary_fd) = create_workspace_temporary(parent_fd.as_raw_fd())
+            .map_err(|error| map_io_error(&error, "review_gate_workspace_replace_failed"))?;
+        let temporary_file = std::fs::File::from(temporary_fd);
+        let replacement_mode = if replacement_git_mode == "100755" {
+            0o755
+        } else {
+            0o644
+        };
+        let mut renamed = false;
+        let replacement = (|| -> io::Result<()> {
+            write_all(temporary_file.as_raw_fd(), replacement_bytes.as_ref())?;
+            temporary_file.set_permissions(std::fs::Permissions::from_mode(replacement_mode))?;
+            temporary_file.sync_all()?;
+
+            // Recheck immediately before rename so drift during preparation is
+            // never silently overwritten.
+            let (verify_digest, verify_mode) = workspace_binding_at(parent_fd.as_raw_fd(), leaf)?;
+            if verify_digest != expected_current_digest || verify_mode != expected_git_mode {
+                return Err(io::Error::from_raw_os_error(libc::ESTALE));
+            }
+
+            rename_relative(
+                parent_fd.as_raw_fd(),
+                &temporary_leaf,
+                parent_fd.as_raw_fd(),
+                leaf,
+                0,
+            )?;
+            renamed = true;
+            std::fs::File::from(open_relative(
+                parent_fd.as_raw_fd(),
+                ".",
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+                0,
+            )?)
+            .sync_all()
+        })();
+        if let Err(error) = replacement {
+            drop(temporary_file);
+            if !renamed {
+                if let Err(cleanup_error) = unlink_relative(parent_fd.as_raw_fd(), &temporary_leaf)
+                {
+                    return Err(map_io_error(
+                        &cleanup_error,
+                        "review_gate_workspace_replace_failed",
+                    ));
+                }
+            }
+            return Err(if error.raw_os_error() == Some(libc::ESTALE) {
+                Error::from_reason("review_gate_current_artifact_changed")
+            } else {
+                map_io_error(&error, "review_gate_workspace_replace_failed")
+            });
+        }
         Ok(())
     }
 
@@ -765,7 +843,12 @@ impl ReviewGateRoot {
     }
 
     fn directory_fds(&self) -> Result<(&OwnedFd, &OwnedFd, &OwnedFd, &OwnedFd)> {
-        match (&self.root_fd, &self.scopes_fd, &self.recovery_fd, &self.workspace_fd) {
+        match (
+            &self.root_fd,
+            &self.scopes_fd,
+            &self.recovery_fd,
+            &self.workspace_fd,
+        ) {
             (Some(root), Some(scopes), Some(recovery), Some(workspace)) => {
                 Ok((root, scopes, recovery, workspace))
             }
@@ -841,7 +924,11 @@ fn gate_lock_id(value: &str) -> Result<&str> {
 }
 
 fn recovery_digest(value: &str) -> Result<&str> {
-    if !value.is_empty() && value.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')) {
+    if !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
         return Ok(value);
     }
     Err(Error::from_reason("review_gate_invalid_digest"))
@@ -867,7 +954,6 @@ fn workspace_git_mode(value: &str) -> Result<&str> {
     }
     Err(Error::from_reason("review_gate_invalid_mode"))
 }
-
 
 fn file_identity(fd: &OwnedFd) -> io::Result<NativeIdentity> {
     let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
@@ -971,6 +1057,16 @@ fn unlink_relative(dirfd: RawFd, path: &str) -> io::Result<()> {
 }
 
 fn rename_noreplace(from_dirfd: RawFd, from: &str, to_dirfd: RawFd, to: &str) -> io::Result<()> {
+    rename_relative(from_dirfd, from, to_dirfd, to, RENAME_NOREPLACE)
+}
+
+fn rename_relative(
+    from_dirfd: RawFd,
+    from: &str,
+    to_dirfd: RawFd,
+    to: &str,
+    flags: libc::c_uint,
+) -> io::Result<()> {
     let from = CString::new(from).map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
     let to = CString::new(to).map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
     // SAFETY: both paths are validated leaves beneath owned directory descriptors.
@@ -981,13 +1077,73 @@ fn rename_noreplace(from_dirfd: RawFd, from: &str, to_dirfd: RawFd, to: &str) ->
             from.as_ptr(),
             to_dirfd,
             to.as_ptr(),
-            RENAME_NOREPLACE,
+            flags,
         )
     };
     if result != 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(())
+}
+
+fn open_workspace_file(dirfd: RawFd, path: &str) -> io::Result<std::fs::File> {
+    let fd = open_relative(
+        dirfd,
+        path,
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        0,
+    )?;
+    let file = std::fs::File::from(fd);
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::from_raw_os_error(libc::EINVAL));
+    }
+    Ok(file)
+}
+
+fn workspace_binding_at(parent_fd: RawFd, leaf: &str) -> io::Result<(String, &'static str)> {
+    let mut file = open_workspace_file(parent_fd, leaf)?;
+    let mode = git_mode_from_permissions(file.metadata()?.permissions().mode());
+    let digest = digest_file(&mut file)?;
+    Ok((digest, mode))
+}
+
+fn git_mode_from_permissions(mode: u32) -> &'static str {
+    if mode & 0o100 != 0 {
+        "100755"
+    } else {
+        "100644"
+    }
+}
+
+fn digest_file(file: &mut std::fs::File) -> io::Result<String> {
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+fn create_workspace_temporary(parent_fd: RawFd) -> io::Result<(String, OwnedFd)> {
+    for _ in 0..32 {
+        let serial = WORKSPACE_REPLACE_SERIAL.fetch_add(1, Ordering::Relaxed);
+        let leaf = format!(".justice-replace-{}-{serial}", std::process::id());
+        match open_relative(
+            parent_fd,
+            &leaf,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600,
+        ) {
+            Ok(fd) => return Ok((leaf, fd)),
+            Err(error) if error.raw_os_error() == Some(libc::EEXIST) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::from_raw_os_error(libc::EEXIST))
 }
 
 fn ftruncate(fd: RawFd, size: usize) -> io::Result<()> {
@@ -1108,6 +1264,9 @@ fn into_owned_fd(file: std::fs::File) -> OwnedFd {
 mod tests {
     use std::ffi::CString;
     use std::os::fd::{FromRawFd, OwnedFd};
+    use std::os::unix::fs::PermissionsExt;
+
+    use napi::bindgen_prelude::Buffer;
 
     use super::{
         artifact_leaf, checked_syscall_fd, gate_lock_id, lease_leaf_from_path,
@@ -1211,8 +1370,78 @@ mod tests {
     }
 
     #[test]
+    fn workspace_exact_replace_checks_digest_and_mode_and_preserves_requested_mode() {
+        let root_dir = std::env::temp_dir().join(format!(
+            "justice-gate-exact-replace-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock is after Unix epoch")
+                .as_nanos(),
+        ));
+        std::fs::create_dir(&root_dir).expect("test workspace should be created");
+        let target = root_dir.join("target.md");
+        std::fs::write(&target, b"before").expect("test target should be created");
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644))
+            .expect("initial mode should be set");
+        let root = super::open_review_gate_root(root_dir.to_string_lossy().into_owned())
+            .expect("native test root should open");
+
+        assert!(root
+            .replace_workspace_file_exact(
+                "target.md".to_string(),
+                "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+                "100644".to_string(),
+                Buffer::from(b"after".to_vec()),
+                "100755".to_string(),
+            )
+            .is_err());
+        assert_eq!(
+            std::fs::read(&target).expect("target remains readable"),
+            b"before"
+        );
+
+        assert!(root
+            .replace_workspace_file_exact(
+                "target.md".to_string(),
+                "6db7d803e74f1ffa7d8f5adc0bf95b3e15bf4c8373fffadf546227cc6c6742cb".to_string(),
+                "100755".to_string(),
+                Buffer::from(b"after".to_vec()),
+                "100755".to_string(),
+            )
+            .is_err());
+        assert_eq!(
+            std::fs::read(&target).expect("target remains readable"),
+            b"before"
+        );
+
+        root.replace_workspace_file_exact(
+            "target.md".to_string(),
+            "6db7d803e74f1ffa7d8f5adc0bf95b3e15bf4c8373fffadf546227cc6c6742cb".to_string(),
+            "100644".to_string(),
+            Buffer::from(b"after".to_vec()),
+            "100755".to_string(),
+        )
+        .expect("matching content and mode should be replaced");
+        assert_eq!(
+            std::fs::read(&target).expect("target remains readable"),
+            b"after"
+        );
+        assert_ne!(
+            std::fs::metadata(&target)
+                .expect("target metadata exists")
+                .permissions()
+                .mode()
+                & 0o100,
+            0
+        );
+        std::fs::remove_dir_all(&root_dir).expect("test workspace should be cleaned");
+    }
+
+    #[test]
     fn gate_lock_handle_reports_real_cloexec_flags() {
-        let path = std::env::temp_dir().join(format!("justice-gate-cloexec-{}", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("justice-gate-cloexec-{}", std::process::id()));
         let path_str = path.to_str().expect("temp path is utf8");
         let path_c = CString::new(path_str).expect("temp path has no interior NUL");
         // SAFETY: open(2) receives a NUL-terminated temp path owned by this test.
