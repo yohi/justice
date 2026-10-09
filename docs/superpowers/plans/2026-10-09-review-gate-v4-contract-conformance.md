@@ -240,7 +240,7 @@ The following five user-visible input/failure classes have explicit owner tests 
 - [ ] **Step 4: Verify GREEN** — focused tests and four global commands; historic lineage and current generation authority remain separate.
 - [ ] **Step 5: Commit** — `git add src/core/review-gate/lineage.ts src/core/review-gate/agent-protocol.ts tests/core/review-gate/lineage.test.ts tests/core/review-gate/agent-protocol.test.ts && git commit -m "feat: validate semantic lineage and commit-bound resolution"`.
 
-### Task 12: Durable Cycle Evidence and Six-rule NC1
+### Task 12: Complete Durable Cycle Evidence and Six-rule NC1
 
 **Files:**
 - Create: `src/core/review-gate/cycle-evidence.ts`, `tests/core/review-gate/cycle-evidence.test.ts`
