@@ -45,9 +45,10 @@ const PLAN_V1 = "## Task 1: Verification\n- [ ] Verify the boundary\n";
 type WorkspaceState = "clean_committed" | "known_dirty" | "mutation_in_flight";
 
 function createTestLockManager() {
+  const makeLock = () => ({ release: () => undefined, verifyCloexec: () => true });
   return {
-    acquireScopeLock: async () => ({ release: () => undefined }),
-    acquireGateLock: async () => ({ release: () => undefined }),
+    acquireScopeLock: async () => makeLock(),
+    acquireGateLock: async () => makeLock(),
     close: () => undefined,
   };
 }
@@ -453,6 +454,8 @@ describe("restart recovery — corrupt scope discovery (Review Focus 1)", () => 
       protocol,
       workspaceReader: workspace,
       mutationSubstrate: substrate,
+      inspectTargets: async (paths) =>
+        new Map(paths.map((path) => [path, "clean_committed" as const])),
       now: () => new Date(Date.UTC(2026, 9, 8, 0, 0, ++serial)).toISOString(),
       newId: () => `cur-id-${++idCounter}`,
       newWriterId: () => "cur-writer",
@@ -484,6 +487,8 @@ describe("restart recovery — corrupt scope discovery (Review Focus 1)", () => 
       protocol,
       workspaceReader: workspace,
       mutationSubstrate: substrate,
+      inspectTargets: async (paths) =>
+        new Map(paths.map((path) => [path, "clean_committed" as const])),
       now: () => new Date(Date.UTC(2026, 9, 8, 1, 0, 0)).toISOString(),
       newId: () => "cur-restart-id-1",
       newWriterId: () => "cur-restart-writer",
@@ -524,6 +529,8 @@ describe("restart recovery — corrupt scope discovery (Review Focus 1)", () => 
         ]),
       ),
       mutationSubstrate: createRecordingSubstrate(),
+      inspectTargets: async (paths) =>
+        new Map(paths.map((path) => [path, "clean_committed" as const])),
       now: () => new Date(Date.UTC(2026, 9, 8, 0, 0, ++serial)).toISOString(),
       newId: () => `oth-id-${++idCounter}`,
       newWriterId: () => "oth-writer",
@@ -555,6 +562,8 @@ describe("restart recovery — corrupt scope discovery (Review Focus 1)", () => 
         ]),
       ),
       mutationSubstrate: createRecordingSubstrate(),
+      inspectTargets: async (paths) =>
+        new Map(paths.map((path) => [path, "clean_committed" as const])),
       now: () => new Date(Date.UTC(2026, 9, 8, 1, 0, 0)).toISOString(),
       newId: () => "fresh-id-1",
       newWriterId: () => "fresh-writer",
@@ -761,14 +770,23 @@ describe("restart recovery — NC1 vs absolute rounds (Review Focus 3)", () => {
     ]);
   });
 
-  it("appends ROUND_LIMIT_EXHAUSTED through a coordinator restart when no trigger fires at zero design capacity", async () => {
+  it("completes a clean gate after all five design remediation rounds were used", async () => {
     const harness = createRestartHarness();
     const gateId = "limit-zero-gate";
     await harness.eventStore.appendEvents(gateId, [
       ...genesisEvents(gateId, harness.protocol),
-      discoverEvent(gateId, "a", "design", "design"),
-      ...[1, 2, 3, 4, 5].map((ordinal) => remediatedEvent(gateId, "a", { phase: "design", ordinal })),
-      reopenedEvent(gateId, "a"),
+      ...[1, 2, 3, 4, 5].flatMap((ordinal) => {
+        const lineage = `round-${ordinal}`;
+        return [
+          discoverEvent(gateId, lineage, "design", "design"),
+          remediatedEvent(gateId, lineage, { phase: "design", ordinal }),
+          seedEvent(gateId, "FINDING_SELF_REVIEWED", {
+            lineageId: `${gateId}-lineage-${lineage}`,
+            findingId: `seed-${lineage}`,
+            remediationRound: { phase: "design", ordinal },
+          }),
+        ];
+      }),
     ]);
     await harness.eventStore.writeScopeIndex(computeReviewScopeId(DESIGN_PATH, PLAN_PATH), gateId);
 
@@ -778,12 +796,22 @@ describe("restart recovery — NC1 vs absolute rounds (Review Focus 3)", () => {
       designPath: DESIGN_PATH,
       planPath: PLAN_PATH,
     });
-    expect(resumed.dispatched).toBe(false);
-    expect(resumed.guidance).toContain("round_limit_exhausted");
+    expect(resumed.dispatched).toBe(true);
+    if (resumed.reviewerPrompt === undefined) throw new Error(resumed.guidance);
+    const response = await driveFrom(
+      coordinator,
+      "main",
+      resumed.reviewerPrompt,
+      (payload) => reviewerResult(payload, []),
+    );
+    if (response.action !== "inject") throw new Error("expected round-limit guidance");
+    expect(response.injectedContext).toContain("[JUSTICE: REVIEW GATE CLEAR]");
     const projected = projectReviewGate(await harness.eventStore.readEvents(gateId));
-    expect(projected.suspensionReason).toBe("round_limit_exhausted");
+    expect(projected.status).toBe("completed");
+    expect(projected.suspensionReason).toBeNull();
     expect(projected.designRemediationRounds).toHaveLength(5);
     expect(evaluateNonConvergence(projected).kind).toBe("convergent");
+    expect(harness.events().some((event) => event.eventType === "ROUND_LIMIT_EXHAUSTED")).toBe(false);
   });
 
   it("records REVIEW_NON_CONVERGENT end to end while design capacity is still positive", async () => {
@@ -851,9 +879,6 @@ describe("restart recovery — NC1 vs absolute rounds (Review Focus 3)", () => {
       trigger: "blocker_landscape_repeated",
     });
 
-    // Trigger 6 (BLOCKER_COUNT_NOT_IMPROVING): a reopened-at-latest-round
-    // blocker plus a fresh one — the landscape fingerprint changes but the
-    // blocker count does not improve against the previous round.
     const count = projectReviewGate([
       ...genesisEvents("t-count", harness.protocol),
       discoverEvent("t-count", "a", "design", "design"),
@@ -864,7 +889,7 @@ describe("restart recovery — NC1 vs absolute rounds (Review Focus 3)", () => {
     ]);
     expect(evaluateNonConvergence(count)).toMatchObject({
       kind: "non_convergent",
-      trigger: "blocker_count_not_improving",
+      trigger: "same_lineage_stall",
     });
 
     // Priority: oscillation outranks the landscape/count triggers when the
@@ -883,13 +908,6 @@ describe("restart recovery — NC1 vs absolute rounds (Review Focus 3)", () => {
       trigger: "remediation_oscillation",
     });
 
-    // Triggers 1/3/4 (RESOLVED_LINEAGE_REGRESSED / SAME_LINEAGE_STALL /
-    // CONTRACT_CONFLICT_REPEATED) read their counters through the
-    // lineage-store seam, which this generation stubs at zero: durable
-    // events alone therefore never produce a false trigger, and those
-    // branches sit above the event-reachable triggers so any future seam
-    // value wins precedence. Pinned: the shipped projection reads the
-    // seam-stubbed counters as zero and stays convergent.
     const seamStubbed = projectReviewGate([
       ...genesisEvents("t-seam", harness.protocol),
       discoverEvent("t-seam", "a", "design", "design"),
@@ -897,7 +915,10 @@ describe("restart recovery — NC1 vs absolute rounds (Review Focus 3)", () => {
       remediatedEvent("t-seam", "a", { phase: "design", ordinal: 2 }),
       reopenedEvent("t-seam", "a"),
     ]);
-    expect(evaluateNonConvergence(seamStubbed).kind).toBe("convergent");
+    expect(evaluateNonConvergence(seamStubbed)).toMatchObject({
+      kind: "non_convergent",
+      trigger: "same_lineage_stall",
+    });
 
     // N1 material-progress guard on a durably suspended NC1 projection: the
     // reentry validation is planned only when material progress was observed.

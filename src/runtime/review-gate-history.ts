@@ -47,6 +47,7 @@ import type { ReviewGateEventStore } from "./review-gate-event-store";
 
 const KNOWN_EVENT_TYPES: ReadonlySet<string> = new Set([
   "GATE_CREATED",
+  "ARTIFACT_BINDINGS_UPDATED",
   "ORCHESTRATION_RESUMED",
   "DESIGN_CLEAR",
   "PLAN_CLEAR",

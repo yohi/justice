@@ -32,9 +32,10 @@ type FlowHarness = {
 };
 
 function createTestLockManager() {
+  const makeLock = () => ({ release: () => undefined, verifyCloexec: () => true });
   return {
-    acquireScopeLock: async () => ({ release: () => undefined }),
-    acquireGateLock: async () => ({ release: () => undefined }),
+    acquireScopeLock: async () => makeLock(),
+    acquireGateLock: async () => makeLock(),
     close: () => undefined,
   };
 }
@@ -69,6 +70,8 @@ function createFlowHarness(prefix: string): FlowHarness {
     protocol,
     workspaceReader: createMapReviewWorkspaceReader(files),
     mutationSubstrate,
+    inspectTargets: async (paths) =>
+      new Map(paths.map((path) => [path, "clean_committed" as const])),
     now: () => {
       serial += 1;
       return new Date(Date.UTC(2026, 9, 8, 0, 0, serial)).toISOString();
@@ -325,6 +328,7 @@ describe("Review Gate event-sourced flow (Task 15 E2E)", () => {
       "FINDING_DISCOVERED",
       "FINDING_REMEDIATED",
       "FINDING_SELF_REVIEWED",
+      "ARTIFACT_BINDINGS_UPDATED",
       "DESIGN_CLEAR",
       "PLAN_CLEAR",
       "COMPLETED_APPROVAL_BINDING",
@@ -396,6 +400,8 @@ describe("Review Gate event-sourced flow (Task 15 E2E)", () => {
       lockManager: createTestLockManager(),
       protocol: createReviewGateProtocolDescriptor(),
       workspaceReader: createMapReviewWorkspaceReader(harness.files),
+      inspectTargets: async (paths) =>
+        new Map(paths.map((path) => [path, "clean_committed" as const])),
       mutationSubstrate: {
         commitArtifact: async () => ({ commitSha: "sha-restart" }),
         restoreArtifact: async () => {},
@@ -454,6 +460,8 @@ describe("Review Gate event-sourced flow (Task 15 E2E)", () => {
       lockManager: createTestLockManager(),
       protocol: createReviewGateProtocolDescriptor(),
       workspaceReader: createMapReviewWorkspaceReader(harness.files),
+      inspectTargets: async (paths) =>
+        new Map(paths.map((path) => [path, "clean_committed" as const])),
       mutationSubstrate: {
         commitArtifact: async () => ({ commitSha: "sha-restart" }),
         restoreArtifact: async () => {},

@@ -4,7 +4,7 @@ on:
   push:
     branches: [ master ]
   pull_request:
-    branches: [ master ]
+    branches: [ master, v4 ]
 
 jobs:
   test:
@@ -22,6 +22,8 @@ jobs:
       - name: Verify native review artifact provider
         run: test -f dist/native/index.linux-x64-gnu.node
       - name: Test native review artifact provider
+        env:
+          RUSTFLAGS: -C link-arg=-Wl,--unresolved-symbols=ignore-all
         run: cargo test --manifest-path native/review-artifact-linux/Cargo.toml --features test
       - name: Lint native review artifact provider
         run: |

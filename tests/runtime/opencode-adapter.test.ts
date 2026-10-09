@@ -1417,10 +1417,25 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
   });
 
   it("allows an Edit targeting the exact reviewed plan during remediation", async () => {
-    const adapter = new OpenCodeAdapter(fakeInit());
+    const workspaceRoot = "/tmp/justice-adapter-review-gate-missing-root";
+    const adapter = new OpenCodeAdapter(
+      fakeInit({ worktree: workspaceRoot, directory: workspaceRoot }),
+    );
     await adapter.ensureInitialized();
     const justice = adapter.getJustice() as JusticePlugin;
-    await justice.getPlanBridge().handleReviewGateStart("main", {
+    const planBridge = justice.getPlanBridge();
+    planBridge.setReviewGateCoordinator(
+      createTestReviewGateCoordinator({
+        files: new Map([
+          ["docs/specs/design.md", "# Design\nAcceptance boundary.\n"],
+          [
+            "docs/plans/implementation-plan.md",
+            "## Task 1: Verification\n- [ ] Verify the boundary\n",
+          ],
+        ]),
+      }),
+    );
+    await planBridge.handleReviewGateStart("main", {
       source: "command",
       designPath: "docs/specs/design.md",
       planPath: "docs/plans/implementation-plan.md",
