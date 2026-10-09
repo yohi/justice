@@ -1,8 +1,8 @@
 # Justice Plugin — 仕様書
 
-> **バージョン**: 2.5.0
-> **ステータス**: プロダクションレディ (v1: Phase 1-9 完了 / v2.0: Quality Control Plane 基盤 完了・L0 Advisory)
-> **最終更新日**: 2026-07-28
+> **Implementation baseline:** 4.3.1
+> **Status:** Advisory quality plane; Review Gate conformance gaps in §4.1c.
+> **Last contract audit:** 2026-10-09
 
 ## 1. 概要
 
@@ -19,8 +19,10 @@ Justice は以下の手順でこのギャップを埋めます：
 
 1. エージェントのメッセージから委譲の意図を検出する
 2. 参照されたプランファイルを解析し、次に実行すべき未完了のタスクを見つける
-3. 構造化されたコンテキストを `task()` の呼び出しに注入する
-4. 実行結果を処理し、`plan.md` を更新する（チェックボックスのオンオフ、エラーの記録など）
+3. After explicit Plan authorization, enrich matching `task()` calls with the
+   approved task contract; artifact readiness alone does not authorize execution.
+4. Observe execution and mandatory review/Gate outcomes; update task progress
+   only after a durable accepted decision (§4.1e).
 5. 今後のタスク委譲を改善するために、タスク実行から得られた学習内容（Wisdom）を永続化する
 
 ### 1.2 コア原則
@@ -28,7 +30,9 @@ Justice は以下の手順でこのギャップを埋めます：
 - **フック重視のアーキテクチャ (Hook-First)**: 全ての機能は OmO のライフサイクルフックとして実装されます
 - **純粋なコアロジック (Pure Core Logic)**: ビジネスロジックは OmO に一切依存せず、完全に分離されておりテスト可能です
 - **不変性 (Immutability)**: 全ての型は `readonly` です。状態の変更は明示的なインターフェースを通じてのみ行われます
-- **フェイルオープン (Fail-Open)**: I/O のエラーによって実行がクラッシュすることはありません。プラグインはグレースフルに縮退します
+- **Fail-open execution / fail-closed acceptance:** ordinary I/O failures degrade
+  safely; uncertain evidence cannot authorize acceptance. The Review Gate
+  implementation lock and secure review-owned writes are enforcement exceptions.
 
 ---
 
@@ -80,6 +84,7 @@ Justice は以下の手順でこのギャップを埋めます：
 interface PlanTask {
   readonly id: string;           // "task-1", "task-2", ...
   readonly title: string;        // "パーサーモジュールの実装"
+  readonly rawBody: string;      // Exact original task section; see §4.1d
   readonly steps: PlanStep[];
   readonly status: PlanTaskStatus; // "pending" | "in_progress" | "completed" | "failed"
 }
@@ -120,13 +125,16 @@ interface DelegationContext {
 引数 wire payload とは別の契約である。`context` も Justice 内部だけで利用する
 task-scoped field であり、OMO の wire payload にはシリアライズしない。`category` は
 `SpCategory | TaskCategory` のいずれかを取り、Adapter 境界では、少なくとも
-`category`、`prompt`、`task_id`、`load_skills`、`run_in_background` を OMO の
+`prompt`、`load_skills`、`run_in_background` と、routing ownership に応じた
+`category` または `subagent_type`、継続時のみ `task_id` を OMO の
 canonical field 名で渡す。内部の `taskId`、`loadSkills`、`runInBackground` と
 legacy 入力の `skills`、`loadSkills`、`taskId` は境界で normalize される。
 
 **カテゴリ値域:**
 
-- `SpCategory`（Superpowers 専用 custom category）: `sp-mechanical` / `sp-implementation` / `sp-integration` / `sp-review` / `sp-final-review`
+- `SpCategory` (Superpowers custom categories): `sp-mechanical`,
+  `sp-implementation`, `sp-integration`, `sp-review`, `sp-final-review`,
+  `sp-deep`, and `sp-architecture`.
 - `TaskCategory`（OmO 標準）: `visual-engineering` / `ultrabrain` / `deep` / `quick` / `unspecified-low` / `unspecified-high` / `writing`
 - カテゴリ → model/provider の対応は `omo.jsonc` 側の定義が SSOT であり、Justice ソースコードに LLM model 名・provider 名をハードコードしない。
 
@@ -136,10 +144,15 @@ legacy 入力の `skills`、`loadSkills`、`taskId` は境界で normalize さ�
 - `RoutingReason`: `workflow_rule` / `task_classification` / `review_role` / `fix_escalation` / `explicit_request` / `compatibility_fallback`。
 - `createWorkerRoutingDecision` は `reason` が `task_classification` の場合に限り role/category の整合性を実行時検証し、違反時は `Invalid routing pair` エラーを送出する。`explicit_request`（呼び出し元の明示指定は権威であり、既存の role/category 不一致挙動を許容）と `compatibility_fallback`（既存フォールバックの保持）では検証をスキップする。
 
-**Worker payload の相互排他（category-first routing）:**
+**Worker routing ownership:**
 
-- `category` が既に存在する場合は呼び出し元の値を尊重し、存在しない場合のみ `PlanBridge` が決定した category を注入する（`normalizeTaskToolInputWithCategory`、`src/hooks/plan-bridge.ts`）。`subagent_type` / `agent` / `model` / `provider` / `variant` / `reasoning` / `fallback_models` は常に除去されるため、Worker category dispatch 時に `category != undefined` かつ `subagent_type == undefined` が保証される。
-- Adapter 層でも共通正規化が行われる: `OpenCodeAdapter.onToolExecuteBefore` は全ての `task()` 呼び出しに対し（no-op 早期 return より前）、元の `args` オブジェクトを差し替えずに `normalizeTaskToolInputInPlace` を適用する。
+- Justice-managed dispatch uses a task-derived or explicitly requested category.
+  Caller-owned named subagent dispatch preserves `subagent_type` and removes
+  `category`; unsupported model/provider fields are removed. The original
+  any-string contract and the current `general` exception are specified in §4.1d.
+- Adapter normalization has separate caller-to-Justice and final OmO-wire
+  phases, preserving args object identity. Logical/unknown IDs remain visible
+  for validation and are filtered only at the final wire boundary (§4.1d).
 
 ### 3.3 タスクフィードバック (Task Feedback)
 
@@ -477,7 +490,8 @@ digest・現在の review protocol fingerprint が完全一致する場合の
 `PlanBridge.handlePreToolUse()` は active plan を持つ `task()` に対し、認可済みの
 session / planPath と現行 Plan の fingerprint を照合する。Review Gate lock 外で
 認可不在または失効済み認可の呼び出しは `implementation_unauthorized` advisory
-だけを返し、plan 読み込み、delegation 構築、wisdom/persona 解決、loop 状態更新、
+だけを返す。現行実装では判定のために Plan 読み込みと認可の再検証を行うが、
+認可されない場合は delegation 構築、wisdom/persona 解決、loop 状態更新、
 completion 入力記録、`modifiedPayload` 生成を行わない。Review Gate lock 中の
 実装可能 tool はこの legacy advisory 経路へ到達する前に adapter boundary で skip
 される。Adapter は全ての `task()` 呼び出しで、早期 return の前にも元の
@@ -509,125 +523,544 @@ Adapter の共通 sanitize・canonicalize は適用される。
 
 ---
 
-### 4.1c Review Gate ランタイム — イベントソーシング調停 (Issue #297)
+### 4.1c Review Gate contracts and implementation status (Issue #297)
 
-Design / Implementation Plan の pre-implementation Review Gate は、Issue #297 以降
-**イベントソーシング型の決定論的オーケストレータ (ARCH1)** で駆動される。`PlanBridge` は Gate 状態を
-所有せず `ReviewGateCoordinator` へ委譲する。エージェントは状態遷移の権限を持たず、証拠（Observation / Remediation）の生成のみを担当する。
+This section preserves the normative contracts from the Convergence design
+deleted by `5dec10d`. A requirement below is not a claim that v4.3.1 implements
+it completely. The implementation snapshot and exceptions are explicit; the
+[contract audit](docs/reports/2026-10-09-documentation-contract-audit.md) records
+source and test evidence. Normative event names are logical identities; the
+current wire event union is listed separately.
 
-**共有ランタイムサービスグラフ (ワークスペースにつき 1 系統):**
+#### ARCH1 — authority and shared runtime
+
+Justice owns deterministic state transitions. Agents produce evidence only;
+reviewer text, prompts, model choice, and session caches are not approval
+authority. `PlanBridge` delegates to one workspace-scoped service graph:
 
 ```text
-LinuxReviewGateProvider? (ネイティブ flock / durable replace / workspace replace)
-  → ReviewGateEventStore   (.justice/review-gates/<gateId>/events/*.json + dispatches/*.json + indexes/scopes/<scopeId>.json)
-  → ReviewGateLockManager  (scope → gate の順序連鎖 flock)
-  → ReviewGateRecoveryStore (recovery CAS)
-  → ReviewGateCoordinator  (純粋オーケストレータ + 投影 + agent protocol)
-  → ReviewGateHistoryService / ReviewGateApprovalLookup (同一 store を再利用、第二 store は作らない)
+LinuxReviewGateProvider? → ReviewGateEventStore → ReviewGateLockManager
+                        → ReviewGateRecoveryStore → ReviewGateCoordinator
+                        → ReviewGateHistoryService / ReviewGateApprovalLookup
 ```
 
-**論理イベントカタログ (EVC1):**
-正本は versioned な追記型イベント履歴のみ。各イベントは SHA-256 コーザルハッシュチェーンで連結され、不可逆かつ決定論的に投影される。
+The history and approval services reuse that store. Pre-implementation Review
+Gate authority is separate from the post-implementation mandatory reviews in
+§4.1e. A Gate starts the implementation lock; CLEAR alone never unlocks it.
 
-| カテゴリ | イベント種別 (`eventType`) | 発行権限 (Authority) | 役割とペイロード概要 |
-| --- | --- | --- | --- |
-| ライフサイクル | `GATE_CREATED` | Justice Core | ゲート初期化。正規化済み Design/Plan パス、SHA-256 ダイジェスト、Git モード (`100644`/`100755`)、RR1 要件解決結果、review protocol fingerprint を固定 |
-| ライフサイクル | `ORCHESTRATION_RESUMED` | Justice Core | 再開記録。新たな `writerId` と `epochId` を発行し、未完了ディスパッチの回復を開始 |
-| 成果物 | `ARTIFACT_BINDINGS_UPDATED` | Justice Core | 要件/設計/計画の再解決・バインディング更新を記録 |
-| レビュー観測 | `REVIEW_OBSERVED` | Reviewer Agent | フレッシュレビューによる指摘候補 (`ReviewCandidateObservationV1[]`) の観測結果 |
-| 指摘・系譜 | `FINDING_RECONCILED` | Coordinator | 独立バリデータ検証済み指摘の照合。セマンティック系譜 (Lineage) の新規登録・ステータス更新 |
-| 検証 | `VALIDATION_RECORDED` | Validator | 決定論的バリデータ (VAL1) またはエージェントによる検証結果の記録 |
-| 系譜状態 | `LINEAGE_STATUS_CHANGED` | Coordinator | 指摘系譜の解決・再オープン・ALREADY_RESOLVED 遷移 |
-| 修正作業 | `REMEDIATION_STARTED` | Remediator Agent | 修正ラウンドの開始。対象系譜 ID 群と事前イメージ（pre-image）を固定 |
-| 修正作業 | `REMEDIATION_COMPLETED` | Remediator Agent | 修正作業完了。成果物の事後イメージ（post-image）を記録 |
-| コミット/復元 | `COMMIT_PREPARED` | Justice Core | exact-artifact コミットの準備状態（クラッシュ回復用 CAS） |
-| コミット/復元 | `RESTORE_PREPARED` | Justice Core | ワークスペース復元の準備状態（クラッシュ回復用 CAS） |
-| コミット/復元 | `REMEDIATION_COMMITTED` | Justice Core | コアによる成果物のアトミック Git コミット完了（GIT1 契約） |
-| コミット/復元 | `WORKSPACE_RESTORED` | Justice Core | 承認スナップショットへの復元完了 |
-| マイルストーン | `DESIGN_CLEAR` | Orchestrator | Design フェーズの全ブロッカー解消と事前検証通過（同一 generation 内で保持） |
-| マイルストーン | `PLAN_CLEAR` | Orchestrator | Plan フェーズの全ブロッカー解消と事前検証通過 |
-| マイルストーン | `COMPLETED_APPROVAL_BINDING`| Orchestrator | 完了承認バインディング（Requirements/Design/Plan パス+ダイジェスト+プロトコル指紋）の固定 |
-| 状態変更 | `REOPEN_RECORDED` | Orchestrator | アップストリーム（Design/Requirements）指摘検出によるフェーズ再オープン |
-| 中断・停止 | `ROUND_LIMIT_EXHAUSTED` | Orchestrator | generation の絶対修正上限（Design 5 / Plan 3）到達による停止 |
-| 中断・停止 | `REVIEW_NON_CONVERGENT` | Orchestrator | NC1 セマンティック非収束検出による停止（マテリアルプログレス待機） |
-| 中断・停止 | `EXECUTION_SUSPENDED` | Coordinator | 実行基盤欠落（ネイティブ未サポート）、入力改変、証拠喪失等による fail-closed 停止 |
+#### R1 / C1 / L1 / G1 / E1 — discovery, locks, and generations
 
-**段階的承認と絶対ラウンド上限:**
-- **Staged Approval**: Design フェーズ (review → finding validation → remediation → self-review → exact-artifact commit → fresh review) → `DESIGN_CLEAR` → Plan フェーズ → `PLAN_CLEAR` + `COMPLETED_APPROVAL_BINDING`。
-- **Remediation ラウンド上限**: generation ごとに **Design 5 回 / Plan 3 回** の絶対値。epoch 更新やコマンド再実行によって replenishment されることはない。いかなる実行パスも Design round 6 や Plan round 4 を生成してはならない。
+- Scope identity is derived from canonical workspace-relative Design/Plan paths.
+  Discovery must validate the same-scope generation chain independently of
+  successfully decoding `GATE_CREATED`. Corrupt/unsupported current-scope
+  history blocks replacement generation creation; unrelated-scope corruption
+  must not globally block a healthy scope. Multiple resumable or completed tips
+  are identity conflicts.
+- Acquire a non-blocking OS scope lock before the Gate lock. Keep the scope lock
+  until the selected Gate is reprojected or the new genesis is durable. Reread
+  artifact/protocol identities under admission ownership and reject mixed reads.
+  Hold the Gate lock for the orchestration invocation. TTL, PID, and heartbeat
+  are diagnostic only; workers must not inherit lock descriptors.
+- Resume a crash from durable history in the same generation and epoch.
+  `ORCHESTRATION_RESUMED` is same-epoch audit; only an eligible suspension
+  transition starts `ORCHESTRATION_EPOCH_STARTED`. Neither restores capacity.
+- Remediation limits are absolute per generation: Design **5**, Plan **3**.
+  No restart, epoch, command rerun, or legacy retry option may create Design
+  round 6 or Plan round 4. A changed active/suspended baseline must pass the
+  reopen/invalidation contract, not silently create replacement budgets.
 
-**OSC1 アップストリーム先行と ResumeCursor 評価順序:**
-現在フェーズのディスポジション判定は以下の順序を厳密に遵守する（第一一致が勝つ）:
-1. **OSC1 Upstream Precedence**: `currentUpstreamBlockers.length > 0` の場合、Plan フェーズであっても最優先で `resolve_upstream`（Design フェーズ再オープン）へ分岐。Design 成果物が未コミット・変更状態（`clean_committed` 以外）であれば、即座に再オープンせず `prepare_restore`（exact restore）で承認済みバインディングに復元してから再オープンする。
-2. **RV1 Stale-lineage Revalidation**: `pendingRevalidationBlockers.length > 0` の場合、指摘の再検証ディスパッチへ分岐。
-3. **NC1 Non-Convergence**: 非収束が検出された場合、`non_convergent`（`REVIEW_NON_CONVERGENT` で suspend）へ分岐。
-4. **Round Limit Exhausted**: 残りラウンド数が 0 の場合、`round_limit`（`ROUND_LIMIT_EXHAUSTED` で suspend）へ分岐。
-5. **Remediation Continuation**: ブロッカーが存在し上限内であれば、通常修正ラウンド（`remediate`）へ分岐。
-6. **Clean Phase Review**: ブロッカーがなければフレッシュレビューまたは Pre-clear 検証へ進む。
+#### RR1 / PF1 / CB1 / IP1 / CTX1 / RI1 — bindings and approval
 
-**NC1 セマンティック非収束判定の 6 大トリガー:**
-単なるテキストの一致ではなく、セマンティック系譜の遷移に基づいて収束・非収束を判定する:
-1. `resolved_lineage_regressed`: 一度解決された指摘系譜の再発 (`regressionCount > 0`)。
-2. `remediation_oscillation`: 再オープンされた指摘系譜が直前ラウンド以外で振動 (`status === "reopened"` かつ not `isLastPhaseRound`)。
-3. `same_lineage_stall`: 直近 2 ラウンド連続で同一指摘が再オープン状態 (`isInLastTwoPhaseRounds`)。
-4. `contract_conflict_repeated`: `ALREADY_RESOLVED` 状態の指摘に対する再指摘・契約衝突の反復 (`alreadyResolvedObservationCount > 0`)。
-5. `blocker_landscape_repeated`: 現在のブロッカー指紋 (`computeBlockerLandscapeFingerprint`) が直前ラウンドと完全に同一で残存。
-6. `blocker_count_not_improving`: ブロッカー件数が直前ラウンドから減少せず停滞または増加。
+- Persist Requirements resolution, artifact paths/digests/Git modes, and protocol
+  identities at genesis. Resolution must be explicit or an unambiguous Design
+  reference; missing/ambiguous resolution cannot invent Requirements authority.
+  Existing-generation resolution remains pinned. **Current command limitation:**
+  there is no `--requirements` flag; the coordinator binds Requirements to the
+  Design artifact itself (`auto_design_reference`).
+- `ReviewProtocolDescriptorV1` contains `design`, `plan`, and `crossPhase`.
+  Phase fingerprints hash canonical JSON of each phase descriptor; the global
+  fingerprint hashes the complete descriptor. Include static prompt digests,
+  semantic validator contracts, policy versions, and absolute limits. Exclude
+  model/provider/package/writer identities and timestamps.
+- A review attempt pins its phase, baseline revision, context identity,
+  relevant artifact bindings, approved Design digest in Plan, and protocol
+  fingerprints. Relevant input drift during an attempt suspends it. Accepted
+  committed context changes invalidate affected progress and revalidate stale
+  lineages; accepted change is distinct from same-loop regression.
+- Exact completed reuse is read-only: compare Requirements/Design/Plan paths
+  and digests plus the current global protocol fingerprint. A mismatch creates
+  a new generation linked by `supersedesGateId`; the completed predecessor is
+  immutable. A resumable generation takes precedence over completed reuse.
+- A new generation may inherit Design CLEAR only from its immediate completed
+  predecessor with an exact Requirements/Design/design-protocol binding. Persist
+  `DESIGN_CLEAR_INHERITED`, predecessor Gate/milestone references, and the
+  inheritance binding. Plan-only drift need not force a new Design review.
+- Reopen precedence is Requirements, then Design, then Plan. Requirements
+  reopen suspends for an upstream committed change. Design reopen invalidates
+  dependent Plan progress; it must not reinterpret an old Design milestone as
+  authority for a new baseline.
+- `/justice-implement --approved` uses `findCurrentCompletedApproval` to require
+  exactly one current durable completed binding. Zero matches is `not_approved`;
+  multiple matches is `identity_conflict`. Lookup is read-only and stale
+  completed Gates receive no invalidation event. Explicit user authorization
+  remains required after a matching lookup.
 
-**再起動・クラッシュ回復 (Crash-Window Recovery):**
-- 再開は durable 履歴の再投影のみから行う。
-- 未完了の durable dispatch は同一 `operationId` で正確に一度だけ再ディスパッチされる。
-- candidate/target 証拠が復元できない操作は `EXECUTION_SUSPENDED` (REDISPATCH_EVIDENCE_UNAVAILABLE) で fail-closed に停止する。
-- prepared restore/commit は source / destination / conflict の 3 値分類で exactly-once 回復され、第三の未定義状態は fail-closed に停止する。`REMEDIATION_STARTED` 後の未知の部分的変更を上書き・復元・chmod することはない。
+#### LNR1 / AR1 / XG1 / XGR1 / EV1 — semantic finding identity
 
-**Actor 分離と Linux 変異能力要件 (CAP1 / GIT1 / WSP1):**
-- **権限分離**: `review_mutation` は remediator worker のみ。`review_restore` と `review_commit` は Justice コアのみが実行可能。
-- **GIT1 exact-artifact コミット契約**: 対象成果物 1 パスのみを `--literal-pathspecs` でステージングし、`[Justice] remediation round <N>` でコミット。プッシュは行わず、他の変更や index/worktree 状態を一切巻き込まない。
-- **Git ファイルモード**: 正規ファイルモードは `100644` (一般) / `100755` (実行可能) のみ。worktree の Git モードは owner execute bit (`stat.mode & 0o100`) のみから導出され、POSIX `0655` / `0645` は `100644` に正規化される。
-- **WSP1 Linux ネイティブ基盤**: ワークスペース変異（commit/restore/exact replace）は、Linux x64 + glibc + `openat2` + `renameat2` + non-blocking `flock` + `fdatasync`/`fsync` を実証したネイティブ基盤が利用可能な場合に限り実行される。`replaceWorkspaceFileExact` は対象ファイルの現行ダイジェストと Git モードの一致を検証し、既存パーミッションを保持したテンポラリファイル作成 → `renameat2` アトミック置換を行う。ネイティブ機能不足環境では危険な Node フォールバックを行わず、`EXECUTION_SUSPENDED` (mutation_unavailable) で fail-closed に停止する。
+- Justice issues `occurrenceId` per observation and generation-local `lineageId`
+  per semantic defect. Agents may refer only to Justice-provided opaque lineage
+  candidates; they cannot mint or rewrite authoritative IDs.
+- The immutable canonical basis is `violationType`, `governingReference`,
+  `semanticLocation`, `violatedContract`, and `ownerScope`. A `basisDigest`
+  hashes canonical JSON of this basis. Line numbers and explanation text are
+  evidence/display only. Later confirmed bases do not rewrite the canonical one.
+- A fresh reviewer and finding-validator run in separate roles and contexts
+  against the same pinned baseline. Hidden reviewer reasoning is not passed to
+  the validator. The validator decides validity, severity, ownership, and
+  `EXISTING | NEW | NONE` semantic relation. `INVALID` is never remediated;
+  duplicates remain auditable but represent one blocker; valid minor findings
+  are displayed as advisory and neither block CLEAR nor auto-remediate.
+- `ALREADY_RESOLVED` requires `EXISTING`, a resolved target lineage, and absence
+  of the defect on the pinned baseline. `NEW + ALREADY_RESOLVED` is invalid.
+  If the defect is present, use `VALID + EXISTING → LINEAGE_REGRESSED` and reopen
+  that lineage. An unchanged digest alone never proves an observation false.
+  Conflicting validity results on one snapshot fail closed.
+- Cross-generation reconciliation may link a new lineage to predecessor
+  semantics, but predecessor resolution is evidence, not current-generation
+  resolution authority. Finding entry points are reviewer validation,
+  self-review discovery, deterministic validation, and regression/revalidation
+  of existing lineages; reentry validation cannot create a fifth entry point.
 
-**実装認可と承認バインディング照合 (CB1 / Task 14):**
-- レビューゲート通過後、セッションには実装ロックが掛かり、`task()` 等の実装ツールは遮断される。
-- 実装認可には明示的な `/justice-implement --plan <path> --approved` が必要。
-- 新設の専用関数 `findCurrentCompletedApproval` が durable な `COMPLETED_APPROVAL_BINDING` を照合し、現在の Requirements / Design / Plan の正準パス + SHA-256 ダイジェスト + 現在の `reviewProtocolFingerprint` の全件完全一致を検証する。
-- 一致 0 件は `not_approved`、複数件は `identity_conflict` で fail-closed。一致 1 件のみで実装ロックが解除（arm）される。照会は読み取り専用であり、stale な Gate に無効化イベントを追記しない。
+#### OSC1 / RV1 / RSL1 / FR1 / AIM1 / SRF1 / CLR1 — review and resolution
 
-**履歴照会 (`/justice-review-history` / HQ1):**
-- 同一の共有 store 上で読み取り専用 DTO 表示（`summary` / `rounds` / `findings`、`--all-generations`）を提供。
-- Gate lock 取得、イベント追記、成果物解決、バリデータ呼び出しは行わない。
-- 破損、複数 live tip、未対応イベントバージョン検出時は部分表示を行わず fail-closed に失敗する。
+- Design review binds Requirements + Design; Plan review binds approved Design
+  and Plan, with Requirements authority inherited transitively from Design.
+  Fresh review is history-blind and independent against committed artifacts.
+  Attempt identity is distinct from remediation round and physical dispatch;
+  transport redispatch preserves logical operation identity.
+- Current upstream blockers take precedence over NC1 and exhausted capacity.
+  Before upstream reopen, discard uncommitted downstream remediation using an
+  exact core-owned restore to its approved binding. Revalidate stale lineages
+  before ordinary remediation. `INDETERMINATE`/failure cannot clear a blocker.
+- Reviewer omission, remediator assertions, or digest changes do not resolve
+  OPEN lineages. Only `LINEAGE_RESOLUTION_COMMITTED` creates resolution authority
+  after verified remediation commit or explicit committed external-change
+  revalidation. Self-review resolution is evidence until commit success and
+  exact committed/pinned digest agreement. Commit failure leaves the lineage OPEN.
+- Self-review uses a fresh finding-validator context for both targeted checks
+  and discovered regressions. Discovered findings carry validity and semantic
+  relation in that result; do not run a redundant ordinary validity call.
+  Reconcile every discovered occurrence before testing commit eligibility.
+  `STILL_PRESENT` plus discovery of the same existing defect is a conflict.
+- Self-review PASS requires all target blockers resolved, no new blocking or
+  upstream finding, no indeterminate target, unchanged pinned inputs, and all
+  mandatory deterministic checks PASS. Minor findings may coexist with PASS.
+  A blocking current-phase result consumes the round without commit and carries
+  the exact known-dirty post-image into the next disposition; final-round failure
+  suspends without inventing another slot.
+- After verified resolution commit, perform fresh review. A failed fresh review
+  suspends without repeating committed remediation. Design CLEAR precedes Plan
+  review. CLEAR requires no current/pending upstream or phase blocker, fresh
+  reconciliation, required validation PASS, and a clean committed target. Plan
+  CLEAR is followed by durable completed approval; neither authorizes execution.
 
-**`--retry` 互換 (RTY1):**
-- `--retry N` (0〜10) は旧構文との解析互換のみの deprecated no-op であり、内部で `legacyRetryOption` として保持される。
-- 予算、epoch、NC1 判定、protocol fingerprint、履歴、絶対上限（5/3）に一切影響を与えない。v5 で削除予定。
+#### VAL1 / VSC1 / DVF1 — deterministic validation
 
-**プロトコル記述子と決定論的指紋 (PF1):**
-レビュープロトコルの同一性はセマンティックな影響範囲に応じて構造化され、暗黙の変更を検知する:
-- `ReviewProtocolDescriptorV1` = `{ design: DesignProtocolDescriptorV1, plan: PlanProtocolDescriptorV1, crossPhase: CrossPhaseProtocolDescriptorV1 }`
-- `designProtocolFingerprint = sha256(canonicalJson(descriptor.design))`
-- `planProtocolFingerprint = sha256(canonicalJson(descriptor.plan))`
-- `reviewProtocolFingerprint = sha256(canonicalJson(descriptor))`
-- 含まれる要素: 各フェーズの契約バージョン、静的プロンプト契約ダイジェスト、決定論的バリデータルール定義、絶対上限（Design 5 / Plan 3）。モデル名・プロバイダー・動的タイムスタンプ等の実行時環境変数は意図的に除外され、決定論性を担保する。
+Registered validators declare contract/schema versions, semantic inputs, phases,
+mandatory stages, rules, and execution kind (`IN_PROCESS | ISOLATED_PROCESS`).
+Mandatory stages are `BASELINE_ADMISSION`, `POST_REMEDIATION_SELF_REVIEW`, and
+`PRE_CLEAR`:
 
-**指摘同一性とセマンティック系譜 (LNR1 / AR1 / XG1):**
-LLM は任意の系譜 ID を発行・変更できず、Justice コアが同一性を管理する:
-- `occurrenceId`: 1回の観測ごとに発行される一意な識別子。
-- `lineageId`: Gate generation 内で同一欠陥を追跡するセマンティックな系譜識別子。
-- `basisDigest`: 欠陥の不変の基底（`targetPath\0lineStart\0lineEnd\0ruleId\0category\0` の正規化ハッシュ）。
-- `ALREADY_RESOLVED` 遷移 (AR1): 過去に解決済みと判定された指摘が、成果物の変更なしに再観測された場合、モデルの誤指摘としてセマンティックに吸収する。この発生は `contract_conflict_repeated` 非収束トリガーとして記録され、ループを防止する。
-- 世代間系譜引き継ぎ (XG1 / XGR1): 同一スコープで新世代の Gate が作成された場合も、過去世代の系譜 ID と解決状態の連続性が追跡される。
+- Admission FAIL/INDETERMINATE suspends before reviewer dispatch and creates no
+  finding. Post-remediation semantic FAIL enters the deterministic finding bridge
+  while LLM self-review still runs; blocking findings prohibit commit.
+- At PRE_CLEAR, exact reusable PASS evidence may satisfy completeness without
+  rerunning. A semantic FAIL enters ordinary lineage/reopen disposition;
+  INDETERMINATE cannot satisfy a mandatory stage.
+- Cache keys hash exact declared bindings, validator/schema identity, phase,
+  and applicable executable/tool/runtime environment identity. Semantic
+  PASS/FAIL/INDETERMINATE can be reused on exact inputs; execution failure cannot.
+  `DETERMINISTIC_VALIDATION_REUSED` references original evidence. Environment
+  drift during redispatch of one logical operation fails closed.
+- DVF1 uses registered rule authority for defect existence/severity; an LLM
+  cannot downgrade it. Deduplicate by `(validationEventId, ruleId)` and reconcile
+  into the same blocker/remediation flow as other findings.
 
-**決定論的バリデータと指摘ブリッジ (VAL1 / VSC1 / DVF1):**
-- 登録済みバリデータ (`validatorId`) により、純粋関数または隔離プロセスで Markdown 構造や必須見出し等を検証する。
-- DVF1 Bridged Findings: 決定論的ルールの違反は絶対的な欠陥存在権威を持ち、LLM はその重大度や有効性を上書きできない。検出された指摘は通常指摘と同じ系譜（Lineage）に合流し、同一のブロッカー・修正サイクルで処理される。Pre-clear 段階で全必須バリデーションが PASS しない限り、`DESIGN_CLEAR` / `PLAN_CLEAR` は発行されない。
+#### NC1 / N1 — non-convergence and reentry
 
-**共有ファイル配置構造 (P1 / PR1):**
-レビューゲートの永続化データは `.justice/review-gates/` 配下に厳格に配置される:
-- `events/<gateId>/writer-<writerId>.json`: ライターシャードごとの追記イベントログ（コーザルハッシュチェーン付き）。
-- `dispatches/<gateId>/disp-<operationId>.json`: 正確に一度の再駆動を担保する durable dispatch 台帳。
-- `indexes/scopes/<scopeId>.json`: スコープ ID から最新 Gate ID へのアトミック索引。
-- `locks/scopes/<scopeId>.lock` / `locks/gates/<gateId>.lock`: プロセス排他ロックファイル。
-- `recovery/<digest>.json`: アトミック復元・CAS 用の不変オブジェクトキャッシュ。
+Use semantic history on the same phase baseline/protocol. Persist all triggered
+rules and choose the first as `primaryReason` in this exact order:
+
+1. `RESOLVED_LINEAGE_REGRESSED`: a committed resolution later regresses on the
+   same context; immediate suspension.
+2. `REMEDIATION_OSCILLATION`: `fingerprint[n] == fingerprint[n-2]` and differs
+   from `fingerprint[n-1]`.
+3. `SAME_LINEAGE_STALL`: the same lineage is targeted in two consecutive rounds
+   and STILL_PRESENT after both.
+4. `CONTRACT_CONFLICT_REPEATED`: the same owner/type/reference/contract group is
+   targeted and remains blocking after two consecutive targeted rounds;
+   semantic location is excluded.
+5. `BLOCKER_LANDSCAPE_REPEATED`: the exact semantic blocker landscape is
+   unchanged for two consecutive remediation cycles.
+6. `BLOCKER_COUNT_NOT_IMPROVING`: two consecutive cycles have
+   `postBlockingCount >= preBlockingCount`; a decrease resets the streak.
+
+Disposition ordering is OSC1 upstream precedence, stale-lineage revalidation,
+NC1, absolute exhaustion, remediation continuation, then clean-phase review.
+An eligible Design reentry change affects Requirements/Design/design protocol;
+an eligible Plan change affects approved Design/Plan/plan protocol. Model or
+provider changes alone are ineligible. Changed targets must be clean/committed.
+`NON_CONVERGENCE_REENTRY_VALIDATION` returns `MATERIAL_PROGRESS`,
+`NO_MATERIAL_PROGRESS`, or an upstream reopen result. Only verified
+`MATERIAL_PROGRESS` permits non-convergence reentry; it never replenishes rounds.
+Upstream reopen requires an already committed CURRENT upstream blocker and cannot
+create a lineage. No eligible/material change remains suspended. Exhaustion
+may admit external committed change for revalidation/CLEAR, but not new capacity.
+
+#### CAP1 / WSP1 / GIT1 / RO1 / CP1 — mutation and crash recovery
+
+- `review_query` is read-only and phase-scoped. `review_mutation` is
+  remediator-only, limited to the exact target and its active round. Core alone
+  performs `review_restore` and `review_commit`; `implementation` stays locked.
+- Mutation requires proven Linux x64 + glibc + `openat2` + `renameat2` +
+  non-blocking `flock` + sync semantics. Missing capability suspends fail-closed;
+  no unsafe pathname-only Node fallback is permitted.
+- Git target identity is content plus tree-entry mode (`100644 | 100755`).
+  Worktree mode derives only from the owner execute bit; POSIX `0655`/`0645`
+  normalize to `100644`. Exact replace checks the current digest/mode and
+  preserves unrelated POSIX permissions.
+- Commit one literal artifact path, preserving unrelated index/worktree state,
+  with message `[Justice] remediation round <N>`. Never push. Verify parent/HEAD,
+  changed-path scope, blob, and mode before declaring commit success.
+- Persist pre-images before mutation and prepared restore/commit intent before
+  side effects. Recovery CAS is private durable content storage, separate from
+  the bounded event ledger. Classify recovery as source, destination, or conflict;
+  recover a known operation exactly once or fail closed on the third state.
+  Unknown partial mutation is never overwritten, restored, or chmodded.
+- Incomplete durable dispatches reuse `operationId`. Missing candidate/target
+  evidence suspends with `REDISPATCH_EVIDENCE_UNAVAILABLE`; do not guess evidence.
+  Exactly-once refers to authoritative outcome application, not a guarantee that
+  an external agent physically executes only once.
+
+#### P1 / DA1 / SV1 / PR1 / RET1 / EVC1 — durable history contract
+
+The normative ledger is versioned, causally ordered, and hash-linked across
+writer shards, with scope membership independently discoverable. Required
+logical event families are:
+
+- Generation/dispatch: `GATE_CREATED`, `ORCHESTRATION_RESUMED`,
+  `ORCHESTRATION_EPOCH_STARTED`, `EXTERNAL_OPERATION_DISPATCHED`.
+- Review/finding: `REVIEW_ATTEMPT_STARTED`, `REVIEW_CANDIDATES_OBSERVED`,
+  `FINDING_VALIDATION_COMPLETED`, `FINDING_RECONCILIATION_COMMITTED`,
+  `CROSS_GENERATION_RECONCILIATION_COMPLETED`.
+- Validation/revalidation: `DETERMINISTIC_VALIDATION_COMPLETED`,
+  `DETERMINISTIC_VALIDATION_REUSED`, `DETERMINISTIC_FINDINGS_OBSERVED`,
+  `LINEAGE_REVALIDATION_COMPLETED`, `LINEAGE_REVALIDATION_COMMITTED`.
+- Remediation/restore: `REMEDIATION_STARTED`, `REMEDIATION_COMPLETED`,
+  `REMEDIATION_INTERRUPTED_RECOVERED`, `REVIEW_TARGET_RESTORE_PREPARED`,
+  `REVIEW_TARGET_RESTORE_SUCCEEDED`, `REVIEW_TARGET_RESTORE_RECOVERED`.
+- Self-review/commit/resolution: `SELF_REVIEW_STARTED`, `SELF_REVIEW_COMPLETED`,
+  `REVIEW_COMMIT_PREPARED`, `REMEDIATION_COMMIT_SUCCEEDED`,
+  `REMEDIATION_COMMIT_RECOVERED`, `LINEAGE_RESOLUTION_COMMITTED`.
+- Change/invalidation: `REQUIREMENTS_REOPEN_REQUIRED`, `DESIGN_REOPEN_REQUIRED`,
+  `REQUIREMENTS_CHANGE_OBSERVED`, `DESIGN_CHANGE_OBSERVED`, `PLAN_CHANGE_OBSERVED`,
+  `REVIEW_PROTOCOL_CHANGE_OBSERVED`, `REVIEW_PROGRESS_INVALIDATED`,
+  `DESIGN_CLEAR_INVALIDATED`.
+- Approval/suspension: `DESIGN_CLEAR`, `DESIGN_CLEAR_INHERITED`, `PLAN_CLEAR`,
+  `REVIEW_NON_CONVERGENT`, `ROUND_LIMIT_EXHAUSTED`,
+  `NON_CONVERGENCE_REENTRY_VALIDATION_COMPLETED`, `EXECUTION_SUSPENDED`.
+
+The preserved namespace is
+`.justice/review-gates/events/<reviewScopeId>/<gateId>/<writerId>.jsonl`,
+with recovery objects under `recovery/objects/sha256/`. This is a design
+requirement, not the observed v4.3.1 layout below.
+
+Only Justice commits authority; agent results are evidence. Busy/identity/history/
+version/persistence-policy errors must not append a synthetic operational event
+when authoritative projection/append is unsafe.
+
+Persist typed, bounded, redacted authority/audit data only. Never persist full
+artifacts, excerpts, raw agent/tool output, prompts, hidden reasoning, environment
+variables, credentials, or absolute host paths in the event ledger. Strictly
+parse raw results, validate persistence policy, append safe typed data, and
+discard raw input. Authority-field violations fail with
+`EVENT_PERSISTENCE_POLICY_VIOLATION`; do not redact them into different semantics.
+All persisted artifact paths are canonical workspace-relative paths.
+
+ACTIVE, SUSPENDED, COMPLETED, corrupt, and unsupported histories are retained
+indefinitely in v4. Automatic rotation/compaction/manual prune of this ledger is
+out of scope; corrupt history cannot be deleted to bypass failure. Only recovery
+CAS objects are eligible for automatic GC under their retention contract.
+Diagnostic counts/bytes/age confer no delete authority.
+
+#### HQ1 / RTY1 — history queries and retry compatibility
+
+`/justice-review-history` reads the shared store without Gate lock acquisition,
+event append, artifact resolution, or validator execution. `summary`, `rounds`,
+and `findings` expose phase/status, effective Design authority, absolute budgets,
+lineage, last transition, ResumeCursor, and revision; `--all-generations` orders
+the validated generation chain oldest first. Corruption, ambiguous tips, and
+unsupported versions fail closed rather than render partial authority.
+
+`--retry N` (0–10) parses as deprecated `legacyRetryOption` only. It changes no
+budget, epoch, convergence rule, fingerprint, or history; removal is planned
+for v5.
+
+#### Observed v4.3.1 implementation and gaps
+
+The current store layout is **not** the normative writer-sharded layout:
+
+```text
+.justice/review-gates/
+  <gateId>/events.jsonl
+  <gateId>/dispatches.jsonl
+  scope-index.json
+  locks/scopes/<scopeId>.lock
+  locks/gates/<gateId>.lock
+  recovery/<digest>.json
+```
+
+`src/core/review-gate-types.ts` currently defines exactly these wire events:
+`GATE_CREATED`, `ARTIFACT_BINDINGS_UPDATED`, `ORCHESTRATION_RESUMED`,
+`DESIGN_CLEAR`, `PLAN_CLEAR`, `REOPEN_REQUIRED`, `ROUND_LIMIT_EXHAUSTED`,
+`REVIEW_NON_CONVERGENT`, `EXECUTION_SUSPENDED`, `FINDING_DISCOVERED`,
+`FINDING_REMEDIATED`, `FINDING_SELF_REVIEWED`, `FINDING_REOPENED`, and
+`COMPLETED_APPROVAL_BINDING`. Do not substitute invented event names or claim
+that this reduced union implements the logical catalog above.
+
+Source/test inspection confirms staged zero-finding completion, absolute round
+limits, dispatch recovery with safe suspension for unavailable evidence,
+read-only approval/history lookup, and exact Git/native recovery primitives.
+It also identifies these conformance gaps:
+
+- The event envelope/store does not implement versioned causal hashes or strict
+  event-specific bounded/redacted persistence policy; atomic JSONL replacement
+  alone does not establish P1/PR1. Resume currently creates a new epoch.
+- Discovery uses `scope-index.json`; changed active/suspended bytes can create
+  a new generation instead of preserving the old budget. Completed command
+  reuse compares artifact paths/digests but omits protocol identity; the separate
+  implementation approval lookup does check the current protocol.
+- `supersedesGateId`/inherited Design CLEAR are not projected. Cross-generation
+  protocol support does not establish runtime lineage continuity.
+- Semantic basis hashing is present, but occurrence/resolution history and
+  regression/ALREADY_RESOLVED counters are incomplete. Current NC1 predicates
+  differ from the normative two-cycle/fingerprint/conflict-group rules.
+- The parser/core expose non-convergence reentry, but the coordinator lacks a
+  complete eligible-change admission path. Self-review discoveries are parsed
+  but not reconciled by its self-review handler; full SRF1/RSL1 authority is not
+  implemented by the simplified `FINDING_SELF_REVIEWED` state alone.
+- The validator library supports stage/cache/bridge contracts; coordinator
+  wiring currently schedules PRE_CLEAR rather than all mandatory stages.
+
+These are implementation gaps, not permissions to weaken the preserved
+contracts. Test PASS proves only the scenarios exercised, not full conformance.
+
+### 4.1d Superpowers / OmO compatibility bridge contract
+
+This section preserves the v4 bridge contract for Superpowers v6.4.2 and OmO
+v4.19.4. It owns task-body, task-identity, routing-ownership, and dependency
+compatibility; component summaries link here rather than redefine the protocol.
+
+#### Original task body and final prompt ownership
+
+`PlanTask.rawBody` is the exact original Markdown from a real task heading to
+just before the next real task heading. Preserve EOLs, Interfaces, Files,
+signatures, test code, verification commands, and expected output without
+canonicalization. Headings inside backtick/tilde fences do not start tasks.
+`steps` owns progress/status; `rawBody` owns worker instructions. Do not confuse
+fingerprint canonicalization with the original body delivered to a worker.
+
+`PlanBridge` constructs the complete authorized worker prompt in this order:
+
+```text
+**TASK CONTRACT FROM APPROVED PLAN**
+<rawBody>
+**CALLER CONTEXT**
+<original caller prompt exactly once; omit if empty>
+**JUSTICE EXECUTION CONSTRAINTS**
+<required implementation directive and constraints>
+**PREVIOUS LEARNINGS**
+<advisory learnings; omit if absent>
+```
+
+For authorized task responses with a string `modifiedPayload.args.prompt`, the
+adapter assigns that prompt directly. It must not prepend `injectedContext` or
+append the original prompt again. Responses without an authoritative task
+prompt keep the ordinary injected-context merge. Learnings never replace or
+precede the approved task contract.
+
+#### Internal identity and two-phase normalization
+
+Justice logical IDs (`task-N`) remain internal selection/correlation identities
+in delegation, progress, observations, and reviews. Only genuine `ses_...`
+continuations may reach OmO wire `task_id`; fresh delegations normally omit it.
+Unknown IDs are removed from the final wire, not before Justice validates them.
+
+1. **Caller → Justice:** canonicalize field aliases while preserving logical,
+   continuation, and unknown task IDs plus caller routing fields. Review-category
+   bookkeeping must not destructively apply wire filtering at this stage.
+2. **Justice → OmO:** after applying modified args, remove logical/unknown IDs,
+   preserve genuine continuation as `task_id`, enforce routing exclusivity, and
+   remove unsupported model/provider fields. Preserve the original args object's
+   identity on authorized, unauthorized, disabled, no-op, and error paths.
+
+#### Routing ownership and conservative dependencies
+
+A caller-supplied string `subagent_type` owns routing: preserve it and remove
+`category`, including a category supplied by Justice. Continue authorization and
+approved-context validation, but do not change a named subagent into a
+category-routed task. Without caller-owned routing, use Justice's task category.
+`agent`, `model`, `provider`, `variant`, `reasoning`, and `fallback_models` remain
+unsupported explicit worker wire fields. Mandatory review stays foreground.
+
+Only explicit supported `(depends: task-N, ...)` markers establish the legacy
+dependency graph. If any parsed task contains the exact trimmed, non-fenced
+line `**Interfaces:**`, do not infer independence or parse Consumes/Produces
+into a graph. Retain document order, select only the first incomplete task, and
+suppress parallel guidance until it completes. Prose mentioning Interfaces
+does not activate this mode. Uncertain extraction/selection must not hand an
+unchecked task contract to a worker.
+
+**Observed implementation:** `PlanParser`, `PlanBridge.buildTaskPrompt`, the
+adapter's finalization, and `DependencyAnalyzer.getParallelizable` implement
+the principal bridge flow with regression tests. The authorized bridge treats
+`subagent_type="general"` as Justice-managed routing, unlike the original
+any-string ownership rule; this exception is a conformance gap. Dependency
+marker fence detection has narrower syntax than the main parser; exhaustive
+fence-grammar equivalence is not established by existing tests.
+
+The real-host smoke report remains **BLOCKED**, not PASS:
+[upstream compatibility smoke](docs/reports/2026-09-28-v4-superpowers-6.4.2-omo-4.19.4-smoke.md).
+Mocked adapter tests do not prove that a supported live host consumes wire
+mutations. A valid live smoke must observe exact task-body delivery, logical-ID
+removal/continuation preservation, routing exclusivity, and conservative task
+selection under the fixed host configuration.
+
+### 4.1e Semantic control plane authorization and transactional acceptance
+
+This section preserves the Semantic design's runtime contracts. Desired
+Controller configuration and observed Worker execution are separate identities.
+Configuration assurance is covered by §5.27; `configured` never implies actual
+controller attribution, application, or success. Runtime controller attribution
+from prompt/category/self-report remains deferred.
+
+#### Plan-scoped authorization
+
+- `/justice-implement --plan <path> --approved` persists an `ApprovedPlanBinding`
+  containing a fresh `authorizationId`, parent `sessionId`, canonical plan path,
+  `CanonicalPlanSnapshot`, semantic `PlanFingerprint`, approval time, and
+  `active | invalidated | released` state in `.justice/authorizations.json`.
+  `fingerprintSchema` is `justice-plan-v1`. Authorization is Plan-scoped, not
+  one-shot, and cannot be reused by another session.
+- `AuthorizationReviewBoundary.withParentSession` serializes authorization,
+  review, Gate, acceptance, and progress authority. Store, dispatch, completion,
+  and evaluator share the same boundary; caches and separate queues are not
+  substitute authority.
+- A persistence `saved` result alone does not prove that the requested fresh
+  authorization won a merge. Reread authoritative state under the same boundary;
+  arm only if the exact fresh ID remains active. A merge loser cannot arm the
+  requested plan. Post-save reread failure clears stale positive cache; failed
+  initial read/save/conflict diversion cannot publish a candidate as authority.
+- Each task and each positive progress/finalization transition revalidates the
+  active binding against the approved canonical task set and current semantic
+  fingerprint. Semantic task/global-contract edits invalidate approval;
+  execution-progress checkbox changes and EOL normalization do not. Do not
+  reconstruct the approved task set from a mutated plan.
+- `/justice-implement --cancel` releases the current session's active binding
+  without a plan argument. Cancel combined with `--plan`/`--approved`, or repeated
+  cancel flags, is invalid. No active binding is an idempotent no-op.
+- Persist release/invalidation first, attempt review cancellation tombstones,
+  then clear active-plan cache under the same boundary. Cancellation append
+  failure never rolls back durable terminal authorization. Reapproval issues a
+  new ID; old pending/claimed/terminal reviews and decisions cannot authorize it.
+- Restart hydration rereads persistence, probes safe plan paths, and computes
+  current fingerprints before publishing active caches or recovering positive
+  downstream transitions. Confirmed missing plans invalidate; unreadable or
+  uncertain probes do not invent irreversible invalidation or positive authority.
+  Terminal states dominate stale active merges and are never resurrected.
+
+Changing/clearing the active-plan cache is not itself a durable authorization
+release. `setActivePlan` changes in-memory context; explicit cancellation,
+invalidation, superseding approval, and finalization use the store's terminal
+mutation paths. Bootstrap alone must not be confused with approval or release.
+
+#### Semantic role routing
+
+The seven role/category pairs are `mechanical → sp-mechanical`,
+`implementation → sp-implementation`, `integration → sp-integration`,
+`review → sp-review`, `final-review → sp-final-review`, `deep → sp-deep`, and
+`architecture → sp-architecture`. Doctor checks all seven configured categories.
+Unknown/classified roles must not silently downgrade; explicit caller category
+and legacy compatibility-fallback paths are distinct from classifier authority.
+Fix-loop escalation changes semantic role, not hard-coded model/provider choice.
+Named caller-owned subagent routing follows §4.1d.
+
+#### Task acceptance and finalization
+
+```text
+implementation TaskExecutionRef
+  → WorkerReported → observed/derived EvidencePending → ReviewPending
+  → mandatory sp-review → matching complete clean artifact → GatePending
+  → current-attempt Gate PASS → durable accepted decision → progress update
+all tasks accepted
+  → finalizationAttemptId / final_review_pending → mandatory sp-final-review
+  → matching complete clean artifact → final_gate_pending → Final Gate PASS
+  → Plan complete → authorization released
+```
+
+`WorkerReported` is not `TaskAccepted`. Declared evidence alone cannot satisfy
+required gates. Findings route to rework without entering Gate acceptance;
+incomplete/unusable/uncertain reviews remain blocked. A clean artifact followed
+by Gate WARN/FAIL creates rework and a fresh implementation attempt; unavailable
+or insufficient Gate evidence remains pending/blocked. Only a durable accepted
+decision for the exact task may update its checkboxes.
+
+Review transport/execution failure retries the same implementation attempt with
+incremented `reviewRound`; actual implementation rework creates a new
+`TaskExecutionRef` and resets its review round. Final-review transport failure
+preserves `finalizationAttemptId`, increments `finalReviewRound`, and does not
+rerun implementation. Actual final rework creates a new finalization identity.
+Terminal/missing/uncertain authorization blocks positive Review/Gate/Acceptance/
+Progress transitions even when worker execution itself continues fail-open.
+
+#### Durable mandatory review and production composition
+
+- One parent has at most one outstanding mandatory review dispatch. Persist
+  `pending → claimed → terminal` state; atomically claim from durable pending
+  authority, never from correlation fields in untrusted tool input.
+- Route `sp-review`/`sp-final-review` before ordinary PlanBridge implementation.
+  Review claims do not consume an implementation arm and failed review claims
+  never fall back to implementation. Preserve exact runtime parent/call identity
+  and force `run_in_background=false` at canonical and final wire boundaries.
+- A committed `TaskCallBinding` defines `implementation | task_review |
+  final_review`. Only an observed child relation establishes
+  `DelegatedExecutionBinding`. Parent matching task PostToolUse triggers review
+  completion; child artifact-write completion is not that trigger. Before child
+  binding, keep `awaiting_child_binding` without reading an artifact.
+- Artifact consumption requires the exact reserved path, private lease, and
+  durable inode identity. A secure review-owned write is either committed and
+  host-cancelled or rejected and host-cancelled; never fall through to the
+  built-in pathname writer. Unusable reservations create no review authority.
+- One terminal physical record commits artifact consumption and review outcome.
+  Restart reapplies missing lifecycle/Gate outcome exactly once without
+  reappending terminal evidence or blindly redispatching recovered claimed calls.
+  Stale calls, rounds, purpose mismatches, or unknown child relations are
+  advisory-only and cannot affect artifact, Gate, acceptance, or progress.
+- `JusticePlugin` composes dispatch state once, injects the shared cancellation
+  callback into PlanBridge, and uses one ObservationLogStore writer/read/append
+  authority. Side-effecting post-tool handlers run in the required serialized
+  order, not `Promise.all`; drain current-authority directives on both pre- and
+  post-tool routes. Core factories use injected ports and remain host-independent.
+- Only observed complete clean mandatory artifacts establish review completion.
+  External CodeRabbit/Greptile review is supplementary, not mandatory evidence.
+  Task completion precedes neither Task Gate nor Final Gate acceptance.
+
+**Observed implementation:** durable Plan authorization, cancellation,
+fingerprint revalidation, review-first routing, accepted-only progress, and
+mandatory review correlation are covered by core/hook/integration suites.
+Secure artifact operations additionally depend on the Linux provider capability
+gate (§15.14). Passing mocked acceptance tests does not establish live-host
+delivery or full pre-implementation Convergence conformance; see the audit.
 
 ---
 
@@ -712,7 +1145,8 @@ LLM は任意の系譜 ID を発行・変更できず、Justice コアが同一�
 
 **機能一覧:**
 
-- **`parse(content)`** — `### Task N: Title` のような見出しと `- [ ]` または `- [x]` 形式のチェックボックスを認識。
+- **`parse(content)`** recognizes Task headings and checked/unchecked steps,
+  ignores fenced task headings, and preserves the exact `rawBody` (§4.1d).
 - **`updateCheckbox(content, lineNumber, checked)`** — 指定された行番号のチェックボックスを切り替える。
 - **`appendErrorNote(content, taskId, note)`** — 該当タスク見出しの下に引用句 (blockquote) でエラー情報を挿入する。
 - **`getNextIncompleteTask(tasks)`** — `status` が `"completed"` ではない最初のタスクを返す。
@@ -735,7 +1169,7 @@ LLM は任意の系譜 ID を発行・変更できず、Justice コアが同一�
 `routing-decision` factoryが担当し、`TaskPackager`はその結果をcategory-onlyの
 OMO wire payloadへパッケージ化します。
 
-**生成されるプロンプトの構成:**
+**Internal packaging template (not the final authorized worker prompt):**
 
 ```text
 **AGENT**: <agentId>
@@ -748,6 +1182,9 @@ OMO wire payloadへパッケージ化します。
 ```
 
 ※ `agentId` が未指定（`undefined`）の場合は、`**AGENT**: <agentId>` の行全体を省略する。
+
+The authorized worker prompt is owned by `PlanBridge.buildTaskPrompt` and
+applied exactly once by the adapter; its normative order is in §4.1d.
 
 ---
 
@@ -766,9 +1203,9 @@ Worker の role/category 判定と Controller の委譲リクエスト構築を�
   `options.category` が明示されている場合は `unspecified-low` を含めてその値を保持し、
   category 未指定時だけ `OmoCategoryMapper` の role mapping を使います。
   内部の `categorySource` はカテゴリの出自を表し、`classifier` では role/category の
-  整合性を検証し、`explicit` では呼び出し元のカテゴリを優先します。`deep` /
-  `architecture` に対する `unspecified-low` は `compatibility_fallback` として扱い、
-  既存のフォールバックを保持します。
+  整合性を検証し、`explicit` では呼び出し元のカテゴリを優先します。
+  Classified `deep` / `architecture` map to `sp-deep` / `sp-architecture`.
+  Explicit legacy compatibility fallbacks are separate from classified routing (§4.1e).
 
 ---
 
@@ -831,13 +1268,18 @@ Worker の role/category 判定と Controller の委譲リクエスト構築を�
 
 **`getParallelizable(tasks)`** — 自身が未完了で、依存先が全て完了しており、かつ循環依存がないタスク一覧を取得する。
 
+The exact non-fenced `**Interfaces:**` marker activates conservative mode:
+return only the first incomplete task in document order (§4.1d).
+
 **`buildExecutionOrder(tasks)`** — タスク順序のトポロジカルソート（有向非巡回グラフ）を実施する。
 
 ---
 
 ### 5.7 `CategoryClassifier`
 
-`ExecutionRoleClassifier` と `OmoCategoryMapper` へ委譲する薄いラッパーです。`PlanTask`（title と各ステップの説明文）を実行ロール（`ExecutionRole`）へ分類し、SpCategory へ写像します。写像を持たないロールは互換フォールバックとして `unspecified-low` を返します。
+A thin wrapper over `ExecutionRoleClassifier` and `OmoCategoryMapper` classifies
+the task title and step descriptions into one of seven semantic roles and maps
+it to the corresponding SpCategory (§4.1e).
 
 **実行ロール分類の優先順位（`ExecutionRoleClassifier`、上から順に評価）:**
 
@@ -860,7 +1302,8 @@ Worker の role/category 判定と Controller の委譲リクエスト構築を�
 | `integration` | `sp-integration` |
 | `review` | `sp-review` |
 | `final-review` | `sp-final-review` |
-| `deep` / `architecture` | `undefined`（`CategoryClassifier` では互換フォールバックの `unspecified-low` を返却） |
+| `deep` | `sp-deep` |
+| `architecture` | `sp-architecture` |
 
 英語の文字列キーワードは、英数字または `_` の内部にある部分一致を除外して照合する。したがって `preview` は `review`、`final preview` は `final-review` として分類しない。日本語の `レビュー` も同じ境界条件で照合する。
 
@@ -1917,7 +2360,11 @@ v2.0 Quality Control Plane の一般的な quality verdict は L0 Advisory（非
 
 ### 15.13 OMO / Superpowers 責務境界と将来要求
 
-`REQUIREMENTS_2026-08-29.md` に記載されていた routing 要件のうち、Controller と Worker の分離、category-first routing、model/provider independence、`ExecutionRole` から OMO category への写像、Worker payload からの `agent` / `subagent_type` / `model` 等の除去は、現行実装および本仕様の §3.2、§4.1b、§5.7、§14 に統合済みである。これらの要件は `REQUIREMENTS*` ファイルではなく本仕様を正とする。
+Controller/Worker separation, model/provider independence, and semantic
+role/category mapping from the historical `REQUIREMENTS_2026-08-29.md` are owned
+by §3.2, §4.1d, §4.1e, and §5.7. Worker wire model/provider fields are removed;
+caller-owned `subagent_type` is preserved. The contracts of the deleted design
+and plan documents, and implementation exceptions, are owned by §4.1c–§4.1e.
 
 以下の要求は、現行で利用可能な構成要素と、まだ実現していない継続実行の契約を区別する。
 

@@ -443,7 +443,12 @@ OpenCode の file-reference 記法も利用できます。
 - Requirements は RR1 自動解決 (auto design reference) で Design 成果物そのものに解決され、`GATE_CREATED` に永続化されます。既存 generation の再開時に `--requirements` を明示しても永続 binding は置き換わりません (コマンド表面には `--requirements` フラグ自体が存在しません)。
 - レビューは **段階的 (staged)** に進みます: Design フェーズの reviewer dispatch → finding validation → 指摘があれば remediation ラウンド → self-review → 対象成果物の exact-artifact commit → fresh review → `DESIGN_CLEAR`、その後 Plan フェーズが同じサイクルで `PLAN_CLEAR` と完了承認 binding へ進みます。Design の CLEAR は同一 generation 内で保持されます。
 - remediation の上限は generation ごとに **Design 5 回 / Plan 3回の絶対値** です。epoch の更新で上限は回復しません。収束しない場合は NC1 (non-convergence) 判定が優先され `REVIEW_NON_CONVERGENT` で、余力がない場合は `ROUND_LIMIT_EXHAUSTED` で suspend します。upstream scope (Requirements/Design) の指摘は OSC1 優先で該当フェーズの reopen に昇格します。
-- suspend 状態 (`reopen_required` / `round_limit_exhausted` / `review_non_convergent` / `execution_suspended`) は durable であり、同じ Design/Plan でコマンドを再実行すると durable 履歴から正確に再開します。crash window は durable dispatch ledger と prepared restore/commit recovery により「正確に一度」回復され、未知の部分的な書き込みを上書き・復元・chmod することはありません。
+- suspend 状態 (`reopen_required` / `round_limit_exhausted` /
+  `review_non_convergent` / `execution_suspended`) は durable です。
+  再開可否は停止理由と残りラウンド数に依存し、再実行だけでは停止条件や予算は
+  リセットされません。規範上必要な再開条件と現行実装の差異は
+  [SPEC.md §4.1c](./SPEC.md#41c-review-gate-contracts-and-implementation-status-issue-297)
+  を参照してください。
 - 成果物の Git 操作は **actor 分離** されています: `review_mutation` は remediator worker のみ、`review_restore` と `review_commit` は Justice コアのみが実行できます。コミットは GIT1 exact-artifact 契約 (literal pathspec、対象 1 パスのみ、unrelated な staged/dirty 状態を保全) に従い、push は行いません。
 - ワークスペースの変異 (commit/restore) には **Linux Review Gate ネイティブ基盤** (Linux x64 + glibc + `openat2` + `renameat2` + non-blocking `flock` + sync semantics) の実行能力が必要です。能力が不足する環境では安全でないフォールバックを行わず、該当する副作用を `EXECUTION_SUSPENDED` で fail-closed に停止します。
 - reviewer を偽装しても、対応する durable dispatch がなければ claim できず、通常の mandatory `sp-final-review` authorization boundary を迂回できません。
@@ -451,6 +456,12 @@ OpenCode の file-reference 記法も利用できます。
 - malformed / incomplete / 成果物変更 / worker 実行失敗は `[JUSTICE: REVIEW GATE BLOCKED]` として扱われ、Gate は typed な理由付きで suspend します。
 
 成果物が読めない場合は `[JUSTICE: REVIEW GATE BLOCKED]` を返し、レビューを dispatch しません。不正文法は `[JUSTICE: COMMAND REJECTED]` として扱われます。`--retry N` は後方互換のための解析のみを受け付ける deprecated な no-op です (`legacyRetryOption` として記録され、予算としては機能しません)。
+
+> [!IMPORTANT]
+> Review Gate の設計契約には、現行 v4.3.1 で未実装または部分実装の項目があります。
+> Design CLEAR 継承、指摘系譜、非収束からの再開、イベント永続化境界などの確認結果は
+> [実装照合レポート](./docs/reports/2026-10-09-documentation-contract-audit.md)
+> を参照してください。テストの成功は、これらの全契約の充足を意味しません。
 
 ## `/justice-review-history` コマンド
 
@@ -468,7 +479,8 @@ durable な Review Gate 履歴を **読み取り専用** で照会するコマ�
 
 ## `/justice-implement` コマンド
 
-アクティブな計画に対して、次の 1 回の `task()` で実装委譲を開始することを明示的に許可するコマンドです。
+承認済み計画に対する継続的な `task()` 実装委譲を明示的に許可するコマンドです。
+認可は計画とセッションに拘束され、最初のタスクで消費されません。
 
 ```bash
 /justice-implement --plan <planPath> --approved
@@ -480,18 +492,37 @@ durable な Review Gate 履歴を **読み取り専用** で照会するコマ�
 /justice-implement --plan docs/plans/feature.md --approved
 ```
 
+現在のセッションの実装認可を取り消す場合:
+
+```bash
+/justice-implement --cancel
+```
+
 ### 引数文法
 
 - **`--plan <path>`** (必須): 計画ファイルの相対パス。
 - **`--approved`** (アーム成立には必須): 人間による承認・マージが確認済みであることを宣言します。省略時も引数は解析されますが、実装はアームされません。Justice 自身は外部状態を検証できません。
+- **`--cancel`**: 現在のセッションの実装認可を取り消します。
+  `--plan` や `--approved` と併用できません。取り消す認可がない場合は状態を変更しません。
 
 ### 動作
 
-- コマンドは `task()` やスキルを起動しません。次の `task()` 呼び出しに対して、Justice が計画コンテキストと実装 directive を注入する権利を 1 回だけ付与します。
+- コマンドは `task()` やスキルを起動しません。計画単位の認可を永続化し、
+  同じセッションの後続 `task()` に計画コンテキストと実装 directive を注入します。
 - Review Gate lock がある場合、durable な完了承認 binding が現在のワークスペースと **正確に一致** する場合に限り arm されます。一致判定には、durable な `COMPLETED_APPROVAL_BINDING` に固定された Requirements/Design/Plan の canonical path + 現在の SHA-256 digest と現在の review protocol fingerprint の全件一致が必要です。findings が残る場合、Gate が未完了の場合、成果物のいずれかが drift している場合、一致する完了承認が複数ある場合は fail-closed に arm されません。この照会は durable 履歴のみから行われるため、プロセス再起動後も成立します。
 - active Review Gate lock の外では、未アーム状態で active plan に対して `task()` が呼ばれた場合に `[JUSTICE: IMPLEMENTATION UNAUTHORIZED]` advisory が注入されます。lock 中は advisory ではなく tool 実行をキャンセルし、task は worker execution へ到達しません。
-- 許可は 1 回の `task()` 呼び出しで消費されます。追加のタスクを委譲する場合は、再度 `/justice-implement --plan <planPath> --approved` を実行してください。
-- active plan が別のパスへ変更またはクリアされると、未消費の許可も失効します。`/justice-start` を再実行した場合は、同じ plan パスでも再アームが必要です。
+- 同じ承認済み計画の次タスクへ進む際、再承認は不要です。
+  各委譲で永続化済みの認可と計画の意味的 fingerprint を再検証します。
+  進捗チェックボックスの更新は認可を維持し、タスク定義や契約の意味的変更は認可を失効させます。
+- `--cancel`、計画の意味的変更、計画完了後の release により認可が終了します。
+  active plan の変更・クリアは実行コンテキストを変更しますが、
+  メモリ内の状態変更だけで永続化済みの認可が release されたとは判断しません。
+  `/justice-start` はメモリ内のアーム補助状態をクリアしますが、
+  それだけで永続化済みの認可を失効させません。
+- 再起動時も、同じセッションの認可と現在の計画が照合できた場合にのみ認可を復元します。
+  詳細は
+  [SPEC.md §4.1e](./SPEC.md#41e-semantic-control-plane-authorization-and-transactional-acceptance)
+  を参照してください。
 
 > [!IMPORTANT]
 > これは、過去の文書にあった `plan_ready` 到達時の暗黙的な実装 enrichment からの動作変更です。現在は active plan の存在だけでは `task()` を強化しません。
