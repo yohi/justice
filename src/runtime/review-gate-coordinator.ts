@@ -467,51 +467,27 @@ export function createReviewGateCoordinator(
       dispatchSerial: dispatchSerial(session, args.operationId),
     });
 
-  const currentDigestOf = async (canonicalPath: string, fallback: string): Promise<string> => {
-    // The completed binding is constructed from artifact identities reread
-    // while the Gate lock is held (design spec §G1); remediated artifacts
-    // must pin their committed post-image, not the admission digest. An
-    // unreadable artifact keeps the durable genesis digest — the exact
-    // current-match approval lookup then fails closed instead of guessing.
-    const bytes = await reader.readWorkspaceFile(canonicalPath);
-    if (bytes === null) return fallback;
-    return computeArtifactDigest(bytes);
-  };
-
   const buildApprovalBinding = async (
     session: MutableSessionState,
     projection: ReviewGateProjection,
   ): Promise<ReviewApprovalBindingV1> => {
     const gateCreated = requireGateCreated(session.gateId);
-    const designDigest = await currentDigestOf(
-      session.designPath,
-      gateCreated.payload.designArtifact.digest,
-    );
-    const planDigest = await currentDigestOf(
-      session.planPath,
-      gateCreated.payload.planArtifact.digest,
-    );
-    const requirementsDigest = await currentDigestOf(
-      gateCreated.payload.requirementsResolution.canonicalPath,
-      gateCreated.payload.requirementsResolution.digest,
-    );
     return Object.freeze({
       reviewScopeId: gateCreated.payload.reviewScopeId,
       gateId: projection.gateId,
       designArtifact: {
         ...gateCreated.payload.designArtifact,
-        digest: designDigest as ArtifactDigest,
+        digest: session.designDigest as ArtifactDigest,
       },
       planArtifact: {
         ...gateCreated.payload.planArtifact,
-        digest: planDigest as ArtifactDigest,
+        digest: session.planDigest as ArtifactDigest,
       },
       requirementsResolution: {
         ...gateCreated.payload.requirementsResolution,
         ...(gateCreated.payload.requirementsResolution.source === "auto_design_reference"
-          ? { canonicalPath: session.designPath }
+          ? { canonicalPath: session.designPath, digest: session.designDigest as ArtifactDigest }
           : {}),
-        digest: requirementsDigest as ArtifactDigest,
       },
       reviewProtocolFingerprint: protocol.reviewProtocolFingerprint,
       designProtocolFingerprint: protocol.designProtocolFingerprint,
@@ -1095,6 +1071,27 @@ export function createReviewGateCoordinator(
           continue;
         }
         case "append_plan_clear": {
+          const [designBytes, planBytes] = await Promise.all([
+            reader.readWorkspaceFile(session.designPath),
+            reader.readWorkspaceFile(session.planPath),
+          ]);
+          if (designBytes === null || planBytes === null) {
+            return suspendAndBlock(
+              session,
+              "reviewed_artifact_unreadable",
+              "the reviewed Design or Plan is unreadable; the Review Gate cannot clear safely.",
+            );
+          }
+          if (
+            computeArtifactDigest(designBytes) !== session.designDigest ||
+            computeArtifactDigest(planBytes) !== session.planDigest
+          ) {
+            return suspendAndBlock(
+              session,
+              "reviewed_artifact_digest_mismatch",
+              "the Design or Plan changed after review; rerun /justice-review-gate.",
+            );
+          }
           // The PLAN_CLEAR milestone plus the terminal completed binding: the
           // reducer only reaches status "completed" on COMPLETED_APPROVAL_BINDING.
           await appendEvents(session, [

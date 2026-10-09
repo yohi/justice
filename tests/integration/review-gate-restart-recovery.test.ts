@@ -1603,6 +1603,41 @@ function createGitRemediationScript(
 }
 
 describe("restart recovery — real Git lifecycle (Review Focus 4-7)", () => {
+  it("blocks PLAN_CLEAR when a reviewed artifact drifts during the Plan review", async () => {
+    const harness = createRestartHarness();
+    const coordinator = harness.buildCoordinator("plan-drift");
+    const started = await coordinator.startOrResume("main", {
+      source: "command",
+      designPath: DESIGN_PATH,
+      planPath: PLAN_PATH,
+    });
+    if (started.reviewerPrompt === undefined) throw new Error(started.guidance);
+
+    const cleared = await driveFrom(coordinator, "main", started.reviewerPrompt, (payload) => {
+      if (payload.requiredResultKind === "review_candidates" && payload.phase === "plan") {
+        harness.files.set(DESIGN_PATH, `${DESIGN_V1}changed after review\n`);
+      }
+      switch (payload.requiredResultKind) {
+        case "review_candidates":
+          return reviewerResult(payload, []);
+        case "finding_validation":
+          return findingValidationResult(payload);
+        default:
+          throw new Error(`unexpected operation: ${String(payload.requiredResultKind)}`);
+      }
+    });
+
+    expect(cleared.injectedContext).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
+    expect(harness.events().some((event) => event.eventType === "PLAN_CLEAR")).toBe(false);
+    expect(
+      harness.events().some(
+        (event) =>
+          event.eventType === "EXECUTION_SUSPENDED" &&
+          JSON.stringify(event.payload).includes("artifact_digest_mismatch"),
+      ),
+    ).toBe(true);
+  });
+
   it("drives a zero-finding gate over a real Git workspace", async () => {
     const fixture = await initGitFixture(":(glob)*.md", "design target v1\nbe clean\n");
     const coordinator = buildGitCoordinator(fixture, "literal-clean");
@@ -1612,6 +1647,7 @@ describe("restart recovery — real Git lifecycle (Review Focus 4-7)", () => {
     await runGitCli(fixture.root, ["add", "docs/a.md"]);
     await writeFile(path.join(fixture.root, "docs/b.md"), "b v2 dirty\n");
     const unrelatedBefore = await computeUnrelatedIndexFingerprint(fixture.root, fixture.target);
+    const headBefore = runGitCli(fixture.root, ["rev-parse", "HEAD"]).trim();
 
     const started = await coordinator.startOrResume("main", {
       source: "command",
@@ -1626,9 +1662,7 @@ describe("restart recovery — real Git lifecycle (Review Focus 4-7)", () => {
 
     // No Review Gate commit ran; the unrelated staged entry survives
     // byte-for-byte and the unrelated dirty bytes remain unstaged.
-    expect(runGitCli(fixture.root, ["rev-parse", "HEAD"])).toBe(
-      runGitCli(fixture.root, ["rev-parse", "HEAD"]),
-    );
+    expect(runGitCli(fixture.root, ["rev-parse", "HEAD"]).trim()).toBe(headBefore);
     const unrelatedAfter = await computeUnrelatedIndexFingerprint(fixture.root, fixture.target);
     expect(unrelatedAfter).toBe(unrelatedBefore);
     const statusOutput = runGitCli(fixture.root, ["status", "--porcelain"]);
