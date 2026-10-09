@@ -68,9 +68,9 @@ No generic v5 event control plane, no v5-wide authority graph, no sophisticated 
 
 ### 4.1 Scope lock and discovery
 
-1. Resolve canonical workspace root identity and canonical relative Design/Plan paths. The scope identity is stable across invocations; identities/paths must not be guessed from text.
+1. Resolve canonical workspace root identity and canonical relative Design/Plan paths. `reviewScopeId` hashes the canonical Design/Plan **path pair** (`computeReviewScopeId`), not artifact content; it is stable across invocations only while both paths remain unchanged. Neither paths nor identities may be guessed from text. Changing either path creates a distinct scope identity.
 2. Acquire the **non-blocking OS scope lock** before any authoritative scope discovery/selection and before the Gate lock. Read-only diagnostic scans prior to lock have no admission authority.
-3. Under scope lock, discover all scope members independently of `scope-index.json`; read trusted scope witness and every relevant Gate/writer shard. Verify schema, causal history, generation chain, unique current tip, predecessor links, and any existing completed binding.
+3. Under scope lock, discover all scope members independently of `scope-index.json`; read trusted scope witness and every relevant Gate/writer shard. Verify schema, causal history, generation chain, unique current tip, predecessor links, and any existing completed binding. Before first enrollment or cross-scope successor selection, additionally inspect the trusted **workspace-wide** scope registry for unfinished scopes related by canonical artifact path or verified provenance; serialize this continuity/enrollment check using a workspace-wide guard or atomic witness-registry CAS. Scope-local locking alone cannot make cross-scope admission atomic. A possible path-relabeled unfinished Gate requires independently verified distinct-workflow or continuity evidence; absent proof, BLOCK rather than issue a fresh budget.
 4. Re-read exact Requirements/Design/Plan identity, Git blob/mode and phase/global protocol fingerprints *under admission ownership*. Mixed snapshots, changed bindings, or conflicting tips BLOCK.
 5. Select the gate, acquire Gate lock, reproject under ownership, or durably publish new `GATE_CREATED` and scope membership before releasing scope lock. Hold Gate lock for the invocation. Locks never flow to child workers; PID/TTL/heartbeat are not ownership proof.
 
@@ -80,15 +80,17 @@ Corruption of a known current scope blocks its admission/successor creation; unr
 
 | Verified situation | Decision | Requirements |
 | --- | --- | --- |
-| Resumable ACTIVE/SUSPENDED generation, no meaningful drift | `RESUME` | Same `gateId`, generation, epoch, all spent rounds |
+| ACTIVE, or ordinary recoverable SUSPENDED with a proven resumable cursor; **excluding** NC1, round exhaustion, upstream reopen, invalidation and authority-conflict stops | `RESUME` | Same `gateId`, generation, epoch, all spent rounds; no restricted stop may use generic resume |
 | Resumable generation with binding/context drift | `REVALIDATE_OR_BLOCK` | Use invalidation/upstream/external-change rules; NEVER make budget-reset successor |
-| Eligible NC1 suspension | `REENTRY_CANDIDATE` | Section 9 two-key verification; same generation |
+| NC1 suspension with candidate eligible committed change | `REENTRY_CANDIDATE` | Only Section 9 two-key verification permits ACTIVE; otherwise remain suspended in same generation/budget |
 | Completed tip, **all Requirements/Design/Plan paths, digests/modes, resolution, global protocol** exact | `REUSE_COMPLETED` | Read only; no event append |
-| Verified unique immediate completed predecessor with changed identity | `CREATE_SUCCESSOR` | `supersedesGateId` bound to predecessor; **fresh Design Gate, even Plan-only drift** |
+| Verified unique immediate completed predecessor with changed content/protocol binding in the same scope, or an **explicitly verified cross-scope continuity reference** | `CREATE_SUCCESSOR` | `supersedesGateId` bound to predecessor; **fresh Design Gate, even Plan-only drift**; no inferred linkage from a path change |
 | Current-scope corruption, unsupported version, missing witness, competing tips | `BLOCK` | No synthetic event, fresh gate, or repair |
-| Provably uninitialized scope with trusted first-enrollment evidence | `CREATE_GENESIS` | First Gate; enrollment and genesis publication are recoverable |
+| Provably uninitialized and independent scope with trusted first-enrollment evidence plus atomic workspace-wide enrollment guard | `CREATE_GENESIS` | First Gate; no plausible unfinished predecessor/alias; enrollment and genesis publication are recoverable |
 
-A successor never inherits predecessor CLEAR or resolution authority. A same-generation Plan resume **does** retain its own still-valid Design CLEAR. On protocol/Requirements/Design drift, previous same-generation approval must be invalidated by a verified change transition, not silently rewritten. Requirements change/upstream blocker precedes Design/Plan remediation.
+A successor never inherits predecessor CLEAR or resolution authority. A same-generation Plan resume **does** retain its own still-valid Design CLEAR. On protocol/Requirements/Design drift, previous same-generation approval must be invalidated by a verified change transition, not silently rewritten. Requirements change/upstream blocker precedes Design/Plan remediation. A changed Design/Plan **path** changes `reviewScopeId`; it is neither automatically a successor nor automatically a new independent workflow. The workspace-wide continuity decision must reject ambiguous path moves, concurrent enrollment conflicts and attempts to evade an unfinished scope's spent rounds by relabeling artifacts. A stopped NC1/round-exhausted Gate never falls through the generic SUSPENDED resume path.
+
+**Protocol identity contract:** Canonical `ReviewProtocolDescriptorV1` has separate `design`, `plan` and `crossPhase` sections. Phase fingerprints bind static prompt digests, reviewer/validator authority and semantic contracts, severity/lineage/resolution/reopen/NC1 policies, required validator registry and round limits; the global `reviewProtocolFingerprint` binds the full descriptor. Model/provider, package/writer identity and timestamps are not protocol authority. A phase-specific change invalidates affected CLEAR; completed reuse always requires global equality. These fingerprints are calculated from versioned canonical data, not from runtime convenience strings.
 
 ### 4.3 Epoch and budget
 
@@ -155,7 +157,7 @@ Exact artifact mode is Git `100644 | 100755`, based on owner execute bit rather 
 
 ## 8. Semantic lineage and NC1 (ARCH-06)
 
-Justice issues `occurrenceId` per observation and generation-local `lineageId` per semantic defect. Immutable basis = `violationType`, `governingReference`, `semanticLocation`, `violatedContract`, `ownerScope`; `basisDigest` hashes canonical JSON. Semantic relation is validated against offered opaque candidates; digest equality alone is not resolution or relation authority.
+Justice issues `occurrenceId` per observation and generation-local `lineageId` per semantic defect. Immutable basis = `violationType`, `governingReference`, `semanticLocation`, `violatedContract`, `ownerScope`; `basisDigest` hashes canonical JSON. Semantic relation is validated against offered opaque candidates; digest equality alone is not resolution or relation authority. `ALREADY_RESOLVED` requires `EXISTING`, an actually resolved target lineage and independently validated absence of the defect on the pinned baseline; `NEW + ALREADY_RESOLVED` is invalid. If an existing committed-resolved defect is present again in the same semantic context, the valid observation becomes `LINEAGE_REGRESSED` and reopens that generation-local lineage, rather than being dropped as already resolved. Conflicting verdicts on one pinned snapshot BLOCK.
 
 Durable events reconstruct targeted lineages, complete pre/post semantic blocker landscapes, fingerprint, count, targeted round outcome, contract-conflict group and committed resolution/regression per cycle. A pure NC1 evaluator compares only **same phase baseline/protocol context**. Missing necessary cycle evidence yields `INDETERMINATE/BLOCK`, never `CONVERGENT`.
 
@@ -225,7 +227,7 @@ Three independently required gates:
 2. **G2 — Devcontainer production-path integration:** real coordinator + adapter + durable store + recovery + Git/native boundaries; restart after prepared commit and after verified commit; concurrent scope contention; deletion/index loss/conflicting tips; self-review discovered regression; phase precedence; budget non-reset; old history verified/unverified bridge; exact completed reuse. Run `bun run test`, `bun run typecheck`, `bun run lint`, `bun run build`. Existing warnings may be separately tracked but **new** errors fail.
 3. **G3 — Supported real-host E2E:** actual supported OpenCode + Superpowers/OmO host, Linux x86_64/glibc native addon/capabilities, real task dispatch and final wire behavior, exact prompt/rawBody, caller routing, logical/continuation IDs, scoped Git mutation and crash/restart flows. Opt-in coverage cannot be reported as exercised unless it really runs. Upstream smoke report at baseline is BLOCKED, **not** PASS.
 
-Required negative-path matrix: concurrent and lost scope indices; corrupt/truncated/rolled-back event history; incomplete/unsupported legacy proof; wrong Requirements reference; out-of-budget resume; target-dirty/unsafe native operation; commit failure and post-commit crash; self-review new blocking/upstream finding; missing/incompatible validation stage; stale/reused execution failure; same-context NC1 six predicates; provider-only reentry, no progress and exhaustion; successor Protocol/Requirements/Design mismatch; completed approval staleness; `subagent_type="general"`; language-fenced Interfaces. All are exercised through actual coordinator/adapter paths where relevant, not only mocked pure seams.
+Required negative-path matrix: concurrent and lost scope indices; Design/Plan path rename, cross-scope alias and concurrent first-enrollment budget-bypass attempts; corrupt/truncated/rolled-back event history; incomplete/unsupported legacy proof; wrong Requirements reference; out-of-budget resume; target-dirty/unsafe native operation; commit failure and post-commit crash; self-review new blocking/upstream finding; missing/incompatible validation stage; stale/reused execution failure; same-context NC1 six predicates; provider-only reentry, no progress and exhaustion; successor Protocol/Requirements/Design mismatch; completed approval staleness; `subagent_type="general"`; language-fenced Interfaces. All are exercised through actual coordinator/adapter paths where relevant, not only mocked pure seams.
 
 **Acceptance rule:** `BLOCKED`, `SKIPPED`, `NOT RUN` are never PASS. G1 + G2 + G3 must pass; DEP-01 must be independently upstream-approved; DEP-02 trusted witness and DEP-03 legacy proof must have demonstrated evidence on the target deployment; DEP-04 resolution contract must be verified. Passing this Design self-review alone gives **no** implementation authorization. Human approval of the written Design Spec precedes any Implementation Plan; approval of the Implementation Plan precedes implementation.
 
@@ -246,7 +248,7 @@ Suggested **implementation plan decomposition** after *written-spec and upstream
 This document is a **proposal for formal review**, not an approved implementation baseline.
 
 - Confirm ARCH-01..10 all map to one authority and no in-memory flag can bypass durable projection.
-- Confirm incomplete generation cannot become a successor and restart/reentry cannot reset rounds.
+- Confirm incomplete generation cannot become a successor, restart/reentry cannot reset rounds, NC1 suspension cannot use ordinary SUSPENDED resume, and changed path-pair scope IDs cannot create a fresh-budget alias.
 - Confirm no self-review or deterministic failure authorizes a Git commit; only verified commit authorizes resolution.
 - Confirm DEP-01 is an explicit upstream contract change, **not** hidden as a permissive reading of `DESIGN_CLEAR_INHERITED`.
 - Confirm DEP-02 does not claim whole-volume rollback protection without a protected independent witness.
