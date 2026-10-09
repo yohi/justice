@@ -92,12 +92,13 @@ The following five user-visible input/failure classes have explicit owner tests 
 - Test: `tests/core/review-gate-types.test.ts`, new runtime test
 
 **Interfaces:**
-- Produces: `RequirementsResolutionV2` with `schemaVersion:2`, `source:"explicit"|"design_declared_reference"`, `canonicalPath,digest,gitMode,requirementsGitBlobOid,committedBaselineOid,workspaceIdentity,selectionEvidence`; `resolveRequirementsForAdmission(input: {workspaceRoot:string;designPath:string;designBytes:Uint8Array;explicitPath?:string}): Promise<RequirementsResolutionV2>`.
-- Historical `RequirementsResolutionV1` is distinct and unchanged; `committedBaselineOid` is **admission HEAD H0 Git commit OID** not future HEAD equality.
-
-- [ ] **Step 1: Write RED tests** — temporary Git repository with clean committed Requirements, absent/untracked/dirty/symlink/alias/`../`/wrong mode/URL paths, Design marker and explicit agreement; assert returned R0 bytes SHA-256/Git blob/mode/H0, no Design-as-Requirements fallback.
+- Consumes Task 2 selector and verified Design AND Plan identities from one locked Git/workspace snapshot.
+- Produces `VerifiedTrackedArtifactIdentity = Readonly<{canonicalPath:string;workspaceIdentity:string;repositoryIdentity:string;gitBlobOid:string;digest:ArtifactDigest;gitMode:"100644"|"100755";fsIdentity:Readonly<{device:string;inode:string}>}>` in `src/core/review-gate-types.ts`. The secure native `(device,inode)` is runtime-only, never a persisted absolute path. Matching content hashes alone do not prove aliasing.
+- Produces `resolveRequirementsForAdmission(input:Readonly<{workspaceRoot:string;design:VerifiedTrackedArtifactIdentity;plan:VerifiedTrackedArtifactIdentity;designBytes:Uint8Array;explicitPath?:string}>):Promise<RequirementsResolutionV2>` in `src/runtime/review-gate-requirements.ts`. It rejects Requirements aliasing **either** Design or Plan by canonical path, symlink-safe resolved identity or hardlink inode identity, before `GATE_CREATED`.
+- The V2 fields/source remain exactly as Design §10.2; legacy V1 stays distinct and admission H0 is not current HEAD equality.
+- [ ] **Step 1: Write RED tests** — independent Git-tracked Requirements ACCEPT; `Requirements == Design` and `Requirements == Plan` BLOCK; distinct tracked paths to the same inode/hardlink BLOCK; symlink/unsafe/dirty/untracked path BLOCK. Distinct files with identical bytes ACCEPT. Verify H0/Git mode/blob/digest and no gate creation on rejection.
 - [ ] **Step 2: Verify RED** — `bun run vitest run tests/runtime/review-gate-requirements.test.ts tests/core/review-gate-types.test.ts`; expect RED for V2 behavior.
-- [ ] **Step 3: Implement resolver using literal Git queries and native safe file reads** — compare same committed snapshot and worktree; never shell-execute arguments or treat external Issue URL as artifact; emit `REQUIREMENTS_RESOLUTION_REQUIRED` before gate create on failed authority.
+- [ ] **Step 3: Implement `resolveRequirementsForAdmission`** — inspect Requirements and the pinned Design/Plan using the same secure filesystem/Git snapshot; reject exact canonical-path equality, symlink and device/inode alias to either target, without inferring alias from equal digests. Fail before `GATE_CREATED` with `REQUIREMENTS_RESOLUTION_REQUIRED`.
 - [ ] **Step 4: Verify GREEN** — focused tests and four global commands. Confirm V1 stored events can still be parsed by historical type but not mistaken for new V2.
 - [ ] **Step 5: Commit** — `git add src/runtime/review-gate-requirements.ts src/core/review-gate-types.ts src/core/review-gate/identity.ts tests/runtime/review-gate-requirements.test.ts tests/core/review-gate-types.test.ts && git commit -m "feat: resolve independently committed Requirements with V2 provenance"`.
 
