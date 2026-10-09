@@ -440,7 +440,7 @@ OpenCode の file-reference 記法も利用できます。
 
 - `--design` と `--plan` はともに必須。
 - Gate は **イベントソーシング** で駆動します。開始時に durable な `GATE_CREATED` イベントへ Design/Plan の正規化済みパス・SHA-256 digest・Git mode・Requirements 解決結果・review protocol fingerprint が固定され、以降のすべての状態は `.justice/review-gates/` 配下の追記型イベント履歴から再構成されます。プロセス内のリトライ状態やチェックポイントファイルは正本ではありません。
-- Requirements は RR1 自動解決 (auto design reference) で Design 成果物そのものに解約され、`GATE_CREATED` に永続化されます。既存 generation の再開時に `--requirements` を明示しても永続 binding は置き換わりません (コマンド表面には `--requirements` フラグ自体が存在しません)。
+- Requirements は RR1 自動解決 (auto design reference) で Design 成果物そのものに解決され、`GATE_CREATED` に永続化されます。既存 generation の再開時に `--requirements` を明示しても永続 binding は置き換わりません (コマンド表面には `--requirements` フラグ自体が存在しません)。
 - レビューは **段階的 (staged)** に進みます: Design フェーズの reviewer dispatch → finding validation → 指摘があれば remediation ラウンド → self-review → 対象成果物の exact-artifact commit → fresh review → `DESIGN_CLEAR`、その後 Plan フェーズが同じサイクルで `PLAN_CLEAR` と完了承認 binding へ進みます。Design の CLEAR は同一 generation 内で保持されます。
 - remediation の上限は generation ごとに **Design 5 回 / Plan 3回の絶対値** です。epoch の更新で上限は回復しません。収束しない場合は NC1 (non-convergence) 判定が優先され `REVIEW_NON_CONVERGENT` で、余力がない場合は `ROUND_LIMIT_EXHAUSTED` で suspend します。upstream scope (Requirements/Design) の指摘は OSC1 優先で該当フェーズの reopen に昇格します。
 - suspend 状態 (`reopen_required` / `round_limit_exhausted` / `review_non_convergent` / `execution_suspended`) は durable であり、同じ Design/Plan でコマンドを再実行すると durable 履歴から正確に再開します。crash window は durable dispatch ledger と prepared restore/commit recovery により「正確に一度」回復され、未知の部分的な書き込みを上書き・復元・chmod することはありません。
