@@ -35,9 +35,9 @@ See SPEC §4.1b, §4.1d, and §4.1e for lifecycle and compatibility ownership.
 - `/justice-start` and `/justice-implement` guidance never invokes a skill or
   `task()`. Bootstrap readiness is not implementation authorization.
 - `handlePreToolUse` enriches implementation `task()` only under explicit
-  `/justice-implement` authorization or an established trusted trigger;
-  otherwise it emits `implementation_unauthorized`. Authorization is Plan- and
-  session-scoped, not one-shot; preserve durable cancellation and revalidation.
+  `/justice-implement --approved` authorization; otherwise it emits
+  `implementation_unauthorized`. Authorization is Plan- and session-scoped,
+  not one-shot; preserve durable cancellation and revalidation.
 - After a Review Gate, implementation-capable calls remain cancelled until
   explicit `/justice-implement --approved` matches the durable completed
   Requirements/Design/Plan digests and current review protocol fingerprint.
