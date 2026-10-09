@@ -55,7 +55,7 @@ The following five user-visible input/failure classes have explicit owner tests 
 **Files:**
 - Create: `src/core/markdown-fence-scanner.ts`
 - Modify: `src/core/plan-parser.ts`, `src/core/dependency-analyzer.ts`
-- Test: `tests/core/plan-parser.test.ts`, `tests/core/dependency-analyzer.test.ts` (create parser test if absent)
+- Test: `tests/core/plan-parser.test.ts`, `tests/core/dependency-analyzer.test.ts` (both already exist)
 
 **Interfaces:**
 - Produces: `scanMarkdownFenceLines(text: string): ReadonlyArray<{ line: string; lineNumber: number; insideFence: boolean }>`; both consumers use this scanner.
@@ -127,7 +127,7 @@ The following five user-visible input/failure classes have explicit owner tests 
 
 **Interfaces:**
 - Produces: `ReviewGateScopeWitness` with `readWorkspaceScopeFrontier(workspaceIdentity:string): Promise<VerifiedScopeFrontier>`, `compareAndAdvance(input:{workspaceIdentity:string;expectedFrontier:string;newFrontier:VerifiedScopeFrontier;operationId:string}):Promise<"advanced"|"already_committed">`, `acquireWorkspaceAdmissionGuard(workspaceIdentity:string):Promise<ReviewGateLockHandle|"occupied">`.
-- Registry is an **independently protected host-state** location outside mutable workspace history; reject insecure/missing deployment trust configuration rather than fallback to same-writer directories.
+- Define `VerifiedScopeFrontier = Readonly<{ workspaceIdentity:string; enrollmentDigest:string; generationIds:readonly string[]; writerHeads:readonly {writerId:string;sequence:number;hash:string}[]; globalFrontierHash:string }>`; `compareAndAdvance` must compare the full canonical expected frontier hash. Registry is an **independently protected host-state** location outside mutable workspace history; reject insecure/missing deployment trust configuration rather than fallback to same-writer directories.
 
 - [ ] **Step 1: Write RED tests** — missing/untrusted anchor BLOCK; malicious removal of Gate directory/index cannot appear as virgin workspace; concurrent first enrollment yields one winner; incomplete frontier update after crash is recoverable or BLOCK; documented both-state rollback cannot be claimed detected.
 - [ ] **Step 2: Verify RED** — `bun run vitest run tests/runtime/review-gate-scope-witness.test.ts tests/runtime/review-gate-lock-manager.test.ts`; expect new protection tests FAIL.
@@ -160,7 +160,7 @@ The following five user-visible input/failure classes have explicit owner tests 
 
 **Interfaces:**
 - Produces: `planReviewGateAdmission(input: VerifiedAdmissionSnapshot): AdmissionDecision` with `RESUME | REENTRY_CANDIDATE | REVALIDATE_OR_BLOCK | REUSE_COMPLETED | CREATE_SUCCESSOR | CREATE_GENESIS | BLOCK`; `admitReviewGateScope(input:ScopeAdmissionRequest):Promise<AdmissionDecision>` holds workspace guard then scope/Gate locks.
-- `VerifiedAdmissionSnapshot` includes workspace-wide membership, unique tip, exact Requirements/Design/Plan modes/digests and global/phase protocol, projected generation/rounds and suspension reason.
+- Define `VerifiedAdmissionSnapshot = Readonly<{workspaceIdentity:string; scopeId:string; verifiedFrontierHash:string; currentTips:readonly {gateId:string;status:"active"|"suspended"|"completed";generationId:string;supersedesGateId:string|null;rounds:{design:number;plan:number};suspensionReason:string|null}[]; requirements:RequirementsResolutionV2; design:ReviewArtifactBinding; plan:ReviewArtifactBinding; globalProtocolFingerprint:string; designProtocolFingerprint:string; planProtocolFingerprint:string}>`; all fields are already independently verified. `AdmissionDecision` variants carry `gateId/generationId/predecessorGateId` where applicable and an explicit blocking reason. Runtime reads durable data before constructing the value.
 
 - [ ] **Step 1: Write RED tests** — one verified completed tip/changed Plan → new generation with predecessor and fresh Design; active/suspended drift → **no successor**; Design/Plan path alias to new scope ID → BLOCK; exact completed match → read-only reuse; multiple tips/corruption/index loss → BLOCK.
 - [ ] **Step 2: Verify RED** — `bun run vitest run tests/core/review-gate/admission.test.ts tests/runtime/review-gate-scope-admission.test.ts`; expect new cases FAIL.
@@ -177,7 +177,7 @@ The following five user-visible input/failure classes have explicit owner tests 
 
 **Interfaces:**
 - Produces: `verifyLegacyContinuation(input:LegacyGateSnapshot): LegacyVerificationResult` with `VERIFIED | BLOCK`; `publishVerifiedLegacyBridge(input:VerifiedLegacyGate, store:ReviewGateEventStore):Promise<"committed"|"already_committed">`.
-- Evidence: independent **pre-existing** frontier, immutable snapshot digest, exact epoch/rounds/dispatch/recovery/commits/protocol/scope/Requirements provenance and idempotent `LEGACY_BRIDGE_PREPARED` → `LEGACY_BRIDGE_COMMITTED`.
+- Define `LegacyGateSnapshot` as immutable original `events.jsonl`/`dispatches.jsonl` bytes plus recovery-object refs, pre-existing trusted frontier and canonical scope/Git identities. `VerifiedLegacyGate` adds verified digest, generation/epoch/round counters, commit/resolution binding and deterministic resume cursor; `LegacyVerificationResult = {kind:"VERIFIED";value:VerifiedLegacyGate}|{kind:"BLOCK";reason:string}`. Evidence requires independent **pre-existing** frontier and idempotent `LEGACY_BRIDGE_PREPARED` → `LEGACY_BRIDGE_COMMITTED`.
 
 - [ ] **Step 1: Write RED tests** — structurally well-formed but unanchored legacy history BLOCK; ambiguous partial round/commit BLOCK; old V1 `auto_design_reference` without genuinely independent original Requirements proof BLOCK; valid old `DESIGN_CLEAR_INHERITED` can be read/validated without becoming new authority; bridge crash does not double rounds.
 - [ ] **Step 2: Verify RED** — `bun run vitest run tests/runtime/review-gate-legacy-bridge.test.ts tests/integration/review-gate-restart-recovery.test.ts`; expect newly added cases FAIL.
@@ -220,7 +220,8 @@ The following five user-visible input/failure classes have explicit owner tests 
 
 **Files:**
 - Modify: `src/core/review-gate/lineage.ts`, `src/core/review-gate/agent-protocol.ts`
-- Test: `tests/core/review-gate/lineage.test.ts`, `tests/core/review-gate/agent-protocol.test.ts`
+- Create: `tests/core/review-gate/lineage.test.ts`
+- Test: `tests/core/review-gate/agent-protocol.test.ts`
 
 **Interfaces:**
 - Preserve `reconcileFindingBatch` / `buildLineageResolution`; store generation-local immutable basis `(violationType, governingReference, semanticLocation, violatedContract, ownerScope)`, occurrence IDs, independently validated relations and commit-bound resolutions.
@@ -241,7 +242,7 @@ The following five user-visible input/failure classes have explicit owner tests 
 
 **Interfaces:**
 - Produces: `evaluateNonConvergenceCycles(cycles: readonly VerifiedSemanticCycle[]): {kind:"convergent"}|{kind:"non_convergent";primaryReason:NonConvergenceKind;allReasons:readonly NonConvergenceKind[]}`.
-- Comparison is **same phase baseline + protocol**, with durable pre/post blocking fingerprints, counts, targets, commit-bound resolution and semantic contract-conflict grouping.
+- Define `VerifiedSemanticCycle = Readonly<{phase:ReviewGatePhase;baselineDigest:string;protocolFingerprint:string;roundOrdinal:number;targetedLineages:readonly LineageId[];preBlockers:readonly string[];postBlockers:readonly string[];preCount:number;postCount:number;preFingerprint:string;postFingerprint:string;commitReference:string|null}>`; grouping also uses validated owner/type/reference/contract semantic keys. Comparison is **same phase baseline + protocol**, and incomplete cycle proof BLOCKS.
 
 - [ ] **Step 1: Write RED table tests** — each of six: resolved regression, A→B→A oscillation, two-round same-lineage stall, repeated owner/type/reference/contract conflict, unchanged landscape, two consecutive non-improving counts; assert all fired reasons and normative primary order.
 - [ ] **Step 2: Verify RED** — `bun run vitest run tests/core/review-gate/cycle-evidence.test.ts tests/core/review-gate/convergence.test.ts`; expect predicate tests FAIL.
@@ -274,7 +275,7 @@ The following five user-visible input/failure classes have explicit owner tests 
 
 **Interfaces:**
 - Produces: `planNonConvergenceReentry(input: VerifiedReentryInput): ReentryDecision` with `STAY_SUSPENDED | REENTER_SAME_GENERATION | REQUIREMENTS_REOPEN_REQUIRED | DESIGN_REOPEN_REQUIRED | BLOCK`.
-- Requires independent verified eligible **clean committed** change and independently validated `NON_CONVERGENCE_REENTRY_VALIDATION` outcome `MATERIAL_PROGRESS`; cannot allocate new budget/generation.
+- Define `VerifiedReentryInput = Readonly<{gateId:string;generationId:string;epochId:string;phase:ReviewGatePhase;remainingRounds:number;verifiedChange:{kind:"requirements"|"design"|"plan"|"protocol";beforeDigest:string;afterDigest:string;commitOid:string}|null;validatorOutcome:"MATERIAL_PROGRESS"|"NO_MATERIAL_PROGRESS"|"DESIGN_REOPEN_REQUIRED"|"REQUIREMENTS_REOPEN_REQUIRED"|"INDETERMINATE";nc1EvidenceEventId:string}>`; verify the independent signed/bound evidence rather than trusting this shape alone. Requires eligible **clean committed** change and independently validated progress; no budget/generation creation.
 
 - [ ] **Step 1: Write RED tests** — provider/model-only change, claimed progress without independent validator, invalid lineage reference, conflicting external Git context => no reentry; valid two-key returns same generation/remaining rounds; exhaustion permits external revalidation but no new remediation ordinal.
 - [ ] **Step 2: Verify RED** — `bun run vitest run tests/core/review-gate/reentry.test.ts tests/core/review-gate/orchestrator.test.ts`; expect new cases FAIL.
@@ -291,7 +292,7 @@ The following five user-visible input/failure classes have explicit owner tests 
 
 **Interfaces:**
 - Produces: `RequirementsAuthoritySnapshotV1`; `planRequirementsAuthorityTransition(input: {historical:RequirementsResolutionV2;effective:RequirementsAuthoritySnapshotV1;proposed:VerifiedRequirementsContext;origin:"justice_remediation_commit"|"external_committed_change"}): RequirementsAuthorityDecision`.
-- Durable event types: `REQUIREMENTS_AUTHORITY_REVALIDATED`, `REQUIREMENTS_AUTHORITY_REBASED`. New completed binding points to historical V2 **and** latest current-effective authority. Justice-origin revalidation references the verified prepared/committed operation; external-origin points to verified external change evidence.
+- Define `RequirementsAuthoritySnapshotV1 = Readonly<{historicalV2EventId:string; currentAuthorityEventId:string; source:"explicit"|"design_declared_reference"; requirements:{workspaceIdentity:string;canonicalPath:string;digest:string;gitMode:"100644"|"100755";gitBlobOid:string};design:{canonicalPath:string;digest:string;gitMode:"100644"|"100755";commitOid:string;protocolFingerprint:string};marker:{present:boolean;valid:boolean;line:number|null;digest:string|null;declaredPath:string|null}}>`; `RequirementsAuthorityDecision = {kind:"REVALIDATE"|"REBASE";next:RequirementsAuthoritySnapshotV1}|{kind:"BLOCK";reason:string}`. Durable events `REQUIREMENTS_AUTHORITY_REVALIDATED`/`REQUIREMENTS_AUTHORITY_REBASED` point to verified original/current authority. Justice-origin ties to prepared commit; external-origin to verified external change.
 
 - [ ] **Step 1: Write RED tests** — H0/D0 marker M0, Justice commit H1/D1 marker M1/R0 => current R0 approval valid and H0 immutable; marker moved line within preamble accepted with new proof; deleted/duplicated/path-changed marker blocks commit; unrelated HEAD-only commit no drift; external R1 needs invalidation+rebase; restart after H1 before event recovers same intent.
 - [ ] **Step 2: Verify RED** — `bun run vitest run tests/core/review-gate/requirements-authority.test.ts tests/runtime/review-gate-requirements.test.ts tests/integration/review-gate-restart-recovery.test.ts`; expect new stale-authority tests FAIL.
@@ -358,7 +359,7 @@ The following five user-visible input/failure classes have explicit owner tests 
 - G2 acceptance consumes actual provider/coordinator/adapters and recorded durable evidence. Tests must inject process death or fsync/publication gap at each critical boundary, then reconstruct from disk; mocks are permitted only for non-security network worker transport, not for core commit/ledger/lock evidence.
 
 - [ ] **Step 1: Add RED integration matrix** — simultaneous scope first enrollment, path-pair budget bypass, missing/wrong witness, writer shard loss, invalid V1 bridge, NC1 six cases and precedence, self-review discovered blocker, fail-before-commit, post-commit crash, stale deterministic PASS, marker D0→D1/R0, stale approval, read-only history mutation, implementation authorization lock.
-- [ ] **Step 2: Verify RED** — `bun run vitest run tests/integration/review-gate-adapter-orchestration.test.ts tests/integration/review-gate-event-sourced-flow.test.ts tests/integration/review-gate-restart-recovery.test.ts tests/integration/review-artifact-linux-e2e.test.ts`; expect newly introduced failing coverage before fixes.
+- [ ] **Step 2: Establish baseline / RED only where a gap exists** — run `bun run vitest run tests/integration/review-gate-adapter-orchestration.test.ts tests/integration/review-gate-event-sourced-flow.test.ts tests/integration/review-gate-restart-recovery.test.ts tests/integration/review-artifact-linux-e2e.test.ts`; record new-case results. If a case already PASSes against the unmodified implementation, retain its observable assertions and treat it as regression coverage; do not fabricate RED or mutate code merely to make it fail.
 - [ ] **Step 3: Fix only failures attributable to earlier contracts** — each fix gets its own RED/GREEN check and focused commit; **STOP** for upstream normative conflict, insecure witness on target deployment, or unverifiable required legacy authority. Never weaken tests to turn BLOCK into PASS.
 - [ ] **Step 4: Verify GREEN** — run focused G2 suite and fresh `bun run test`, `bun run typecheck`, `bun run lint`, `bun run build` from configured devcontainer remoteUser. Record exact commands/outcomes, any skipped test, DEP-02 trust-model proof and DEP-03 actual legacy corpus classification. Unproven proofs remain BLOCKED.
 - [ ] **Step 5: Commit** — stage only added/changed integration tests and implementation fixes reviewed against original task owners; `git commit -m "test: prove Review Gate authority through production integration"`.
@@ -375,7 +376,7 @@ The following five user-visible input/failure classes have explicit owner tests 
 - Acceptance state is `G1 PASS && G2 PASS && G3 PASS && DEP-02 DEPLOYMENT PROVEN && DEP-03 LEGACY PROOF OR EXPLICIT FAIL-CLOSED CLASSIFICATION && DEP-04 IMPLEMENTATION PROVEN`. No automatic `Implementation Ready` declaration.
 
 - [ ] **Step 1: Write live E2E cases** — valid command with Requirements source, caller `"general"`, controller→worker foreground dispatch, clean Design/Plan review/commit/approval path, crash/restart, unauthorized implementation rejected, sanctioned `--approved` path checks binding.
-- [ ] **Step 2: Execute actual opt-in native/host RED/GREEN** — `bun run build:native:review-artifact` if required, `JUSTICE_RUN_LIVE_HOST_E2E=1 bun run vitest run tests/integration/review-artifact-linux-host-e2e.test.ts tests/runtime/linux-review-gate-provider-e2e.test.ts`; expect real host execution, not skips or mere imports. If environment unavailable, record `BLOCKED`, **not** PASS.
+- [ ] **Step 2: Execute actual opt-in native/host cases** — `bun run build:native:review-artifact` if required; then `JUSTICE_RUN_LIVE_HOST_E2E=1 bun run vitest run tests/integration/review-artifact-linux-host-e2e.test.ts tests/runtime/linux-review-gate-provider-e2e.test.ts`. Record RED for genuinely missing behavior and GREEN only after fixes; if cases pass immediately, retain their assertions as regression evidence. Host unavailable or any skipped mandatory case means `BLOCKED`, **not** PASS.
 - [ ] **Step 3: Fix only tested integration defects under review** — preserve exact permission/read-only contract, bounded events and fail-closed semantics; do not change ratified Design or upstream scope without approval.
 - [ ] **Step 4: Verify complete acceptance** — all four global commands freshly, both real-host cases actually PASS, native capability security checks, exact source/test/protocol diff, DEP-02/03/04 proof artifacts. Report `SKIPPED/BLOCKED/NOT RUN` explicitly as blockers. Request an independent whole-branch code/security review before any completion claim.
 - [ ] **Step 5: Commit report and tests** — `git add tests/integration/review-artifact-linux-host-e2e.test.ts tests/runtime/linux-review-gate-provider-e2e.test.ts docs/reports/2026-10-09-issue-310-review-gate-v4-implementation-verification.md && git commit -m "test: record live Review Gate contract-conformance evidence"` **only when the report records actual results**.
