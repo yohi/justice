@@ -550,20 +550,35 @@ Gate authority is separate from the post-implementation mandatory reviews in
 
 #### R1 / C1 / L1 / G1 / E1 — discovery, locks, and generations
 
-- Scope identity is derived from canonical workspace-relative Design/Plan paths.
-  Discovery must validate the same-scope generation chain independently of
+- Scope identity remains derived from canonical workspace-relative Design/Plan
+  paths, but a path-pair change is not proof of a distinct workflow. Before a
+  fresh scope enrollment or cross-scope successor, check independently
+  protected **workspace-wide** enrollment/continuity records for related
+  unfinished Gates, path aliases and verified provenance. No changed scope ID
+  may bypass an unfinished Gate's consumed round budget. Require independent
+  distinct-workflow or explicit continuity proof; otherwise BLOCK. Discovery
+  must validate the relevant generation chain independently of
   successfully decoding `GATE_CREATED`. Corrupt/unsupported current-scope
   history blocks replacement generation creation; unrelated-scope corruption
   must not globally block a healthy scope. Multiple resumable or completed tips
   are identity conflicts.
-- Acquire a non-blocking OS scope lock before the Gate lock. Keep the scope lock
-  until the selected Gate is reprojected or the new genesis is durable. Reread
+- Acquire a non-blocking OS scope lock before the Gate lock. Additionally
+  serialize workspace-wide first-enrollment and cross-scope continuity
+  decisions with a workspace guard or atomic trusted witness-registry CAS:
+  a scope-local lock alone cannot serialize cross-scope budget decisions.
+  Keep the scope lock until the selected Gate is reprojected or the new
+  genesis is durable. Reread
   artifact/protocol identities under admission ownership and reject mixed reads.
   Hold the Gate lock for the orchestration invocation. TTL, PID, and heartbeat
   are diagnostic only; workers must not inherit lock descriptors.
 - Resume a crash from durable history in the same generation and epoch.
   `ORCHESTRATION_RESUMED` is same-epoch audit; only an eligible suspension
   transition starts `ORCHESTRATION_EPOCH_STARTED`. Neither restores capacity.
+  Generic ACTIVE/ordinary recoverable SUSPENDED resume may not reopen NC1,
+  exhaustion, upstream-reopen, invalidation, or authority-conflict stops. NC1
+  requires verified eligible committed change and independent
+  `MATERIAL_PROGRESS` (Two-Key Reentry Authority); exhaustion permits
+  verified external-change revalidation/CLEAR only, never new rounds.
 - Remediation limits are absolute per generation: Design **5**, Plan **3**.
   No restart, epoch, command rerun, or legacy retry option may create Design
   round 6 or Plan round 4. A changed active/suspended baseline must pass the
@@ -587,14 +602,22 @@ Gate authority is separate from the post-implementation mandatory reviews in
   fingerprints. Relevant input drift during an attempt suspends it. Accepted
   committed context changes invalidate affected progress and revalidate stale
   lineages; accepted change is distinct from same-loop regression.
-- Exact completed reuse is read-only: compare Requirements/Design/Plan paths
-  and digests plus the current global protocol fingerprint. A mismatch creates
-  a new generation linked by `supersedesGateId`; the completed predecessor is
-  immutable. A resumable generation takes precedence over completed reuse.
-- A new generation may inherit Design CLEAR only from its immediate completed
-  predecessor with an exact Requirements/Design/design-protocol binding. Persist
-  `DESIGN_CLEAR_INHERITED`, predecessor Gate/milestone references, and the
-  inheritance binding. Plan-only drift need not force a new Design review.
+- Exact completed reuse is read-only: compare verified Requirements resolution
+  and Requirements/Design/Plan canonical paths, digests, Git modes, and the
+  **current global** review-protocol fingerprint. A resumable generation takes
+  precedence; it cannot be replaced to refresh budget. Only a uniquely
+  verified immediate **completed** predecessor can authorize a successor
+  linked by `supersedesGateId`; unknown/conflicting chain or scope BLOCKS.
+- **v4 Conservative Design Re-review (DEP-01):** a successor following a
+  completed Gate, **including Plan-only drift**, MUST run a fresh Design Gate
+  against its current verified Requirements, Design and design-protocol before
+  Plan review. It MUST NOT emit `DESIGN_CLEAR_INHERITED` or import predecessor
+  Design CLEAR/finding resolution as successor authority. Immutable predecessor
+  milestones, findings and commits remain historical evidence. Verified
+  predecessor lineage refs may be recorded for traceability only; advanced
+  authority inheritance is reserved for v5 (#298). Within the **same
+  generation**, a stopped Plan Gate may reuse its own still-valid Design CLEAR
+  only after the applicable suspension/reentry rules are satisfied.
 - Reopen precedence is Requirements, then Design, then Plan. Requirements
   reopen suspends for an upstream committed change. Design reopen invalidates
   dependent Plan progress; it must not reinterpret an old Design milestone as
@@ -766,9 +789,18 @@ logical event families are:
   `REQUIREMENTS_CHANGE_OBSERVED`, `DESIGN_CHANGE_OBSERVED`, `PLAN_CHANGE_OBSERVED`,
   `REVIEW_PROTOCOL_CHANGE_OBSERVED`, `REVIEW_PROGRESS_INVALIDATED`,
   `DESIGN_CLEAR_INVALIDATED`.
-- Approval/suspension: `DESIGN_CLEAR`, `DESIGN_CLEAR_INHERITED`, `PLAN_CLEAR`,
+- Approval/suspension (new v4 events): `DESIGN_CLEAR`, `PLAN_CLEAR`,
   `REVIEW_NON_CONVERGENT`, `ROUND_LIMIT_EXHAUSTED`,
   `NON_CONVERGENCE_REENTRY_VALIDATION_COMPLETED`, `EXECUTION_SUSPENDED`.
+
+**Historic event compatibility (ARCH-05) is separate from new issuance.**
+Previously stored `DESIGN_CLEAR_INHERITED` events must remain recognizable to
+version-aware legacy readers for validation/read/upcast/migration. Validate
+their historical schema, predecessor binding, causal completeness and
+provenance before admitting their authority under a verified continuation
+bridge. Do not reject solely because no new v4 successor emits that event.
+Do not silently treat an unverified legacy inherited approval as a freshly
+reviewed Design CLEAR; insufficient evidence preserves the bytes and BLOCKS.
 
 The preserved namespace is
 `.justice/review-gates/events/<reviewScopeId>/<gateId>/<writerId>.jsonl`,
@@ -840,8 +872,10 @@ It also identifies these conformance gaps:
   a new generation instead of preserving the old budget. Completed command
   reuse compares artifact paths/digests but omits protocol identity; the separate
   implementation approval lookup does check the current protocol.
-- `supersedesGateId`/inherited Design CLEAR are not projected. Cross-generation
-  protocol support does not establish runtime lineage continuity.
+- `supersedesGateId`/historical inherited Design CLEAR are not projected.
+  This is a pre-amendment **implementation observation**, not a requirement to
+  introduce new Design CLEAR inheritance in v4. Cross-generation protocol
+  support does not establish runtime lineage continuity.
 - Semantic basis hashing is present, but occurrence/resolution history and
   regression/ALREADY_RESOLVED counters are incomplete. Current NC1 predicates
   differ from the normative two-cycle/fingerprint/conflict-group rules.
