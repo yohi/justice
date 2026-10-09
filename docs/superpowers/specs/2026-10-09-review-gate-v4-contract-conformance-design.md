@@ -200,17 +200,82 @@ An incomplete Gate is not a predecessor eligible for a fresh budget; corrupted h
 
 **DEP-01: RATIFIED.** The v4 Conservative Design Re-review contract is now normative in `SPEC.md` §4.1c, Issue #297 (§21 and AC-14/19–21) and Issue #310 (§8 and revised acceptance conditions), at the ratified amendment baseline `5b33b79bb27a26c00e79f950c7211a625b4727bf`. These supersede the old v4 obligation to emit `DESIGN_CLEAR_INHERITED` for new successors. Previously persisted inherited events remain recognizable for ARCH-05 verified read/validation/migration and fail closed if their authority cannot be proven. DEP-01 ratification alone does **not** pass the Formal Design Gate, prove DEP-02/03, resolve DEP-04, or authorize implementation. Advanced inheritance remains v5 #298.
 
-### 10.2 Requirements resolution contract (DEP-04)
+### 10.2 Requirements resolution contract (DEP-04 / RG-310-FDR-004)
 
-Requirements authority is a **real independently identified input artifact**, not a name inferred from a Design title or a substitution of Design bytes. Resolution is either:
-- An optional **explicit** canonical Requirements path (compatible additive `--requirements <path>` input proposed for v4) whose bytes, blob, mode, scope and binding are verified under admission lock; or
-- Exactly **one** syntactically valid, canonical, unambiguous Design-declared Requirements reference resolved under the same lock and independently verified.
+**Decision:** Requirements is a distinct, real, verified Git-tracked workspace artifact; it is not inferred from a Design title, a remote URL or Design bytes. Two authoritative selection interfaces are defined below. The ratified RR1 contract already permits explicit selection or one unambiguous Design reference; this is the **final v4 design interface**, not an optional implementation suggestion. `--design` and `--plan` remain required, and Requirements must not alias either target.
 
-Zero, multiple, ambiguous, missing, unreadable, unsafe, mismatched or stale references => **BLOCK with actionable `REQUIREMENTS_RESOLUTION_REQUIRED`** before reviewer dispatch or genesis. `auto_design_reference` does not prove independent Requirements identity; legacy Gate with that field may continue only if DEP-03 verified authoritative external evidence establishes its genuine Requirements source. The user is not required to supply an argument when an unambiguous reference is present; the public command entrance remains backward-compatible wherever the prior input is verifiably valid.
+#### 10.2.1 Public command and request interface
 
-Persist `RequirementsResolutionV1` source, canonical path, digest, Git mode, proof of reference/explicit selection and binding to generation in `GATE_CREATED`; no subsequent silent rebinding. Design attempt pins Requirements + Design; Plan inherits Requirements authority **transitively through its current-generation verified Design CLEAR**. A changed Requirements artifact invalidates that approval and invokes upstream rules. The Requirements artifact is never an auto-remediation target.
+```text
+/justice-review-gate --design <path> --plan <path> [--requirements <path>] [--retry N]
+```
 
-**DEP-04 is independent and remains OPEN after DEP-01 ratification.** The observed pre-change coordinator fallback `auto_design_reference` (Design used as Requirements) is not proof of Requirements authority. The ratified normative RR1 rule requires a real explicitly supplied or uniquely referenced Requirements artifact. Alignment of the `SPEC.md` command-limitation observation with the intended `--requirements` interface, resolver syntax/provenance rules, and existing legacy data is **DEP-04-specific work** and requires subsequent explicit contract clarification if normative text must change; it is not silently approved or completed by DEP-01. Until the required binding is verified, admission BLOCKS. Existing code behavior is evidence of an implementation gap, not permission to bypass the new rule.
+- **REQUIRED:** extend `parseJusticeReviewGateCommandArguments` and `ReviewGateRequest` with a single optional `readonly requirementsPath?: string`. It is the authoritative **explicit** selector when present. Existing `--design`, `--plan`, `--retry N` semantics and their argument order independence are preserved.
+- `--requirements <path>` accepts the existing OpenCode `@path` shorthand identically to `--design` / `--plan`: strip exactly one leading `@` then validate. The parser rejects duplicate flags, missing/empty values, unknown switches, extra positional text, `--requirements=path`, paths with whitespace/quoting, and unsafe `@`/path encodings. The deprecated `--retry` cannot change admission, protocol or capacity.
+- Malformed command syntax returns `REVIEW_GATE_INVALID_ARGUMENTS` *before* Gate admission, without an event append. An accepted selector with missing, ambiguous, conflicting or unverified Requirements authority returns `REQUIREMENTS_RESOLUTION_REQUIRED` without genesis/reviewer dispatch. Omitting the new flag preserves the existing two-required-flags UX **only when** one valid Design declaration exists; the legacy `auto_design_reference` fallback is not an alternative.
+- On an unfinished generation, its existing persisted resolution is immutable. A later `--requirements` override must be evaluated under ARCH-02 change/invalidation rules, never used to replace the resolution silently or create a replacement budget.
+
+#### 10.2.2 Exactly one Design-declared reference grammar
+
+**Only** this standalone HTML-comment marker is recognized as a fresh v4 Design Requirements declaration:
+
+```text
+<!-- justice-review-gate:requirements="docs/requirements/feature.md" -->
+```
+
+- After trimming **only leading/trailing horizontal whitespace**, the marker must match `<!-- justice-review-gate:requirements="<path>" -->` with exact case, ASCII punctuation and internal spaces. `<path>` must match `[A-Za-z0-9][A-Za-z0-9._/-]*\.md`, be at most 4096 UTF-8 bytes, and pass the same strict canonical path checks as the CLI. Quotes, spaces, `%`/URL escaping, `@`, `~`, fragments, queries and shell expansions are not supported in a marker.
+- The marker must be in the **Design document preamble**, outside any Markdown fenced code: after the optional first ATX H1 heading and before the first unfenced ATX H2/H3, and within the first 64 physical lines. A document without an H1 may place it before its first H2/H3. Fence state is computed using the shared backtick/tilde, opening-language-info-aware Markdown scanner from ARCH-10; LF/CRLF are equivalent. Marker-looking lines inside a valid fenced block are not selectors.
+- Scan the *whole* document for unfenced marker-prefix occurrences. A malformed reserved marker, a marker outside the preamble, a second declaration even with an identical value, or untrustworthy/unbalanced fence parsing is an **ambiguity/error**, not a reason to select another candidate. No "first/last/nearest" fallback. Plain `Requirements:` headings, arbitrary Markdown links, YAML keys, issue URLs or prose references do not select authority. Other undocumented/legacy declaration grammars are not silently accepted for **new** generations.
+- Deterministic candidate extraction: no marker → require explicit CLI; one valid marker → one candidate; duplicate/invalid/late marker → `REQUIREMENTS_RESOLUTION_REQUIRED` even when an explicit CLI path is present. An old Design without this marker can add it explicitly or use the CLI; historical events are read only through ARCH-05 rules.
+
+#### 10.2.3 Path rules, precedence, and fail-closed errors
+
+Under scope/workspace admission ownership, prove all of the following before genesis and reviewer dispatch:
+
+1. Both CLI and marker paths are **workspace-root-relative**, not Design-directory-relative or CWD-relative. Require exact canonical serialization: reject absolute or drive-letter paths, leading `./`, `.`/`..` segments, repeated `/`, backslash, empty/trailing components, NUL/control characters, URI schemes, path aliases or symlink escape (including parent directories). Resolve with proven native safe open semantics; reject symlink, submodule, non-regular artifacts and aliasing to Design or Plan.
+2. Verify one real **Git-tracked**, clean and committed Requirements file. Bind canonical workspace/root and repository identity, path, Git blob OID, SHA-256 byte digest, Git mode (`100644|100755`) and committed baseline identity under one stable snapshot; missing, untracked, dirty, unreadable, unsupported mode or mixed-snapshot evidence => `REQUIREMENTS_RESOLUTION_REQUIRED` (or stricter history/authority BLOCK where warranted).
+3. **Explicit precedence with mandatory agreement:** CLI-only selects `explicit`; marker-only selects `design_declared_reference`. When both exist, the CLI remains the source selector **only if** canonical path and independently verified artifact identity agree; record both sources of evidence. Any disagreement, duplicates or malformed marker yields `REQUIREMENTS_RESOLUTION_REQUIRED`, **not** a silent CLI override or silent marker preference.
+4. URL schemes and external GitHub Issues/PRs are **not** valid Requirements artifact identities. Remote links may appear as context inside a separately verified Requirements file, but never trigger a fetch/selection or serve as the approved baseline. No guessed path or Design-content substitution.
+5. An absent/mismatched selector, invalid declaration, unsafe/nonexistent/uncommitted file, or unverifiable independent source fails **before `GATE_CREATED`** with a sanitized actionable `REQUIREMENTS_RESOLUTION_REQUIRED` error. Existing-generation history corruption/invalid authority is handled by the stricter ARCH-02/04/05 BLOCK rules; it must not turn into a new genesis.
+
+#### 10.2.4 Versioned durable source type and historical decoding
+
+Observed current source is `RequirementsResolutionV1` with `source: "explicit" | "auto_design_reference"`. **Do not reinterpret, widen or overwrite this legacy union.** New v4 generations use a separate versioned payload bound to the event schema:
+
+```ts
+type RequirementsResolutionV2 = Readonly<{
+  schemaVersion: 2;
+  source: "explicit" | "design_declared_reference";
+  canonicalPath: string;
+  digest: ArtifactDigest; // verified SHA-256 content digest
+  gitMode: "100644" | "100755";
+  requirementsGitBlobOid: string;
+  committedBaselineOid: string;
+  workspaceIdentity: string; // stable, versioned authority identity
+  selectionEvidence: Readonly<{
+    commandPath?: string;
+    declaration?: Readonly<{
+      designCanonicalPath: string;
+      designDigest: ArtifactDigest;
+      declarationLine: number; // 1-based physical line
+      declarationDigest: ArtifactDigest; // digest of exact marker line
+      declaredCanonicalPath: string;
+    }>;
+  }>;
+}>;
+```
+
+- All new `GATE_CREATED` and completed approval binding events must carry validated V2 source semantics (and a matching versioned event-schema discriminator); `source="explicit"` requires an actual CLI selector, `source="design_declared_reference"` requires a unique verified declaration and **no CLI**. When both agree, emit `explicit` and retain the declaration proof too. All evidence paths must resolve to the same canonical Requirements identity; inconsistent/missing proofs are invalid authoritative events.
+- `RequirementsResolutionV2` stores **bounded typed evidence only**, never full Requirements text, Design excerpt or raw prompts. Persist the Requirements path, digest, Git mode, Git OID, committed baseline, workspace identity and optional declaration proof in the `GATE_CREATED`/approval binding. The **grammar, parser/source policy and V2 version MUST be included in the Design protocol's `requirementsResolutionPolicyVersion`** and thus affected phase/global protocol fingerprints. Exact completed reuse, context drift and approval lookup verify the full Requirements binding and matching current protocol.
+- Preserve an explicitly **version-aware legacy V1 decoder** with historical `explicit | auto_design_reference`. V1 `explicit` is not sufficient without independently verified original Requirements authority and history integrity under ARCH-05. V1 `auto_design_reference` pointing to Design bytes is **never** accepted as a new Requirements source; continuation requires independent, pre-existing trustworthy evidence for the actual historical Requirements source and exact binding. Lacking such evidence: preserve bytes and BLOCK, no retrospective authority invention, silent upcast, source renaming or new-budget generation. Historical `DESIGN_CLEAR_INHERITED` also remains recognized under verified ARCH-05 reading, never emitted for new v4 successors.
+- New generations pin V2 once in `GATE_CREATED`; no same-generation silent rebinding during restart. Design attempts use independently bound Requirements + Design; Plan inherits Requirements approval only through that **same generation's** still-valid Design CLEAR. Requirements committed drift invalidates dependent progress/approval; Requirements are not automatically remediated.
+
+#### 10.2.5 Ratified RR1 compatibility, normative dependency and DEP-04 status
+
+The public optional flag, one strict Design declaration grammar, and V2 semantics are **definitive choices in this Design**, refining RR1's already-ratified "explicit or unambiguous Design reference" contract without changing DEP-01. The current `SPEC.md` note stating that `--requirements` does not exist and the coordinator uses `auto_design_reference` is a **pre-implementation observation**, not a license to retain that fallback.
+
+If further inspection finds a *normative* `SPEC.md` / #297 / #310 rule that **prohibits** this additive public interface or requires an incompatible source schema, do not amend it within this Design fix. Raise a **separate DEP-04 normative amendment / approval dependency** before Implementation Ready. As written, **DEP-04's design ambiguity is resolved** by §§10.2.1–10.2.4; implementation/API alignment, legacy decoding proof and G1/G2 verification remain independently **OPEN**, not satisfied by the design-only change. DEP-01 stays RATIFIED; neither Design self-review nor this contract constitutes Formal Design Gate or implementation authorization.
+
 
 ## 11. Compatibility and authorization (ARCH-10)
 
@@ -224,11 +289,11 @@ Read-only history remains truly read-only, including on invalid/corrupt historie
 
 Three independently required gates:
 
-1. **G1 — Pure contract tests:** strict schema/replay, causal hash/frontier, scope discovery, admission decisions, round limits, authoritative commit and crash states, six NC1 conditions/priority, all validation stages/reuse, eligibility/reentry, successor Design re-review, Requirements resolver, routing and shared fence grammar.
-2. **G2 — Devcontainer production-path integration:** real coordinator + adapter + durable store + recovery + Git/native boundaries; restart after prepared commit and after verified commit; concurrent scope contention; deletion/index loss/conflicting tips; self-review discovered regression; phase precedence; budget non-reset; old history verified/unverified bridge; exact completed reuse. Run `bun run test`, `bun run typecheck`, `bun run lint`, `bun run build`. Existing warnings may be separately tracked but **new** errors fail.
+1. **G1 — Pure contract tests:** strict schema/replay, causal hash/frontier, scope discovery, admission decisions, round limits, authoritative commit and crash states, six NC1 conditions/priority, all validation stages/reuse, eligibility/reentry, successor Design re-review, Requirements command parser, one-declaration grammar, path/selector agreement, V2 source and legacy V1 decoding, routing and shared fence grammar.
+2. **G2 — Devcontainer production-path integration:** real coordinator + adapter + durable store + recovery + Git/native boundaries; restart after prepared commit and after verified commit; concurrent scope contention; deletion/index loss/conflicting tips; self-review discovered regression; phase precedence; budget non-reset; old history verified/unverified bridge; command-to-coordinator Requirements authority, pinned V2 event/reuse/approval, drift and reopen; exact completed reuse. Run `bun run test`, `bun run typecheck`, `bun run lint`, `bun run build`. Existing warnings may be separately tracked but **new** errors fail.
 3. **G3 — Supported real-host E2E:** actual supported OpenCode + Superpowers/OmO host, Linux x86_64/glibc native addon/capabilities, real task dispatch and final wire behavior, exact prompt/rawBody, caller routing, logical/continuation IDs, scoped Git mutation and crash/restart flows. Opt-in coverage cannot be reported as exercised unless it really runs. Upstream smoke report at baseline is BLOCKED, **not** PASS.
 
-Required negative-path matrix: concurrent and lost scope indices; Design/Plan path rename, cross-scope alias and concurrent first-enrollment budget-bypass attempts; corrupt/truncated/rolled-back event history; incomplete/unsupported legacy proof; wrong Requirements reference; out-of-budget resume; target-dirty/unsafe native operation; commit failure and post-commit crash; self-review new blocking/upstream finding; missing/incompatible validation stage; stale/reused execution failure; same-context NC1 six predicates; provider-only reentry, no progress and exhaustion; successor Protocol/Requirements/Design mismatch; completed approval staleness; `subagent_type="general"`; language-fenced Interfaces. All are exercised through actual coordinator/adapter paths where relevant, not only mocked pure seams.
+Required negative-path matrix: concurrent and lost scope indices; Design/Plan path rename, cross-scope alias and concurrent first-enrollment budget-bypass attempts; corrupt/truncated/rolled-back event history; incomplete/unsupported legacy proof; Requirements selector absent/explicit/declaration/both agreeing/both conflicting, duplicate/late/malformed/fenced marker, remote Issue URL ignored, missing/unsafe/symlink/untracked/dirty file, V1 auto fallback unverifiable, V2 payload/provenance mismatch, changed Requirements/protocol, wrong Requirements reference; out-of-budget resume; target-dirty/unsafe native operation; commit failure and post-commit crash; self-review new blocking/upstream finding; missing/incompatible validation stage; stale/reused execution failure; same-context NC1 six predicates; provider-only reentry, no progress and exhaustion; successor Protocol/Requirements/Design mismatch; completed approval staleness; `subagent_type="general"`; language-fenced Interfaces. All are exercised through actual coordinator/adapter paths where relevant, not only mocked pure seams.
 
 **Acceptance rule:** `BLOCKED`, `SKIPPED`, `NOT RUN` are never PASS. G1 + G2 + G3 must pass; DEP-01 is **already RATIFIED** at the stated baseline; DEP-02 trusted witness and DEP-03 legacy proof must have demonstrated evidence on the target deployment; DEP-04 resolution contract must be reconciled and verified. Passing this Design self-review alone gives **no** implementation authorization. Human approval of the written Design Spec precedes any Implementation Plan; approval of the Implementation Plan precedes implementation.
 
@@ -239,7 +304,7 @@ Required negative-path matrix: concurrent and lost scope indices; Design/Plan pa
 | **DEP-01** Upstream contract | Section 10.1; `SPEC.md` §4.1c and #297/#310 ratified for v4 re-review; advanced inheritance remains #298 | **Satisfied — ratified amendment `5b33b79`** | **RATIFIED / CLOSED AS CONTRACT DEPENDENCY** |
 | **DEP-02** Scope witness | Section 5.2; separate trusted high-watermark, modeled threat, fsync/recovery; BLOCK if protection absent | Real security isolation, durability and rollback/deletion tests | **DESIGN RULE SPECIFIED / PROOF PENDING** |
 | **DEP-03** Legacy history | Section 6; pre-existing trusted witness, verified complete authority, immutable prepared/committed bridge; otherwise BLOCK | Legacy corpus classifications and crash-injection evidence | **DESIGN RULE SPECIFIED / PROOF PENDING** |
-| **DEP-04** Requirements authority | Section 10.2; explicit or unique independently verified Requirements file; never Design-as-Requirements fallback | **Independent RR1/CLI compatibility alignment**, resolver/provenance and production tests (not covered by DEP-01) | **OPEN / ALIGNMENT AND VERIFICATION PENDING** |
+| **DEP-04** Requirements authority | §10.2 fixes public `--requirements`, unique exact Design marker, independent tracked Git identity, V2 source semantics and V1 legacy decoder | **Design ambiguity addressed**; API/parser/resolver/versioned record and G1/G2 proof not yet implemented; separate normative approval if a conflicting upstream rule is discovered | **DESIGN SPECIFIED / IMPLEMENTATION VERIFICATION PENDING** |
 | **DEP-05** Live host | Section 12; mandatory real-host E2E | Actual PASS under supported environment | **IMPLEMENTATION ACCEPTANCE PENDING** |
 
 Suggested **implementation plan decomposition** only after *the Formal Design Gate passes and separate Implementation Plan authoring is authorized*, preserving one overall contract: (1) authority/storage/anchor/schema + admission, (2) recovery/commit/self-review, (3) lineage/NC1/validation/reentry, (4) successor/Requirements/compatibility + integration/E2E. No slice can independently assert Review Gate compliance without the final full evidence suite.
@@ -254,7 +319,7 @@ This document is a **proposal for formal review**, not an approved implementatio
 - Confirm DEP-01 is **RATIFIED** at `5b33b79`, new successors cannot inherit Design CLEAR, and historical `DESIGN_CLEAR_INHERITED` reads remain ARCH-05-gated.
 - Confirm DEP-02 does not claim whole-volume rollback protection without a protected independent witness.
 - Confirm DEP-03 does not bootstrap legacy integrity evidence retroactively; unsafe legacy BLOCK.
-- Confirm DEP-04 forbids guessed Requirements authority and reconciles existing `auto_design_reference`.
+- Confirm DEP-04 exactly specifies public CLI, Design marker, source precedence, Git/scope identity, V2 event/approval schema, historical V1 decoding and fail-closed errors without treating `auto_design_reference` as authority.
 - Confirm G3 is required and `BLOCKED/SKIPPED/NOT RUN` cannot satisfy acceptance.
 - Confirm this Fresh Design Review remediation modifies only this Design Spec; already-ratified `SPEC.md`/Issue changes are separately identified as prior upstream contract work; no production source, tests, CI or implementation plan changes are authorized.
 
@@ -287,4 +352,8 @@ The following table is preserved **as historical evidence at its original baseli
 
 Fresh Review shall independently verify the exact committed Design blob and ratified upstream contract; a document self-review cannot itself close the Formal Design Gate.
 
-**Current status (after ratification): DEP-01 RATIFIED; DEP-02/03 proof pending; DEP-04 independent alignment/verification pending; DEP-05 real-host E2E NOT RUN. Formal Design Gate: BLOCKED pending independent Fresh Review. Implementation Plan: NOT AUTHORIZED. Production Changes: NOT AUTHORIZED. Implementation Ready: NOT APPROVED.**
+### RG-310-FDR-004 — Design clarification record (2026-10-09)
+
+The new Major finding concerned the public Requirements selector, Design declaration syntax and durable source type, **not** the earlier FDR-003 DEP-01/04 separation. §§10.2.1–10.2.5 define all three, precedence, fail-closed handling and acceptance tests. **Document remediation: ADDRESSED; independent Fresh Review: REQUIRED**. Historical FDR-001〜003 results and DEP-01 RATIFIED are unchanged. No implementation or test is asserted.
+
+**Current status: DEP-01 RATIFIED; DEP-02/03 proof pending; DEP-04 design contract specified but implementation/alignment verification pending; DEP-05 real-host E2E NOT RUN. Formal Design Gate: BLOCKED pending independent Fresh Review. Implementation Plan: NOT AUTHORIZED. Production Changes: NOT AUTHORIZED. Implementation Ready: NOT APPROVED.**
