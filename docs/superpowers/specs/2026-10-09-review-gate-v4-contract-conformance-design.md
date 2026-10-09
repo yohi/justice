@@ -2,11 +2,12 @@
 
 - Date: 2026-10-09 (JST)
 - Repository: `yohi/justice`, base branch `v4`
-- Source baseline: `ed4dd8d5a3050fe6ba559b1ced94e01f0157f60b`
+- Original implementation audit baseline: `ed4dd8d5a3050fe6ba559b1ced94e01f0157f60b`
+- **Ratified normative review baseline:** `5b33b79bb27a26c00e79f950c7211a625b4727bf` (`SPEC.md` §4.1c as amended, [#297](https://github.com/yohi/justice/issues/297) and [#310](https://github.com/yohi/justice/issues/310) as ratified on 2026-10-09)
 - Requirements: [#297](https://github.com/yohi/justice/issues/297); gap audit: [#310](https://github.com/yohi/justice/issues/310); v5 boundary: [#298](https://github.com/yohi/justice/issues/298)
 - Normative source under review: `SPEC.md` §4.1c (plus §4.1d and §4.1e for compatibility/authorization)
-- Status: **DESIGN DRAFT — architecture approved; formal written Design Gate pending; NOT IMPLEMENTATION-READY**
-- Change permission: **this document only**. No production source, tests, CI, `SPEC.md`, Issues, or implementation plan changes authorized by this document.
+- Status: **DESIGN REVISED AFTER FRESH REVIEW — ARCH-01..10 approved; DEP-01 RATIFIED; formal written Design Gate BLOCKED pending fresh review; NOT IMPLEMENTATION-READY**
+- Fresh Design Review remediation scope: **this Design Spec only**. The already-ratified upstream `SPEC.md` and Issue updates are historical inputs, not fresh normative changes. No production source, tests, CI or implementation plan modification is authorized.
 
 ## 1. Purpose, scope, and authority
 
@@ -20,7 +21,7 @@ This design makes the existing v4 pre-implementation Review Gate contract-correc
 4. Per-generation remediation ceilings are **Design 5** and **Plan 3**. Retry, crash resume, reentry, drift, `--retry`, or legacy migration cannot reset them.
 5. Never commit on unresolved targeted self-review, newly discovered blocking/upstream findings, indeterminate evidence, required validation failure, or wrong artifact binding. Resolution follows verified Git success, never an LLM assertion.
 6. Read-only completed approval lookup, history inspection, and exact completed reuse never alter state. CLEAR is not human approval, merge authorization, or implementation authorization.
-7. Previous generations remain immutable historical evidence. This v4 design deliberately does **not** inherit Design CLEAR or finding-resolution authority into a completed successor (ARCH-09); see **DEP-01 contract amendment gate**.
+7. Previous generations remain immutable historical evidence. This v4 design deliberately does **not** inherit Design CLEAR or finding-resolution authority into a completed successor (ARCH-09); this is the **DEP-01 ratified normative contract**.
 
 ### Scope exclusions
 
@@ -38,7 +39,7 @@ No generic v5 event control plane, no v5-wide authority graph, no sophisticated 
 | ARCH-06 | **A — Durable Semantic Cycle Evidence + Pure NC1 Evaluator** | Occurrence, lineage, cycle snapshots/evidence, six NC1 predicates |
 | ARCH-07 | **A — Stage-aware Validation Planner + Durable Evidence** | Three required stages, durable exact-binding reuse, DVF1 |
 | ARCH-08 | **A — Two-Key Reentry Authority** | Deterministic eligible-change proof + independent material-progress validation |
-| ARCH-09 | **B — Conservative Design Re-review** | No Design CLEAR inheritance on successor; approved upstream contract amendment required |
+| ARCH-09 | **B — Conservative Design Re-review** | No Design CLEAR inheritance on successor; upstream contract RATIFIED at `5b33b79` |
 | ARCH-10 | **A — Contract-first Compatibility Adapters + Tiered Acceptance Gates** | Host/task compatibility, production integration, three verification levels |
 
 ## 3. Component ownership and interfaces
@@ -193,11 +194,11 @@ The result is *evidence*, not ACTIVE authority. A pure reentry planner validates
 
 ### 10.1 Conservative Design re-review
 
-Exact completed reuse requires verified complete Requirements resolution, Design/Plan canonical path + digest + Git mode and current **global** `reviewProtocolFingerprint` equality. It is read-only. For a changed completed tip, a new successor is permissible **only** from the unique verified immediate completed predecessor; bind `supersedesGateId`. No predecessor Design CLEAR or resolution is projected as current authority. **Even a Plan-only change starts a fresh Design Gate** using current Requirements, Design and design-protocol. Current-generation Design CLEAR from that fresh run can be used during later Plan resume if still valid. New generation lineages may store independently validated `(predecessorGateId, predecessorLineageId)` historical references; no cross-generation resolution import, advanced propagation or `DESIGN_CLEAR_INHERITED` emission.
+Exact completed reuse requires verified complete Requirements resolution, Design/Plan canonical path + digest + Git mode and current **global** `reviewProtocolFingerprint` equality. It is read-only. For a changed completed tip, a new successor is permissible **only** from the unique verified immediate completed predecessor; bind `supersedesGateId`. No predecessor Design CLEAR or resolution is projected as current authority. **Even a Plan-only change starts a fresh Design Gate** using current Requirements, Design and design-protocol. Current-generation Design CLEAR from that fresh run can be used during later Plan resume if still valid. When independent semantic reconciliation establishes a verifiable predecessor relation, the successor **MUST durably persist** a `(predecessorGateId, predecessorLineageId)` historical reference, bound to the reconciliation evidence and current generation-local `lineageId`. If such a relation cannot be established, do not fabricate a link: retain a new independent generation-local lineage without a predecessor reference. No predecessor resolved status is imported as successor resolution authority, and no advanced propagation or new `DESIGN_CLEAR_INHERITED` emission is allowed.
 
 An incomplete Gate is not a predecessor eligible for a fresh budget; corrupted history or ambiguous current tips BLOCK.
 
-**DEP-01 is an unconditional authorization gate:** `SPEC.md` §4.1c and #297/#310 currently expect Design CLEAR inheritance in the relevant completed successor scenario. Explicitly amend the *v4 contract* to permit/require fresh Design re-review as the selected conservative alternative and move advanced inheritance to v5 #298. This Design document **does not** make that upstream amendment or grant its approval. Until upstream amendments are reviewed and approved, formal implementation-ready status is forbidden.
+**DEP-01: RATIFIED.** The v4 Conservative Design Re-review contract is now normative in `SPEC.md` §4.1c, Issue #297 (§21 and AC-14/19–21) and Issue #310 (§8 and revised acceptance conditions), at the ratified amendment baseline `5b33b79bb27a26c00e79f950c7211a625b4727bf`. These supersede the old v4 obligation to emit `DESIGN_CLEAR_INHERITED` for new successors. Previously persisted inherited events remain recognizable for ARCH-05 verified read/validation/migration and fail closed if their authority cannot be proven. DEP-01 ratification alone does **not** pass the Formal Design Gate, prove DEP-02/03, resolve DEP-04, or authorize implementation. Advanced inheritance remains v5 #298.
 
 ### 10.2 Requirements resolution contract (DEP-04)
 
@@ -209,7 +210,7 @@ Zero, multiple, ambiguous, missing, unreadable, unsafe, mismatched or stale refe
 
 Persist `RequirementsResolutionV1` source, canonical path, digest, Git mode, proof of reference/explicit selection and binding to generation in `GATE_CREATED`; no subsequent silent rebinding. Design attempt pins Requirements + Design; Plan inherits Requirements authority **transitively through its current-generation verified Design CLEAR**. A changed Requirements artifact invalidates that approval and invokes upstream rules. The Requirements artifact is never an auto-remediation target.
 
-Any conflicting current `SPEC.md` command-limitation text (the historical Design-as-Requirements fallback) must be explicitly reconciled during DEP-01/contract alignment, not hidden as an implementation detail.
+**DEP-04 is independent and remains OPEN after DEP-01 ratification.** The observed pre-change coordinator fallback `auto_design_reference` (Design used as Requirements) is not proof of Requirements authority. The ratified normative RR1 rule requires a real explicitly supplied or uniquely referenced Requirements artifact. Alignment of the `SPEC.md` command-limitation observation with the intended `--requirements` interface, resolver syntax/provenance rules, and existing legacy data is **DEP-04-specific work** and requires subsequent explicit contract clarification if normative text must change; it is not silently approved or completed by DEP-01. Until the required binding is verified, admission BLOCKS. Existing code behavior is evidence of an implementation gap, not permission to bypass the new rule.
 
 ## 11. Compatibility and authorization (ARCH-10)
 
@@ -229,19 +230,19 @@ Three independently required gates:
 
 Required negative-path matrix: concurrent and lost scope indices; Design/Plan path rename, cross-scope alias and concurrent first-enrollment budget-bypass attempts; corrupt/truncated/rolled-back event history; incomplete/unsupported legacy proof; wrong Requirements reference; out-of-budget resume; target-dirty/unsafe native operation; commit failure and post-commit crash; self-review new blocking/upstream finding; missing/incompatible validation stage; stale/reused execution failure; same-context NC1 six predicates; provider-only reentry, no progress and exhaustion; successor Protocol/Requirements/Design mismatch; completed approval staleness; `subagent_type="general"`; language-fenced Interfaces. All are exercised through actual coordinator/adapter paths where relevant, not only mocked pure seams.
 
-**Acceptance rule:** `BLOCKED`, `SKIPPED`, `NOT RUN` are never PASS. G1 + G2 + G3 must pass; DEP-01 must be independently upstream-approved; DEP-02 trusted witness and DEP-03 legacy proof must have demonstrated evidence on the target deployment; DEP-04 resolution contract must be verified. Passing this Design self-review alone gives **no** implementation authorization. Human approval of the written Design Spec precedes any Implementation Plan; approval of the Implementation Plan precedes implementation.
+**Acceptance rule:** `BLOCKED`, `SKIPPED`, `NOT RUN` are never PASS. G1 + G2 + G3 must pass; DEP-01 is **already RATIFIED** at the stated baseline; DEP-02 trusted witness and DEP-03 legacy proof must have demonstrated evidence on the target deployment; DEP-04 resolution contract must be reconciled and verified. Passing this Design self-review alone gives **no** implementation authorization. Human approval of the written Design Spec precedes any Implementation Plan; approval of the Implementation Plan precedes implementation.
 
 ## 13. Dependency gates and implementation sequencing
 
 | Dependency | Design rule | Proof/approval still required | Current status |
 | --- | --- | --- | --- |
-| **DEP-01** Upstream contract | Section 10.1; explicitly amend `SPEC.md` §4.1c and #297/#310 to v4 re-review; retain advanced inheritance in #298 | **External human approval of the upstream amendment** | **BLOCKING / UNAPPROVED** |
+| **DEP-01** Upstream contract | Section 10.1; `SPEC.md` §4.1c and #297/#310 ratified for v4 re-review; advanced inheritance remains #298 | **Satisfied — ratified amendment `5b33b79`** | **RATIFIED / CLOSED AS CONTRACT DEPENDENCY** |
 | **DEP-02** Scope witness | Section 5.2; separate trusted high-watermark, modeled threat, fsync/recovery; BLOCK if protection absent | Real security isolation, durability and rollback/deletion tests | **DESIGN RULE SPECIFIED / PROOF PENDING** |
 | **DEP-03** Legacy history | Section 6; pre-existing trusted witness, verified complete authority, immutable prepared/committed bridge; otherwise BLOCK | Legacy corpus classifications and crash-injection evidence | **DESIGN RULE SPECIFIED / PROOF PENDING** |
-| **DEP-04** Requirements authority | Section 10.2; explicit or unique actual Requirements file; no Design-as-Requirements fallback | Contract reconciliation + parser/provenance & production tests | **DESIGN RULE SPECIFIED / PROOF PENDING** |
+| **DEP-04** Requirements authority | Section 10.2; explicit or unique independently verified Requirements file; never Design-as-Requirements fallback | **Independent RR1/CLI compatibility alignment**, resolver/provenance and production tests (not covered by DEP-01) | **OPEN / ALIGNMENT AND VERIFICATION PENDING** |
 | **DEP-05** Live host | Section 12; mandatory real-host E2E | Actual PASS under supported environment | **IMPLEMENTATION ACCEPTANCE PENDING** |
 
-Suggested **implementation plan decomposition** after *written-spec and upstream approvals*, preserving one overall contract: (1) authority/storage/anchor/schema + admission, (2) recovery/commit/self-review, (3) lineage/NC1/validation/reentry, (4) successor/Requirements/compatibility + integration/E2E. No slice can independently assert Review Gate compliance without the final full evidence suite.
+Suggested **implementation plan decomposition** only after *the Formal Design Gate passes and separate Implementation Plan authoring is authorized*, preserving one overall contract: (1) authority/storage/anchor/schema + admission, (2) recovery/commit/self-review, (3) lineage/NC1/validation/reentry, (4) successor/Requirements/compatibility + integration/E2E. No slice can independently assert Review Gate compliance without the final full evidence suite.
 
 ## 14. Self-review checklist and Design Gate handoff
 
@@ -250,14 +251,16 @@ This document is a **proposal for formal review**, not an approved implementatio
 - Confirm ARCH-01..10 all map to one authority and no in-memory flag can bypass durable projection.
 - Confirm incomplete generation cannot become a successor, restart/reentry cannot reset rounds, NC1 suspension cannot use ordinary SUSPENDED resume, and changed path-pair scope IDs cannot create a fresh-budget alias.
 - Confirm no self-review or deterministic failure authorizes a Git commit; only verified commit authorizes resolution.
-- Confirm DEP-01 is an explicit upstream contract change, **not** hidden as a permissive reading of `DESIGN_CLEAR_INHERITED`.
+- Confirm DEP-01 is **RATIFIED** at `5b33b79`, new successors cannot inherit Design CLEAR, and historical `DESIGN_CLEAR_INHERITED` reads remain ARCH-05-gated.
 - Confirm DEP-02 does not claim whole-volume rollback protection without a protected independent witness.
 - Confirm DEP-03 does not bootstrap legacy integrity evidence retroactively; unsafe legacy BLOCK.
 - Confirm DEP-04 forbids guessed Requirements authority and reconciles existing `auto_design_reference`.
 - Confirm G3 is required and `BLOCKED/SKIPPED/NOT RUN` cannot satisfy acceptance.
-- Confirm no production source, tests, CI, original `SPEC.md`, upstream Issue, or implementation plan was modified in this authoring step.
+- Confirm this Fresh Design Review remediation modifies only this Design Spec; already-ratified `SPEC.md`/Issue changes are separately identified as prior upstream contract work; no production source, tests, CI or implementation plan changes are authorized.
 
-### Authoring self-review result (2026-10-09)
+### Historical authoring self-review result (2026-10-09, before DEP-01 ratification)
+
+The following table is preserved **as historical evidence at its original baseline**, not as the current gate/dependency status. In particular its DEP-01 BLOCKED and scope statements were accurate before the `5b33b79` upstream amendment and its later ratification.
 
 | Check | Result | Reason |
 | --- | --- | --- |
@@ -274,4 +277,14 @@ This document is a **proposal for formal review**, not an approved implementatio
 
 **Self-review outcome:** Document-level consistency checks PASS with explicitly identified external blockers; **Formal Design Gate remains unpassed** and no implementation plan or production work is authorized.
 
-**Formal Design Gate: NOT YET PASSED. Implementation Plan: NOT AUTHORIZED. Production Changes: NOT AUTHORIZED. Implementation Ready: BLOCKED pending DEP-01 upstream approval (plus proof of DEP-02..04).**
+### Fresh Design Review remediation record (2026-10-09; ratified baseline `5b33b79`)
+
+| Finding | Severity | Disposition | Contract evidence |
+| --- | --- | --- | --- |
+| RG-310-FDR-001 | Major | **RESOLVED in Design** | §10.1, §13, §14 and document header reflect ratified DEP-01; historical self-review remains explicitly historical |
+| RG-310-FDR-002 | Major | **RESOLVED in Design** | §10.1 requires durable predecessor lineage reference **when independently validated**; unknown relations must not be invented and prior resolution carries no authority |
+| RG-310-FDR-003 | Minor | **RESOLVED in Design** | §10.2 and §13 isolate the unresolved RR1/`auto_design_reference` compatibility question under **DEP-04** |
+
+Fresh Review shall independently verify the exact committed Design blob and ratified upstream contract; a document self-review cannot itself close the Formal Design Gate.
+
+**Current status (after ratification): DEP-01 RATIFIED; DEP-02/03 proof pending; DEP-04 independent alignment/verification pending; DEP-05 real-host E2E NOT RUN. Formal Design Gate: BLOCKED pending independent Fresh Review. Implementation Plan: NOT AUTHORIZED. Production Changes: NOT AUTHORIZED. Implementation Ready: NOT APPROVED.**
