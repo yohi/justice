@@ -168,7 +168,6 @@ describe("PlanBridge Review Gate implementation lock (coordinator)", () => {
       source: "command",
       designPath: DESIGN_PATH,
       planPath: PLAN_PATH,
-      retryBudget: 0,
     });
     expect(started.dispatched).toBe(true);
     expect(started.reviewerPrompt).toContain("[JUSTICE: REVIEW GATE OPERATION PAYLOAD]");
@@ -184,7 +183,6 @@ describe("PlanBridge Review Gate implementation lock (coordinator)", () => {
       source: "command",
       designPath: DESIGN_PATH,
       planPath: PLAN_PATH,
-      retryBudget: 0,
     });
 
     expect(
@@ -227,7 +225,6 @@ describe("PlanBridge Review Gate implementation lock (coordinator)", () => {
       source: "command",
       designPath: DESIGN_PATH,
       planPath: PLAN_PATH,
-      retryBudget: 1,
     });
     const { response } = await runReviewerStep(bridge, started.reviewerPrompt as string, [
       { candidateId: "cand-1", severity: "major", summary: "Missing lifecycle test", location: "Task 1" },
@@ -244,7 +241,6 @@ describe("PlanBridge Review Gate implementation lock (coordinator)", () => {
       source: "command",
       designPath: DESIGN_PATH,
       planPath: PLAN_PATH,
-      retryBudget: 2,
     });
     await runReviewerStep(bridge, started.reviewerPrompt as string, [
       { candidateId: "cand-1", severity: "major", summary: "Missing lifecycle test", location: "Task 1" },
@@ -309,7 +305,6 @@ describe("PlanBridge Review Gate implementation lock (coordinator)", () => {
       source: "command",
       designPath: DESIGN_PATH,
       planPath: PLAN_PATH,
-      retryBudget: 0,
     });
     const step = await claimWorker(bridge, "call-1", started.reviewerPrompt as string);
     const response = await submitResult(bridge, step.input, "not a strict packet result");
@@ -332,7 +327,6 @@ describe("PlanBridge Review Gate implementation lock (coordinator)", () => {
       source: "command",
       designPath: DESIGN_PATH,
       planPath: PLAN_PATH,
-      retryBudget: 0,
     });
     const review1 = await runReviewerStep(bridge, started.reviewerPrompt as string, [], "review-1");
     const planReviewPrompt = nextPromptOf(review1.response);
@@ -360,7 +354,6 @@ describe("PlanBridge Review Gate implementation lock (coordinator)", () => {
       source: "command",
       designPath: DESIGN_PATH,
       planPath: PLAN_PATH,
-      retryBudget: 0,
     });
     expect(reuse.dispatched).toBe(false);
     expect(bridge.getReviewGateLock("parent")?.phase).toBe(
@@ -375,7 +368,6 @@ describe("PlanBridge Review Gate implementation lock (coordinator)", () => {
       source: "command",
       designPath: DESIGN_PATH,
       planPath: PLAN_PATH,
-      retryBudget: 0,
     });
     const review1 = await runReviewerStep(bridge, started.reviewerPrompt as string, [], "review-1");
     const review2 = await runReviewerStep(bridge, nextPromptOf(review1.response), [], "review-2");
@@ -399,7 +391,6 @@ describe("PlanBridge Review Gate implementation lock (coordinator)", () => {
       source: "command",
       designPath: DESIGN_PATH,
       planPath: PLAN_PATH,
-      retryBudget: 0,
     });
     const review1 = await runReviewerStep(bridge, started.reviewerPrompt as string, [], "review-1");
     const review2 = await runReviewerStep(bridge, nextPromptOf(review1.response), [], "review-2");
@@ -424,7 +415,6 @@ describe("PlanBridge Review Gate implementation lock (coordinator)", () => {
       source: "command",
       designPath: DESIGN_PATH,
       planPath: PLAN_PATH,
-      retryBudget: 0,
     });
     expect(bridge.hasAnyReviewGateLock()).toBe(true);
     expect(bridge.getReviewGateLock("other-parent")).toBeUndefined();

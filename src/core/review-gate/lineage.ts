@@ -373,6 +373,10 @@ export function commitLineageRevalidation(
   if (evidence.verifiedCommitBinding === undefined) {
     throw new Error("revalidation_requires_binding");
   }
+  // The revalidation closes the round whose post-image it validates — the
+  // lineage's own pending remediation round — never a newly minted round:
+  // minting one would breach the absolute Design 5 / Plan 3 ceilings and
+  // double-count a round that already consumed capacity.
   const event: FindingSelfReviewedV1 = {
     eventType: "FINDING_SELF_REVIEWED",
     gateId: projection.gateId,

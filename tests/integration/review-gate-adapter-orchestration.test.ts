@@ -163,7 +163,6 @@ it("clears a zero-finding gate end to end through the adapter and reuses the com
     source: "command",
     designPath: DESIGN_PATH,
     planPath: PLAN_PATH,
-    retryBudget: 0,
   });
   expect(started.dispatched).toBe(true);
   expect(started.reviewerPrompt).toContain("[JUSTICE: REVIEW GATE OPERATION PAYLOAD]");
@@ -219,7 +218,6 @@ it("clears a zero-finding gate end to end through the adapter and reuses the com
     source: "command",
     designPath: DESIGN_PATH,
     planPath: PLAN_PATH,
-    retryBudget: 0,
   });
   expect(reuse.dispatched).toBe(false);
   expect(reuse.guidance).toContain("[JUSTICE: REVIEW GATE CLEAR]");
@@ -238,7 +236,6 @@ it("routes remediation and self-review, then blocks safely when the mutation sub
     source: "command",
     designPath: DESIGN_PATH,
     planPath: PLAN_PATH,
-    retryBudget: 2,
   });
   if (started.reviewerPrompt === undefined) throw new Error("gate did not start");
 

@@ -467,24 +467,28 @@ export function createReviewGateCoordinator(
       dispatchSerial: dispatchSerial(session, args.operationId),
     });
 
-  const buildApprovalBinding = (
+  const buildApprovalBinding = async (
     session: MutableSessionState,
     projection: ReviewGateProjection,
-  ): ReviewApprovalBindingV1 => {
+  ): Promise<ReviewApprovalBindingV1> => {
     const gateCreated = requireGateCreated(session.gateId);
     return Object.freeze({
       reviewScopeId: gateCreated.payload.reviewScopeId,
       gateId: projection.gateId,
-      designArtifact: phaseArtifactBinding(session, "design"),
-      planArtifact: phaseArtifactBinding(session, "plan"),
-      requirementsResolution:
-        gateCreated.payload.requirementsResolution.source === "auto_design_reference"
-          ? {
-              ...gateCreated.payload.requirementsResolution,
-              canonicalPath: session.designPath,
-              digest: session.designDigest as ArtifactDigest,
-            }
-          : gateCreated.payload.requirementsResolution,
+      designArtifact: {
+        ...gateCreated.payload.designArtifact,
+        digest: session.designDigest as ArtifactDigest,
+      },
+      planArtifact: {
+        ...gateCreated.payload.planArtifact,
+        digest: session.planDigest as ArtifactDigest,
+      },
+      requirementsResolution: {
+        ...gateCreated.payload.requirementsResolution,
+        ...(gateCreated.payload.requirementsResolution.source === "auto_design_reference"
+          ? { canonicalPath: session.designPath, digest: session.designDigest as ArtifactDigest }
+          : {}),
+      },
       reviewProtocolFingerprint: protocol.reviewProtocolFingerprint,
       designProtocolFingerprint: protocol.designProtocolFingerprint,
       planProtocolFingerprint: protocol.planProtocolFingerprint,
@@ -571,10 +575,10 @@ export function createReviewGateCoordinator(
     return dispatches;
   };
 
-  const buildContext = (
+  const buildContext = async (
     session: MutableSessionState,
     projection: ReviewGateProjection,
-  ): ReviewGatePlanningContext => {
+  ): Promise<ReviewGatePlanningContext> => {
     const artifacts: ReviewGatePlanningArtifacts = Object.freeze({
       design: phaseArtifactBinding(session, "design"),
       plan: phaseArtifactBinding(session, "plan"),
@@ -610,7 +614,7 @@ export function createReviewGateCoordinator(
       workspaceStates: session.workspaceStates,
       materialProgressObserved: session.materialProgressObserved || undefined,
       designClearFingerprint: protocol.designProtocolFingerprint,
-      preparedApprovalBinding: buildApprovalBinding(session, projection),
+      preparedApprovalBinding: await buildApprovalBinding(session, projection),
     };
     if (session.inFlight !== null) context.inFlight = session.inFlight;
     if (session.reviewObserved !== null) context.reviewObserved = session.reviewObserved;
@@ -648,7 +652,11 @@ export function createReviewGateCoordinator(
   ): ReviewGateOperationPacketV1 => {
     switch (op.kind) {
       case "dispatch_reviewer": {
-        if (op.redispatchedOperationId === undefined) {
+        // AIM1: the coordinator mints identities. A redispatch keeps the
+        // live attempt id; a restart lost it with the process, so the
+        // redispatched reviewer operation mints a fresh attempt id while
+        // continuing the identical durable logical dispatch.
+        if (op.redispatchedOperationId === undefined || session.reviewAttemptId === null) {
           session.reviewAttemptId = newId();
         }
         return buildReviewerOperationPacket({
@@ -852,7 +860,7 @@ export function createReviewGateCoordinator(
   const drive = async (session: MutableSessionState): Promise<HookResponse | null> => {
     for (let iteration = 0; iteration < MAX_DRIVE_ITERATIONS; iteration += 1) {
       const projection = await loadProjection(session.gateId);
-      const context = buildContext(session, projection);
+      const context = await buildContext(session, projection);
       let op: ReviewGateNextOperation;
       try {
         op = planReviewGateNextOperation(projection, context);
@@ -868,8 +876,18 @@ export function createReviewGateCoordinator(
         case "dispatch_self_review":
         case "dispatch_lineage_revalidation":
         case "validate_non_convergence_reentry": {
+          // The fresh review dispatch consumes the resolution-commit evidence;
+          // keeping it would re-plan dispatch_reviewer forever.
+          if (op.kind === "dispatch_reviewer" && session.resolutionsCommitted !== null) {
+            session.resolutionsCommitted = null;
+          }
           const packet = buildPacketForOperation(session, projection, op);
-          await recordDispatch(session, packet);
+          // A redispatch continues the already-durable logical dispatch;
+          // re-recording it with fresh envelope fields would conflict instead
+          // of resuming the crashed attempt exactly once.
+        if (op.redispatchedOperationId === undefined) {
+            await recordDispatch(session, packet);
+          }
           return injectPacket(session, packet);
         }
         case "start_remediation":
@@ -973,6 +991,9 @@ export function createReviewGateCoordinator(
         }
         case "commit_resolutions": {
           session.resolutionsCommitted = Object.freeze({ lineageIds: [...op.lineageIds] });
+          // The commit evidence is consumed by this step; keeping it would
+          // re-plan commit_resolutions forever (drive_iteration_exhausted).
+          session.commitCompleted = null;
           continue;
         }
         case "prepare_restore":
@@ -1050,6 +1071,27 @@ export function createReviewGateCoordinator(
           continue;
         }
         case "append_plan_clear": {
+          const [designBytes, planBytes] = await Promise.all([
+            reader.readWorkspaceFile(session.designPath),
+            reader.readWorkspaceFile(session.planPath),
+          ]);
+          if (designBytes === null || planBytes === null) {
+            return suspendAndBlock(
+              session,
+              "reviewed_artifact_unreadable",
+              "the reviewed Design or Plan is unreadable; the Review Gate cannot clear safely.",
+            );
+          }
+          if (
+            computeArtifactDigest(designBytes) !== session.designDigest ||
+            computeArtifactDigest(planBytes) !== session.planDigest
+          ) {
+            return suspendAndBlock(
+              session,
+              "reviewed_artifact_digest_mismatch",
+              "the Design or Plan changed after review; rerun /justice-review-gate.",
+            );
+          }
           // The PLAN_CLEAR milestone plus the terminal completed binding: the
           // reducer only reaches status "completed" on COMPLETED_APPROVAL_BINDING.
           await appendEvents(session, [
@@ -1181,11 +1223,21 @@ export function createReviewGateCoordinator(
         latestBindingEvent?.eventType === "ARTIFACT_BINDINGS_UPDATED"
           ? latestBindingEvent.payload.planArtifact
           : gateCreated.payload.planArtifact;
+      const expectedDesignArtifact =
+        projection.status === "completed"
+          ? projection.approvalBinding?.designArtifact
+          : latestDesignArtifact;
+      const expectedPlanArtifact =
+        projection.status === "completed"
+          ? projection.approvalBinding?.planArtifact
+          : latestPlanArtifact;
       const bindingsMatch =
-        latestDesignArtifact.digest === designDigest &&
-        latestPlanArtifact.digest === planDigest &&
-        latestDesignArtifact.canonicalPath === designPath &&
-        latestPlanArtifact.canonicalPath === planPath;
+        expectedDesignArtifact !== undefined &&
+        expectedPlanArtifact !== undefined &&
+        expectedDesignArtifact.digest === designDigest &&
+        expectedPlanArtifact.digest === planDigest &&
+        expectedDesignArtifact.canonicalPath === designPath &&
+        expectedPlanArtifact.canonicalPath === planPath;
 
       if (projection.status === "completed" && bindingsMatch) {
         // Exact completed binding: read-only reuse — no lock acquisition, no

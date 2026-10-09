@@ -26,21 +26,31 @@ describe("parseJusticeReviewGateCommandArguments", () => {
       source: "command",
       designPath: "docs/specs/design.md",
       planPath: "docs/plans/implementation-plan.md",
-      retryBudget: 0,
     });
   });
 
-  it.each([0, 1, 10])("parses --retry %i as the additional cycle budget", (retryBudget) => {
-    expect(
-      parseJusticeReviewGateCommandArguments(
-        `--design docs/specs/design.md --plan docs/plans/implementation-plan.md --retry ${retryBudget}`,
-      ),
-    ).toEqual({
-      source: "command",
-      designPath: "docs/specs/design.md",
-      planPath: "docs/plans/implementation-plan.md",
-      retryBudget,
-    });
+  it.each([0, 1, 10])(
+    "parses --retry %i as deprecated RTY1 parser compatibility (no-op)",
+    (legacyRetryOption) => {
+      expect(
+        parseJusticeReviewGateCommandArguments(
+          `--design docs/specs/design.md --plan docs/plans/implementation-plan.md --retry ${legacyRetryOption}`,
+        ),
+      ).toEqual({
+        source: "command",
+        designPath: "docs/specs/design.md",
+        planPath: "docs/plans/implementation-plan.md",
+        legacyRetryOption,
+      });
+    },
+  );
+
+  it("does not synthesize a legacy retry option when --retry is absent", () => {
+    const parsed = parseJusticeReviewGateCommandArguments(
+      "--design docs/specs/design.md --plan docs/plans/implementation-plan.md",
+    );
+    expect(parsed).not.toHaveProperty("legacyRetryOption");
+    expect(parsed).not.toHaveProperty("retryBudget");
   });
 
   it("accepts OpenCode @path file references", () => {
@@ -54,7 +64,6 @@ describe("parseJusticeReviewGateCommandArguments", () => {
         "docs/superpowers/specs/2026-09-28-idle-closed-child-session-reopen-design.md",
       planPath:
         "docs/superpowers/plans/2026-09-28-idle-closed-child-session-reopen.md",
-      retryBudget: 0,
     });
   });
 
