@@ -1,5 +1,6 @@
 import { expect, expectTypeOf, it } from "vitest";
 import type {
+  ArtifactDigest,
   CompletedApprovalBindingV1,
   DesignClearV1,
   EpochId,
@@ -16,6 +17,8 @@ import type {
   OrchestrationResumedV1,
   PlanClearV1,
   RemediationRound,
+  RequirementsResolutionV1,
+  RequirementsResolutionV2,
   ReopenRequiredV1,
   ReviewArtifactBinding,
   ReviewGateEvent,
@@ -25,6 +28,7 @@ import type {
   ReviewNonConvergentV1,
   ReviewScopeId,
   RoundLimitExhaustedV1,
+  VerifiedTrackedArtifactIdentity,
   WriterId,
 } from "../../src/core/review-gate-types.js";
 
@@ -35,6 +39,9 @@ declare const epochId: EpochId;
 declare const lineageId: LineageId;
 declare const findingId: FindingId;
 declare const digest: ReviewArtifactBinding["digest"];
+
+/** Runtime-evaluated branded digest for fixture objects (declare-const bindings are erased). */
+const fixtureDigest = "d".repeat(64) as ArtifactDigest;
 
 export function buildTypeFixtures(): ReadonlyArray<ReviewGateEvent> {
   const common = { gateId, writerId, epochId, emittedAt: "2026-10-07T00:00:00.000Z" };
@@ -102,4 +109,83 @@ it("Review Gate event types are discriminated and unique", () => {
 it("Review Gate status and snapshot types have the expected shape", () => {
   expectTypeOf<ReviewGateStatus>().toEqualTypeOf<"active" | "suspended" | "completed">();
   expectTypeOf<ReviewGateState["findings"]>().toEqualTypeOf<ReadonlyMap<LineageId, FindingState>>();
+});
+
+it("VerifiedTrackedArtifactIdentity pins runtime filesystem evidence without persisted paths", () => {
+  expectTypeOf<VerifiedTrackedArtifactIdentity>().toEqualTypeOf<Readonly<{
+    canonicalPath: string;
+    workspaceIdentity: string;
+    repositoryIdentity: string;
+    gitBlobOid: string;
+    digest: ArtifactDigest;
+    gitMode: "100644" | "100755";
+    fsIdentity: Readonly<{ device: string; inode: string }>;
+  }>>();
+  const tracked = {
+    canonicalPath: "docs/design.md",
+    workspaceIdentity: "workspace-identity",
+    repositoryIdentity: "repository-identity",
+    gitBlobOid: "a".repeat(40),
+    digest: fixtureDigest,
+    gitMode: "100644",
+    fsIdentity: { device: "2049", inode: "1188593" },
+  } satisfies VerifiedTrackedArtifactIdentity;
+  void tracked;
+});
+
+it("RequirementsResolutionV2 is versioned, source-bounded and never confusable with legacy V1", () => {
+  expectTypeOf<RequirementsResolutionV2["schemaVersion"]>().toEqualTypeOf<2>();
+  expectTypeOf<RequirementsResolutionV2["source"]>().toEqualTypeOf<
+    "explicit" | "design_declared_reference"
+  >();
+  expectTypeOf<RequirementsResolutionV1["source"]>().toEqualTypeOf<
+    "explicit" | "auto_design_reference"
+  >();
+  expectTypeOf<RequirementsResolutionV1["source"]>().not.toEqualTypeOf<
+    RequirementsResolutionV2["source"]
+  >();
+  expectTypeOf<RequirementsResolutionV2["selectionEvidence"]>().toEqualTypeOf<Readonly<{
+    commandPath?: string;
+    declaration?: Readonly<{
+      designCanonicalPath: string;
+      designDigest: ArtifactDigest;
+      declarationLine: number;
+      declarationDigest: ArtifactDigest;
+      declaredCanonicalPath: string;
+    }>;
+  }>>();
+
+  const v2Explicit = {
+    schemaVersion: 2,
+    source: "explicit",
+    canonicalPath: "requirements.md",
+    digest: fixtureDigest,
+    gitMode: "100644",
+    requirementsGitBlobOid: "b".repeat(40),
+    committedBaselineOid: "c".repeat(40),
+    workspaceIdentity: "workspace-identity",
+    selectionEvidence: { commandPath: "requirements.md" },
+  } satisfies RequirementsResolutionV2;
+  const v2Declared = {
+    ...v2Explicit,
+    source: "design_declared_reference",
+    selectionEvidence: {
+      declaration: {
+        designCanonicalPath: "docs/design.md",
+        designDigest: fixtureDigest,
+        declarationLine: 3,
+        declarationDigest: fixtureDigest,
+        declaredCanonicalPath: "requirements.md",
+      },
+    },
+  } satisfies RequirementsResolutionV2;
+  void v2Declared;
+
+  // Historical V1 stored payloads keep their own shape: no schemaVersion
+  // discriminator and the legacy `auto_design_reference` source that V2 never
+  // carries, so a V1 record can never satisfy the V2 provenance contract.
+  const v1Stored = { source: "auto_design_reference", canonicalPath: "requirements.md", digest: fixtureDigest };
+  expect("schemaVersion" in v1Stored).toBe(false);
+  expect(v1Stored.source).toBe("auto_design_reference");
+  expect(v2Explicit.schemaVersion).toBe(2);
 });
