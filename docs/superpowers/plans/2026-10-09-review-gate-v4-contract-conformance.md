@@ -199,31 +199,7 @@ The following five user-visible input/failure classes have explicit owner tests 
 - Test: `tests/core/review-gate-identity.test.ts`
 
 **Interfaces:**
-- **RG-312-PLAN-026 — Pure Core export boundary:** Task 7 exports only domain-pure `VerifiedAdmissionSnapshot`, `AdmissionDecision`, `VerifiedGateTip`, `VerifiedCompletedBindingSnapshot`, `VerifiedUnfinishedBindingSnapshot` and protected-evidence **value DTOs** from `src/core/review-gate/{admission,types}.ts`. These contain immutable verified identity/provenance values, never Runtime instances or an implementation of a host factory. **No** Core import, even `import type`, from `src/runtime/*`; `ReviewGateScopeWitness`, `ReviewGateEventStore`, `ReviewGateLockManager`, `typeof resolveRequirementsForAdmission`, `ReviewGateProtocolDescriptor` (if Runtime-owned), `ScopeAdmissionRequest`, `ReviewGateScopeAdmissionOptions`, `ReviewGateScopeAdmission` and `createReviewGateScopeAdmission` belong exclusively to **Task 18 `src/runtime/review-gate-scope-admission.ts`**. Define their Runtime interface here as a **non-Core reference contract**, implemented and compiled only in Task 18:
-```ts
-// src/runtime/review-gate-scope-admission.ts (Task 18 only)
-type ScopeAdmissionRequest = Readonly<{
-  workspaceRoot: string; workspaceIdentity: string;
-  designPath: string; planPath: string;
-  explicitRequirementsPath?: string;
-  protocol: ReviewGateProtocolDescriptor;
-}>;
-type ReviewGateScopeAdmissionOptions = Readonly<{
-  witness: ReviewGateScopeWitness;
-  eventStore: ReviewGateEventStore;
-  lockManager: ReviewGateLockManager;
-  requirementsResolver: typeof resolveRequirementsForAdmission;
-}>;
-interface ReviewGateScopeAdmission {
-  withAdmissionLease<T>(
-    request: ScopeAdmissionRequest,
-    run: (decision: AdmissionDecision) => Promise<T>,
-  ): Promise<T>;
-}
-function createReviewGateScopeAdmission(
-  options: ReviewGateScopeAdmissionOptions,
-): ReviewGateScopeAdmission;
-```
+- **RG-312-PLAN-026 — Pure Core export boundary:** Task 7 exports only domain-pure `VerifiedAdmissionSnapshot`, `AdmissionDecision`, `VerifiedGateTip`, `VerifiedCompletedBindingSnapshot`, `VerifiedUnfinishedBindingSnapshot` and protected-evidence **value DTOs** from `src/core/review-gate/{admission,types}.ts`. These contain immutable verified identity/provenance values, never Runtime instances or an implementation of a host factory. **No** Core import, even `import type`, from `src/runtime/*`; `ReviewGateScopeWitness`, `ReviewGateEventStore`, `ReviewGateLockManager`, `typeof resolveRequirementsForAdmission`, `ReviewGateProtocolDescriptor` (if Runtime-owned), `ScopeAdmissionRequest`, `ReviewGateScopeAdmissionOptions`, `ReviewGateScopeAdmission` and `createReviewGateScopeAdmission` belong exclusively to **Task 18 `src/runtime/review-gate-scope-admission.ts`**. The concrete Runtime interface and factory signature are defined **only in Task 18's Interfaces**, after the Core planner has compiled with no Runtime dependencies:
   - **PLAN-026 G1/G2 dependency proof:** Task 7 RED/GREEN must compile/run **with the Task 18 Runtime factory still absent**, using pure domain DTO fixtures, and a boundary test/static import graph fails on any Core → Runtime import. Task 18 RED/GREEN must instantiate the real factory and prove it imports Core only one-way; no Core barrel type re-export of the Runtime factory or application configuration.
 - **Produces in Core:** `planReviewGateAdmission(input:VerifiedAdmissionSnapshot):AdmissionDecision` with `RESUME | INSPECT_NC1_ELIGIBLE_CHANGE | STAY_SUSPENDED | REENTRY_CANDIDATE | UPSTREAM_PRECEDENCE_REQUIRED | STALE_LINEAGE_REVALIDATION_REQUIRED | REVALIDATE_OR_BLOCK | REUSE_COMPLETED | CREATE_SUCCESSOR | CREATE_GENESIS | BLOCK`. The Runtime builds its immutable input under protected ownership; **Core alone** decides binding equality and next generation.
 - **Task 18 runtime ownership contract, not Task 7 implementation:** `withAdmissionLease` will acquire Task 5 workspace guard then scope lock, validate Task 5 installation-wide complete `VerifiedScopeFrontier` and related Task 6 Gate tips plus the independently authenticated `VerifiedFirstEnrollmentAuthorityV1` / distinct-workflow / cross-scope successor proofs, and Task 3 Design/Plan/Requirements. After acquiring Gate lock, reproject entire relevant relationship closure and all CURRENT upstream/pending-stale proof from Task 9/11 at one witness frontier; call Pure Core **before** publishing a new enrollment or generating NC1 candidate. Only Core-authorized genesis/successor may publish enrollment (idempotently, under the same workspace guard) before dropping workspace/scope guards and invoke `run(decision)` under Gate lock. Task 18 must release in `finally`; no worker inherits locks. **Task 7's completion is only its independently testable pure planner + Core value DTOs, never Runtime factory types or a fake successful runtime wrapper.**
@@ -657,6 +633,33 @@ type VerifiedAdmissionAuthorityDecisionV1 =
 - Test: `tests/integration/review-gate-event-sourced-flow.test.ts`, `tests/integration/review-gate-restart-recovery.test.ts`, `tests/integration/review-gate-implementation-lock.test.ts`
 
 **Interfaces:**
+- **PLAN-026 Runtime-only admission factory type definitions:** These types and the factory belong only in `src/runtime/review-gate-scope-admission.ts`. Its imports point Runtime→Core, never Core→Runtime; `src/core/review-gate/types.ts` contains only Core value DTOs.
+```ts
+// src/runtime/review-gate-scope-admission.ts (Task 18 only)
+type ScopeAdmissionRequest = Readonly<{
+  workspaceRoot: string; workspaceIdentity: string;
+  designPath: string; planPath: string;
+  explicitRequirementsPath?: string;
+  protocol: ReviewGateProtocolDescriptor;
+}>;
+type ReviewGateScopeAdmissionOptions = Readonly<{
+  witness: ReviewGateScopeWitness;
+  eventStore: ReviewGateEventStore;
+  lockManager: ReviewGateLockManager;
+  requirementsResolver: typeof resolveRequirementsForAdmission;
+}>;
+interface ReviewGateScopeAdmission {
+  withAdmissionLease<T>(
+    request: ScopeAdmissionRequest,
+    run: (decision: AdmissionDecision) => Promise<T>,
+  ): Promise<T>;
+}
+function createReviewGateScopeAdmission(
+  options: ReviewGateScopeAdmissionOptions,
+): ReviewGateScopeAdmission;
+```
+
+
 - Preserve `createReviewGateCoordinator`/`PlanBridge.setReviewGateCoordinator` public seams. Wire Tasks 2–16 into one runtime loop; coordinator owns I/O, mutation, locks, dispatch only; Core owns next-step decisions.
 - **Composition root `src/runtime/opencode-adapter.ts` / `buildSharedReviewGateRuntimeGraph`:** reuse the *same* Task 5 `ReviewGateScopeWitness` instance held by Task 6's store. Implement the **Task 18-owned Runtime-only factory contract** in `src/runtime/review-gate-scope-admission.ts` as `createReviewGateScopeAdmission({witness,eventStore,lockManager,requirementsResolver})`, backed by real Task 9/15 projections; inject `scopeAdmission:ReviewGateScopeAdmission` as a **required** new property of `ReviewGateCoordinatorOptions` in `src/runtime/review-gate-coordinator.ts`. The `SharedReviewGateRuntimeGraph` retains witness/store/admission for the invocation; on restart, reopen the same protected `JUSTICE_REVIEW_GATE_WITNESS_DIR` + verified `workspaceIdentity`, not a new empty registry. Do not construct a second witness in Coordinator or Approval. Missing config/witness, inconsistent workspace identity or ledger membership BLOCKS graph admission, never a legacy unanchored fallback.
 - **ScopeAdmissionRequest**, constructed from the command request: canonical workspace root/identity, Design/Plan paths, optional explicit Requirements selector and ratified ReviewGateProtocolDescriptor. Task 7/9 restore the **last durable effective binding** from Task 6 events + Task 15 persisted authority, while Task 15/3 independently inspect the **current observed candidate** within the lease. Runtime must not replace `lastVerifiedBinding` with current observations, compare drift itself, or infer an absent binding from `ownDesignClear`. Pure Core compares them. The coordinator MUST route start/resume through `scopeAdmission.withAdmissionLease(request, async decision => ...)`; **Task 18 builds the complete workspace enrollment and current-lineage precedence evidence and first invokes Task 7 Core with `nc1Observation:'NOT_INSPECTED'`**, not a preliminary runtime allow/deny boolean. `UPSTREAM_PRECEDENCE_REQUIRED` routes the already verified blocker to Task 14's existing Core orchestrator restore/reopen path; `STALE_LINEAGE_REVALIDATION_REQUIRED` dispatches Task 11 first. Only `INSPECT_NC1_ELIGIBLE_CHANGE` permits Task 18's observation producer, after which Task 18 re-reads current protected witness/frontier, phase Git/protocol sources and CURRENT lineage proof and invokes Task 7 again. Only that second Pure Core decision may be `REENTRY_CANDIDATE`; if blocker/stale evidence appears between passes, it preempts NC1 and **no** `MATERIAL_PROGRESS` dispatch occurs. Gate lease is held across orchestration, released by Task 7 in `finally`, and no worker inherits handles. Any `REUSE_COMPLETED`/`CREATE_SUCCESSOR`/BLOCK or NC1 `REENTRY_CANDIDATE` decision is Task 7 Pure Core output only, never redecided by the coordinator. **After protected admission, NC1 candidate triggers the actual independent validator dispatch and Task 14 witness-committed reentry before a new ACTIVE invocation; `NO_MATERIAL_PROGRESS` remains suspended, crash retries same operation. The Task 14 input binds NC1 stop event, eligible-change committed proof, independent validator event and before/after semantic context; model text alone cannot claim material progress.** Under scope/Gate ownership, derive the current phase from verified projection and check **only that phase's target** Git-clean. Design phase: Design dirty BLOCK but dirty downstream Plan allowed and not approved; Plan phase: Plan dirty BLOCK and already-approved Design binding must stay verified. Unrelated staged/dirty paths are permitted and excluded from commit. No automatic both-target clean prerequisite at Design admission. **For an existing in-flight Gate, a known-dirty target may be used only in a verified Task 10 same-operation mutation/recovery cursor**; unknown dirty state BLOCKS. Never reject valid exact crash recovery solely because an authoritative post-image has not yet been committed. All three mandatory validation stages run in production, and `REVIEW_COMMIT_PREPARED` is witness-committed before Git. No authority from `session.materialProgressObserved` or legacy mutable flags.
