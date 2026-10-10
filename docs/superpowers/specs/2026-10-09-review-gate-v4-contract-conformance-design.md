@@ -172,6 +172,45 @@ Durable events reconstruct targeted lineages, complete pre/post semantic blocker
 
 **Core-issued decision and publication:** `planSemanticContextTransition(input:VerifiedSemanticContextTransitionInput): SemanticContextTransitionDecision` is a **pure Core** decision with `KEEP_CONTINUITY | PREPARE_INCOMPATIBLE_SEGMENT | BLOCK`. Core validates the verified trigger kind, old/new authority refs, validator registration/version/protocol, full causal evidence, same scope/Gate/generation/phase, monotone previous segment and unchanged round counters. For equal governed semantic inputs or proof of `EQUIVALENT`, preserve existing `phaseBaselineId`, `comparisonSegmentId` and all NC1 cycles (and publish a bounded linked audit transition only when a real governing authority transition occurred); `INCOMPATIBLE` allows an **explicit** new comparison segment *within the same generation* but only after the independent proof. The runtime coordinator is the **sole writer**, not workers: it binds Core's exact prepared decision + verified `DETERMINISTIC_VALIDATION_COMPLETED` ID + parent authoritative change event to `SEMANTIC_CONTEXT_TRANSITION`, validates scope/writer frontier and atomically witness-commits the typed event before any new review/CLEAR or NC1 cycle evaluation under the new context. Crash/replay is idempotent by a stable transition operation ID and rejects any conflicting event. Legacy/unknown event versions and missing proof BLOCK without truncating history. **Segment changes never reset budget, waive existing NC1 stop/Two-Key Reentry, import predecessor resolution or erase prior cycles.** Cross-generation successors always start a fresh phase semantic context and cannot inherit prior authority.
 
+**Wire-level proof boundary (types are immutable, versioned and event-anchored):**
+
+```ts
+type SemanticContextInputsV1 = Readonly<{
+  workspaceIdentity: string; gateId: string; generationId: string;
+  phase: "design" | "plan"; phaseBaselineId: string;
+  comparisonSegmentId: string;
+  requirements: Readonly<{ source: string; canonicalPath: string;
+    gitBlobOid: string; gitMode: "100644" | "100755";
+    authorityEventId: string }>;
+  upstreamApproved: Readonly<{ bindingDigest: string;
+    authorityEventId: string }> | null;
+  policy: Readonly<{ contractId: string; version: string;
+    semanticFingerprint: string; lineageFingerprint: string;
+    nc1Fingerprint: string; validatorRegistryDigest: string }>;
+}>;
+type SemanticContextCompatibilityProofV1 = Readonly<{
+  validationEventId: string; triggeringAuthorityEventId: string;
+  validatorId: "SEMANTIC_CONTEXT_COMPATIBILITY_V1";
+  validatorVersion: string; executableDigest: string;
+  registryDigest: string; compatibilityTableDigest: string;
+  oldNormalizedInputsDigest: string; newNormalizedInputsDigest: string;
+  result: "EQUIVALENT" | "INCOMPATIBLE" | "INDETERMINATE";
+  ruleId: string; ruleVersion: string;
+}>;
+type VerifiedSemanticContextTransitionInput = Readonly<{
+  oldInputs: SemanticContextInputsV1;
+  newInputs: SemanticContextInputsV1;
+  proof: SemanticContextCompatibilityProofV1;
+  triggeringAuthorityEventId: string;
+  verifiedHistoryFrontier: string;
+  roundCountersBefore: Readonly<{design:number;plan:number}>;
+  roundCountersAfter: Readonly<{design:number;plan:number}>;
+  operationId: string;
+}>;
+```
+
+The versioned normalizer hashes only governing semantic field **values**, never the `authorityEventId`, `validationEventId`, observation commit, artifact revision or writer identities; those remain mandatory independent causal provenance checks. Only verified `SemanticContextInputsV1` values and a `SemanticContextCompatibilityProofV1` whose exact normalized input digests and triggering event match may enter Core. The registry owns the compatibility table and proof rule identities; workers may not supply them. The result of `planSemanticContextTransition` is typed `KEEP_CONTINUITY | PREPARE_INCOMPATIBLE_SEGMENT | BLOCK` with an operation- and evidence-bound decision; no input path allows a caller-supplied boolean `equivalent`/`incompatible` to override the validator.
+
 Six normative predicates, evaluated all and stored with the ordered first as `primaryReason`:
 1. `RESOLVED_LINEAGE_REGRESSED`: committed resolution later regresses in the same context (immediate suspend).
 2. `REMEDIATION_OSCILLATION`: `fingerprint[n] == fingerprint[n-2]` and differs from `fingerprint[n-1]`.
