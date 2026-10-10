@@ -1,8 +1,8 @@
 import type { PlanTask, PlanStep, PlanTaskStatus } from "./types";
+import { scanMarkdownFenceLines } from "./markdown-fence-scanner";
 
 const TASK_HEADING_REGEX = /^#{2,3}\s+Task\s+(\d+):\s*(.+)$/;
 const CHECKBOX_ANY_REGEX = /^(\s*-\s+\[)([ xX])(\]\s+.+)$/;
-const FENCE_OPEN_REGEX = /^ {0,3}(`{3,}|~{3,})/;
 
 export class PlanParser {
   /**
@@ -11,7 +11,7 @@ export class PlanParser {
   parse(content: string): PlanTask[] {
     if (!content.trim()) return [];
 
-    const lines = content.split(/\r?\n/);
+    const scanned = scanMarkdownFenceLines(content);
     const tasks: PlanTask[] = [];
     let currentTask: {
       title: string;
@@ -20,33 +20,15 @@ export class PlanParser {
       startOffset: number;
     } | null = null;
     let lineStartOffset = 0;
-    let fence: { readonly character: string; readonly length: number } | null = null;
 
-    for (let i = 0; i < lines.length; i++) {
+    for (let i = 0; i < scanned.length; i++) {
       // eslint-disable-next-line security/detect-object-injection
-      const line = lines[i];
-      if (line === undefined) continue;
+      const entry = scanned[i];
+      if (entry === undefined) continue;
 
-      const lineNumber = i + 1; // 1-indexed
+      const { line, lineNumber, insideFence } = entry;
 
-      const openingFence = line.match(FENCE_OPEN_REGEX)?.[1];
-      if (fence) {
-        const { character, length } = fence;
-        const closingFence = openingFence?.[0] === character ? openingFence : undefined;
-        const closingLine = line.trim();
-        if (
-          closingFence !== undefined &&
-          closingFence.length >= length &&
-          closingLine.length >= length &&
-          [...closingLine].every((fenceCharacter) => fenceCharacter === character)
-        ) {
-          fence = null;
-        }
-      } else if (openingFence !== undefined) {
-        fence = { character: openingFence[0] ?? "`", length: openingFence.length };
-      }
-
-      const taskMatch = fence ? null : line.match(TASK_HEADING_REGEX);
+      const taskMatch = insideFence ? null : line.match(TASK_HEADING_REGEX);
       if (taskMatch?.[1] !== undefined && taskMatch[2] !== undefined) {
         if (currentTask) {
           tasks.push(

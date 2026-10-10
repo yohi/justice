@@ -136,6 +136,33 @@ describe("PlanParser", () => {
 
       expect(tasks.map((task) => task.id)).toEqual(["task-1", "task-2"]);
     });
+
+    it("ignores language-fenced Interfaces and task headings", () => {
+      const content = [
+        "### Task 1: Real task",
+        "**Interfaces:**",
+        "- [ ] real step",
+        "```markdown",
+        "**Interfaces:**",
+        "### Task 99: fenced example",
+        "```",
+        "```text`tick",
+        "### Task 2: Next real task",
+        "- [ ] next step",
+      ].join("\n");
+
+      const tasks = parser.parse(content);
+
+      // The valid ```markdown fence hides its marker and Task 99. The line whose
+      // info string contains a backtick is not a valid opening fence, so Task 2 is real.
+      expect(tasks.map((task) => task.id)).toEqual(["task-1", "task-2"]);
+      expect(tasks[0].rawBody).toBe(
+        content.slice(0, content.indexOf("### Task 2: Next real task")),
+      );
+      expect(tasks[1].rawBody).toBe(content.slice(content.indexOf("### Task 2: Next real task")));
+      expect(tasks[0].steps).toMatchObject([{ description: "real step", lineNumber: 3 }]);
+      expect(tasks[1].steps).toMatchObject([{ description: "next step", lineNumber: 10 }]);
+    });
   });
 
   it("derives task-1 from both ordinary and leading-zero task headings", () => {
