@@ -32,11 +32,20 @@ describe("parseDesignRequirementsDeclaration", () => {
     });
   });
 
-  it("accepts a marker placed before the first H1 heading", () => {
+  it("rejects a marker placed before the first H1 heading (Design §10.2.2)", () => {
     const design = [VALID_MARKER, "", "# Feature Design", "", "## Overview"].join("\n");
 
-    const parsed = parseDesignRequirementsDeclaration(design);
-    expect(parsed).toMatchObject({ kind: "selected", canonicalPath: "docs/requirements/feature.md", line: 1 });
+    expect(parseDesignRequirementsDeclaration(design).kind).toBe("invalid");
+  });
+
+  it("accepts a marker between the first H1 and the first unfenced H2", () => {
+    const design = ["# Feature Design", "", VALID_MARKER, "", "## Overview"].join("\n");
+
+    expect(parseDesignRequirementsDeclaration(design)).toMatchObject({
+      kind: "selected",
+      canonicalPath: "docs/requirements/feature.md",
+      line: 3,
+    });
   });
 
   it("normalizes the declared path through the shared safe-path rules", () => {

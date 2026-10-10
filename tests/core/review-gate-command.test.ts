@@ -43,6 +43,7 @@ describe("parseJusticeReviewGateCommandArguments", () => {
         designPath: "docs/specs/design.md",
         planPath: "docs/plans/implementation-plan.md",
         legacyRetryOption,
+        retryDeprecatedWarning: RETRY_DEPRECATED_WARNING,
       });
     },
   );
@@ -53,6 +54,7 @@ describe("parseJusticeReviewGateCommandArguments", () => {
     );
     expect(parsed).not.toHaveProperty("legacyRetryOption");
     expect(parsed).not.toHaveProperty("retryBudget");
+    expect(parsed).not.toHaveProperty("retryDeprecatedWarning");
   });
 
   it("accepts OpenCode @path file references", () => {
@@ -172,8 +174,10 @@ describe("deprecated --retry warning diagnostics (RTY1)", () => {
         designPath: "docs/specs/design.md",
         planPath: "docs/plans/implementation-plan.md",
         legacyRetryOption,
+        retryDeprecatedWarning: RETRY_DEPRECATED_WARNING,
       });
       expect(reviewGateCommandWarnings(parsed)).toEqual([RETRY_DEPRECATED_WARNING]);
+      expect(parsed?.retryDeprecatedWarning).toBe(RETRY_DEPRECATED_WARNING);
       expect(RETRY_DEPRECATED_WARNING).toContain("RETRY_DEPRECATED");
     },
   );
@@ -183,6 +187,7 @@ describe("deprecated --retry warning diagnostics (RTY1)", () => {
       "--design docs/specs/design.md --plan docs/plans/implementation-plan.md",
     );
     expect(reviewGateCommandWarnings(parsed)).toEqual([]);
+    expect(parsed).not.toHaveProperty("retryDeprecatedWarning");
   });
 
   it("keeps the legacy retry option inert at the command boundary", () => {
@@ -206,6 +211,7 @@ describe("deprecated --retry warning diagnostics (RTY1)", () => {
       "designPath",
       "legacyRetryOption",
       "planPath",
+      "retryDeprecatedWarning",
       "source",
     ]);
     expect(Object.keys(withoutRetry ?? {}).sort()).toEqual([

@@ -19,8 +19,15 @@ const MAX_DECLARED_PATH_BYTES = 4096;
 const PREAMBLE_MAX_PHYSICAL_LINES = 64;
 
 /**
- * The first unfenced ATX H2/H3 bounds the Design preamble. The optional H1 and
- * deeper (H4+) headings do not bound it; fenced pseudo headings never do.
+ * The first unfenced ATX H1 is the preamble lower bound when present: the
+ * declaration must appear after it (Design §10.2.2). A document without an
+ * H1 may place it at the top, before its first H2/H3.
+ */
+const H1_HEADING_REGEX = /^ {0,3}#(?:[ \t]|$)/;
+
+/**
+ * The first unfenced ATX H2/H3 bounds the Design preamble. Deeper (H4+)
+ * headings do not bound it; fenced pseudo headings never do.
  */
 const H2_H3_HEADING_REGEX = /^ {0,3}#{2,3}(?:[ \t]|$)/;
 
@@ -45,7 +52,8 @@ const MARKER_REGEX =
  *
  * - `none`: no unfenced reserved marker occurs anywhere in the document.
  * - `selected`: exactly one grammar-valid unfenced marker inside the preamble
- *   window (first 64 physical lines before the first unfenced H2/H3).
+ *   window (after the optional first unfenced ATX H1, before the first
+ *   unfenced ATX H2/H3, within the first 64 physical lines).
  * - `invalid`: any unfenced reserved-marker occurrence is malformed, placed
  *   outside the preamble window, or duplicated (even with an identical value).
  *   No first/last/nearest fallback is applied.
@@ -128,11 +136,15 @@ function parseMarkerLine(line: string): ParsedMarkerLine | RejectedMarkerLine {
 
 function isInPreamble(
   lineNumber: number,
+  firstUnfencedH1Line: number | null,
   firstUnfencedH2H3Line: number | null,
 ): boolean {
+  const afterFirstH1 =
+    firstUnfencedH1Line === null || lineNumber > firstUnfencedH1Line;
+  const beforeFirstH2H3 =
+    firstUnfencedH2H3Line === null || lineNumber < firstUnfencedH2H3Line;
   return (
-    lineNumber <= PREAMBLE_MAX_PHYSICAL_LINES &&
-    (firstUnfencedH2H3Line === null || lineNumber < firstUnfencedH2H3Line)
+    lineNumber <= PREAMBLE_MAX_PHYSICAL_LINES && afterFirstH1 && beforeFirstH2H3
   );
 }
 
@@ -149,12 +161,20 @@ export function parseDesignRequirementsDeclaration(
 ): DesignRequirementsDeclaration {
   const scannedLines = scanMarkdownFenceLines(design);
 
+  let firstUnfencedH1Line: number | null = null;
   let firstUnfencedH2H3Line: number | null = null;
   for (const entry of scannedLines) {
-    if (!entry.insideFence && H2_H3_HEADING_REGEX.test(entry.line)) {
-      firstUnfencedH2H3Line = entry.lineNumber;
-      break;
+    if (entry.insideFence) continue;
+    if (firstUnfencedH1Line === null && H1_HEADING_REGEX.test(entry.line)) {
+      firstUnfencedH1Line = entry.lineNumber;
     }
+    if (
+      firstUnfencedH2H3Line === null &&
+      H2_H3_HEADING_REGEX.test(entry.line)
+    ) {
+      firstUnfencedH2H3Line = entry.lineNumber;
+    }
+    if (firstUnfencedH1Line !== null && firstUnfencedH2H3Line !== null) break;
   }
 
   const candidates: {
@@ -191,10 +211,10 @@ export function parseDesignRequirementsDeclaration(
   const declaration = candidates[0];
   if (declaration === undefined) return { kind: "none" };
 
-  if (!isInPreamble(declaration.line, firstUnfencedH2H3Line)) {
+  if (!isInPreamble(declaration.line, firstUnfencedH1Line, firstUnfencedH2H3Line)) {
     return {
       kind: "invalid",
-      reason: "reserved Requirements declaration outside the Design preamble (first 64 physical lines before the first unfenced H2/H3)",
+      reason: "reserved Requirements declaration outside the Design preamble (after the optional first unfenced ATX H1, before the first unfenced ATX H2/H3, within the first 64 physical lines)",
     };
   }
 

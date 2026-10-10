@@ -15,12 +15,19 @@ export interface ReviewGateRequest {
   readonly planPath: string;
   readonly requirementsPath?: string;
   readonly legacyRetryOption?: number;
+  /**
+   * RTY1: the stable `RETRY_DEPRECATED` warning text, present exactly when
+   * `legacyRetryOption` is present so the deprecation is observable on the
+   * parsed Justice command response itself, not merely in internal logs.
+   */
+  readonly retryDeprecatedWarning?: string;
 }
 
 /**
  * RTY1: stable, observable public diagnostic for the deprecated `--retry`
- * option. Returned by `reviewGateCommandWarnings` for any parsed request that
- * carries `legacyRetryOption`, so hosts can surface it on the Justice command
+ * option. The parser embeds this text as `retryDeprecatedWarning` on every
+ * parsed request carrying `legacyRetryOption` (and `reviewGateCommandWarnings`
+ * exposes the same list), so hosts can surface it on the Justice command
  * response rather than only in internal logs. The text itself states the
  * no-op contract: the option never alters Design 5 / Plan 3 budgets, Gate
  * identity, protocol fingerprints, epoch, admission decisions or history.
@@ -119,6 +126,9 @@ export function parseJusticeReviewGateCommandArguments(
     designPath,
     planPath,
     ...(legacyRetryOption === undefined ? {} : { legacyRetryOption }),
+    ...(legacyRetryOption === undefined
+      ? {}
+      : { retryDeprecatedWarning: RETRY_DEPRECATED_WARNING }),
     ...(requirementsPath === null ? {} : { requirementsPath }),
   };
 }
