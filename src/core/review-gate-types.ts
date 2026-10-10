@@ -94,6 +94,43 @@ export type RequirementsResolutionV2 = Readonly<{
   }>;
 }>;
 
+/**
+ * Current, causally verified Requirements authority. This preserves immutable
+ * V2 admission provenance separately from the effective Requirements and
+ * committed Design identities used for subsequent review and approval checks.
+ */
+export type RequirementsAuthoritySnapshotV1 = Readonly<{
+  readonly schemaVersion: 1;
+  readonly historicalResolutionEventId: string;
+  readonly currentAuthorityEventId: string;
+  readonly producingOperationId: string;
+  readonly workspaceIdentity: string;
+  readonly repositoryIdentity: string;
+  readonly requirements: Readonly<{
+    readonly source: "explicit" | "design_declared_reference";
+    readonly selectedCanonicalPath: string;
+    readonly canonicalPath: string;
+    readonly gitBlobOid: string;
+    readonly digest: ArtifactDigest;
+    readonly gitMode: "100644" | "100755";
+  }>;
+  readonly design: Readonly<{
+    readonly canonicalPath: string;
+    readonly digest: ArtifactDigest;
+    readonly gitMode: "100644" | "100755";
+    readonly verifiedCommitOid: string;
+    readonly verifiedTreeOid: string;
+    readonly phaseProtocolFingerprint: string;
+    readonly marker: Readonly<{
+      readonly presence: "present" | "absent";
+      readonly validPreamblePosition: boolean;
+      readonly declaredCanonicalPath: string | null;
+      readonly declarationLine: number | null;
+      readonly declarationDigest: ArtifactDigest | null;
+    }>;
+  }>;
+}>;
+
 export type DesignProtocolDescriptorV1 = Readonly<{
   readonly designReviewContractVersion: string;
   readonly findingValidatorContractVersion: string;
