@@ -167,7 +167,49 @@ The following five user-visible input/failure classes have explicit owner tests 
 
 **Interfaces:**
 - Produces: `planReviewGateAdmission(input: VerifiedAdmissionSnapshot): AdmissionDecision` with `RESUME | REENTRY_CANDIDATE | REVALIDATE_OR_BLOCK | REUSE_COMPLETED | CREATE_SUCCESSOR | CREATE_GENESIS | BLOCK`; `admitReviewGateScope(input:ScopeAdmissionRequest):Promise<AdmissionDecision>` holds workspace guard then scope/Gate locks.
-- Define `VerifiedAdmissionSnapshot = Readonly<{workspaceIdentity:string; scopeId:string; verifiedFrontierHash:string; currentTips:readonly {gateId:string;status:"active"|"suspended"|"completed";generationId:string;supersedesGateId:string|null;rounds:{design:number;plan:number};suspensionReason:string|null}[]; requirements:RequirementsResolutionV2; design:ReviewArtifactBinding; plan:ReviewArtifactBinding; globalProtocolFingerprint:string; designProtocolFingerprint:string; planProtocolFingerprint:string}>`; each completed tip carries a typed `previousCompletedBinding` with verified historic and current authority references; active and suspended tips carry only their same-generation phase binding. All fields are independently verified. `AdmissionDecision` variants carry `gateId/generationId/predecessorGateId` where applicable and an explicit blocking reason. Runtime reads durable data before constructing the value. Each completed tip must additionally provide a validated prior completed-approval record containing Requirements source/path/digest/mode/blob, Design and Plan path/digest/mode, global protocol and historical/current authority event IDs; missing prior binding BLOCKS reuse/successor.
+- Define these Task 7 types in `src/core/review-gate/admission.ts`. The completed tip is a **discriminated union**, not an optional previous binding that could be forgotten:
+
+```ts
+type VerifiedCompletedBindingSnapshot = Readonly<{
+  approvalEventId: string; gateId: string; generationId: string;
+  historicalRequirementsV2EventId: string;
+  historicalRequirements: RequirementsResolutionV2;
+  currentRequirementsAuthorityEventId: string;
+  currentRequirements: VerifiedRequirementsBinding;
+  design: ReviewArtifactBinding; plan: ReviewArtifactBinding;
+  designClearEventId: string; planClearEventId: string;
+  globalProtocolFingerprint: string;
+  verifiedHistoryFrontier: string;
+}>;
+type VerifiedRequirementsBinding = Readonly<{
+  source: 'explicit' | 'design_declared_reference';
+  workspaceIdentity: string; canonicalPath: string;
+  digest: ArtifactDigest; gitMode: '100644' | '100755';
+  gitBlobOid: string; selectedByEventId: string;
+}>;
+type VerifiedGateTip =
+  | Readonly<{status: 'completed'; gateId: string; generationId: string;
+      scopeId: string; supersedesGateId: string | null;
+      completedApproval: VerifiedCompletedBindingSnapshot}>
+  | Readonly<{status: 'active' | 'suspended'; gateId: string;
+      generationId: string; scopeId: string; supersedesGateId: string | null;
+      rounds: Readonly<{design:number;plan:number}>;
+      suspensionReason: string | null; ownDesignClear:
+        Readonly<{eventId:string;binding:ReviewArtifactBinding;
+          requirementsAuthorityEventId:string}> | null}>;
+type VerifiedAdmissionSnapshot = Readonly<{
+  workspaceIdentity: string; scopeId: string; verifiedFrontierHash: string;
+  currentTips: readonly VerifiedGateTip[];
+  current: Readonly<{requirements: VerifiedRequirementsBinding;
+    design: ReviewArtifactBinding; plan: ReviewArtifactBinding;
+    globalProtocolFingerprint: string;
+    designProtocolFingerprint: string; planProtocolFingerprint: string}>;
+}>;
+```
+
+- Task 6 provides verified writer-shard membership, Task 9 projects tip and own-generation Design CLEAR, and Task 15 produces verified **current-effective** Requirements authority. Task 7's pure planner consumes only immutable verified inputs; its G1 tests use explicitly constructed verified fixtures, while G2 integrated authority is gated on Task 15/18 wiring.
+- Pure Core compares `completedApproval.currentRequirements` with `current.requirements` (source/path/digest/mode/blob/workspace), its Design/Plan path/digest/mode, and global protocol. Equal => read-only `REUSE_COMPLETED`; changed completed binding => `CREATE_SUCCESSOR` with fresh Design; unfinished drift => `REVALIDATE_OR_BLOCK`. Missing/corrupt completed approval or conflicting tips => `BLOCK` before any new generation.
+
 
 - [ ] **Step 1: Write RED tests** — one verified completed tip/changed Plan → new generation with predecessor and fresh Design; active/suspended drift → **no successor**; Design/Plan path alias to new scope ID → BLOCK; exact completed match → read-only reuse; multiple tips/corruption/index loss → BLOCK.
 - [ ] **Step 2: Verify RED** — `bun run vitest run tests/core/review-gate/admission.test.ts tests/runtime/review-gate-scope-admission.test.ts`; expect new cases FAIL.
