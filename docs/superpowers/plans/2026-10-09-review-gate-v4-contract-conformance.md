@@ -214,6 +214,14 @@ type VerifiedRequirementsBinding = Readonly<{
   digest: ArtifactDigest; gitMode: '100644' | '100755';
   gitBlobOid: string; selectedByEventId: string;
 }>;
+type VerifiedObservedRequirementsCandidate = Readonly<{
+  // Independently verified current Git observation, NOT approval authority.
+  source: 'explicit' | 'design_declared_reference';
+  workspaceIdentity: string; canonicalPath: string;
+  digest: ArtifactDigest; gitMode: '100644' | '100755';
+  gitBlobOid: string; observedCommitOid: string;
+  observationEvidenceId: string;
+}>;
 type VerifiedGateContextBinding = Readonly<{
   requirements: VerifiedRequirementsBinding;
   design: ReviewArtifactBinding;
@@ -257,16 +265,16 @@ type VerifiedGateTip =
 type VerifiedAdmissionSnapshot = Readonly<{
   workspaceIdentity: string; scopeId: string; verifiedFrontierHash: string;
   currentTips: readonly VerifiedGateTip[];
-  current: Readonly<{requirements: VerifiedRequirementsBinding;
+  current: Readonly<{requirements: VerifiedObservedRequirementsCandidate;
     design: ReviewArtifactBinding; plan: ReviewArtifactBinding;
     globalProtocolFingerprint: string;
     designProtocolFingerprint: string; planProtocolFingerprint: string}>;
 }>;
 ```
 
-- **Unfinished binding producer/consumer:** Task 6 supplies complete witness-anchored history; Task 15 verifies persisted Requirements authority transitions and their current-effective evidence; Task 9 projects the immutable initial `admission.context`, most recent **durably committed** `effective.context` and same-generation `ownDesignClear` into `lastVerifiedBinding`. Task 7's runtime adapter separately builds `VerifiedAdmissionSnapshot.current` from fresh, stable and independently verified Git/Requirements/Design/Plan/protocol observations under its lease; it must never manufacture the tip's persisted effective context from these current observations. The Core planner receives both inputs, never accepts unverified cached state, and G1 uses validated immutable fixtures while G2 proves Task 9/15/18 wiring.
+- **Unfinished binding producer/consumer:** Task 6 supplies complete witness-anchored history; Task 15 verifies persisted Requirements authority transitions and their effective evidence; Task 9 projects the immutable initial `admission.context`, most recent **durably committed** `effective.context` and same-generation `ownDesignClear` into `lastVerifiedBinding`. Task 15/3 runtime verification separately produces `VerifiedObservedRequirementsCandidate` and stable current Design/Plan/protocol observations under Task 7's lease. An observed candidate is never a new `selectedByEventId`/approved authority; only a later verified durable transition can advance that authority. The scope-admission adapter must **never** manufacture the tip's persisted effective context from fresh observations. The pure planner receives both inputs, with G1 immutable fixtures and G2 real Task 9/15/18 verification.
 - **Pure Core completed decision:** compare `completedApproval.currentRequirements` with `current.requirements` (source/path/digest/mode/blob/workspace), Design/Plan path/digest/mode and global protocol. Exact => read-only `REUSE_COMPLETED`; changed completed binding => `CREATE_SUCCESSOR` with fresh Design; missing/corrupt completed approval or conflicting tips => `BLOCK`.
-- **Pure Core unfinished decision:** require valid `lastVerifiedBinding.admission` and `effective`, causal event/operation IDs and its independent history frontier. Compare `effective.context` with `current` across Requirements source/path/digest/mode/blob/workspace, Design and Plan canonical path/digest/Git mode, **global + both phase protocol fingerprints**. A differing field returns `REVALIDATE_OR_BLOCK` with an explicit dimension/reason and predecessor proof references; **never `CREATE_SUCCESSOR`**. An exact match may return `RESUME` **only** for ACTIVE or ordinary recoverable SUSPENDED with verified resumable cursor; NC1 is `REENTRY_CANDIDATE` only on separately verified eligible change and remains suspended pending Two-Key progress, and exhaustion/upstream reopen/invalidation/authority conflict cannot use generic RESUME. The same-generation `ownDesignClear` survives only if its approved Requirements authority, Design binding and phase protocol still match the effective/current context and no upstream invalidation exists; it is never imported from a predecessor. Missing, corrupt or contradictory persisted effective binding => `BLOCK` (not inferred from `admission.context` or mutable cache).
+- **Pure Core unfinished decision:** require valid `lastVerifiedBinding.admission` and `effective`, causal event/operation IDs and its independent history frontier. Compare the **material** Requirements identity of `effective.context.requirements` with the independent `current.requirements` candidate (source/path/digest/mode/blob/workspace, **excluding persisted event ID and observation-only commit OID**), plus Design and Plan canonical path/digest/Git mode and **global + both phase protocol fingerprints**. A differing field returns `REVALIDATE_OR_BLOCK` with an explicit dimension/reason and predecessor proof references; **never `CREATE_SUCCESSOR`**. An exact match may return `RESUME` **only** for ACTIVE or ordinary recoverable SUSPENDED with verified resumable cursor; NC1 is `REENTRY_CANDIDATE` only on separately verified eligible change and remains suspended pending Two-Key progress, and exhaustion/upstream reopen/invalidation/authority conflict cannot use generic RESUME. The same-generation `ownDesignClear` survives only if its approved Requirements authority, Design binding and phase protocol still match the effective/current context and no upstream invalidation exists; it is never imported from a predecessor. Missing, corrupt or contradictory persisted effective binding => `BLOCK` (not inferred from `admission.context` or mutable cache).
 
 
 - [ ] **Step 1: Write RED tests** — completed exact approval => read-only reuse; Plan-only successor fresh Design; protocol/Requirements drift or missing previous completed approval => never false reuse. For unfinished tips: ACTIVE + exact effective binding => `RESUME`, ACTIVE + Design/Plan/global/phase-protocol drift => `REVALIDATE_OR_BLOCK`, SUSPENDED + Requirements drift => `REVALIDATE_OR_BLOCK`, unfinished + any drift => never `CREATE_SUCCESSOR`, missing/corrupt last effective binding => `BLOCK`; same-generation Design CLEAR survives only matching approved context, NC1 SUSPENDED + exact binding prohibits generic `RESUME`; exhaustion/reopen/invalidation keep restricted stop. Assert initial `GATE_CREATED` identity remains unchanged after a committed same-generation remediation, and validate witness identity, single enrollment, lock release on error.
