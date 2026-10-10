@@ -373,6 +373,29 @@ describe("resolveRequirementsForAdmission", () => {
     ).rejects.toMatchObject(blockedShape);
   });
 
+  it("blocks when the provided Design bytes do not match the pinned Design digest", async () => {
+    await freshRepo(DESIGN_BODY);
+    const design = await trackedIdentity("docs/design.md");
+    const forged: VerifiedTrackedArtifactIdentity = {
+      ...design,
+      // A different digest than the actual on-disk Design bytes the resolver
+      // receives in `designBytes` — the V2 must never mix these evidences.
+      digest: ("f".repeat(64)) as VerifiedTrackedArtifactIdentity["digest"],
+    };
+    await expect(
+      resolveRequirements({ designOverride: forged, explicitPath: "requirements.md" }),
+    ).rejects.toMatchObject(blockedShape);
+  });
+
+  it("blocks when the provided Design bytes are not the committed Design content", async () => {
+    await freshRepo(DESIGN_BODY);
+    // The pinned identity is real, but `designBytes` carries different bytes
+    // (e.g. a stale snapshot read) — digest agreement must fail closed.
+    await expect(
+      resolveRequirements({ designBytes: Buffer.from("# Tampered\n"), explicitPath: "requirements.md" }),
+    ).rejects.toMatchObject(blockedShape);
+  });
+
   it("blocks when a pinned Design artifact is missing from the filesystem snapshot", async () => {
     await freshRepo(DESIGN_BODY);
     const design = await trackedIdentity("docs/design.md");

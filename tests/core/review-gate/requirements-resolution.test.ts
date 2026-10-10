@@ -48,16 +48,34 @@ describe("parseDesignRequirementsDeclaration", () => {
     });
   });
 
-  it("normalizes the declared path through the shared safe-path rules", () => {
+  it("rejects a declared path containing a parent-directory segment (Design §10.2.3.1)", () => {
     const design = [
       '<!-- justice-review-gate:requirements="docs/./requirements/../requirements/feature.md" -->',
       "",
       "## Overview",
     ].join("\n");
 
-    const parsed = parseDesignRequirementsDeclaration(design);
-    // `docs/./x` collapses during normalization but `..` segments are rejected.
-    expect(parsed.kind).toBe("invalid");
+    expect(parseDesignRequirementsDeclaration(design).kind).toBe("invalid");
+  });
+
+  it("rejects a declared path with an interior dot segment (exact canonical serialization)", () => {
+    const design = [
+      '<!-- justice-review-gate:requirements="docs/./requirements/feature.md" -->',
+      "",
+      "## Overview",
+    ].join("\n");
+
+    expect(parseDesignRequirementsDeclaration(design).kind).toBe("invalid");
+  });
+
+  it("rejects a declared path with repeated slashes (exact canonical serialization)", () => {
+    const design = [
+      '<!-- justice-review-gate:requirements="docs//requirements/feature.md" -->',
+      "",
+      "## Overview",
+    ].join("\n");
+
+    expect(parseDesignRequirementsDeclaration(design).kind).toBe("invalid");
   });
 
   it("returns none for a document without any marker", () => {

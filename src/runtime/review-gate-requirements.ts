@@ -146,7 +146,17 @@ export async function resolveRequirementsForAdmission(
 ): Promise<RequirementsResolutionV2> {
   const { design, plan } = input;
 
-  // 1. Authoritative selector (Task 2): explicit CLI and/or unique declaration.
+  // 1. The provided Design bytes must be exactly the pinned D0 identity
+  //    content: the marker evidence and the recorded `designDigest` would
+  //    otherwise describe two different artifacts.
+  const designDigest = computeArtifactDigest(input.designBytes);
+  if (designDigest !== design.digest) {
+    throw new RequirementsResolutionError(
+      "the provided Design bytes do not match the pinned Design identity digest",
+    );
+  }
+
+  // 2. Authoritative selector (Task 2): explicit CLI and/or unique declaration.
   const declaration = parseDesignRequirementsDeclaration(
     textDecoder.decode(input.designBytes),
   );
@@ -166,7 +176,7 @@ export async function resolveRequirementsForAdmission(
     );
   }
 
-  // 2. Exact canonical-path aliasing against either pinned target.
+  // 3. Exact canonical-path aliasing against either pinned target.
   if (canonicalPath === design.canonicalPath) {
     throw new RequirementsResolutionError(
       "the Requirements canonical path aliases the pinned Design artifact",
@@ -178,7 +188,7 @@ export async function resolveRequirementsForAdmission(
     );
   }
 
-  // 3. One locked snapshot: resolve the workspace, pin HEAD (H0) once, and
+  // 4. One locked snapshot: resolve the workspace, pin HEAD (H0) once, and
   //    require the pinned identities to belong to this same workspace/repository.
   const workspaceRootReal = await failClosed(
     "the workspace root cannot be resolved",
@@ -226,7 +236,7 @@ export async function resolveRequirementsForAdmission(
     );
   }
 
-  // 4. The pinned Design/Plan artifacts must exist in this same filesystem
+  // 5. The pinned Design/Plan artifacts must exist in this same filesystem
   //    snapshot so resolved-identity aliasing can be checked safely.
   const designRealPath = await failClosed(
     "the pinned Design artifact is missing from the filesystem snapshot",
@@ -237,7 +247,7 @@ export async function resolveRequirementsForAdmission(
     () => realpath(path.join(workspaceRootReal, plan.canonicalPath)),
   );
 
-  // 5. Requirements must be one real regular artifact inside the workspace.
+  // 6. Requirements must be one real regular artifact inside the workspace.
   const absoluteRequirementsPath = path.join(workspaceRootReal, canonicalPath);
   const requirementsStats = await failClosed(
     "the Requirements artifact is missing from the workspace",
@@ -278,7 +288,7 @@ export async function resolveRequirementsForAdmission(
     );
   }
 
-  // 6. Hardlink (device,inode) aliasing against either pinned target. Equal
+  // 7. Hardlink (device,inode) aliasing against either pinned target. Equal
   //    content digests are deliberately not an aliasing test.
   if (
     fsIdentity.device === design.fsIdentity.device &&
@@ -297,7 +307,7 @@ export async function resolveRequirementsForAdmission(
     );
   }
 
-  // 7. Same-snapshot Git proof: tracked, committed and clean at H0.
+  // 8. Same-snapshot Git proof: tracked, committed and clean at H0.
   const headEntry = parseHeadTreeEntry(
     await gitSnapshotOutput(
       workspaceRootReal,
@@ -364,7 +374,7 @@ export async function resolveRequirementsForAdmission(
     );
   }
 
-  // 8. Immutable V2 provenance (Design §10.2.4). Both evidence sources are
+  // 9. Immutable V2 provenance (Design §10.2.4). Both evidence sources are
   //    recorded when the explicit CLI agrees with the unique declaration.
   const selectionEvidence: RequirementsResolutionV2["selectionEvidence"] = {
     ...(selection.source === "explicit" ? { commandPath: canonicalPath } : {}),

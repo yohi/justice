@@ -131,6 +131,16 @@ function parseMarkerLine(line: string): ParsedMarkerLine | RejectedMarkerLine {
     };
   }
 
+  // Design §10.2.3.1 exact canonical serialization: repeated `/` and `.`
+  // segments are not silently normalized away; the declared path must
+  // already equal its own canonical form.
+  if (canonicalPath !== declaredPath) {
+    return {
+      ok: false,
+      reason: "declared path is not in exact canonical serialization (no repeated slashes or dot segments)",
+    };
+  }
+
   return { ok: true, canonicalPath };
 }
 
