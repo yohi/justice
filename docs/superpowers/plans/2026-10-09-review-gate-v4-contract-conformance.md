@@ -214,6 +214,37 @@ type VerifiedRequirementsBinding = Readonly<{
   digest: ArtifactDigest; gitMode: '100644' | '100755';
   gitBlobOid: string; selectedByEventId: string;
 }>;
+type VerifiedGateContextBinding = Readonly<{
+  requirements: VerifiedRequirementsBinding;
+  design: ReviewArtifactBinding;
+  plan: ReviewArtifactBinding;
+  globalProtocolFingerprint: string;
+  designProtocolFingerprint: string;
+  planProtocolFingerprint: string;
+}>;
+type VerifiedUnfinishedBindingSnapshot = Readonly<{
+  // Immutable authority captured by this generation's original GATE_CREATED.
+  admission: Readonly<{
+    gateCreatedEventId: string;
+    historicalRequirementsV2EventId: string;
+    context: VerifiedGateContextBinding;
+  }>;
+  // Latest causally durable effective context, never inferred from live files.
+  effective: Readonly<{
+    context: VerifiedGateContextBinding;
+    authorityEventId: string;
+    operationId: string;
+    verifiedHistoryFrontier: string;
+  }>;
+  // Only the same generation's Design CLEAR, and only at its approved context.
+  ownDesignClear: Readonly<{
+    eventId: string;
+    approvedContextEventId: string;
+    approvedRequirementsAuthorityEventId: string;
+    approvedDesign: ReviewArtifactBinding;
+    designProtocolFingerprint: string;
+  }> | null;
+}>;
 type VerifiedGateTip =
   | Readonly<{status: 'completed'; gateId: string; generationId: string;
       scopeId: string; supersedesGateId: string | null;
@@ -221,9 +252,8 @@ type VerifiedGateTip =
   | Readonly<{status: 'active' | 'suspended'; gateId: string;
       generationId: string; scopeId: string; supersedesGateId: string | null;
       rounds: Readonly<{design:number;plan:number}>;
-      suspensionReason: string | null; ownDesignClear:
-        Readonly<{eventId:string;binding:ReviewArtifactBinding;
-          requirementsAuthorityEventId:string}> | null}>;
+      suspensionReason: string | null;
+      lastVerifiedBinding: VerifiedUnfinishedBindingSnapshot}>;
 type VerifiedAdmissionSnapshot = Readonly<{
   workspaceIdentity: string; scopeId: string; verifiedFrontierHash: string;
   currentTips: readonly VerifiedGateTip[];
@@ -234,13 +264,14 @@ type VerifiedAdmissionSnapshot = Readonly<{
 }>;
 ```
 
-- Task 6 provides verified writer-shard membership, Task 9 projects tip and own-generation Design CLEAR, and Task 15 produces verified **current-effective** Requirements authority. Task 7's pure planner consumes only immutable verified inputs; its G1 tests use explicitly constructed verified fixtures, while G2 integrated authority is gated on Task 15/18 wiring.
-- Pure Core compares `completedApproval.currentRequirements` with `current.requirements` (source/path/digest/mode/blob/workspace), its Design/Plan path/digest/mode, and global protocol. Equal => read-only `REUSE_COMPLETED`; changed completed binding => `CREATE_SUCCESSOR` with fresh Design; unfinished drift => `REVALIDATE_OR_BLOCK`. Missing/corrupt completed approval or conflicting tips => `BLOCK` before any new generation.
+- **Unfinished binding producer/consumer:** Task 6 supplies complete witness-anchored history; Task 15 verifies persisted Requirements authority transitions and their current-effective evidence; Task 9 projects the immutable initial `admission.context`, most recent **durably committed** `effective.context` and same-generation `ownDesignClear` into `lastVerifiedBinding`. Task 7's runtime adapter separately builds `VerifiedAdmissionSnapshot.current` from fresh, stable and independently verified Git/Requirements/Design/Plan/protocol observations under its lease; it must never manufacture the tip's persisted effective context from these current observations. The Core planner receives both inputs, never accepts unverified cached state, and G1 uses validated immutable fixtures while G2 proves Task 9/15/18 wiring.
+- **Pure Core completed decision:** compare `completedApproval.currentRequirements` with `current.requirements` (source/path/digest/mode/blob/workspace), Design/Plan path/digest/mode and global protocol. Exact => read-only `REUSE_COMPLETED`; changed completed binding => `CREATE_SUCCESSOR` with fresh Design; missing/corrupt completed approval or conflicting tips => `BLOCK`.
+- **Pure Core unfinished decision:** require valid `lastVerifiedBinding.admission` and `effective`, causal event/operation IDs and its independent history frontier. Compare `effective.context` with `current` across Requirements source/path/digest/mode/blob/workspace, Design and Plan canonical path/digest/Git mode, **global + both phase protocol fingerprints**. A differing field returns `REVALIDATE_OR_BLOCK` with an explicit dimension/reason and predecessor proof references; **never `CREATE_SUCCESSOR`**. An exact match may return `RESUME` **only** for ACTIVE or ordinary recoverable SUSPENDED with verified resumable cursor; NC1 is `REENTRY_CANDIDATE` only on separately verified eligible change and remains suspended pending Two-Key progress, and exhaustion/upstream reopen/invalidation/authority conflict cannot use generic RESUME. The same-generation `ownDesignClear` survives only if its approved Requirements authority, Design binding and phase protocol still match the effective/current context and no upstream invalidation exists; it is never imported from a predecessor. Missing, corrupt or contradictory persisted effective binding => `BLOCK` (not inferred from `admission.context` or mutable cache).
 
 
-- [ ] **Step 1: Write RED tests** — construct both discriminated `VerifiedGateTip` variants: completed with exact Requirements+Design+Plan+global protocol => read-only `REUSE_COMPLETED`; Plan-only change => `CREATE_SUCCESSOR` with fresh Design; Requirements or global protocol drift => no reuse; missing/corrupt completed approval or competing completed tips => `BLOCK`; active/suspended drift => `REVALIDATE_OR_BLOCK`, never successor. Preserve only same-generation `ownDesignClear`. Reject missing/mismatched witness, mismatched `ScopeAdmissionRequest.workspaceIdentity`, concurrent enrollment and lease leaks after errors.
+- [ ] **Step 1: Write RED tests** — completed exact approval => read-only reuse; Plan-only successor fresh Design; protocol/Requirements drift or missing previous completed approval => never false reuse. For unfinished tips: ACTIVE + exact effective binding => `RESUME`, ACTIVE + Design/Plan/global/phase-protocol drift => `REVALIDATE_OR_BLOCK`, SUSPENDED + Requirements drift => `REVALIDATE_OR_BLOCK`, unfinished + any drift => never `CREATE_SUCCESSOR`, missing/corrupt last effective binding => `BLOCK`; same-generation Design CLEAR survives only matching approved context, NC1 SUSPENDED + exact binding prohibits generic `RESUME`; exhaustion/reopen/invalidation keep restricted stop. Assert initial `GATE_CREATED` identity remains unchanged after a committed same-generation remediation, and validate witness identity, single enrollment, lock release on error.
 - [ ] **Step 2: Verify RED** — `bun run vitest run tests/core/review-gate/admission.test.ts tests/runtime/review-gate-scope-admission.test.ts`; expect new cases FAIL.
-- [ ] **Step 3: Implement `planReviewGateAdmission` and `createReviewGateScopeAdmission`** — use fully verified previous completed bindings from Task 9/15 in `VerifiedAdmissionSnapshot`, compare solely in Core and apply decisions through `withAdmissionLease` under workspace/scope/Gate ownership. Recheck source and frontiers, close locks via `finally`, never mint successor from NC1/exhausted/unfinished drift.
+- [ ] **Step 3: Implement `planReviewGateAdmission` and `createReviewGateScopeAdmission`** — require Task 9/15-projected immutable initial+latest effective bindings for unfinished tips and completed proof for completed tips; recheck fresh current identity/phase+global protocols under the witness-backed lease. Decide exact `RESUME` vs dimension-specific `REVALIDATE_OR_BLOCK` and restricted NC1/exhaustion/reopen states **only in Core**; runtime executes its decision, retains cumulative rounds and closes locks in `finally`. Never construct an unfinished successor.
 - [ ] **Step 4: Verify GREEN** — focused tests and four global commands; no double Gate creation under concurrent admission.
 - [ ] **Step 5: Commit** — `git add src/core/review-gate/admission.ts src/runtime/review-gate-scope-admission.ts src/core/review-gate/identity.ts tests/core/review-gate/admission.test.ts tests/runtime/review-gate-scope-admission.test.ts tests/core/review-gate-identity.test.ts && git commit -m "feat: admit Review Gates from verified workspace continuity"`.
 
