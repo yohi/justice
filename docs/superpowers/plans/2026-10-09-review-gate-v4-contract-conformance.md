@@ -143,20 +143,21 @@ The following five user-visible input/failure classes have explicit owner tests 
 
 **Files:**
 - Modify: `src/runtime/review-gate-event-store.ts`, `src/runtime/review-gate-recovery-store.ts`
+- Modify: `src/runtime/opencode-adapter.ts` (migrate `buildSharedReviewGateRuntimeGraph` factory call and construct ONE Task 5 witness)
 - Test: `tests/integration/review-gate-event-sourced-flow.test.ts` (migrate existing factory callers)
 - Test: `tests/runtime/review-gate-event-store.test.ts`, `tests/runtime/review-gate-recovery-store.test.ts`
 
 **Interfaces:**
 - Consumes Task 4 `validateReviewGateEventRecord` and Task 5 `ReviewGateScopeWitness`/`VerifiedScopeFrontier`.
-- **Required factory migration**: `ReviewGateEventStoreOptions = Readonly<{workspaceIdentity:string;writerId:string;witness:ReviewGateScopeWitness}>`; `createReviewGateEventStore(rootDir:string,options:ReviewGateEventStoreOptions):ReviewGateEventStore`. This replaces the old one-arg factory; update all production and existing test callers, rather than silently constructing an unprotected witness. Contract-faithful fake witness is allowed in G1 only; G2 must use real protected witness.
+- **Required factory migration**: `ReviewGateEventStoreOptions = Readonly<{workspaceIdentity:string;writerId:string;witness:ReviewGateScopeWitness}>`; `createReviewGateEventStore(rootDir:string,options:ReviewGateEventStoreOptions):ReviewGateEventStore`. This replaces the old one-arg factory; update all production and existing test callers. **Composition owner:** `src/runtime/opencode-adapter.ts` `buildSharedReviewGateRuntimeGraph` resolves `JUSTICE_REVIEW_GATE_WITNESS_DIR`, validates canonical `workspaceIdentity`, constructs one Task 5 witness and injects it into the Task 6 store. Keep it in `SharedReviewGateRuntimeGraph` for Tasks 7/18; on missing/untrusted witness, do not construct the authority graph. G1 may use a contract-faithful test witness; G2 must use the protected real witness.
 - Produces `ReviewGateEventStore.readVerifiedScope(scopeId:string):Promise<Readonly<{frontier:VerifiedScopeFrontier;gateIds:readonly string[];eventsByGate:ReadonlyMap<string,readonly VerifiedReviewGateEvent[]>}>>`. `readEvents(gateId)`, `appendEvents`, `listGateIds` must also independently verify Gate→scope and expected writer frontier against the injected witness; `scope-index.json` remains a non-authoritative cache.
 - Shards use `.justice/review-gates/events/<reviewScopeId>/<gateId>/<writerId>.jsonl`; original legacy files remain immutable for Task 8.
 
 - [ ] **Step 1: Write RED tests** — two-arg factory with mandatory witness, shard sequence/hash/frontier and independent membership checks. Missing witness, lost index/history, missing witness-listed shard, orphan writer/Gate, unexpected path-pair association, corrupt/truncated JSONL and conflicting witness heads must BLOCK; read-only history cannot create/write authority.
 - [ ] **Step 2: Verify RED** — `bun run vitest run tests/runtime/review-gate-event-store.test.ts tests/runtime/review-gate-recovery-store.test.ts`; expect new cases FAIL.
-- [ ] **Step 3: Implement verified shard append and read** — require `options.witness`; verify scope/Gate/writer membership, sync writer journal, CAS expected witness frontier, then acknowledge. Return immutable witness-verified scope view. Partially prepared tails recover by exact durable intent only; unknown state BLOCK. Migrate factory callers in the same Task.
+- [ ] **Step 3: Implement verified shard append and read** — require `options.witness`; `buildSharedReviewGateRuntimeGraph` creates a single verified witness and injects into store; add it to `SharedReviewGateRuntimeGraph`. Verify scope/Gate/writer membership, sync journal and CAS witness before ack. Repair only trusted same-intent prepared tails; untrusted state BLOCK. Migrate one-arg call sites and preserve same instance on restart from protected durable directory.
 - [ ] **Step 4: Verify GREEN** — tests and four global commands; preserve all historical records without pruning/compaction.
-- [ ] **Step 5: Commit** — stage the event/recovery store, tests and only the existing factory call sites migrated for mandatory witness injection; `git commit -m "feat: persist causally verified Review Gate writer shards"`.
+- [ ] **Step 5: Commit** — stage `src/runtime/review-gate-event-store.ts`, `src/runtime/review-gate-recovery-store.ts`, `src/runtime/opencode-adapter.ts`, affected store tests and migrated factory-caller tests; `git commit -m "feat: persist causally verified Review Gate writer shards"`.
 
 ### Task 7: Pure Generation Admission and Verified Approval Selection
 
