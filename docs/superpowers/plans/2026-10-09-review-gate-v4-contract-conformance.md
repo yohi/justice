@@ -263,15 +263,30 @@ type VerifiedNC1StopV1 = Readonly<{
   epochId: string; stoppedContextDigest: string;
   remainingRounds: number; witnessFrontierAtStop: string;
 }>; // Task 9: solely historical, event-anchored suspension authority.
+// PLAN-014: the runtime's own workspace Git history is not the authority
+// for a verified, immutable externally published phase-protocol descriptor.
 type VerifiedNC1EligibleChangeV1 = Readonly<{
   gateId: string; generationId: string; phase: ReviewGatePhase;
-  nc1StopEventId: string; kind: 'requirements'|'design'|'plan'|'protocol';
-  beforeContextDigest: string; afterContextDigest: string;
-  beforeArtifactDigest: string; afterArtifactDigest: string;
-  committedGitOid: string; verifiedGitParentOid: string;
-  changeObservedEventId: string; observationOperationId: string;
-  witnessFrontierAtObservation: string;
-}>; // Task 18: independent current-Git producer, not Task 9 projection.
+  nc1StopEventId: string; beforeContextDigest: string;
+  afterContextDigest: string; changeObservedEventId: string;
+  observationOperationId: string; witnessFrontierAtObservation: string;
+}> & (
+  | Readonly<{kind:'artifact'; artifactKind:'requirements'|'design'|'plan';
+      beforeArtifactDigest:string; afterArtifactDigest:string;
+      committedGitOid:string; verifiedGitParentOid:string;
+      beforeGitBlobOid:string; afterGitBlobOid:string;
+      verifiedTargetClean:true}>
+  | Readonly<{kind:'protocol'; protocolPhase:'design'|'plan';
+      beforePhaseFingerprint:string; afterPhaseFingerprint:string;
+      beforeDescriptorDigest:string; afterDescriptorDigest:string;
+      protocolSchemaVersion:string; beforeReleaseId:string;
+      afterReleaseId:string; verifiedPublisherIdentityDigest:string;
+      authenticatedImmutableReleaseProvenanceDigest:string;
+      protectedProtocolRegistryFrontierHash:string;
+      relevantStaticPromptAndPolicyDigest:string;
+      progressInvalidatedEventId:string}>
+); // Task 18's verified present-tense producer, not Task 9 history.
+// No fake Git commit/parent or beforeArtifactDigest in the protocol variant.
 type VerifiedGateTip =
   | Readonly<{status: 'completed'; gateId: string; generationId: string;
       scopeId: string; supersedesGateId: string | null;
@@ -282,10 +297,52 @@ type VerifiedGateTip =
       suspensionReason: string | null;
       lastVerifiedBinding: VerifiedUnfinishedBindingSnapshot;
       nc1Stop: VerifiedNC1StopV1 | null}>;
+// PLAN-013: complete workspace enrollment evidence and independently proved
+// relevant current tips travel THROUGH Pure Core, never only a runtime precheck.
+type VerifiedWorkspaceContinuityV1 = Readonly<{
+  installationId:string; workspaceIdentity:string;
+  protectedInstallationFrontierHash:string;
+  workspaceEnrollmentFrontierHash:string;
+  registryVerificationEventId:string;
+  // COMPLETE sorted enrollment list from the protected Task 5 frontier,
+  // not current scope alone; Core checks path/provenance closure itself.
+  allEnrollments:readonly ScopeEnrollmentV1[];
+  relatedScopeTips:readonly VerifiedGateTip[];
+  relatedGateHistoryFrontierHash:string;
+  authorizedFirstEnrollment:VerifiedFirstEnrollment|null;
+  verifiedIndependentWorkflow:Readonly<{
+    authorizationEventId:string; authenticatedDistinctWorkflowProofDigest:string;
+    comparedEnrollmentFrontierHash:string; proposedPathPairDigest:string;
+  }> | null;
+  verifiedCrossScopePredecessor:Readonly<{
+    priorScopeId:string; priorGateId:string; completedApprovalEventId:string;
+    predecessorVerificationEventId:string; relationshipProofDigest:string;
+  }> | null;
+  relationClosureProofDigest:string;
+  coverage:'COMPLETE'|'INCOMPLETE'|'AMBIGUOUS';
+}>;
+// PLAN-015: authority-certified CURRENT upstream/stale results must share
+// the same Gate/witness frontier as nc1Stop and current material observation.
+type VerifiedAdmissionPrecedenceV1 = Readonly<{
+  gateId:string; generationId:string; phase:ReviewGatePhase;
+  verifiedLineageFrontierHash:string;
+  currentUpstreamBlockers:readonly Readonly<{
+    lineageId:string; findingEventId:string; owner:'requirements'|'design';
+    currentStatusEventId:string; committedAuthorityEventId:string;
+  }>[];
+  pendingStaleLineages:readonly Readonly<{
+    lineageId:string; staleEvidenceEventId:string; requiredRevalidationRuleId:string;
+  }>[];
+  relationCompleteness:'COMPLETE'|'INDETERMINATE';
+}>;
 type VerifiedAdmissionSnapshot = Readonly<{
   workspaceIdentity: string; scopeId: string; verifiedFrontierHash: string;
+  workspaceContinuity:VerifiedWorkspaceContinuityV1;
   currentTips: readonly VerifiedGateTip[];
+  // Null cannot mean both "not inspected" and "inspected with none".
+  nc1Observation:'NOT_INSPECTED'|'VERIFIED_NONE'|'VERIFIED_CANDIDATE';
   nc1Candidate: VerifiedNC1EligibleChangeV1 | null;
+  precedence:VerifiedAdmissionPrecedenceV1|null;
   current: Readonly<{requirements: VerifiedObservedRequirementsCandidate;
     design: ReviewArtifactBinding; plan: ReviewArtifactBinding;
     globalProtocolFingerprint: string;
