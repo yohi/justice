@@ -1247,14 +1247,21 @@ describe("restart recovery — reopen, invalidation, and protocol change", () =>
     );
   });
 
-  it("never accepts an explicit --requirements path and never re-runs RR1 auto-resolution", async () => {
-    // The command surface has no --requirements flag: an explicit path
-    // change is rejected before any gate state is touched.
+  it("parses an explicit --requirements path but never re-runs RR1 auto-resolution", async () => {
+    // Design §10.2.1: the parser accepts an optional explicit Requirements
+    // selector; a persisted resolution stays immutable across a resume and is
+    // never silently replaced (the coordinator below still pins the genesis
+    // auto design reference in this task).
     expect(
       parseJusticeReviewGateCommandArguments(
         `--design ${DESIGN_PATH} --plan ${PLAN_PATH} --requirements other/requirements.md`,
       ),
-    ).toBeNull();
+    ).toEqual({
+      source: "command",
+      designPath: DESIGN_PATH,
+      planPath: PLAN_PATH,
+      requirementsPath: "other/requirements.md",
+    });
 
     // The Requirements identity is pinned once by the durable genesis and
     // stays the auto design reference across a resume.
