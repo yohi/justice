@@ -166,7 +166,33 @@ The following five user-visible input/failure classes have explicit owner tests 
 - Test: `tests/core/review-gate-identity.test.ts`
 
 **Interfaces:**
-- Produces: `planReviewGateAdmission(input: VerifiedAdmissionSnapshot): AdmissionDecision` with `RESUME | REENTRY_CANDIDATE | REVALIDATE_OR_BLOCK | REUSE_COMPLETED | CREATE_SUCCESSOR | CREATE_GENESIS | BLOCK`; `admitReviewGateScope(input:ScopeAdmissionRequest):Promise<AdmissionDecision>` holds workspace guard then scope/Gate locks.
+- **Produces in `src/runtime/review-gate-scope-admission.ts`:**
+```ts
+type ScopeAdmissionRequest = Readonly<{
+  workspaceRoot: string; workspaceIdentity: string;
+  designPath: string; planPath: string;
+  explicitRequirementsPath?: string;
+  protocol: ReviewGateProtocolDescriptor;
+}>;
+type ReviewGateScopeAdmissionOptions = Readonly<{
+  witness: ReviewGateScopeWitness;
+  eventStore: ReviewGateEventStore;
+  lockManager: ReviewGateLockManager;
+  requirementsResolver: typeof resolveRequirementsForAdmission;
+}>;
+interface ReviewGateScopeAdmission {
+  withAdmissionLease<T>(
+    request: ScopeAdmissionRequest,
+    run: (decision: AdmissionDecision) => Promise<T>,
+  ): Promise<T>;
+}
+function createReviewGateScopeAdmission(
+  options: ReviewGateScopeAdmissionOptions,
+): ReviewGateScopeAdmission;
+```
+- **Produces in Core:** `planReviewGateAdmission(input:VerifiedAdmissionSnapshot):AdmissionDecision` with `RESUME | REENTRY_CANDIDATE | REVALIDATE_OR_BLOCK | REUSE_COMPLETED | CREATE_SUCCESSOR | CREATE_GENESIS | BLOCK`. The Runtime builds its immutable input under protected ownership; **Core alone** decides binding equality and next generation.
+- **Lock ownership:** `withAdmissionLease` acquires Task 5 workspace guard, then scope lock, validates Task 6's witness-complete scope and Task 3's exact Design/Plan/Requirements snapshot, acquires Gate lock and reprojects, publishes any new enrollment before dropping workspace/scope guards, and invokes `run(decision)` while holding Gate lock for active orchestration. Release Gate lock in `finally` on success, error or cancellation; BLOCK/read-only reuse exits without a retained mutation lock; never hand lock descriptors to workers.
+
 - Define these Task 7 types in `src/core/review-gate/admission.ts`. The completed tip is a **discriminated union**, not an optional previous binding that could be forgotten:
 
 ```ts
