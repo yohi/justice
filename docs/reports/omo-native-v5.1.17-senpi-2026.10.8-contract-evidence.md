@@ -1,6 +1,6 @@
 # OmO Native v5.1.17 / Senpi v2026.10.8 Contract Evidence
 
-**Status:** BLOCKED — Task 1 currently has 30/32 PROVEN and 2/32 BLOCKED
+**Status:** BLOCKED — Task 1 currently has 31/32 PROVEN and 1/32 BLOCKED
 **Task:** Justice v5 Implementation Plan — Revised Task 1 Evidence Spike
 **Scope:** tests / fixtures / probes / raw evidence / report only
 
@@ -254,9 +254,69 @@ because the terminated descendant was briefly visible as a Linux zombie (`Z`).
 That test passed standalone (1/1), and the subsequent full-suite rerun passed;
 the protected test file was not modified.
 
-The two remaining BLOCKED contracts are still unproven by actual runtime
-observations; no contract was promoted based on a helper-only PASS. Historical
-contract accounting and the pre-#296 BLOCKED record remain intact.
+The two remaining BLOCKED contracts at the end of Task A verification were
+still unproven by actual runtime observations. Historical contract accounting
+and the pre-#296 BLOCKED record remain intact.
+
+## Failure and synthetic-result follow-up — 2026-10-12
+
+The remaining live probes were exercised independently after the Task A report
+above. Current 32-contract accounting is **31 PROVEN / 1 BLOCKED**; the historical
+27/5 and 30/2 snapshots above are retained as dated evidence.
+
+### Case A and Case B failure probes
+
+| Case | Fresh observation | Disposition |
+| --- | --- | --- |
+| A — provider stream error | The mock provider emitted its error after the capability-bearing ToolCall stream. A same-role assistant error was observed, but its content was not minimal; receipt invalidation was not observed. | **BLOCKED.** The required persisted minimal fallback and invalidation chain are absent. |
+| B — post-capture sanitizer-failure control | A fixture-local fault was injected after outbound receipt capture and after a token-free sanitation pass. The pinned runtime path was blocked, but the candidate receipt still validated as `superpowers`; no exact minimal assistant fallback was observed. | **BLOCKED.** This control does not prove Justice production sanitizer failure handling or receipt invalidation. |
+
+Case A and Case B are represented as separate observations. The fixture-only
+fault seam is not treated as production implementation evidence.
+
+### Unknown tool and registered invalid-schema result
+
+The public Senpi RPC subscription captured the actual unknown-tool assistant
+entry and the subsequent synthetic error `toolResult`. The assistant entry
+matched JSONL exactly and the persisted arguments contained neither the
+capability marker nor its token. The observer's stricter
+`immediateJsonlReadBackMatched` flag remained false because it also requires the
+unknown tool's `description` to equal the original task description; that
+description equality is reported separately and is not used as evidence of
+token absence. The synthetic `toolResult` was appended and matched JSONL exactly,
+with neither marker nor token. No outbound receipt or task provenance was
+observed. The final isolated-tree scan remained token-free and safe.
+
+The registered `fixture_schema_validation_probe` was also exercised with an
+invalid required field. Runtime validation rejected it before its `execute`
+callback, then appended an error result that matched JSONL and contained no
+capability token. The registered-tool preflight alternative was therefore
+observed independently of the unknown-tool result.
+
+The unknown-tool contract is now **PROVEN** from those runtime observations.
+The one remaining BLOCKED contract is:
+
+```text
+task1_message_end_fallback_prevents_token_persistence_on_error
+```
+
+It remains BLOCKED because neither Case A nor Case B demonstrated the required
+minimal fallback plus exact receipt invalidation.
+
+### Final follow-up verification
+
+```text
+Focused Task 1 integration: 45 passed
+Full suite: 2,317 passed, 5 skipped; 168 files (167 passed, 1 skipped)
+TypeScript: PASS (`bun run typecheck`)
+Scoped type fixtures: PASS (`tsc --noEmit --project tests/types/tsconfig.json`)
+Lint: 0 errors, 298 warnings (`bun run lint`)
+Build: PASS (`bun run build`)
+```
+
+The protected process-supervisor test again produced an intermittent zombie
+(`Z`) assertion failure in one full-suite attempt; it passed standalone (1/1),
+and the final full-suite rerun passed. Its content and SHA-256 were unchanged.
 
 ## Change boundary
 

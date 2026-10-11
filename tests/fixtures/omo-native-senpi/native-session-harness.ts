@@ -342,8 +342,10 @@ async function main(): Promise<void> {
       expectedCapabilityCalls: [
         { toolCallId: "justice-spike-task-2", originalDescription: "original-task-description" },
         { toolCallId: "justice-spike-task-fallback", originalDescription: "fallback-probe-description" },
+        { toolCallId: "justice-spike-unknown-echo", originalDescription: "original-task-description" },
+        { toolCallId: "justice-spike-invalid-schema", originalDescription: null },
       ],
-      expectedSyntheticToolCallIds: ["justice-spike-unknown-echo"],
+      expectedSyntheticToolCallIds: ["justice-spike-unknown-echo", "justice-spike-invalid-schema"],
     };
     const rpcResult = await run([rpcSessionDriver, JSON.stringify(rpcConfiguration)], {
       cwd: sandbox.cwd,
@@ -626,7 +628,54 @@ async function main(): Promise<void> {
     const unknownToolSanitizedCount = rows.filter(
       (row) => row.event === "tool_result_sanitized" && unknownToolIds.has(String(row.toolCallId)),
     ).length;
+    const unknownRpcSyntheticResults = rpcSyntheticToolResultObservations.filter(
+      (row) => typeof row.toolCallId === "string" && unknownToolIds.has(row.toolCallId),
+    );
+    const unknownRpcSyntheticResultsReadBackSafely =
+      unknownToolIds.size > 0 &&
+      Array.from(unknownToolIds).every((toolCallId) =>
+        unknownRpcSyntheticResults.some(
+          (row) =>
+            row.toolCallId === toolCallId &&
+            row.entryAppendedObserved === true &&
+            row.isError === true &&
+            row.immediateJsonlReadBackMatched === true &&
+            row.capabilityAbsentFromResult === true,
+        ),
+      );
+    const registeredSchemaToolCallId = "justice-spike-invalid-schema";
+    const registeredSchemaAssistantCall = assistantToolCallAppendObservations.find(
+      (row) => row.toolCallId === registeredSchemaToolCallId,
+    );
+    const registeredSchemaSyntheticResult = rpcSyntheticToolResultObservations.find(
+      (row) => row.toolCallId === registeredSchemaToolCallId,
+    );
+    const registeredSchemaToolExecutionStarted = rows.some(
+      (row) =>
+        row.event === "fixture_schema_validation_probe_executed" &&
+        row.toolCallId === registeredSchemaToolCallId,
+    );
+    const registeredSchemaNoReceiptOrProvenance =
+      !rows.some(
+        (row) => row.event === "capability_outbound_captured" && row.toolCallId === registeredSchemaToolCallId,
+      ) &&
+      !rows.some(
+        (row) => row.event === "task_provenance_validated" && row.toolCallId === registeredSchemaToolCallId,
+      );
+    const registeredSchemaValidationProven =
+      rows.some((row) => row.event === "fixture_schema_validation_probe_registered") &&
+      registeredSchemaAssistantCall?.persistedEntryReadBack === true &&
+      registeredSchemaAssistantCall.capabilityAbsentFromArguments === true &&
+      registeredSchemaSyntheticResult?.entryAppendedObserved === true &&
+      registeredSchemaSyntheticResult.isError === true &&
+      registeredSchemaSyntheticResult.immediateJsonlReadBackMatched === true &&
+      registeredSchemaSyntheticResult.capabilityAbsentFromResult === true &&
+      !registeredSchemaToolExecutionStarted &&
+      registeredSchemaNoReceiptOrProvenance &&
+      harnessFinalScanSafe;
+    const registeredSchemaValidationStatus = registeredSchemaValidationProven ? "PROVEN" : "BLOCKED";
     const providerStreamErrorObserved = rows.some((row) => row.event === "message_end_forced_failure_injected");
+    const sanitizerFailureRow = parentRows.find((row) => row.event === "sanitizer_failure_fault_injected");
 
     summary = {
       task1Result: blockedContracts.length === 0 ? "PROVEN" : "BLOCKED",
@@ -714,18 +763,58 @@ async function main(): Promise<void> {
         },
         justiceSanitizerFailureControl: {
           status: "BLOCKED",
-          failureInjectedAfterCaptureAndSanitation: false,
+          failureInjectedAfterCaptureAndSanitation:
+            sanitizerFailureRow?.failureInjectedAfterCaptureAndSanitation === true,
+          failureSurface: sanitizerFailureRow?.failureSurface ?? "unobserved",
+          capabilityReceiptCaptured: sanitizerFailureRow?.outboundReceiptCaptured === true,
+          sanitationCompleted: sanitizerFailureRow?.sanitationCompleted === true,
+          sanitizedInputTokenFree: sanitizerFailureRow?.sanitizedInputTokenFree === true,
+          candidateReceiptInvalidated: sanitizerFailureRow?.candidateReceiptInvalidated === true,
+          postFailureProvenance: sanitizerFailureRow?.postFailureProvenance ?? "unobserved",
+          exactMinimalFallbackObserved: false,
         },
         failureInvalidationControls: {
           provider_stream_error: { status: "BLOCKED" },
-          justice_sanitizer_failure: { status: "BLOCKED" },
+          justice_sanitizer_failure: {
+            status: "BLOCKED",
+            failureInjectedAfterCaptureAndSanitation:
+              sanitizerFailureRow?.failureInjectedAfterCaptureAndSanitation === true,
+            exactMinimalFallbackObserved: false,
+          },
         },
         syntheticUnknownToolResult: {
-          status: "BLOCKED",
+          status: contracts.task1_unknown_tool_capability_echo_is_sanitized_before_persistence
+            ? "PROVEN"
+            : "BLOCKED",
           actualUnknownToolModelCallObserved: unknownToolEmissionRows.length > 0,
           actualSyntheticToolResultMessageEndObserved: unknownToolSanitizedCount > 0,
           resultCount: unknownToolResultCount,
           sanitizedCount: unknownToolSanitizedCount,
+          rpcPersistedSyntheticResultObserved: unknownRpcSyntheticResults.length > 0,
+          rpcPersistedSyntheticResultCount: unknownRpcSyntheticResults.length,
+          rpcPersistedResultsReadBackSafely: unknownRpcSyntheticResultsReadBackSafely,
+        },
+        registeredSchemaValidation: {
+          attempted: registeredSchemaAssistantCall !== undefined,
+          toolCallId: registeredSchemaToolCallId,
+          toolRegistered: rows.some((row) => row.event === "fixture_schema_validation_probe_registered"),
+          toolCallObserved: rows.some(
+            (row) => row.event === "tool_call" && row.toolCallId === registeredSchemaToolCallId,
+          ),
+          toolExecutionStarted: registeredSchemaToolExecutionStarted,
+          validationFailureObserved:
+            registeredSchemaSyntheticResult?.isError === true && !registeredSchemaToolExecutionStarted,
+          persistedSyntheticResultObserved: registeredSchemaSyntheticResult?.entryAppendedObserved === true,
+          immediateJsonlReadBackMatched:
+            registeredSchemaSyntheticResult?.immediateJsonlReadBackMatched === true,
+          capabilityAbsentFromArguments:
+            registeredSchemaAssistantCall?.capabilityAbsentFromArguments === true,
+          capabilityAbsentFromResult:
+            registeredSchemaSyntheticResult?.capabilityAbsentFromResult === true,
+          noOutboundReceiptOrProvenance: registeredSchemaNoReceiptOrProvenance,
+          status: registeredSchemaValidationStatus,
+          task1ContractStatus:
+            contracts.task1_unknown_tool_capability_echo_is_sanitized_before_persistence ? "PROVEN" : "BLOCKED",
         },
         harnessFinalScan: {
           tokenFound: harnessFinalScan.tokenFound,

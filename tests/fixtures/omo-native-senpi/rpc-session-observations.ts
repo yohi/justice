@@ -171,6 +171,10 @@ export function observeAppendedEntry(input: {
       const diskDescriptionMatched = diskCall !== undefined && descriptionRestored(diskCall.arguments, expectedDescription);
       const markerAbsent = !containsSecret(entry, [CAPABILITY_MARKER]);
       const knownTokenAbsent = !containsSecret(entry, input.knownCapabilityIds);
+      const persistedArgumentsTokenFree =
+        diskCall !== undefined &&
+        !containsSecret(diskCall.arguments, [CAPABILITY_MARKER]) &&
+        !containsSecret(diskCall.arguments, input.knownCapabilityIds);
       assistantToolCalls.push({
         sessionId: input.sessionId,
         entryId: entry.id,
@@ -178,12 +182,21 @@ export function observeAppendedEntry(input: {
         subscriptionEvent: "entry_appended",
         subscriptionSource: "AgentSession.subscribe via Senpi RPC",
         observedAt: Date.now(),
+        persistedEntryFound: diskEntry !== null,
+        persistedEntryFullyMatchesEvent: readBackMatched,
+        persistedToolCallFound: diskCall !== undefined,
         immediateJsonlReadBackMatched: readBackMatched && diskDescriptionMatched,
         descriptionRestored: descriptionMatched && diskDescriptionMatched ? expectedDescription : null,
         descriptionRestoredMatchesExpected: descriptionMatched && diskDescriptionMatched,
         capabilityEnvelopeMarkerAbsent: markerAbsent,
         knownCapabilityTokenAbsent: knownTokenAbsent,
-        capabilityAbsentFromArguments: markerAbsent && knownTokenAbsent && descriptionMatched && diskDescriptionMatched,
+        persistedCapabilityEnvelopeMarkerAbsent:
+          diskCall !== undefined && !containsSecret(diskCall.arguments, [CAPABILITY_MARKER]),
+        persistedKnownCapabilityTokenAbsent:
+          diskCall !== undefined && !containsSecret(diskCall.arguments, input.knownCapabilityIds),
+        persistedDescriptionRestoredMatchesExpected: diskDescriptionMatched,
+        capabilityAbsentFromArguments:
+          markerAbsent && knownTokenAbsent && persistedArgumentsTokenFree,
       });
     }
   }

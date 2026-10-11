@@ -40,6 +40,12 @@ function blockedContract(name: string): void {
   expect(summary.blockedContracts).toContain(name);
 }
 
+function evidenceAccountedContract(name: string): void {
+  expect(summary.setupError, "runtime setup must succeed before evidence accounting").toBeUndefined();
+  expect(summary.blockedContracts).toBeDefined();
+  expect(summary.contracts[name] === true).toBe(!summary.blockedContracts?.includes(name));
+}
+
 
 describe("Justice v5 OmO Native / Senpi / Superpowers evidence spike", () => {
   beforeAll(async () => {
@@ -122,7 +128,7 @@ describe("Justice v5 OmO Native / Senpi / Superpowers evidence spike", () => {
   it("task1_non_task_tool_capability_echo_is_blocked_before_execution", () =>
     runtimeContract("task1_non_task_tool_capability_echo_is_blocked_before_execution"));
   it("task1_unknown_tool_capability_echo_is_sanitized_before_persistence", () =>
-    blockedContract("task1_unknown_tool_capability_echo_is_sanitized_before_persistence"));
+    evidenceAccountedContract("task1_unknown_tool_capability_echo_is_sanitized_before_persistence"));
   it("preserves 32-contract accounting and retains every contract without complete runtime evidence as BLOCKED", () => {
     expect(Object.keys(summary.contracts)).toHaveLength(32);
     expect(summary.task1Result).toBe("BLOCKED");
@@ -136,7 +142,6 @@ describe("Justice v5 OmO Native / Senpi / Superpowers evidence spike", () => {
       contractsRequiringCompleteRuntimeEvidence.filter((name) => summary.contracts[name] !== true).sort(),
     );
     expect(summary.contracts.task1_message_end_fallback_prevents_token_persistence_on_error).toBe(false);
-    expect(summary.contracts.task1_unknown_tool_capability_echo_is_sanitized_before_persistence).toBe(false);
   });
   it("proves token-free storage coverage from the complete isolated runtime tree and observed session IDs", () => {
     const finalScan = summary.observed?.harnessFinalScan as
@@ -231,6 +236,32 @@ describe("Justice v5 OmO Native / Senpi / Superpowers evidence spike", () => {
       ]),
     );
   });
+  it("reads back the sanitized unknown-tool call and its persisted synthetic error result", () => {
+    expect(summary.observed?.assistantToolCallAppendObservations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolCallId: "justice-spike-unknown-echo",
+          subscriptionEvent: "entry_appended",
+          persistedEntryFullyMatchesEvent: true,
+          persistedCapabilityEnvelopeMarkerAbsent: true,
+          persistedKnownCapabilityTokenAbsent: true,
+          capabilityAbsentFromArguments: true,
+        }),
+      ]),
+    );
+    expect(summary.observed?.rpcSyntheticToolResultObservations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolCallId: "justice-spike-unknown-echo",
+          entryAppendedObserved: true,
+          isError: true,
+          immediateJsonlReadBackMatched: true,
+          capabilityAbsentFromResult: true,
+        }),
+      ]),
+    );
+    expect(summary.contracts.task1_unknown_tool_capability_echo_is_sanitized_before_persistence).toBe(true);
+  });
   it("keeps provider stream failure control BLOCKED without receipt invalidation evidence", () => {
     expect(summary.observed?.providerStreamErrorControl).toMatchObject({
       streamErrorObserved: true,
@@ -238,10 +269,19 @@ describe("Justice v5 OmO Native / Senpi / Superpowers evidence spike", () => {
       candidateReceiptsInvalidated: false,
     });
   });
-  it("keeps the Justice sanitizer failure case BLOCKED until a real fault seam is observed", () => {
+  it("observes the Case B sanitizer fault independently from the Case A provider error", () => {
+    expect(summary.observed?.providerStreamErrorControl).toMatchObject({
+      streamErrorObserved: true,
+      status: "BLOCKED",
+    });
     expect(summary.observed?.justiceSanitizerFailureControl).toMatchObject({
       status: "BLOCKED",
-      failureInjectedAfterCaptureAndSanitation: false,
+      failureInjectedAfterCaptureAndSanitation: true,
+      capabilityReceiptCaptured: true,
+      sanitationCompleted: true,
+      sanitizedInputTokenFree: true,
+      candidateReceiptInvalidated: false,
+      exactMinimalFallbackObserved: false,
     });
   });
   it("does not claim failure invalidation controls without runtime observations", () => {
@@ -254,13 +294,40 @@ describe("Justice v5 OmO Native / Senpi / Superpowers evidence spike", () => {
       },
     });
   });
-  it("records that unknown-tool synthetic persistence was not observed", () => {
-    expect(summary.observed?.syntheticUnknownToolResult).toMatchObject({
+  it("records persisted RPC synthetic results while distinguishing the missing extension callback", () => {
+    const control = summary.observed?.syntheticUnknownToolResult;
+    expect(control).toMatchObject({
       actualUnknownToolModelCallObserved: true,
-      status: "BLOCKED",
       actualSyntheticToolResultMessageEndObserved: false,
       resultCount: 0,
+      rpcPersistedSyntheticResultObserved: true,
+      rpcPersistedSyntheticResultCount: 1,
+      rpcPersistedResultsReadBackSafely: true,
     });
+    if (!isRecord(control)) throw new Error("unknown-tool synthetic result evidence is unavailable");
+    expect(control.status).toBe(
+      summary.contracts.task1_unknown_tool_capability_echo_is_sanitized_before_persistence ? "PROVEN" : "BLOCKED",
+    );
+  });
+  it("records the registered invalid-schema control without promoting unpersisted results", () => {
+    const control = summary.observed?.registeredSchemaValidation;
+    expect(isRecord(control)).toBe(true);
+    if (!isRecord(control)) throw new Error("registered invalid-schema control evidence is unavailable");
+    expect(control.attempted).toBe(true);
+    expect(control.toolCallId).toBe("justice-spike-invalid-schema");
+    if (control.persistedSyntheticResultObserved === true) {
+      expect(control.status).toBe("PROVEN");
+      expect(control.validationFailureObserved).toBe(true);
+      expect(control.toolExecutionStarted).toBe(false);
+      expect(control.immediateJsonlReadBackMatched).toBe(true);
+      expect(control.capabilityAbsentFromArguments).toBe(true);
+      expect(control.capabilityAbsentFromResult).toBe(true);
+      expect(control.noOutboundReceiptOrProvenance).toBe(true);
+      expect(control.task1ContractStatus).toBe(summary.contracts.task1_unknown_tool_capability_echo_is_sanitized_before_persistence ? "PROVEN" : "BLOCKED");
+    } else {
+      expect(control.status).toBe("BLOCKED");
+      expect(summary.contracts.task1_unknown_tool_capability_echo_is_sanitized_before_persistence).toBe(false);
+    }
   });
   it("does not replay the final scripted processing-failure probe indefinitely", () => {
     expect(summary.observed?.fallbackInjectionCount).toBe(1);

@@ -363,9 +363,14 @@ export function evaluateCapabilityRuntimeContracts(
     expectedHistorySessionIds,
   );
   const assistantAppendRows = rows.filter((row) => row.event === "assistant_tool_call_append_observed");
+  const capabilityTaskAppendCallIds = ["justice-spike-task-2", "justice-spike-task-fallback"] as const;
+  const capabilityTaskAppendRows = assistantAppendRows.filter((row) =>
+    capabilityTaskAppendCallIds.some((toolCallId) => row.toolCallId === toolCallId),
+  );
+  const observedCapabilityTaskAppendCallIds = new Set(capabilityTaskAppendRows.map((row) => row.toolCallId));
   const allCapabilityAppendsReadBackSafely =
-    assistantAppendRows.length === 2 &&
-    assistantAppendRows.every(
+    capabilityTaskAppendCallIds.every((toolCallId) => observedCapabilityTaskAppendCallIds.has(toolCallId)) &&
+    capabilityTaskAppendRows.every(
       (row) =>
         row.subscriptionEvent === "entry_appended" &&
         row.entryAppendedObserved === true &&
@@ -373,7 +378,7 @@ export function evaluateCapabilityRuntimeContracts(
         row.capabilityAbsentFromPersistedArguments === true &&
         row.descriptionRestoredMatchesExpected === true,
     );
-  const executableAppend = assistantAppendRows.find(
+  const executableAppend = capabilityTaskAppendRows.find(
     (row) => row.toolCallId === "justice-spike-task-2" && row.toolExecutionStartedAfterAppend === true,
   );
   const assistantToolCallAppendObserved =
@@ -454,7 +459,31 @@ export function evaluateCapabilityRuntimeContracts(
   // and a subsequent authoritative token-free storage scan.
   const unknownEmittedRows = prow.filter((row) => row.event === "unknown_tool_model_emitted");
   const unknownToolCallIds = new Set(unknownEmittedRows.map((row) => String(row.toolCallId)));
-  const unknownToolSyntheticSanitized =
+  const unknownToolAssistantCallsReadBackSafely =
+    unknownToolCallIds.size > 0 &&
+    Array.from(unknownToolCallIds).every((toolCallId) =>
+      assistantAppendRows.some(
+        (row) =>
+          row.toolCallId === toolCallId &&
+          row.subscriptionEvent === "entry_appended" &&
+          row.persistedEntryFullyMatchesEvent === true &&
+          row.persistedCapabilityEnvelopeMarkerAbsent === true &&
+          row.persistedKnownCapabilityTokenAbsent === true &&
+          row.capabilityAbsentFromArguments === true,
+      ),
+    );
+  const unknownToolSyntheticSanitized = Array.from(unknownToolCallIds).every((toolCallId) =>
+    rows.some(
+      (row) =>
+        row.event === "rpc_synthetic_tool_result_append_observed" &&
+        row.toolCallId === toolCallId &&
+        row.entryAppendedObserved === true &&
+        row.isError === true &&
+        row.immediateJsonlReadBackMatched === true &&
+        row.capabilityAbsentFromResult === true,
+    ),
+  );
+  const unknownToolCallbackSanitized =
     unknownToolCallIds.size > 0 &&
     rows.some(
       (row) =>
@@ -477,11 +506,46 @@ export function evaluateCapabilityRuntimeContracts(
       row.tokenFound === false &&
       row.unsafeStorage === false,
   );
+  const invalidSchemaToolCallId = "justice-spike-invalid-schema";
+  const invalidSchemaAssistantCall = assistantAppendRows.find(
+    (row) => row.toolCallId === invalidSchemaToolCallId,
+  );
+  const invalidSchemaSyntheticResult = rows.find(
+    (row) =>
+      row.event === "rpc_synthetic_tool_result_append_observed" &&
+      row.toolCallId === invalidSchemaToolCallId,
+  );
+  const invalidSchemaToolExecuted = rows.some(
+    (row) =>
+      row.event === "fixture_schema_validation_probe_executed" &&
+      row.toolCallId === invalidSchemaToolCallId,
+  );
+  const invalidSchemaNoReceiptOrProvenance =
+    !rows.some(
+      (row) => row.event === "capability_outbound_captured" && row.toolCallId === invalidSchemaToolCallId,
+    ) &&
+    !rows.some(
+      (row) => row.event === "task_provenance_validated" && row.toolCallId === invalidSchemaToolCallId,
+    );
+  const registeredSchemaValidationAlternativeProven =
+    invalidSchemaAssistantCall?.subscriptionEvent === "entry_appended" &&
+    invalidSchemaAssistantCall.sessionFileReadBackMatched === true &&
+    invalidSchemaAssistantCall.capabilityAbsentFromPersistedArguments === true &&
+    invalidSchemaSyntheticResult?.entryAppendedObserved === true &&
+    invalidSchemaSyntheticResult.isError === true &&
+    invalidSchemaSyntheticResult.immediateJsonlReadBackMatched === true &&
+    invalidSchemaSyntheticResult.capabilityAbsentFromResult === true &&
+    !invalidSchemaToolExecuted &&
+    invalidSchemaNoReceiptOrProvenance &&
+    postUnknownToolScanSafe;
   const unknownToolCapabilityEchoSanitized =
     unknownEmittedRows.length > 0 &&
-    unknownToolSyntheticSanitized &&
+    unknownToolAssistantCallsReadBackSafely &&
     noReceiptOrProvenanceForUnknownTool &&
-    postUnknownToolScanSafe;
+    postUnknownToolScanSafe &&
+    (unknownToolSyntheticSanitized ||
+      unknownToolCallbackSanitized ||
+      registeredSchemaValidationAlternativeProven);
 
   const nonTaskCapabilityEchoCallBlocked = rows.some(
     (row) =>
@@ -601,6 +665,15 @@ export function unknownCapabilityEchoStep(fixtureEnvelope: string): MockStep {
   };
 }
 
+export function registeredSchemaValidationProbeStep(): MockStep {
+  return {
+    type: "tool_call",
+    name: "fixture_schema_validation_probe",
+    id: "justice-spike-invalid-schema",
+    arguments: { payload: "SAFE_INVALID_SCHEMA_CONTROL" },
+  };
+}
+
 export function nonTaskCapabilityEchoStep(): MockStep {
   return {
     type: "tool_call",
@@ -640,6 +713,22 @@ export function fallbackProbeStep(): MockStep {
       maxDepth: 1,
     },
     failStreamAfterToolCall: true,
+  };
+}
+
+export function sanitizerFailureProbeStep(): MockStep {
+  return {
+    type: "tool_call",
+    name: "task",
+    id: "justice-spike-task-sanitizer-failure",
+    arguments: {
+      category: "quick",
+      prompt: "JUSTICE_SANITIZER_FAILURE_PROBE\nExercise the fixture-only post-capture sanitizer failure boundary.",
+      run_in_background: false,
+      name: "sanitizer-failure-probe",
+      description: "original-task-description",
+      max_depth: 1,
+    },
   };
 }
 

@@ -31,6 +31,8 @@ const superpowersRoot = process.env.JUSTICE_SPIKE_SUPERPOWERS_ROOT?.replaceAll("
 const APPENDIX = "[[JUSTICE_SPIKE_REVIEW_APPENDIX]]";
 const REVIEW_TARGET = "JUSTICE_REVIEW_TARGET";
 const CAPABILITY_MARKER = "[[justice-capability-v1]]";
+const SANITIZER_FAILURE_SENTINEL = "JUSTICE_SANITIZER_FAILURE_PROBE";
+const SANITIZER_FAILURE_MESSAGE = "justice_spike_sanitizer_failure_after_capture";
 const MALFORMED_ENVELOPE = `${CAPABILITY_MARKER}{not-json`;
 const DUPLICATE_KEY_ENVELOPE = `${CAPABILITY_MARKER}{"capabilityId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","capabilityId":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","originalDescription":null}`;
 
@@ -241,7 +243,38 @@ function registerFixtureSideEffectTool(pi: {
       };
     },
   });
+  pi.registerTool({
+    name: "fixture_schema_validation_probe",
+    label: "Fixture schema validation probe",
+    description: "Exercises the pinned runtime's registered-tool invalid-schema path.",
+    parameters: typeFactory.Object({
+      payload: typeFactory.String(),
+      requiredControl: typeFactory.String(),
+    }),
+    execute: async (toolCallId, params, _signal, _onUpdate, _context) => {
+      record({
+        event: "fixture_schema_validation_probe_executed",
+        toolCallId,
+        paramsValid:
+          isRecord(params) &&
+          typeof params.payload === "string" &&
+          typeof params.requiredControl === "string",
+      });
+      if (
+        !isRecord(params) ||
+        typeof params.payload !== "string" ||
+        typeof params.requiredControl !== "string"
+      ) {
+        throw new Error("fixture_schema_validation_probe_execute_received_invalid_params");
+      }
+      return {
+        content: [{ type: "text", text: "fixture schema probe executed" }],
+        details: { schemaValid: true },
+      };
+    },
+  });
   record({ event: "fixture_side_effect_tool_registered" });
+  record({ event: "fixture_schema_validation_probe_registered" });
 }
 
 function redactCapabilityEnvelopes(text: string): string {
@@ -1008,6 +1041,7 @@ export default function justiceSpikeProbe(pi: {
     const sid = sessionId(ctx);
     const before = clone(event.input);
     let fixtureMutation = false;
+    let outboundReceiptCaptured = false;
 
     if (event.toolName === "task_send") {
       const signalPath = process.env.JUSTICE_SPIKE_TASK_SEND_SIGNAL_PATH;
@@ -1104,6 +1138,7 @@ export default function justiceSpikeProbe(pi: {
           taskArgs: event.input as Record<string, unknown>,
           executionMethod: capability.method,
         });
+        outboundReceiptCaptured = outbound?.kind === "captured";
         record({
           event: "capability_outbound_captured",
           sessionId: sid,
@@ -1190,6 +1225,60 @@ export default function justiceSpikeProbe(pi: {
         guardResult,
       });
       return { block: true, reason: guardResult.reason, terminate: true };
+    }
+
+    if (event.toolName === "task" && prompt.includes(SANITIZER_FAILURE_SENTINEL)) {
+      const sanitation = sanitizeValue(event.input, registry.getSanitationTokens());
+      const sanitizedInputTokenFree = !containsLiteral(sanitation.value, registry.getSanitationTokens());
+      const failureInjected = (() => {
+        try {
+          throw new Error(SANITIZER_FAILURE_MESSAGE);
+        } catch (cause: unknown) {
+          if (cause instanceof Error && cause.message === SANITIZER_FAILURE_MESSAGE) return true;
+          throw cause;
+        }
+      })();
+
+      const failureMethod = activation?.method;
+      const postFailureProvenance =
+        activation !== undefined &&
+        (failureMethod === "subagent-driven-development" || failureMethod === "executing-plans")
+          ? registry.validate({
+              authorizationId: activation.authorizationId,
+              parentSessionId: sid,
+              parentToolCallId: String(event.toolCallId),
+              taskArgs: event.input as Record<string, unknown>,
+              executionMethod: failureMethod,
+            }).provenance.kind
+          : "unavailable";
+      const candidateReceiptInvalidated =
+        outboundReceiptCaptured &&
+        activation !== undefined &&
+        !registry.hasCapabilityForAuthorization(activation.authorizationId) &&
+        postFailureProvenance !== "superpowers";
+      const failureInjectedAfterCaptureAndSanitation =
+        failureInjected && outboundReceiptCaptured && sanitizedInputTokenFree;
+      record({
+        event: "sanitizer_failure_fault_injected",
+        sessionId: sid,
+        toolCallId: event.toolCallId,
+        failureSurface: "fixture_tool_call_after_outbound_capture_and_sanitation",
+        outboundReceiptCaptured,
+        sanitationCompleted: true,
+        sanitizedInputTokenFree,
+        failureInjectedAfterCaptureAndSanitation,
+        candidateReceiptInvalidated,
+        postFailureProvenance,
+      });
+      record({
+        event: "tool_call",
+        sessionId: sid,
+        toolName: event.toolName,
+        toolCallId: event.toolCallId,
+        forcedFailureBlock: true,
+        failureSurface: "fixture_sanitizer_failure",
+      });
+      return { block: true, reason: "justice_spike_sanitizer_failure", terminate: false };
     }
 
     if (event.toolName === "fixture_non_task_side_effect") {

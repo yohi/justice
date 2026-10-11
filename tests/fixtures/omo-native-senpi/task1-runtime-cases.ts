@@ -8,6 +8,8 @@ import {
   nonTaskCapabilityEchoStep,
   nonTaskPositiveControlStep,
   provenanceProbeStep,
+  registeredSchemaValidationProbeStep,
+  sanitizerFailureProbeStep,
   staleReplayStep,
   unknownCapabilityEchoStep,
 } from "./capability-runtime-cases";
@@ -98,6 +100,8 @@ export function buildTask1RuntimeMockScript(
       arguments: { path: skillPath },
     } as MockStep,
     unknownCapabilityEchoStep(fixtureEnvelope) as MockStep,
+    registeredSchemaValidationProbeStep() as MockStep,
+    sanitizerFailureProbeStep() as MockStep,
     compactionTriggerStep() as MockStep,
     staleReplayStep() as MockStep,
     fallbackProbeStep() as MockStep,
