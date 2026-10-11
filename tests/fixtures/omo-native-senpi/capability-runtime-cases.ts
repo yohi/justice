@@ -6,6 +6,7 @@ import {
   type NativeSuperpowersProvenanceInput,
   type NativeSuperpowersTaskCapability,
 } from "./capability-probe";
+import { REQUIRED_STORAGE_CLASSES } from "./capability-session-storage";
 import type { MockStep } from "./task-e2e-mock-provider";
 
 /**
@@ -72,19 +73,25 @@ type CapabilityRuntimeCaseResult = {
 
 let cachedRows: readonly EvidenceRow[] | undefined;
 let cachedParentSessionId: string | undefined;
+let cachedChildSessionId: string | undefined;
 let cachedFixtureEnvelope: string | undefined;
 let cachedRawEvidenceText: string | undefined;
+let cachedCapabilityEnvVarAbsent: boolean | undefined;
 
 export function setCapabilityRuntimeEvidence(
   rows: readonly EvidenceRow[],
   parentSessionId: string | undefined,
+  childSessionId: string | undefined,
   fixtureEnvelope: string,
   rawEvidenceText: string,
+  capabilityEnvVarAbsent: boolean,
 ): void {
   cachedRows = rows;
   cachedParentSessionId = parentSessionId;
+  cachedChildSessionId = childSessionId;
   cachedFixtureEnvelope = fixtureEnvelope;
   cachedRawEvidenceText = rawEvidenceText;
+  cachedCapabilityEnvVarAbsent = capabilityEnvVarAbsent;
 }
 
 function parentRows(rows: readonly EvidenceRow[], parentSessionId: string | undefined): readonly EvidenceRow[] {
@@ -94,22 +101,28 @@ function parentRows(rows: readonly EvidenceRow[], parentSessionId: string | unde
 function requireEvidence(): {
   rows: readonly EvidenceRow[];
   parentSessionId: string;
+  childSessionId: string | undefined;
   fixtureEnvelope: string;
   rawEvidenceText: string;
+  capabilityEnvVarAbsent: boolean;
 } {
+  const capabilityEnvVarAbsent = cachedCapabilityEnvVarAbsent;
   if (
     cachedRows === undefined ||
     cachedParentSessionId === undefined ||
     cachedFixtureEnvelope === undefined ||
-    cachedRawEvidenceText === undefined
+    cachedRawEvidenceText === undefined ||
+    capabilityEnvVarAbsent === undefined
   ) {
     throw new Error("runCapabilityRuntimeCase: capability runtime evidence not set");
   }
   return {
     rows: cachedRows,
     parentSessionId: cachedParentSessionId,
+    childSessionId: cachedChildSessionId,
     fixtureEnvelope: cachedFixtureEnvelope,
     rawEvidenceText: cachedRawEvidenceText,
+    capabilityEnvVarAbsent,
   };
 }
 
@@ -121,12 +134,14 @@ function bool(value: unknown): boolean {
 export async function runCapabilityRuntimeCase(
   name: CapabilityRuntimeCaseName,
 ): Promise<CapabilityRuntimeCaseResult> {
-  const { rows, parentSessionId, fixtureEnvelope, rawEvidenceText } = requireEvidence();
+  const { rows, parentSessionId, childSessionId, fixtureEnvelope, rawEvidenceText, capabilityEnvVarAbsent } = requireEvidence();
   const contracts = evaluateCapabilityRuntimeContracts({
     rows,
     parentSessionId,
+    childSessionId,
     fixtureEnvelope,
     rawEvidenceText,
+    capabilityEnvVarAbsent,
   }).contracts;
   const proven = contracts[name] === true;
   return {
@@ -138,8 +153,10 @@ export async function runCapabilityRuntimeCase(
 export type CapabilityRuntimeContractsInput = {
   readonly rows: readonly EvidenceRow[];
   readonly parentSessionId: string | undefined;
+  readonly childSessionId?: string | undefined;
   readonly fixtureEnvelope: string;
   readonly rawEvidenceText: string;
+  readonly capabilityEnvVarAbsent: boolean;
 };
 
 export type CapabilityRuntimeContracts = {
@@ -149,14 +166,48 @@ export type CapabilityRuntimeContracts = {
 export function evaluateCapabilityRuntimeContracts(
   input: CapabilityRuntimeContractsInput,
 ): CapabilityRuntimeContracts {
-  const { rows, parentSessionId, fixtureEnvelope, rawEvidenceText } = input;
+  const { rows, parentSessionId, childSessionId, fixtureEnvelope, rawEvidenceText } = input;
   const prow = parentRows(rows, parentSessionId);
 
-  const capabilityContextDelivered = prow.some((row) => row.event === "capability_context_delivered");
-  const capabilityStrip = prow.find((row) => row.event === "tool_call_capability_stripped");
-  const capabilityTransportedInDescription = prow.some(
-    (row) => row.event === "tool_call_capability_stripped" && bool(row.hadCapabilityMarker),
+  // RG-001: the capability must be delivered via a deep-copied request-local context
+  // message (not environment injection), with the persisted read ToolResult unchanged
+  // and token-free under real session storage.
+  const contextCopyDeliveries = prow.filter(
+    (row) => row.event === "capability_context_delivered" && row.deliveryKind === "request_local_context_copy",
   );
+  const contextCopyDelivered = contextCopyDeliveries.some(
+    (row) =>
+      row.readResultMessageFound === true &&
+      row.contextMessagesDeepCopied === true &&
+      row.directiveAttachedToCopy === true &&
+      row.originalReadResultUnmodified === true,
+  );
+  const postDeliveryScanSafe = prow.some(
+    (row) =>
+      row.event === "storage_scan" &&
+      row.label === "after_capability_context_delivery" &&
+      row.tokenFound === false &&
+      row.unsafeStorage === false,
+  );
+  const envFallbackAbsentForDelivery = input.capabilityEnvVarAbsent === true;
+  const capabilityContextDelivered = contextCopyDelivered && postDeliveryScanSafe && envFallbackAbsentForDelivery;
+
+  // RG-001: the model transport must source the envelope from context.messages only.
+  const capabilityStrip = prow.find(
+    (row) => row.event === "tool_call_capability_stripped" && row.hadCapability === true,
+  );
+  const capabilitySourcedFromContext = rows.some(
+    (row) =>
+      row.event === "mock_provider_context" &&
+      row.isChild === false &&
+      row.capabilityInContext === true &&
+      row.capabilitySource === "context_messages" &&
+      row.envCapabilityVarPresent === false,
+  );
+  const capabilityTransportedInDescription =
+    prow.some((row) => row.event === "tool_call_capability_stripped" && bool(row.hadCapabilityMarker)) &&
+    capabilitySourcedFromContext &&
+    input.capabilityEnvVarAbsent === true;
   const capabilityBound = capabilityStrip !== undefined && capabilityContextDelivered;
 
   const rejections = rows.filter((row) => row.event === "capability_presentation_rejected");
@@ -178,7 +229,7 @@ export function evaluateCapabilityRuntimeContracts(
     (row) => row.surface === "unverified_guard_profile" && row.reason === "unverified_guard_profile",
   );
   const acceptedPresentationRows = rows.filter((row) => row.event === "capability_presentation_accepted");
-  const realCapabilityIssued = acceptedPresentationRows.length > 0 || capabilityContextDelivered;
+  const realCapabilityIssued = acceptedPresentationRows.length > 0 || contextCopyDelivered;
   const expiredMalfDup =
     rejections.some((row) => row.surface === "expired" && row.reason === "expired") &&
     rejections.some((row) => row.surface === "malformed" && row.reason === "malformed_capability") &&
@@ -207,24 +258,137 @@ export function evaluateCapabilityRuntimeContracts(
     (row) => row.event === "message_end_sanitized" && bool(row.hadCapability),
   );
 
+  // RG-002.1: authoritative storage coverage. Every scan must be token-free and safe,
+  // and the final authoritative scan must observe every required storage class.
   const storageScanRows = rows.filter((row) => row.event === "storage_scan");
   const anyStorageScanPerformed = storageScanRows.length > 0;
-  const allStorageScansTokenFree = storageScanRows.every((row) => bool(row.tokenFound) === false);
-
-  const messageEndSanitizedRows = prow.filter((row) => row.event === "message_end_sanitized");
-  const messageEndFallbackPreventsTokenPersistence = messageEndSanitizedRows.some(
-    (row) => bool(row.hadCapability) === true,
+  const allStorageScansSafe =
+    anyStorageScanPerformed &&
+    storageScanRows.every((row) => bool(row.tokenFound) === false && bool(row.unsafeStorage) === false);
+  const finalScanRows = storageScanRows.filter(
+    (row) => row.label === "final_authoritative" && row.source === "harness_post_exit_scan",
   );
-  const unknownToolCapabilityEchoSanitized = messageEndSanitizedRows.some(
-    (row) => row.toolName !== "task" && bool(row.hadCapability) === true,
+  const parentAndChildSessionStarted =
+    typeof parentSessionId === "string" &&
+    typeof childSessionId === "string" &&
+    [parentSessionId, childSessionId].every((sessionId) =>
+      rows.some((row) => row.event === "session_start" && row.sessionId === sessionId),
+    );
+  const finalScanClassesComplete = finalScanRows.some(
+    (row) =>
+      Array.isArray(row.classesObserved) &&
+      REQUIRED_STORAGE_CLASSES.every((cls) => (row.classesObserved as readonly string[]).includes(cls)) &&
+      typeof row.explicitSessionFilesRequired === "number" &&
+      row.explicitSessionFilesObserved === row.explicitSessionFilesRequired &&
+      typeof row.sessionIdsRequired === "number" &&
+      row.sessionIdsRequired >= 2 &&
+      row.sessionIdsObserved === row.sessionIdsRequired,
   );
+  const tokenFreeReadBackValidated =
+    allStorageScansSafe && parentAndChildSessionStarted && finalScanClassesComplete;
 
-  const nonTaskCapabilityEchoBlocked = prow.some(
+  // RG-002.2: real processing failure after capture/sanitation with the runtime's
+  // same-role minimal error fallback persisted, token-free, without a raw exception
+  // stack, without outbound receipt, and without executing the trusted task.
+  const fallbackInjectionRows = prow.filter((row) => row.event === "message_end_forced_failure_injected");
+  const fallbackArmedSanitized = prow.some(
+    (row) => row.event === "message_end_sanitized" && row.forcedFailureArmed === true,
+  );
+  const fallbackObserved = prow.filter((row) => row.event === "message_end_error_fallback_observed");
+  const fallbackSameRoleMinimal = fallbackObserved.some(
+    (row) =>
+      row.sameRoleFallback === true &&
+      row.minimalContent === true &&
+      row.errorMessagePresent === true &&
+      row.rawExceptionStack === false &&
+      row.hadCapabilityToken === false,
+  );
+  const fallbackToolCallId = fallbackInjectionRows
+    .map((row) => String(row.toolCallId))
+    .find((id) => id.length > 0);
+  const noTaskExecutionForFailedCall =
+    fallbackToolCallId !== undefined &&
+    rows
+      .filter((row) => row.event === "tool_call" && String(row.toolCallId) === fallbackToolCallId)
+      .every((row) => row.forcedFailureBlock === true) &&
+    rows.some(
+      (row) =>
+        row.event === "tool_call" &&
+        String(row.toolCallId) === fallbackToolCallId &&
+        row.forcedFailureBlock === true,
+    ) &&
+    !rows.some((row) => row.event === "tool_result" && String(row.toolCallId) === fallbackToolCallId) &&
+    !rows.some((row) => row.event === "runtime_task_identity_observed" && String(row.toolCallId) === fallbackToolCallId) &&
+    !rows.some((row) => row.event === "capability_outbound_captured" && String(row.toolCallId) === fallbackToolCallId);
+  const postFallbackScanSafe = storageScanRows.some(
+    (row) =>
+      (row.label === "after_error_fallback" || row.label === "final_authoritative") &&
+      row.tokenFound === false &&
+      row.unsafeStorage === false,
+  );
+  const messageEndFallbackPreventsTokenPersistence =
+    fallbackInjectionRows.length > 0 &&
+    fallbackArmedSanitized &&
+    fallbackSameRoleMinimal &&
+    noTaskExecutionForFailedCall &&
+    postFallbackScanSafe;
+
+  // RG-002.3: the synthetic unknown-tool result path — real unknown-tool emission,
+  // synthetic result sanitation before persistence, no outbound receipt, no provenance,
+  // and a subsequent authoritative token-free storage scan.
+  const unknownEmittedRows = prow.filter((row) => row.event === "unknown_tool_model_emitted");
+  const unknownToolCallIds = new Set(unknownEmittedRows.map((row) => String(row.toolCallId)));
+  const unknownToolSyntheticSanitized =
+    unknownToolCallIds.size > 0 &&
+    rows.some(
+      (row) =>
+      row.event === "tool_result_sanitized" &&
+      typeof row.toolCallId === "string" &&
+      unknownToolCallIds.has(row.toolCallId) &&
+      row.unknownToolCall === true &&
+      row.isError === true,
+    );
+  const noReceiptOrProvenanceForUnknownTool = Array.from(unknownToolCallIds).every(
+    (id) =>
+      !rows.some((row) => row.event === "capability_outbound_captured" && String(row.toolCallId) === id) &&
+      !rows.some((row) => row.event === "task_provenance_validated" && String(row.toolCallId) === id),
+  );
+  const postUnknownToolScanSafe = storageScanRows.some(
+    (row) =>
+      (row.label === "after_unknown_tool_synthetic_result" ||
+        row.label === "after_synthetic_result_sanitation" ||
+        row.label === "final_authoritative") &&
+      row.tokenFound === false &&
+      row.unsafeStorage === false,
+  );
+  const unknownToolCapabilityEchoSanitized =
+    unknownEmittedRows.length > 0 &&
+    unknownToolSyntheticSanitized &&
+    noReceiptOrProvenanceForUnknownTool &&
+    postUnknownToolScanSafe;
+
+  const nonTaskCapabilityEchoCallBlocked = rows.some(
     (row) =>
       row.event === "tool_call" &&
-      row.toolName !== "task" &&
+      row.toolName === "fixture_non_task_side_effect" &&
+      row.hadCapability === true &&
       (row.guardResult as { readonly kind?: string } | undefined)?.kind === "block",
   );
+  const nonTaskSafeControlExecuted = rows.some(
+    (row) =>
+      row.event === "fixture_non_task_tool_executed" &&
+      row.payloadContainsCapability === false &&
+      row.markerKind === "positive",
+  );
+  const nonTaskSideEffectScan = rows.find((row) => row.event === "fixture_side_effect_post_exit_scan");
+  const nonTaskCapabilityEchoBlocked =
+    nonTaskCapabilityEchoCallBlocked &&
+    nonTaskSafeControlExecuted &&
+    nonTaskSideEffectScan?.capabilityMarkerPresent === false &&
+    nonTaskSideEffectScan.positiveControlMarkerPresent === true &&
+    !rows.some(
+      (row) => row.event === "fixture_non_task_tool_executed" && row.payloadContainsCapability === true,
+    );
 
   const decodedEnvelope = decodeTaskCapabilityEnvelope(fixtureEnvelope);
   const sensitiveTokens: string[] = [];
@@ -247,7 +411,6 @@ export function evaluateCapabilityRuntimeContracts(
   const strippedArgsDigestValidated =
     authenticatedProtocolAffiliationObserved && bool(protocolAffiliationRow?.strippedArgsDigestValidated);
   const capabilityRestoredAndStripped = capabilityContextDelivered && capabilityStrip !== undefined;
-  const tokenFreeReadBackValidated = anyStorageScanPerformed && allStorageScansTokenFree;
 
   return {
     contracts: {
@@ -277,9 +440,9 @@ export function evaluateCapabilityRuntimeContracts(
         capabilityRestoredAndStripped &&
         tokenFreeReadBackValidated,
       task1_capability_never_enters_persisted_session_history:
-        anyStorageScanPerformed && allStorageScansTokenFree,
+        allStorageScansSafe && finalScanClassesComplete,
       task1_capability_is_removed_before_assistant_tool_call_persistence:
-        capabilityStrip !== undefined && anyStorageScanPerformed && allStorageScansTokenFree,
+        capabilityStrip !== undefined && allStorageScansSafe,
       task1_message_end_fallback_prevents_token_persistence_on_error:
         messageEndFallbackPreventsTokenPersistence,
       task1_unsupported_in_process_and_nested_calls_remain_untrusted:
@@ -299,8 +462,8 @@ export function provenanceProbeStep(): MockStep {
       run_in_background: true,
       name: "provenance-probe",
       description: "original-task-description",
-      max_depth: 3,
-      maxDepth: 3,
+      max_depth: 1,
+      maxDepth: 1,
     },
   };
 }
@@ -312,18 +475,49 @@ export function unknownCapabilityEchoStep(fixtureEnvelope: string): MockStep {
     id: "justice-spike-unknown-echo",
     arguments: {
       prompt: "JUSTICE_UNKNOWN_ECHO",
+      payload: fixtureEnvelope,
       description: fixtureEnvelope,
     },
   };
 }
 
-export function readCapabilityEchoStep(fixtureEnvelope: string): MockStep {
+export function nonTaskCapabilityEchoStep(): MockStep {
   return {
     type: "tool_call",
-    name: "read",
-    id: "justice-spike-read-echo",
+    name: "task",
+    id: "justice-spike-nontask-capability-echo",
     arguments: {
-      path: `/tmp/justice-v5-native-spike-echo\n${fixtureEnvelope}`,
+      category: "quick",
+      prompt: "JUSTICE_NON_TASK_CHILD\nRead the selected Superpowers method and run the capability side-effect probe.",
+      run_in_background: false,
+      name: "non-task-capability-probe",
+      max_depth: 1,
+    },
+  };
+}
+
+export function nonTaskPositiveControlStep(): MockStep {
+  return {
+    type: "tool_call",
+    name: "fixture_non_task_side_effect",
+    id: "justice-spike-nontask-positive-control",
+    arguments: { payload: "SAFE_POSITIVE_CONTROL" },
+  };
+}
+
+export function fallbackProbeStep(): MockStep {
+  return {
+    type: "tool_call",
+    name: "task",
+    id: "justice-spike-task-fallback",
+    arguments: {
+      category: "quick",
+      prompt: "JUSTICE_FALLBACK_PROBE\nCapability-bearing task whose processing fails after sanitation.",
+      run_in_background: false,
+      name: "fallback-probe",
+      description: "fallback-probe-description",
+      max_depth: 1,
+      maxDepth: 1,
     },
   };
 }

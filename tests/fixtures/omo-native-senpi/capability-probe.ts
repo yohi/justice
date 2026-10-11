@@ -20,6 +20,14 @@ export type NativeSuperpowersActivationBinding = {
   readonly evidenceKind: "read_tool_result";
   readonly issuedFromReadToolCallId: string;
   readonly observedAt: string;
+};
+
+/**
+ * Fixture-private observation view of an activation. The canonical binding above
+ * carries only the approved Design/Plan fields; verification state and issuance
+ * timestamps are fixture observation concerns and live here.
+ */
+export type FixtureActivationObservation = NativeSuperpowersActivationBinding & {
   readonly verified: boolean;
   readonly issuedAt: string;
 };
@@ -161,6 +169,13 @@ export type ProviderSelectionGuardResult =
 
 export const MOCK_PROVIDER_ID = "omo-mock";
 export const MOCK_MODEL_ID = "mock-1";
+
+/**
+ * Prompt sentinel marking the deterministic capability-bearing task call whose
+ * processing the fixture fails after message_end capture/sanitation, proving
+ * the runtime's same-role minimal error fallback path.
+ */
+export const FALLBACK_PROBE_SENTINEL = "JUSTICE_FALLBACK_PROBE";
 
 export type ProviderCredentialScan = {
   readonly credentialEnvVarsFound: readonly string[];

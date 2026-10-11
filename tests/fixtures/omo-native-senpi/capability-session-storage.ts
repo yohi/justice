@@ -1,10 +1,18 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export type StorageScanInput = {
   readonly isolatedRoot: string;
   readonly sessionFiles: readonly string[];
+  readonly sessionIds?: readonly string[];
   readonly capabilityIds: readonly string[];
+  /**
+   * Fixture-input files (relative to isolatedRoot) that legitimately embed fixture
+   * capability identities by construction, e.g. the deterministic mock script's echo
+   * steps. Excluded paths are skipped entirely: neither scanned nor counted, and
+   * they never mark the scan unsafe.
+   */
+  readonly excludedRelativePaths?: readonly string[];
 };
 
 export type StorageScanResult = {
@@ -12,34 +20,42 @@ export type StorageScanResult = {
   readonly filesChecked: number;
   readonly entriesChecked: number;
   readonly unsafeStorage: boolean;
+  readonly explicitSessionFilesRequired: number;
+  readonly explicitSessionFilesObserved: number;
+  readonly sessionIdsRequired: number;
+  readonly sessionIdsObserved: number;
+  /**
+   * Fixture-private observation: which pinned-runtime storage classes the scan
+   * actually walked (no paths, no tokens). The authoritative evaluator requires
+   * every REQUIRED_STORAGE_CLASSES entry on the final scan before PROVEN.
+   */
+  readonly classesObserved: readonly string[];
 };
 
-function walk(root: string): readonly string[] {
-  const results: string[] = [];
-  const stack: string[] = [root];
-  while (stack.length > 0) {
-    const dir = stack.pop() as string;
-    let entries: string[];
-    try {
-      entries = readdirSync(dir);
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      const full = join(dir, entry);
-      try {
-        const st = statSync(full);
-        if (st.isDirectory()) {
-          stack.push(full);
-        } else if (st.isFile()) {
-          results.push(full);
-        }
-      } catch {
-        // ignore inaccessible entries
-      }
-    }
-  }
-  return results;
+/**
+ * Storage classes the authoritative scan must observe for the pinned runtime:
+ * session/history branches, task-state tree, actual logs, and evidence storage.
+ * Detection is by path shape relative to the isolated root, matching the pinned
+ * OmO v5.1.17 / Senpi v2026.10.8 sandbox layout the harness creates.
+ */
+export const REQUIRED_STORAGE_CLASSES: readonly string[] = Object.freeze([
+  "sessions",
+  "task_state",
+  "logs",
+  "evidence",
+]);
+
+function posixRelative(root: string, path: string): string {
+  return relative(root, path).split(sep).join("/");
+}
+
+function classifyFile(relativePath: string): string | null {
+  const components = relativePath.toLowerCase().split("/");
+  if (components.some((component) => component === "evidence" || component.startsWith("evidence."))) return "evidence";
+  if (components.some((component) => component === "sessions" || component === "history")) return "sessions";
+  if (components.some((component) => component === "logs" || component.endsWith(".log") || component.endsWith(".log.jsonl"))) return "logs";
+  if (components.some((component) => component === "task-state" || component === "task_state" || component === "tasks" || component === "projects")) return "task_state";
+  return null;
 }
 
 function scanValue(value: unknown, tokens: ReadonlyArray<string>): boolean {
@@ -74,7 +90,7 @@ export type CredentialStoreScan = {
 
 function safeExists(path: string): boolean {
   try {
-    statSync(path);
+    lstatSync(path);
     return true;
   } catch {
     return false;
@@ -99,55 +115,141 @@ export function scanCredentialStores(input: {
   };
 }
 
+/**
+ * Authoritative capability-token scan over the isolated runtime tree.
+ *
+ * Fails closed: an unusable isolated root, an unreadable/missing explicit
+ * session file, or any inaccessible entry inside the tree marks the scan
+ * unsafeStorage. Every file under isolatedRoot is read raw and rescanned as
+ * recursively decoded JSONL entries, covering session/history branches, the
+ * task-state tree, actual logs, and evidence storage.
+ */
 export async function inspectCapabilitySessionStorage(input: StorageScanInput): Promise<StorageScanResult> {
   let filesChecked = 0;
   let entriesChecked = 0;
   let tokenFound = false;
   let unsafeStorage = false;
+  const classes = new Set<string>();
+  const expectedSessionFiles = new Set<string>();
+  const observedSessionFiles = new Set<string>();
+  const expectedSessionIds = new Set(input.sessionIds ?? []);
+  const observedSessionIds = new Set<string>();
+  const root = resolve(input.isolatedRoot);
 
-  const allFiles = new Set(input.sessionFiles);
-  for (const file of input.sessionFiles) {
-    for (const found of walk(file)) {
-      allFiles.add(found);
-    }
+  // Fail closed: the isolated runtime root itself must be a usable directory.
+  try {
+    if (!lstatSync(root).isDirectory()) unsafeStorage = true;
+  } catch {
+    unsafeStorage = true;
   }
-  for (const rootFile of input.sessionFiles) {
+
+  if (input.sessionFiles.length === 0) unsafeStorage = true;
+
+  // Fail closed: every explicit parent/child session target must exist as a file.
+  for (const file of input.sessionFiles) {
     try {
-      statSync(rootFile);
+      const absolutePath = resolve(file);
+      const relativePath = relative(root, absolutePath);
+      if (relativePath === "" || relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
+        unsafeStorage = true;
+        continue;
+      }
+      if (!lstatSync(absolutePath).isFile()) {
+        unsafeStorage = true;
+        continue;
+      }
+      expectedSessionFiles.add(absolutePath);
     } catch {
       unsafeStorage = true;
     }
   }
-  for (const path of allFiles) {
-    filesChecked++;
-    let raw: Buffer;
+
+  const excluded = new Set(input.excludedRelativePaths ?? []);
+
+  // Walk the full isolated runtime tree; any unreadable entry fails the scan closed.
+  const stack: string[] = [root];
+  while (stack.length > 0) {
+    const dir = stack.pop() as string;
+    let entries: string[];
     try {
-      raw = readFileSync(path);
+      entries = readdirSync(dir);
     } catch {
       unsafeStorage = true;
       continue;
     }
-    // Scan raw UTF-8 bytes.
-    const rawText = raw.toString("utf8");
-    for (const token of input.capabilityIds) {
-      if (rawText.includes(token)) {
-        tokenFound = true;
-      }
-    }
-    // Scan recursively decoded JSON line entries (JSONL sessions, history, logs).
-    for (const line of rawText.split("\n")) {
-      if (!line.trim()) continue;
-      entriesChecked++;
+    for (const entry of entries) {
+      const full = join(dir, entry);
+      if (excluded.has(posixRelative(root, full))) continue;
+      let st;
       try {
-        const parsed = JSON.parse(line) as unknown;
-        if (scanValue(parsed, input.capabilityIds)) {
+        st = lstatSync(full);
+      } catch {
+        unsafeStorage = true;
+        continue;
+      }
+      if (st.isSymbolicLink()) {
+        unsafeStorage = true;
+        continue;
+      }
+      if (st.isDirectory()) {
+        stack.push(full);
+        continue;
+      }
+      if (!st.isFile()) continue;
+      filesChecked++;
+      if (expectedSessionFiles.has(full)) observedSessionFiles.add(full);
+      const relativePath = posixRelative(root, full);
+      const observed = classifyFile(relativePath);
+      if (observed) classes.add(observed);
+      if (observed === "sessions") {
+        const basename = relativePath.split("/").at(-1) ?? "";
+        for (const sessionId of expectedSessionIds) {
+          if (basename.endsWith(`_${sessionId}.jsonl`) || basename === `${sessionId}.jsonl`) {
+            observedSessionIds.add(sessionId);
+          }
+        }
+      }
+      let raw: Buffer;
+      try {
+        raw = readFileSync(full);
+      } catch {
+        unsafeStorage = true;
+        continue;
+      }
+      const rawText = raw.toString("utf8");
+      for (const token of input.capabilityIds) {
+        if (rawText.includes(token)) {
           tokenFound = true;
         }
-      } catch {
-        // Not JSON; raw text already scanned above.
+      }
+      // Recursively decoded JSONL entries (sessions, history, task state, logs, evidence).
+      for (const line of rawText.split("\n")) {
+        if (!line.trim()) continue;
+        entriesChecked++;
+        try {
+          const parsed = JSON.parse(line) as unknown;
+          if (scanValue(parsed, input.capabilityIds)) {
+            tokenFound = true;
+          }
+        } catch {
+          // Not JSON; raw UTF-8 bytes were already scanned above.
+        }
       }
     }
   }
 
-  return { tokenFound, filesChecked, entriesChecked, unsafeStorage };
+  if (observedSessionFiles.size !== expectedSessionFiles.size) unsafeStorage = true;
+  if (observedSessionIds.size !== expectedSessionIds.size) unsafeStorage = true;
+
+  return {
+    tokenFound,
+    filesChecked,
+    entriesChecked,
+    unsafeStorage,
+    explicitSessionFilesRequired: expectedSessionFiles.size,
+    explicitSessionFilesObserved: observedSessionFiles.size,
+    sessionIdsRequired: expectedSessionIds.size,
+    sessionIdsObserved: observedSessionIds.size,
+    classesObserved: Array.from(classes).sort(),
+  };
 }

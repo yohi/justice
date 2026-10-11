@@ -11,15 +11,21 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-decodeTaskCapabilityEnvelope,
+  decodeTaskCapabilityEnvelope,
   encodeTaskCapabilityEnvelope,
   type NativeSuperpowersTaskCapability,
 } from "./capability-probe";
 import {
-evaluateCapabilityRuntimeContracts,
-issueFixtureCapability,
-setCapabilityRuntimeEvidence,
+  evaluateCapabilityRuntimeContracts,
+  issueFixtureCapability,
+  setCapabilityRuntimeEvidence,
 } from "./capability-runtime-cases";
+import { inspectCapabilitySessionStorage } from "./capability-session-storage";
+import {
+  installProcessGroupSignalHandlers,
+  runInIsolatedProcessGroup,
+  type IsolatedProcessResult,
+} from "./process-group-supervisor";
 import { buildTask1RuntimeMockScript, evaluateHostRuntimeContracts } from "./task1-runtime-cases";
 
 const EXPECTED = {
@@ -59,6 +65,8 @@ type EvidenceRow = Readonly<Record<string, unknown>>;
 
 type SpikeSummary = {
   readonly setupError?: string;
+  readonly task1Result?: "PROVEN" | "BLOCKED";
+  readonly blockedContracts?: readonly string[];
   readonly expected: Readonly<Record<string, string>>;
   readonly versions?: Readonly<Record<string, string>>;
   readonly contracts: Readonly<Record<string, boolean>>;
@@ -66,20 +74,21 @@ type SpikeSummary = {
   readonly observed?: Readonly<Record<string, unknown>>;
 };
 
-function run(args: ReadonlyArray<string>, options: { readonly cwd?: string; readonly env?: NodeJS.ProcessEnv; readonly inherit?: boolean } = {}) {
+async function run(
+  args: ReadonlyArray<string>,
+  options: { readonly cwd?: string; readonly env?: NodeJS.ProcessEnv; readonly inherit?: boolean } = {},
+): Promise<IsolatedProcessResult> {
   const inherit = options.inherit ?? process.env.JUSTICE_SPIKE_DEBUG_MODEL === "1";
-  const result = spawnSync(BUN, args as string[], {
-    encoding: inherit ? undefined : "utf8",
-    timeout: 300_000,
-    maxBuffer: 64 * 1024 * 1024,
-    stdio: inherit ? "inherit" : ["pipe", "pipe", "pipe"],
+  const result = await runInIsolatedProcessGroup(BUN, args, {
+    timeoutMs: 300_000,
+    maxOutputBytes: 64 * 1024 * 1024,
+    inheritOutput: inherit,
     cwd: options.cwd,
     env: options.env,
   });
-  if (result.error) throw result.error;
-  if (result.status !== 0) {
+  if (result.exitCode !== 0) {
     throw new Error(
-      `command failed (${String(result.status)}): bun ${args.join(" ")}\n${String(result.stdout ?? "")}\n${String(result.stderr ?? "")}`,
+      `command failed (${String(result.exitCode)}): bun ${args.join(" ")}\n${result.stdout}\n${result.stderr}`,
     );
   }
   return result;
@@ -127,9 +136,11 @@ function runtimeEnv(
     readonly sessions: string;
     readonly evidence: string;
     readonly script: string;
+    readonly runtimeNodeModules: string;
+    readonly sideEffectPath: string;
+    readonly taskSendSignalPath: string;
   },
   superpowersRoot: string,
-  fixtureEnvelope: string,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of ["PATH", "LANG", "LC_ALL", "TZ", "TERM"]) {
@@ -153,11 +164,15 @@ function runtimeEnv(
     JUSTICE_SPIKE_EVIDENCE_PATH: sandbox.evidence,
     JUSTICE_SPIKE_SUPERPOWERS_ROOT: superpowersRoot,
     JUSTICE_SPIKE_MOCK_SCRIPT: sandbox.script,
-    JUSTICE_SPIKE_CAPABILITY_ENVELOPE: fixtureEnvelope,
+    JUSTICE_SPIKE_SANDBOX_ROOT: sandbox.root,
+    JUSTICE_SPIKE_RUNTIME_NODE_MODULES: sandbox.runtimeNodeModules,
+    JUSTICE_SPIKE_SIDE_EFFECT_PATH: sandbox.sideEffectPath,
+    JUSTICE_SPIKE_TASK_SEND_SIGNAL_PATH: sandbox.taskSendSignalPath,
   };
 }
 
-function main(): void {
+async function main(): Promise<void> {
+  installProcessGroupSignalHandlers();
   const root = mkdtempSync(join(tmpdir(), "justice-v5-native-spike-"));
   let summary: SpikeSummary;
   let keepRoot = false;
@@ -178,7 +193,7 @@ function main(): void {
         2,
       )}\n`,
     );
-    run(["install", "--no-progress"], { cwd: runtime, env: process.env });
+    await run(["install", "--no-progress"], { cwd: runtime, env: process.env });
 
     const omoRoot = join(runtime, "node_modules/omo-ai");
     const superpowersRoot = join(runtime, "node_modules/superpowers");
@@ -198,7 +213,7 @@ function main(): void {
     if (omoPackage.dependencies?.["@code-yeongyu/senpi"] !== EXPECTED.senpiVersion) {
       throw new Error(`OmO→Senpi pin mismatch: ${String(omoPackage.dependencies?.["@code-yeongyu/senpi"])}`);
     }
-    const version = run([join(omoRoot, "bin/omo.js"), "--version"], { cwd: runtime, inherit: false });
+    const version = await run([join(omoRoot, "bin/omo.js"), "--version"], { cwd: runtime, inherit: false });
     const launcher = `${version.stdout}${version.stderr}`.trim();
     if (!launcher.includes("5.1.17") || !launcher.includes("senpi 2026.10.8")) {
       throw new Error(`unexpected omo --version: ${launcher}`);
@@ -212,27 +227,31 @@ function main(): void {
       sessions: join(root, "sandbox/sessions"),
       evidence: join(root, "sandbox/evidence.jsonl"),
       script: join(root, "sandbox/project/mock-script.json"),
+      runtimeNodeModules: join(runtime, "node_modules"),
+      sideEffectPath: join(root, "sandbox/side-effects/fixture"),
+      taskSendSignalPath: join(root, "sandbox/task-send.signal"),
     } as const;
     for (const path of [sandbox.cwd, sandbox.home, sandbox.agent, sandbox.sessions]) mkdirSync(path, { recursive: true });
     mkdirSync(join(sandbox.cwd, ".omo"), { recursive: true });
+    mkdirSync(dirname(sandbox.sideEffectPath), { recursive: true });
     mkdirSync(join(sandbox.home, ".omo"), { recursive: true });
     writeFileSync(
       join(sandbox.agent, "settings.json"),
-      `${JSON.stringify({ defaultProjectTrust: "trust", packages: [], max_depth: 3 }, null, 2)}\n`,
+      `${JSON.stringify({ defaultProjectTrust: "trust", packages: [], max_depth: 1 }, null, 2)}\n`,
     );
     const omoConfig = {
       memory: { enabled: false },
-      max_depth: 3,
-      task: { default_execution_mode: "process", process_runner: "child-process", max_depth: 3 },
+      max_depth: 1,
+      task: { default_execution_mode: "process", process_runner: "child-process", max_depth: 1 },
       agents: {
         quick: {
           model: "omo-mock/mock-1",
-          max_depth: 3,
+          max_depth: 1,
           allowed_subagents: ["quick"],
           execution_mode: "in-process",
         },
       },
-      categories: { quick: { description: "Justice evidence spike", model: "omo-mock/mock-1", max_depth: 3, allowed_subagents: ["quick"] } },
+      categories: { quick: { description: "Justice evidence spike", model: "omo-mock/mock-1", max_depth: 1, allowed_subagents: ["quick"] } },
     };
     writeFileSync(
       join(sandbox.cwd, ".omo/omo.json"),
@@ -254,8 +273,11 @@ function main(): void {
     const mockScript = buildTask1RuntimeMockScript(superpowersRoot, fixtureEnvelope);
     writeFileSync(sandbox.script, `${JSON.stringify(mockScript, null, 2)}\n`);
 
-    spawnEnvForEval = runtimeEnv(sandbox, superpowersRoot, fixtureEnvelope);
-    const result = run(
+    spawnEnvForEval = runtimeEnv(sandbox, superpowersRoot);
+    const capabilityEnvVarAbsent =
+      spawnEnvForEval.JUSTICE_SPIKE_CAPABILITY_ENVELOPE === undefined &&
+      !Object.hasOwn(spawnEnvForEval, "JUSTICE_SPIKE_CAPABILITY_ENVELOPE");
+    const result = await run(
       [
         join(omoRoot, "bin/omo.js"),
         "-e",
@@ -299,13 +321,19 @@ function main(): void {
       typeof (taskCall.inputBefore as Record<string, unknown>).prompt === "string" &&
       ((taskCall.inputBefore as Record<string, unknown>).prompt as string).includes(APPENDIX) !== true;
 
-    const capabilityContextDelivered = parentRows.some((row) => row.event === "capability_context_delivered");
-    const capabilityStrip = parentRows.find((row) => row.event === "tool_call_capability_stripped");
+    const capabilityContextDelivered = parentRows.some(
+      (row) => row.event === "capability_context_delivered" && row.deliveryKind === "request_local_context_copy",
+    );
+    const capabilityStrip = parentRows.find(
+      (row) => row.event === "tool_call_capability_stripped" && row.hadCapability === true,
+    );
     const childSessionId = rows.find((row) => row.event === "before_agent_start" && row.isChild === true)?.sessionId;
 
     const storageScanRows = rows.filter((row) => row.event === "storage_scan");
     const anyStorageScanPerformed = storageScanRows.length > 0;
-    const allStorageScansTokenFree = storageScanRows.every((row) => row.tokenFound === false);
+    const allStorageScansTokenFree =
+      storageScanRows.length > 0 &&
+      storageScanRows.every((row) => row.tokenFound === false && row.unsafeStorage === false);
 
     const rawEvidenceText = readFileSync(sandbox.evidence, "utf8");
     const decodedEnvelope = decodeTaskCapabilityEnvelope(fixtureEnvelope);
@@ -360,7 +388,61 @@ function main(): void {
     const capabilityRestoredAndStripped = capabilityContextDelivered && capabilityStrip !== undefined;
     const tokenFreeReadBackValidated = anyStorageScanPerformed && allStorageScansTokenFree;
 
-    setCapabilityRuntimeEvidence(rows, parentSessionId, fixtureEnvelope, rawEvidenceText);
+    // Harness-side authoritative final scan after the runtime exited: no async race,
+    // covers the full isolated tree for the harness-issued capability identity.
+    const harnessScanSessionFiles = Array.from(
+      new Set(rows.filter((row) => typeof row.sessionFile === "string").map((row) => row.sessionFile as string)),
+    );
+    const harnessScanSessionIds = Array.from(
+      new Set(
+        rows
+          .filter((row) => row.event === "session_start" && typeof row.sessionId === "string")
+          .map((row) => row.sessionId as string),
+      ),
+    );
+    const harnessFinalScan = await inspectCapabilitySessionStorage({
+      isolatedRoot: sandbox.root,
+      sessionFiles: harnessScanSessionFiles,
+      sessionIds: harnessScanSessionIds,
+      capabilityIds: sensitiveTokens.filter((token) => token !== fixtureEnvelope),
+      excludedRelativePaths: ["project/mock-script.json"],
+    });
+    const harnessFinalScanSafe =
+      harnessFinalScan.tokenFound === false &&
+      harnessFinalScan.unsafeStorage === false;
+    const capabilitySideEffectMarkerPresent = existsSync(`${sandbox.sideEffectPath}.capability`);
+    const positiveControlMarkerPresent = existsSync(`${sandbox.sideEffectPath}.positive`);
+    const evidenceRowsWithHarnessScan: readonly EvidenceRow[] = [
+      ...rows,
+      {
+        event: "fixture_side_effect_post_exit_scan",
+        capabilityMarkerPresent: capabilitySideEffectMarkerPresent,
+        positiveControlMarkerPresent,
+      },
+      {
+        event: "storage_scan",
+        label: "final_authoritative",
+        source: "harness_post_exit_scan",
+        tokenFound: harnessFinalScan.tokenFound,
+        unsafeStorage: harnessFinalScan.unsafeStorage,
+        filesChecked: harnessFinalScan.filesChecked,
+        entriesChecked: harnessFinalScan.entriesChecked,
+        classesObserved: harnessFinalScan.classesObserved,
+        explicitSessionFilesRequired: harnessFinalScan.explicitSessionFilesRequired,
+        explicitSessionFilesObserved: harnessFinalScan.explicitSessionFilesObserved,
+        sessionIdsRequired: harnessFinalScan.sessionIdsRequired,
+        sessionIdsObserved: harnessFinalScan.sessionIdsObserved,
+      },
+    ];
+
+    setCapabilityRuntimeEvidence(
+      evidenceRowsWithHarnessScan,
+      parentSessionId,
+      childSessionId,
+      fixtureEnvelope,
+      rawEvidenceText,
+      capabilityEnvVarAbsent,
+    );
     const hostContracts = evaluateHostRuntimeContracts({
       rows,
       parentSessionId,
@@ -368,15 +450,25 @@ function main(): void {
       runtimeTaskId: typeof runtimeTaskId === "string" ? runtimeTaskId : undefined,
       runtimeEnv: spawnEnvForEval,
       agentSettingsPath: join(sandbox.agent, "settings.json"),
+      superpowersRoot,
     }).contracts;
     const capabilityContracts = evaluateCapabilityRuntimeContracts({
-      rows,
+      rows: evidenceRowsWithHarnessScan,
       parentSessionId,
+      childSessionId,
       fixtureEnvelope,
       rawEvidenceText,
+      capabilityEnvVarAbsent,
     }).contracts;
+    const contracts = { ...hostContracts, ...capabilityContracts };
+    const blockedContracts = Object.entries(contracts)
+      .filter(([, proven]) => !proven)
+      .map(([name]) => name)
+      .sort();
 
     summary = {
+      task1Result: blockedContracts.length === 0 ? "PROVEN" : "BLOCKED",
+      blockedContracts,
       expected: EXPECTED,
       versions: {
         omo: omoPackage.version,
@@ -384,11 +476,8 @@ function main(): void {
         superpowers: superpowersPackage.version,
         launcher,
       },
-      contracts: {
-        ...hostContracts,
-        ...capabilityContracts,
-      },
-      blockedAt: null,
+      contracts,
+      blockedAt: blockedContracts[0] ?? null,
       observed: {
         parentSessionId: parentSessionId ?? null,
         activationEvidenceKind: activation?.evidenceKind ?? null,
@@ -412,7 +501,7 @@ function main(): void {
         strippedTaskArgsDigest: (protocolAffiliationRow?.strippedTaskArgsDigest as string | undefined) ?? null,
         nativeTaskToolCallFieldsObserved: (taskCall?.nativeTaskToolCallFieldsObserved as readonly string[] | undefined) ?? null,
         hostIndependentSuperpowersOriginField: (taskCall?.hostIndependentSuperpowersOriginField as string | undefined) ?? null,
-        processExitStatus: result.status,
+        processExitStatus: result.exitCode,
         stderrTail: (result.stderr ?? "").slice(-2000),
         taskSendOutcomes: taskSendRows,
         batchBindingCount: batchBindingRows.length,
@@ -427,6 +516,68 @@ function main(): void {
         providerObservations: providerObservedRows.map((row) => ({ provider: row.provider, model: row.model, verdict: row.guardVerdict })),
         nonMockSelectionBlocked,
         replayReasons: replayRows.map((row) => row.reason),
+        capabilityEnvVarAbsent,
+        harnessFinalScan: {
+          tokenFound: harnessFinalScan.tokenFound,
+          unsafeStorage: harnessFinalScan.unsafeStorage,
+          filesChecked: harnessFinalScan.filesChecked,
+          entriesChecked: harnessFinalScan.entriesChecked,
+          classesObserved: harnessFinalScan.classesObserved,
+          explicitSessionFilesRequired: harnessFinalScan.explicitSessionFilesRequired,
+          explicitSessionFilesObserved: harnessFinalScan.explicitSessionFilesObserved,
+          sessionIdsRequired: harnessFinalScan.sessionIdsRequired,
+          sessionIdsObserved: harnessFinalScan.sessionIdsObserved,
+          safe: harnessFinalScanSafe,
+        },
+        nonTaskSideEffectMarkers: {
+          capability: capabilitySideEffectMarkerPresent,
+          positiveControl: positiveControlMarkerPresent,
+        },
+        nonTaskTrace: rows
+          .filter(
+            (row) =>
+              row.event === "fixture_non_task_tool_executed" ||
+              row.event === "non_task_capability_veto_armed" ||
+              row.event === "fixture_non_task_tool_preflight_allowed" ||
+              (row.event === "tool_call" && row.toolName === "fixture_non_task_side_effect"),
+          )
+          .map((row) => ({
+            event: row.event,
+            toolCallId: row.toolCallId,
+            hadCapability: row.hadCapability,
+            payloadContainsCapability: row.payloadContainsCapability,
+            markerKind: row.markerKind,
+            guardKind: (row.guardResult as { readonly kind?: unknown } | undefined)?.kind,
+          })),
+        storageScanCount: storageScanRows.length,
+        fallbackInjectionCount: rows.filter((row) => row.event === "message_end_forced_failure_injected").length,
+        fallbackObservedCount: rows.filter((row) => row.event === "message_end_error_fallback_observed").length,
+        unknownToolEmissionCount: rows.filter((row) => row.event === "unknown_tool_model_emitted").length,
+        activationMethods: Array.from(
+          new Set(rows.filter((row) => row.event === "activation_evidence").map((row) => String(row.method))),
+        ).sort(),
+        methodActivationProof: rows
+          .filter((row) => row.event === "activation_evidence" && row.sessionId === parentSessionId)
+          .map((row) => {
+            const method = String(row.method);
+            const callId = String(row.observedCallOrInputId);
+            const sourcePath = typeof row.sourcePath === "string" ? row.sourcePath : "";
+            return {
+              method,
+              callId,
+              sameParentSession: row.sessionId === parentSessionId,
+              canonicalInstalledPath:
+                sourcePath.endsWith(`/skills/${method}/SKILL.md`) &&
+                sourcePath.startsWith(`${superpowersRoot}/skills/`),
+              successfulReadResult: rows.some(
+                (result) =>
+                  result.event === "tool_result" &&
+                  result.toolName === "read" &&
+                  String(result.toolCallId) === callId &&
+                  result.isError === false,
+              ),
+            };
+          }),
       },
     };
 
@@ -448,4 +599,4 @@ function main(): void {
   process.stdout.write(`JUSTICE_SPIKE_EVIDENCE_SUMMARY=${JSON.stringify(summary)}\n`);
 }
 
-main();
+void main();

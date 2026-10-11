@@ -1,12 +1,17 @@
 // Fixture-only Senpi extension probe. No Justice production imports.
 
 import { appendFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { join } from "node:path";
 import {
   CREDENTIAL_ENV_VARS,
+  FALLBACK_PROBE_SENTINEL,
   MOCK_MODEL_ID,
   MOCK_PROVIDER_ID,
   decodeTaskCapabilityEnvelope,
-  fixtureCapabilityFromEnvelope,
+  encodeTaskCapabilityEnvelope,
+  formatNativeCapabilityDirective,
   formatReviewAppendixSuffix,
   FixtureCapabilityRegistry,
   guardCapabilityToolCall,
@@ -28,16 +33,32 @@ const CAPABILITY_MARKER = "[[justice-capability-v1]]";
 const MALFORMED_ENVELOPE = `${CAPABILITY_MARKER}{not-json`;
 const DUPLICATE_KEY_ENVELOPE = `${CAPABILITY_MARKER}{"capabilityId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","capabilityId":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","originalDescription":null}`;
 
-const activated = new Map<string, { readonly method: string; readonly sourceToolCallId: string; readonly sourcePath: string }>();
+const activated = new Map<
+  string,
+  {
+    readonly authorizationId: string;
+    readonly method: string;
+    readonly sourceToolCallId: string;
+    readonly sourcePath: string;
+  }
+>();
 const registry = new FixtureCapabilityRegistry();
 let parentSessionId: string | null = null;
-const envEnvelope = process.env.JUSTICE_SPIKE_CAPABILITY_ENVELOPE ?? null;
+const sandboxRoot = process.env.JUSTICE_SPIKE_SANDBOX_ROOT ?? "";
+const DIRECTIVE_MARKER = "[[justice-capability-directive-v1]]";
 const sessionFiles = new Map<string, string[]>();
+const runtimeSessionIds = new Set<string>();
 const issuedCapabilityIds = new Set<string>();
 const preSpawnDelivered = new Map<string, boolean>();
 const nonTaskVetoed = new Map<string, boolean>();
 const syntheticResultSanitized = new Map<string, boolean>();
-const storageScanResults: Array<{ readonly tokenFound: boolean; readonly filesChecked: number; readonly entriesChecked: number }> = [];
+const storageScanResults: Array<{ readonly tokenFound: boolean; readonly unsafeStorage: boolean; readonly filesChecked: number; readonly entriesChecked: number; readonly classesObserved: readonly string[] }> = [];
+const capabilityByActivation = new Map<string, NativeSuperpowersTaskCapability>();
+const contextDeliveryScanByActivation = new Set<string>();
+const envelopeBySession = new Map<string, string>();
+const forcedFailureToolCallIds = new Set<string>();
+const unknownToolCallIds = new Set<string>();
+const syntheticSanitizedCallIds = new Set<string>();
 const MAX_CAPABILITY_AGE_MS = 3_600_000;
 const CREDENTIAL_SCAN = scanCredentialStores({
   homeDir: process.env.HOME ?? "",
@@ -140,6 +161,88 @@ return String(value) as unknown as T;
 }
 }
 
+type RuntimeTypeFactory = Readonly<{
+  readonly Object: (properties: Readonly<Record<string, unknown>>) => unknown;
+  readonly String: (options?: Readonly<Record<string, unknown>>) => unknown;
+}>;
+
+type FixtureSideEffectResult = Readonly<{
+  readonly content: readonly Readonly<{ readonly type: "text"; readonly text: string }>[];
+  readonly details: Readonly<Record<string, unknown>>;
+}>;
+
+type FixtureSideEffectTool = Readonly<{
+  readonly name: string;
+  readonly label: string;
+  readonly description: string;
+  readonly parameters: unknown;
+  readonly execute: (
+    toolCallId: string,
+    params: unknown,
+    signal: AbortSignal,
+    onUpdate: (update: unknown) => void,
+    context: unknown,
+  ) => Promise<FixtureSideEffectResult>;
+}>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isRuntimeTypeFactory(value: unknown): value is RuntimeTypeFactory {
+  return isRecord(value) && typeof value.Object === "function" && typeof value.String === "function";
+}
+
+function registerFixtureSideEffectTool(pi: {
+  readonly registerTool?: (tool: FixtureSideEffectTool) => void;
+}): void {
+  const modulesPath = process.env.JUSTICE_SPIKE_RUNTIME_NODE_MODULES;
+  if (modulesPath === undefined || pi.registerTool === undefined) {
+    record({ event: "fixture_side_effect_tool_unavailable" });
+    return;
+  }
+  const loaded: unknown = createRequire(join(modulesPath, "package.json"))("@earendil-works/pi-ai");
+  const typeFactory = isRecord(loaded) && isRuntimeTypeFactory(loaded.Type) ? loaded.Type : undefined;
+  if (typeFactory === undefined) {
+    record({ event: "fixture_side_effect_tool_unavailable" });
+    return;
+  }
+
+  const sideEffectBase = process.env.JUSTICE_SPIKE_SIDE_EFFECT_PATH;
+  if (sideEffectBase === undefined) {
+    record({ event: "fixture_side_effect_tool_unavailable" });
+    return;
+  }
+
+  pi.registerTool({
+    name: "fixture_non_task_side_effect",
+    label: "Fixture non-task side effect",
+    description: "Records whether the fixture's non-task capability probe was executed.",
+    parameters: typeFactory.Object({
+      payload: typeFactory.String(),
+    }),
+    execute: async (toolCallId, params, _signal, _onUpdate, _context) => {
+      if (!isRecord(params) || typeof params.payload !== "string") {
+        throw new Error("fixture_non_task_payload_invalid");
+      }
+      const containsCapability = params.payload.includes(CAPABILITY_MARKER);
+      const markerPath = `${sideEffectBase}.${containsCapability ? "capability" : "positive"}`;
+      writeFileSync(markerPath, "executed\n");
+      record({
+        event: "fixture_non_task_tool_executed",
+        toolCallId,
+        payloadContainsCapability: containsCapability,
+        markerKind: containsCapability ? "capability" : "positive",
+      });
+      return {
+        content: [{ type: "text", text: "fixture tool completed" }],
+        details: { markerKind: containsCapability ? "capability" : "positive" },
+      };
+    },
+  });
+  record({ event: "fixture_side_effect_tool_registered" });
+}
+
 function redactCapabilityEnvelopes(text: string): string {
   let result = text;
   let index = result.indexOf(CAPABILITY_MARKER);
@@ -203,7 +306,6 @@ function redactText(text: string, tokens: readonly string[]): string {
 function record(row: Record<string, unknown>): void {
   if (!evidencePath) return;
   const tokens: string[] = Array.from(issuedCapabilityIds);
-  if (envEnvelope) tokens.push(envEnvelope);
   tokens.push(CAPABILITY_MARKER);
   tokens.sort((a, b) => b.length - a.length);
   const redacted = sanitizeValue(row, tokens).value as Record<string, unknown>;
@@ -255,26 +357,59 @@ function registerSessionFile(sid: string, path: string): void {
     sessionFiles.set(sid, list);
   }
 }
-function scanSessionStorage(sid: string, label: string, ctx?: { readonly sessionManager?: { readonly getSessionFile?: () => string } }): void {
+function scanSessionStorage(
+  sid: string,
+  label: string,
+  ctx?: { readonly sessionManager?: { readonly getSessionFile?: () => string } },
+): Promise<void> {
   const tokens = Array.from(issuedCapabilityIds);
-  if (tokens.length === 0) return;
   const files = new Set(sessionFiles.get(sid) ?? []);
+  for (const [other, paths] of sessionFiles) {
+    if (other !== sid) for (const path of paths) files.add(path);
+  }
   if (ctx) {
     const sf = sessionFile(ctx);
     if (sf) files.add(sf);
   }
-  inspectCapabilitySessionStorage({ isolatedRoot: "", sessionFiles: Array.from(files), capabilityIds: tokens })
+  if (!sandboxRoot) {
+    record({ event: "storage_scan_error", sessionId: sid, label, error: "isolated sandbox root unavailable" });
+    return Promise.resolve();
+  }
+  return inspectCapabilitySessionStorage({
+    isolatedRoot: sandboxRoot,
+    sessionFiles: Array.from(files),
+    sessionIds: Array.from(runtimeSessionIds),
+    capabilityIds: tokens,
+  })
     .then((result) => {
       storageScanResults.push(result);
-      record({ event: "storage_scan", sessionId: sid, label, tokenFound: result.tokenFound, filesChecked: result.filesChecked, entriesChecked: result.entriesChecked });
+      record({
+        event: "storage_scan",
+        sessionId: sid,
+        label,
+        tokenFound: result.tokenFound,
+        unsafeStorage: result.unsafeStorage,
+        filesChecked: result.filesChecked,
+        entriesChecked: result.entriesChecked,
+        classesObserved: result.classesObserved,
+        explicitSessionFilesRequired: result.explicitSessionFilesRequired,
+        explicitSessionFilesObserved: result.explicitSessionFilesObserved,
+        sessionIdsRequired: result.sessionIdsRequired,
+        sessionIdsObserved: result.sessionIdsObserved,
+      });
     })
     .catch((error: unknown) => {
       record({ event: "storage_scan_error", sessionId: sid, label, error: error instanceof Error ? error.message : String(error) });
     });
 }
 
-function stripCapabilityFromArgs(args: Record<string, unknown>): { readonly args: Record<string, unknown>; readonly originalDescription: string | null } {
+function stripCapabilityFromArgs(args: Record<string, unknown>): {
+  readonly args: Record<string, unknown>;
+  readonly originalDescription: string | null;
+  readonly strippedCapability: boolean;
+} {
   let originalDescription: string | null = null;
+  let strippedCapability = false;
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(args)) {
     if (key === "description" && typeof value === "string") {
@@ -284,6 +419,7 @@ function stripCapabilityFromArgs(args: Record<string, unknown>): { readonly args
         const decoded = decodeTaskCapabilityEnvelope(envelope);
         if (decoded.kind === "decoded") {
           originalDescription = decoded.originalDescription;
+          strippedCapability = true;
           const prefix = value.slice(0, markerIndex).trimEnd();
           result[key] = prefix.length > 0 ? prefix : originalDescription ?? undefined;
           if (result[key] === undefined) {
@@ -295,15 +431,20 @@ function stripCapabilityFromArgs(args: Record<string, unknown>): { readonly args
     }
     result[key] = clone(value);
   }
-  return { args: result, originalDescription };
+  return { args: result, originalDescription, strippedCapability };
 }
 
 export default function justiceSpikeProbe(pi: {
   readonly on: (event: string, handler: (event: Record<string, unknown>, ctx: Record<string, unknown>) => unknown | Promise<unknown>) => void;
+  readonly registerTool?: (tool: FixtureSideEffectTool) => void;
 }): void {
+  registerFixtureSideEffectTool(pi);
   pi.on("session_start", (event, ctx) => {
     const sid = sessionId(ctx);
-    record({ event: "session_start", sessionId: sid, reason: event.reason });
+    const liveSessionFile = sessionFile(ctx);
+    runtimeSessionIds.add(sid);
+    if (liveSessionFile) registerSessionFile(sid, liveSessionFile);
+    record({ event: "session_start", sessionId: sid, sessionFile: liveSessionFile, reason: event.reason });
     record({
       event: "provider_credential_scan",
       sessionId: sid,
@@ -369,6 +510,8 @@ export default function justiceSpikeProbe(pi: {
     const promptText = typeof event.prompt === "string" ? event.prompt : "";
     const isParentPrompt = promptText.trim() === "SPIKE_RECOGNIZED_PARENT";
     const isChild = !isParentPrompt && (promptText.includes("JUSTICE_") || promptText.includes("Category_Context") || promptText.includes("onboarding/SKILL.md"));
+    if (isParentPrompt) process.env.JUSTICE_SPIKE_FIXTURE_ROLE = "parent";
+    else if (isChild) process.env.JUSTICE_SPIKE_FIXTURE_ROLE = "child";
     let hasPreSpawnSuffix = false;
     if (isChild) {
       const suffix = formatReviewAppendixSuffix("");
@@ -413,8 +556,6 @@ export default function justiceSpikeProbe(pi: {
       evidenceKind: "read_tool_result",
       issuedFromReadToolCallId: "justice-spike-read-1",
       observedAt: new Date().toISOString(),
-      verified: true,
-      issuedAt: new Date().toISOString(),
     };
     registry.registerActivation(binding);
     const issued = registry.issueIfGuardProfileVerified(binding, guardProfileFor(sid, true));
@@ -462,7 +603,6 @@ export default function justiceSpikeProbe(pi: {
     const unverifiedBinding: NativeSuperpowersActivationBinding = {
       ...binding,
       authorizationId: `${sid}:unverified-profile`,
-      verified: false,
     };
     const unverified = registry.issueIfGuardProfileVerified(unverifiedBinding, guardProfileFor(sid, false));
     recordCapabilityVerdict("unverified_guard_profile", unverified, { sessionId: sid });
@@ -536,22 +676,91 @@ export default function justiceSpikeProbe(pi: {
       preSpawnSuffixInContext: serialized.includes(suffix),
     });
 
-    // Request-local capability delivery: record that the capability was issued for this
-    // successful method-read context, without persisting the directive in message content
-    // (which would leak capability tokens into raw evidence).
+    // Request-local capability delivery: after a successful method read, deep-copy the
+    // persisted read ToolResult message inside the request-local context and attach the
+    // capability directive/envelope to that copy only. The original message object the
+    // runtime persists is never mutated, so session storage stays token-free.
     const activation = activated.get(sid);
-    if (activation) {
-      const capability = issueCapabilityForActivation(sid, activation);
-      if (capability) {
-        record({
-          event: "capability_context_delivered",
-          sessionId: sid,
-          toolCallId: activation.sourceToolCallId,
-          capabilityPresent: true,
-          messageRole: "toolResult",
-        });
-        scanSessionStorage(sid, "after_capability_context_delivery", ctx);
+    const messageInventory = messages.map((message, index) => {
+      if (message === null || typeof message !== "object") {
+        return { index, role: null, toolCallId: null, toolName: null, id: null, contentKinds: [] };
       }
+      const recordMessage = message as Record<string, unknown>;
+      const messageContent = recordMessage.content;
+      const contentParts = Array.isArray(messageContent) ? messageContent : [];
+      return {
+        index,
+        role: typeof recordMessage.role === "string" ? recordMessage.role : null,
+        toolCallId: typeof recordMessage.toolCallId === "string" ? recordMessage.toolCallId : null,
+        toolName: typeof recordMessage.toolName === "string" ? recordMessage.toolName : null,
+        id: typeof recordMessage.id === "string" ? recordMessage.id : null,
+        contentKinds: contentParts.map((part) =>
+          part !== null && typeof part === "object" && typeof (part as { readonly type?: unknown }).type === "string"
+            ? (part as { readonly type: string }).type
+            : "unknown",
+        ),
+      };
+    });
+    record({
+      event: "context_activation_lookup",
+      sessionId: sid,
+      activationFound: activation !== undefined,
+      activationReadToolCallId: activation?.sourceToolCallId ?? null,
+      contextMessageInventory: messageInventory,
+    });
+    if (!activation) return;
+    const cacheKey = `${sid}:${activation.sourceToolCallId}`;
+    const capability = issueCapabilityForActivation(sid, activation);
+    if (!capability) return;
+    const readIndex = messages.findIndex(
+      (message) =>
+        message !== null &&
+        typeof message === "object" &&
+        (message as { readonly role?: unknown }).role === "toolResult" &&
+        (message as { readonly toolCallId?: unknown }).toolCallId === activation.sourceToolCallId,
+    );
+    if (readIndex < 0) {
+      record({
+        event: "capability_context_delivered",
+        sessionId: sid,
+        toolCallId: activation.sourceToolCallId,
+        deliveryKind: "request_local_context_copy",
+        readResultMessageFound: false,
+        contextMessagesDeepCopied: false,
+        directiveAttachedToCopy: false,
+        originalReadResultUnmodified: false,
+        messageCountAfter: messages.length,
+        method: activation.method,
+      });
+      return;
+    }
+    const original = messages[readIndex] as Record<string, unknown>;
+    const beforeJson = JSON.stringify(original);
+    const copy = clone(original) as Record<string, unknown>;
+    const envelope = formatNativeCapabilityDirective(capability, null);
+    const directive = `${DIRECTIVE_MARKER} successful ${activation.method} method read; attach the following capability envelope to the next task delegation:\n${envelope}`;
+    const baseContent = Array.isArray(copy.content)
+      ? [...(copy.content as unknown[])]
+      : [{ type: "text", text: String(copy.content ?? "") }];
+    copy.content = [...baseContent, { type: "text", text: directive }];
+    messages[readIndex] = copy;
+    const originalUnmodified = JSON.stringify(original) === beforeJson;
+    record({
+      event: "capability_context_delivered",
+      sessionId: sid,
+      toolCallId: activation.sourceToolCallId,
+      deliveryKind: "request_local_context_copy",
+      readResultMessageFound: true,
+      contextMessagesDeepCopied: true,
+      directiveAttachedToCopy: true,
+      originalReadResultUnmodified: originalUnmodified,
+      copyIndex: readIndex,
+      messageCountAfter: messages.length,
+      method: activation.method,
+    });
+    if (!contextDeliveryScanByActivation.has(cacheKey)) {
+      contextDeliveryScanByActivation.add(cacheKey);
+      void scanSessionStorage(sid, "after_capability_context_delivery", ctx);
     }
   });
 
@@ -561,21 +770,61 @@ export default function justiceSpikeProbe(pi: {
     if (!message || typeof message !== "object") return;
     const role = (message as { readonly role?: string }).role;
     const content = (message as { readonly content?: unknown }).content;
+    let forcedFailureToolCallId: string | null = null;
     if (role === "assistant" && Array.isArray(content)) {
       for (let i = 0; i < content.length; i++) {
         const part = content[i];
         if (part && typeof part === "object" && (part as { readonly type?: string }).type === "toolCall") {
           const args = (part as { readonly arguments?: Record<string, unknown> }).arguments ?? {};
           const stripped = stripCapabilityFromArgs(args);
-          (part as { arguments: Record<string, unknown> }).arguments = stripped.args;
+          const sanitizedArguments = sanitizeValue(stripped.args, Array.from(issuedCapabilityIds));
+          const persistedArguments =
+            sanitizedArguments.value !== null &&
+            typeof sanitizedArguments.value === "object" &&
+            !Array.isArray(sanitizedArguments.value)
+              ? (sanitizedArguments.value as Record<string, unknown>)
+              : {};
+          (part as { arguments: Record<string, unknown> }).arguments = persistedArguments;
           const toolCallId = (part as { readonly id?: string }).id ?? "<unknown>";
+          const toolName = (part as { readonly name?: string }).name;
+          const prompt =
+            typeof (stripped.args as { readonly prompt?: unknown }).prompt === "string"
+              ? ((stripped.args as { readonly prompt: string }).prompt)
+              : "";
+          const isFallbackProbe = toolName === "task" && prompt.includes(FALLBACK_PROBE_SENTINEL);
+          const hadCapability = stripped.strippedCapability || sanitizedArguments.changed;
+          if (toolName !== "task" && hadCapability) {
+            nonTaskVetoed.set(`${sid}:${toolCallId}`, true);
+            registry.rememberNonTaskLeak(sid, toolCallId);
+            record({
+              event: "non_task_capability_veto_armed",
+              sessionId: sid,
+              toolName,
+              toolCallId,
+            });
+          }
+          if (typeof toolName === "string" && toolName.startsWith("justice_unknown")) {
+            unknownToolCallIds.add(toolCallId);
+            record({
+              event: "unknown_tool_model_emitted",
+              sessionId: sid,
+              toolName,
+              toolCallId,
+              emissionSurface: "assistant_message_end_tool_call",
+            });
+          }
           record({
             event: "message_end_sanitized",
             sessionId: sid,
             toolCallId,
-            toolName: (part as { readonly name?: string }).name,
-            hadCapability: stripped.originalDescription !== undefined,
+            toolName,
+            hadCapability,
+            hadOriginalDescription: stripped.originalDescription !== null,
+            forcedFailureArmed: isFallbackProbe && stripped.strippedCapability,
           });
+          if (isFallbackProbe && stripped.strippedCapability) {
+            forcedFailureToolCallId = toolCallId;
+          }
         }
       }
       const provider = (message as { readonly provider?: unknown }).provider;
@@ -593,13 +842,63 @@ export default function justiceSpikeProbe(pi: {
         });
       }
     }
+    if (role === "assistant" && (message as { readonly stopReason?: unknown }).stopReason === "error") {
+      // Real processing failure observed: the runtime persisted its same-role minimal
+      // error fallback. Assert the fallback carries no capability token and no raw
+      // exception stack, and re-scan storage after the persisted fallback append.
+      const errorMessageValue = (message as { readonly errorMessage?: unknown }).errorMessage;
+      const errorText = typeof errorMessageValue === "string" ? errorMessageValue : "";
+      const minimalContent =
+        !Array.isArray(content) ||
+        content.every(
+          (part) => !(part && typeof part === "object" && (part as { readonly type?: string }).type === "toolCall"),
+        );
+      record({
+        event: "message_end_error_fallback_observed",
+        sessionId: sid,
+        sameRoleFallback: role === "assistant",
+        minimalContent,
+        stopReasonObserved: "error",
+        errorMessagePresent: errorText.length > 0,
+        rawExceptionStack: /\n\s*at\s/.test(errorText),
+        hadCapabilityToken: containsLiteral([content, errorMessageValue], Array.from(issuedCapabilityIds)),
+      });
+      void scanSessionStorage(sid, "after_error_fallback", ctx);
+    }
     if (role === "tool" || role === "toolResult") {
       // Synthetic toolResult redaction fallback.
       const sanitized = sanitizeValue(content, Array.from(issuedCapabilityIds));
       if (sanitized.changed) {
         (message as { content: unknown }).content = sanitized.value;
-        record({ event: "tool_result_sanitized", sessionId: sid, role });
+        const resultToolName = (message as { readonly toolName?: unknown }).toolName;
+        const resultToolCallId = (message as { readonly toolCallId?: unknown }).toolCallId;
+        const toolCallIdText = typeof resultToolCallId === "string" ? resultToolCallId : null;
+        record({
+          event: "tool_result_sanitized",
+          sessionId: sid,
+          role,
+          toolName: typeof resultToolName === "string" ? resultToolName : null,
+          toolCallId: toolCallIdText,
+          isError: (message as { readonly isError?: unknown }).isError === true,
+          unknownToolCall: toolCallIdText !== null && unknownToolCallIds.has(toolCallIdText),
+        });
+        if (toolCallIdText !== null) {
+          syntheticSanitizedCallIds.add(toolCallIdText);
+          void scanSessionStorage(
+            sid,
+            unknownToolCallIds.has(toolCallIdText) ? "after_unknown_tool_synthetic_result" : "after_synthetic_result_sanitation",
+            ctx,
+          );
+        }
       }
+    }
+    if (forcedFailureToolCallId !== null) {
+      forcedFailureToolCallIds.add(forcedFailureToolCallId);
+      record({ event: "message_end_forced_failure_injected", sessionId: sid, toolCallId: forcedFailureToolCallId });
+      // Force a real processing failure AFTER capture/sanitation of the capability-bearing
+      // assistant message. The runtime converts this into its same-role minimal error
+      // fallback; no tool executes for this call.
+      throw new Error("justice-spike-forced-processing-failure");
     }
   });
 
@@ -607,6 +906,26 @@ export default function justiceSpikeProbe(pi: {
     const sid = sessionId(ctx);
     const before = clone(event.input);
     let fixtureMutation = false;
+
+    if (event.toolName === "task_send") {
+      const signalPath = process.env.JUSTICE_SPIKE_TASK_SEND_SIGNAL_PATH;
+      if (signalPath !== undefined) writeFileSync(signalPath, "task_send observed\n");
+    }
+
+    if (forcedFailureToolCallIds.has(String(event.toolCallId))) {
+      record({
+        event: "tool_call",
+        sessionId: sid,
+        toolName: event.toolName,
+        toolCallId: event.toolCallId,
+        forcedFailureBlock: true,
+      });
+      return {
+        block: true,
+        reason: "justice_spike_forced_processing_failure",
+        terminate: true,
+      };
+    }
 
     // Strip any capability envelope from incoming tool arguments before guard/execution.
     const hadCapabilityMarker =
@@ -621,9 +940,10 @@ export default function justiceSpikeProbe(pi: {
         toolName: event.toolName,
         toolCallId: event.toolCallId,
         hadCapabilityMarker,
+        hadCapability: stripped.strippedCapability,
         hadOriginalDescription: stripped.originalDescription !== null,
       });
-      scanSessionStorage(sid, "after_tool_call_strip", ctx);
+      void scanSessionStorage(sid, "after_tool_call_strip", ctx);
     }
 
     // Fixture compaction trigger: the marker tool forces an accepted compaction so capability
@@ -652,54 +972,41 @@ export default function justiceSpikeProbe(pi: {
         String(event.toolCallId),
       );
     }
-    if (event.toolName === "task" && typeof sid === "string" && sid !== parentSessionId && envEnvelope) {
-      // Wrong-session presentation: a capability envelope arriving in a session that did not issue it.
-      const decodedPresentation = decodeTaskCapabilityEnvelope(envEnvelope);
-      const fromEnv =
-        decodedPresentation.kind === "decoded"
-          ? fixtureCapabilityFromEnvelope(envEnvelope, sid, String(event.toolCallId))
-          : null;
-      const verdict: CapabilityVerdict =
-        decodedPresentation.kind === "decoded" && fromEnv
-          ? registry.presentCapability(
-              {
-                authorizationId: fromEnv.authorizationId,
-                method: fromEnv.method,
-                presentingSessionId: sid,
-              },
-              {
-                currentSessionId: sid,
-                currentMethod: fromEnv.method,
-                nowMs: Date.now(),
-                maxAgeMs: MAX_CAPABILITY_AGE_MS,
-              },
-            )
-          : {
-              kind: "rejected" as const,
-              reason: "stale_transcript_replay" as const,
-              capabilityId: null,
-              observedSessionId: sid,
-              expectedSessionId: null,
-            };
-      recordCapabilityVerdict("wrong_session_tool_call", verdict, {
-        sessionId: sid,
-        toolCallId: event.toolCallId,
-      });
+    if (event.toolName === "task" && sid !== parentSessionId) {
+      // Wrong-session presentation: a live capability issued for another session must be
+      // rejected when presented from this session's tool-call surface.
+      const foreign = Array.from(registryBySession.values()).find((cap) => cap.sessionId !== sid);
+      if (foreign) {
+        const verdict = registry.presentCapability(
+          { authorizationId: foreign.authorizationId, method: foreign.method, presentingSessionId: sid },
+          { currentSessionId: sid, currentMethod: foreign.method, nowMs: Date.now(), maxAgeMs: MAX_CAPABILITY_AGE_MS },
+        );
+        recordCapabilityVerdict("wrong_session_tool_call", verdict, {
+          sessionId: sid,
+          toolCallId: event.toolCallId,
+        });
+      }
     }
 
     // Capture outbound task capability receipt when a model-issued task carries a capability.
     const activation = activated.get(sid);
     const prompt = typeof (event.input as { readonly prompt?: string }).prompt === "string" ? (event.input as { readonly prompt: string }).prompt : "";
     const isUnrelatedTask = event.toolName === "task" && prompt.includes("JUSTICE_UNRELATED_TASK");
-    if (activation && event.toolName === "task" && (stripped.originalDescription !== null || isUnrelatedTask)) {
+    if (activation && event.toolName === "task" && (stripped.strippedCapability || isUnrelatedTask)) {
       const capability = registryBySession.get(sid);
       if (capability) {
-        registry.captureOutbound({
+        const outbound = registry.captureOutbound({
           authorizationId: capability.authorizationId,
           parentSessionId: sid,
           parentToolCallId: String(event.toolCallId),
           taskArgs: event.input as Record<string, unknown>,
           executionMethod: capability.method,
+        });
+        record({
+          event: "capability_outbound_captured",
+          sessionId: sid,
+          toolCallId: event.toolCallId,
+          outboundKind: outbound?.kind ?? null,
         });
       }
     }
@@ -716,7 +1023,7 @@ export default function justiceSpikeProbe(pi: {
         });
       } else {
         const validationInput = {
-          authorizationId: resolveAuthorizationId(sid, activation.method),
+          authorizationId: activation.authorizationId,
           parentSessionId: sid,
           parentToolCallId: String(event.toolCallId),
           taskArgs: event.input as Record<string, unknown>,
@@ -758,9 +1065,6 @@ export default function justiceSpikeProbe(pi: {
     });
     if (guardResult.kind === "block") {
       nonTaskVetoed.set(`${sid}:${String(event.toolCallId)}`, true);
-      event.block = true;
-      event.terminate = true;
-      (event as { blockReason?: string }).blockReason = guardResult.reason;
       record({
         event: "tool_call",
         sessionId: sid,
@@ -771,6 +1075,9 @@ export default function justiceSpikeProbe(pi: {
         inputBefore: before,
         inputAfter: clone(event.input),
         fixtureMutation,
+        hadCapability:
+          containsLiteral(before, registry.getSanitationTokens()) ||
+          nonTaskVetoed.get(`${sid}:${String(event.toolCallId)}`) === true,
         currentSessionActivationObserved: activated.has(sid),
         nativeTaskToolCallFieldsObserved: ["toolCallId", "toolName", "input", "parentToolCallId"],
         hostIndependentSuperpowersOriginField: "absent",
@@ -778,7 +1085,16 @@ export default function justiceSpikeProbe(pi: {
         promptSemanticsUsedAsAuthority: false,
         guardResult,
       });
-      return;
+      return { block: true, reason: guardResult.reason, terminate: true };
+    }
+
+    if (event.toolName === "fixture_non_task_side_effect") {
+      record({
+        event: "fixture_non_task_tool_preflight_allowed",
+        sessionId: sid,
+        toolCallId: event.toolCallId,
+        hadCapability: containsLiteral(before, registry.getSanitationTokens()),
+      });
     }
 
     if (
@@ -831,20 +1147,19 @@ export default function justiceSpikeProbe(pi: {
       const path = (event.input as { readonly path?: string }).path;
       const method = methodFromReadPath(path);
       if (method) {
-        activated.set(sid, { method, sourceToolCallId: String(event.toolCallId), sourcePath: String(path) });
+        const sourceToolCallId = String(event.toolCallId);
+        const authorizationId = resolveAuthorizationId(sid, method, sourceToolCallId);
+        activated.set(sid, { authorizationId, method, sourceToolCallId, sourcePath: String(path) });
         const binding: NativeSuperpowersActivationBinding = {
           schemaVersion: "justice-native-superpowers-activation-binding-v1",
-          authorizationId: resolveAuthorizationId(sid, method),
+          authorizationId,
           sessionId: sid,
           method: method as "subagent-driven-development" | "executing-plans",
           evidenceKind: "read_tool_result",
           issuedFromReadToolCallId: String(event.toolCallId),
           observedAt: new Date().toISOString(),
-          verified: true,
-          issuedAt: new Date().toISOString(),
         };
         registry.registerActivation(binding);
-        registerSessionFile(sid, String(path));
         record({
           event: "activation_evidence",
           evidenceKind: "read_tool_result",
@@ -967,9 +1282,10 @@ export default function justiceSpikeProbe(pi: {
     });
 
     // Stale transcript replay: after compaction invalidated the capability, the stale envelope
-    // (or a batch echo of it) must not restore or reissue a capability.
-    if (envEnvelope) {
-      const replay = registry.decodePresentation(envEnvelope, sid);
+    // captured from the pre-compaction issuance must not restore or reissue a capability.
+    const staleEnvelope = envelopeBySession.get(sid);
+    if (typeof staleEnvelope === "string") {
+      const replay = registry.decodePresentation(staleEnvelope, sid);
       recordCapabilityVerdict("stale_transcript_replay", replay, { sessionId: sid, surface: "post_compaction_replay" });
       if (replay.kind === "rejected") {
         replayRejections.push({ reason: replay.reason, surface: "post_compaction_replay" });
@@ -985,7 +1301,7 @@ export default function justiceSpikeProbe(pi: {
     registryBySession.delete(sid);
   });
 
-  pi.on("session_shutdown", (event, ctx) => {
+  pi.on("session_shutdown", async (event, ctx) => {
     const sid = sessionId(ctx);
     registry.invalidateSession(sid, "session_shutdown");
     const reason = typeof event.reason === "string" ? event.reason : "<unknown>";
@@ -996,58 +1312,54 @@ export default function justiceSpikeProbe(pi: {
       shutdownReason: reason,
     });
     record({ event: "session_shutdown", sessionId: sid });
+    // Authoritative final storage scan before the runtime exits; covers the full isolated
+    // tree with every required storage class observed.
+    await scanSessionStorage(sid, "final_authoritative", ctx);
   });
 }
 const registryBySession = new Map<string, NativeSuperpowersTaskCapability>();
 
 
-function resolveAuthorizationId(sessionId: string, method: string): string {
-  // If the harness supplied a fixed envelope, align activation authorization so validation matches.
-  if (envEnvelope) {
-    const decoded = decodeTaskCapabilityEnvelope(envEnvelope);
-    if (decoded.kind === "decoded") {
-      const fromEnv = fixtureCapabilityFromEnvelope(envEnvelope, sessionId, "<unused>");
-      if (fromEnv) return fromEnv.authorizationId;
-    }
-  }
-  return `${sessionId}:${method}`;
+function resolveAuthorizationId(
+  sessionId: string,
+  method: string,
+  sourceToolCallId?: string,
+): string {
+  // Activation authorization is derived from the observed session and method only;
+  // no environment fallback participates in capability issuance.
+  return `${sessionId}:${method}:${sourceToolCallId ?? "fixture"}`;
 }
 
 function issueCapabilityForActivation(
   sid: string,
-  activation: { readonly method: string; readonly sourceToolCallId: string },
+  activation: {
+    readonly authorizationId: string;
+    readonly method: string;
+    readonly sourceToolCallId: string;
+  },
 ): NativeSuperpowersTaskCapability | null {
+  const cacheKey = `${sid}:${activation.sourceToolCallId}`;
+  const cached = capabilityByActivation.get(cacheKey);
+  if (cached) {
+    return registry.invalidatedReasonFor(cached.authorizationId) === undefined ? cached : null;
+  }
   const binding: NativeSuperpowersActivationBinding = {
     schemaVersion: "justice-native-superpowers-activation-binding-v1",
-    authorizationId: resolveAuthorizationId(sid, activation.method),
+    authorizationId: activation.authorizationId,
     sessionId: sid,
     method: activation.method as "subagent-driven-development" | "executing-plans",
     evidenceKind: "read_tool_result",
     issuedFromReadToolCallId: activation.sourceToolCallId,
     observedAt: new Date().toISOString(),
-    verified: true,
-    issuedAt: new Date().toISOString(),
   };
-  let capability: NativeSuperpowersTaskCapability | null = null;
-  if (envEnvelope) {
-    const fromEnv = fixtureCapabilityFromEnvelope(envEnvelope, sid, activation.sourceToolCallId);
-    if (fromEnv) {
-      capability = fromEnv;
-      registry.registerActivation(binding);
-      registry.registerCapability(fromEnv);
-      registry.addSanitationToken(fromEnv.capabilityId);
-      issuedCapabilityIds.add(fromEnv.capabilityId);
-      registryBySession.set(sid, fromEnv);
-    }
-  } else {
-    const issuedFixture = registry.issue(binding);
-    if (issuedFixture) {
-      capability = issuedFixture;
-      issuedCapabilityIds.add(issuedFixture.capabilityId);
-      registryBySession.set(sid, issuedFixture);
-    }
-  }
-  return capability;
+  registry.registerActivation(binding);
+  const issuedFixture = registry.issue(binding);
+  if (!issuedFixture) return null;
+  capabilityByActivation.set(cacheKey, issuedFixture);
+  issuedCapabilityIds.add(issuedFixture.capabilityId);
+  registryBySession.set(sid, issuedFixture);
+  envelopeBySession.set(sid, encodeTaskCapabilityEnvelope(issuedFixture.capabilityId, null));
+  return issuedFixture;
 }
 
 function containsLiteral(value: unknown, tokens: readonly string[]): boolean {

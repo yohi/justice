@@ -3,9 +3,11 @@ import { join } from "node:path";
 import type { MockScript, MockStep } from "./task-e2e-mock-provider";
 import {
   compactionTriggerStep,
+  fallbackProbeStep,
   foreignCapabilityProbeStep,
+  nonTaskCapabilityEchoStep,
+  nonTaskPositiveControlStep,
   provenanceProbeStep,
-  readCapabilityEchoStep,
   staleReplayStep,
   unknownCapabilityEchoStep,
 } from "./capability-runtime-cases";
@@ -33,7 +35,6 @@ export function buildTask1RuntimeMockScript(
   fixtureEnvelope: string,
 ): MockScript {
   const skillPath = join(superpowersRoot, "skills/subagent-driven-development/SKILL.md");
-
   const parentSteps: MockStep[] = [
     {
       type: "tool_call",
@@ -44,39 +45,6 @@ export function buildTask1RuntimeMockScript(
     provenanceProbeStep() as MockStep,
     {
       type: "tool_call",
-      name: "task",
-      id: "justice-spike-task-3",
-      arguments: {
-        category: "quick",
-        prompt: "JUSTICE_UNRELATED_TASK\nDo something unrelated without a capability.",
-        run_in_background: true,
-        name: "unrelated-probe",
-        max_depth: 3,
-        maxDepth: 3,
-      },
-    } as MockStep,
-    {
-      type: "tool_call",
-      name: "task",
-      id: "justice-spike-task-batch",
-      arguments: {
-        run_in_background: true,
-        category: "quick",
-        name: "batch-probe",
-        tasks: [
-          {
-            prompt: "JUSTICE_BATCH_ITEM_0\nBatch item zero; echo BATCH_ECHO_DONE_0.",
-            name: "batch-item-0",
-          },
-          {
-            prompt: "JUSTICE_BATCH_ITEM_1\nBatch item one; echo BATCH_ECHO_DONE_1.",
-            name: "batch-item-1",
-          },
-        ],
-      },
-    } as MockStep,
-    {
-      type: "tool_call",
       name: "task_send",
       id: "justice-spike-task-send",
       arguments: {
@@ -85,20 +53,81 @@ export function buildTask1RuntimeMockScript(
           "JUSTICE_CONTINUATION_STEER\nReply CONTINUATION_DONE and keep working in the same task.",
       },
     } as MockStep,
+    fallbackProbeStep() as MockStep,
+    {
+      type: "tool_call",
+      name: "task",
+      id: "justice-spike-task-3",
+      arguments: {
+        category: "quick",
+        prompt: "JUSTICE_UNRELATED_TASK\nDo something unrelated without a capability.",
+        run_in_background: false,
+        name: "unrelated-probe",
+        max_depth: 1,
+        maxDepth: 1,
+      },
+    } as MockStep,
+    {
+      type: "tool_call",
+      name: "task",
+      id: "justice-spike-task-batch",
+      arguments: {
+        run_in_background: false,
+        category: "quick",
+        name: "batch-probe",
+        max_depth: 1,
+        maxDepth: 1,
+        tasks: [
+          {
+            prompt: "JUSTICE_BATCH_ITEM_0\nBatch item zero; echo BATCH_ECHO_DONE_0.",
+            name: "batch-item-0",
+            max_depth: 1,
+          },
+          {
+            prompt: "JUSTICE_BATCH_ITEM_1\nBatch item one; echo BATCH_ECHO_DONE_1.",
+            name: "batch-item-1",
+            max_depth: 1,
+          },
+        ],
+      },
+    } as MockStep,
+    nonTaskCapabilityEchoStep() as MockStep,
+    {
+      type: "tool_call",
+      name: "read",
+      id: "justice-spike-read-3",
+      arguments: { path: skillPath },
+    } as MockStep,
     unknownCapabilityEchoStep(fixtureEnvelope) as MockStep,
-    readCapabilityEchoStep(fixtureEnvelope) as MockStep,
     compactionTriggerStep() as MockStep,
     staleReplayStep() as MockStep,
     { type: "text", text: "SPIKE_PARENT_DONE" },
   ];
 
   const childSteps: MockStep[] = [
-    { type: "text", text: "REVIEW_CHILD_DONE" },
     foreignCapabilityProbeStep() as MockStep,
+    { type: "text", text: "REVIEW_CHILD_DONE" },
     { type: "text", text: "FOREIGN_SESSION_DONE" },
   ];
 
-  return { parentSteps, childSteps };
+  const nonTaskChildSteps: MockStep[] = [
+    {
+      type: "tool_call",
+      name: "read",
+      id: "justice-spike-nontask-read",
+      arguments: { path: skillPath },
+    },
+    nonTaskPositiveControlStep(),
+    {
+      type: "tool_call",
+      name: "fixture_non_task_side_effect",
+      id: "justice-spike-nontask-capability-call",
+      arguments: { payload: "JUSTICE_CAPABILITY_ECHO_PLACEHOLDER" },
+    },
+    { type: "text", text: "NON_TASK_PROBE_DONE" },
+  ];
+
+  return { parentSteps, childSteps, nonTaskChildSteps };
 }
 
 export type HostRuntimeContractsInput = {
@@ -108,6 +137,7 @@ export type HostRuntimeContractsInput = {
   readonly runtimeTaskId: string | undefined;
   readonly runtimeEnv?: NodeJS.ProcessEnv | undefined;
   readonly agentSettingsPath?: string | undefined;
+  readonly superpowersRoot?: string | undefined;
 };
 
 export type HostRuntimeContracts = {
@@ -120,6 +150,39 @@ export function evaluateHostRuntimeContracts(input: HostRuntimeContractsInput): 
 
   const bootstrap = prow.some((row) => row.event === "context" && row.hasSuperpowersBootstrap === true);
   const activation = prow.find((row) => row.event === "activation_evidence");
+  // Both Superpowers execution methods must be proven independently: canonical installed
+  // read path, successful read_tool_result, same session, exact read call identity, and
+  // activation evidence per method. A wrong-method rejection never substitutes for a
+  // successful executing-plans proof.
+  const SUPPORTED_METHODS = ["subagent-driven-development", "executing-plans"] as const;
+  const activationRows = prow.filter(
+    (row) => row.event === "activation_evidence" && row.evidenceKind === "read_tool_result",
+  );
+  const bothMethodsActivatedIndependently = SUPPORTED_METHODS.every((method) => {
+    const methodRows = activationRows.filter((row) => row.method === method);
+    return methodRows.some((row) => {
+      const callId = typeof row.observedCallOrInputId === "string" ? row.observedCallOrInputId : null;
+      const canonicalPath =
+        input.superpowersRoot !== undefined &&
+        row.sourcePath === `${input.superpowersRoot}/skills/${method}/SKILL.md`;
+      const successfulRead =
+        callId !== null &&
+        prow.some(
+          (result) =>
+            result.event === "tool_result" &&
+            result.toolName === "read" &&
+            String(result.toolCallId) === callId &&
+            result.isError === false,
+        );
+      return (
+        row.sessionId === parentSessionId &&
+        callId !== null &&
+        canonicalPath &&
+        successfulRead
+      );
+    });
+  }) &&
+    new Set(activationRows.map((row) => String(row.observedCallOrInputId))).size >= 2;
   const taskCall = prow.find((row) => row.event === "tool_call" && row.toolName === "task");
   const taskResult = prow.find((row) => row.event === "tool_result" && row.toolName === "task");
   const taskResultDetails = taskResult?.details as Record<string, unknown> | undefined;
@@ -240,7 +303,7 @@ export function evaluateHostRuntimeContracts(input: HostRuntimeContractsInput): 
       loads_omo_and_superpowers_pi_packages_together: true,
       superpowers_using_superpowers_bootstrap_is_present_in_native_context: bootstrap,
       native_method_skill_load_produces_current_session_activation_evidence:
-        Boolean(activation && activation.method),
+        bothMethodsActivatedIndependently,
       native_task_tool_call_exposes_mutable_input_session_and_tool_call_id:
         Boolean(mutableInput && parentSessionId && taskCall?.toolCallId),
       native_task_enforces_category_subagent_type_xor: taskEnforcesCategorySubagentTypeXor,
