@@ -36,6 +36,7 @@ function blockedContract(name: string): void {
   expect(summary.blockedContracts).toContain(name);
 }
 
+
 describe("Justice v5 OmO Native / Senpi / Superpowers evidence spike", () => {
   beforeAll(async () => {
     const { stdout, stderr } = await exec("bun", [runnerPath], {
@@ -118,7 +119,8 @@ describe("Justice v5 OmO Native / Senpi / Superpowers evidence spike", () => {
     runtimeContract("task1_non_task_tool_capability_echo_is_blocked_before_execution"));
   it("task1_unknown_tool_capability_echo_is_sanitized_before_persistence", () =>
     blockedContract("task1_unknown_tool_capability_echo_is_sanitized_before_persistence"));
-  it("reports the five runtime contracts lacking required observable proof", () => {
+  it("preserves 32-contract accounting and reports the five unsupported runtime contracts as BLOCKED", () => {
+    expect(Object.keys(summary.contracts)).toHaveLength(32);
     expect(summary.task1Result).toBe("BLOCKED");
     expect(summary.blockedContracts).toEqual([
       "task1_authenticated_protocol_affiliation_is_bound_without_prompt_inference",
@@ -151,6 +153,53 @@ describe("Justice v5 OmO Native / Senpi / Superpowers evidence spike", () => {
   it("observes the actual runtime's same-role error fallback after the injected stream failure", () => {
     expect(summary.observed?.fallbackInjectionCount).toBe(1);
     expect(summary.observed?.fallbackObservedCount).toBe(1);
+  });
+  it("reads full parent SessionManager history and reconciles its branches with the actual JSONL", () => {
+    expect(summary.observed?.sessionManagerHistoryReadback).toMatchObject({
+      source: "ReadonlySessionManager.getEntries",
+      sessionEntriesObserved: expect.any(Number),
+      diskEntriesObserved: expect.any(Number),
+      entryIdsAndBranchesMatch: false,
+      tokenFoundInMemoryEntries: false,
+      tokenFoundInDiskEntries: false,
+      unsafeStorage: false,
+    });
+  });
+  it("does not promote a turn_end read-back to entry_appended subscription proof", () => {
+    expect(summary.observed?.appendObservationSource).toBe("turn_end");
+    expect(summary.observed?.entryAppendedSubscriptionAvailable).toBe(false);
+    expect(summary.contracts.task1_capability_is_removed_before_assistant_tool_call_persistence).toBe(false);
+  });
+  it("keeps provider stream failure control BLOCKED without receipt invalidation evidence", () => {
+    expect(summary.observed?.providerStreamErrorControl).toMatchObject({
+      streamErrorObserved: true,
+      status: "BLOCKED",
+      candidateReceiptsInvalidated: false,
+    });
+  });
+  it("keeps the Justice sanitizer failure case BLOCKED until a real fault seam is observed", () => {
+    expect(summary.observed?.justiceSanitizerFailureControl).toMatchObject({
+      status: "BLOCKED",
+      failureInjectedAfterCaptureAndSanitation: false,
+    });
+  });
+  it("does not claim failure invalidation controls without runtime observations", () => {
+    expect(summary.observed?.failureInvalidationControls).toMatchObject({
+      provider_stream_error: {
+        status: "BLOCKED",
+      },
+      justice_sanitizer_failure: {
+        status: "BLOCKED",
+      },
+    });
+  });
+  it("records that unknown-tool synthetic persistence was not observed", () => {
+    expect(summary.observed?.syntheticUnknownToolResult).toMatchObject({
+      actualUnknownToolModelCallObserved: true,
+      status: "BLOCKED",
+      actualSyntheticToolResultMessageEndObserved: false,
+      resultCount: 0,
+    });
   });
   it("does not replay the final scripted processing-failure probe indefinitely", () => {
     expect(summary.observed?.fallbackInjectionCount).toBe(1);

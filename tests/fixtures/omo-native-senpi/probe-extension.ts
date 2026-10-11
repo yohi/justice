@@ -1,6 +1,6 @@
 // Fixture-only Senpi extension probe. No Justice production imports.
 
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
@@ -401,6 +401,74 @@ function scanSessionStorage(
     .catch((error: unknown) => {
       record({ event: "storage_scan_error", sessionId: sid, label, error: error instanceof Error ? error.message : String(error) });
     });
+}
+
+function entryIdentity(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+  const id = value.id;
+  const parentId = value.parentId ?? null;
+  const type = value.type;
+  if (typeof id !== "string" || typeof type !== "string") return null;
+  return JSON.stringify({ id, parentId, type });
+}
+
+function recordSessionManagerHistoryReadback(
+  sid: string,
+  ctx: Record<string, unknown>,
+  phase: "turn_end" | "session_shutdown",
+  turnEndEntryId?: string,
+): void {
+  const manager = isRecord(ctx.sessionManager) ? ctx.sessionManager : undefined;
+  const getEntries = manager?.getEntries;
+  const getSessionFile = manager?.getSessionFile;
+  if (typeof getEntries !== "function" || typeof getSessionFile !== "function") {
+    record({ event: "session_manager_history_readback", sessionId: sid, unavailable: true, unsafeStorage: true });
+    return;
+  }
+
+  try {
+    const memoryEntries: unknown = getEntries.call(manager);
+    const path = getSessionFile.call(manager);
+    if (!Array.isArray(memoryEntries) || typeof path !== "string") {
+      record({ event: "session_manager_history_readback", sessionId: sid, unavailable: true, unsafeStorage: true });
+      return;
+    }
+    const diskText = readFileSync(path, "utf8");
+    const diskEntries: unknown[] = diskText
+      .split("\n")
+      .filter(Boolean)
+      .map((line: string) => {
+        const parsed: unknown = JSON.parse(line);
+        return parsed;
+      });
+    const memoryIdentities = memoryEntries
+      .map((entry: unknown) => entryIdentity(entry))
+      .filter((id: string | null): id is string => id !== null)
+      .sort();
+    const diskIdentities = diskEntries
+      .map((entry: unknown) => entryIdentity(entry))
+      .filter((id: string | null): id is string => id !== null)
+      .sort();
+    const tokens = Array.from(registry.getSanitationTokens());
+    record({
+      event: "session_manager_history_readback",
+      sessionId: sid,
+      phase,
+      turnEndEntryId: turnEndEntryId ?? null,
+      source: "ReadonlySessionManager.getEntries",
+      sessionEntriesObserved: memoryEntries.length,
+      diskEntriesObserved: diskEntries.length,
+      entryIdsAndBranchesMatch:
+        memoryIdentities.length === memoryEntries.length &&
+        diskIdentities.length === diskEntries.length &&
+        JSON.stringify(memoryIdentities) === JSON.stringify(diskIdentities),
+      tokenFoundInMemoryEntries: containsLiteral(memoryEntries, tokens),
+      tokenFoundInDiskEntries: containsLiteral(diskEntries, tokens),
+      unsafeStorage: false,
+    });
+  } catch {
+    record({ event: "session_manager_history_readback", sessionId: sid, unavailable: true, unsafeStorage: true });
+  }
 }
 
 function stripCapabilityFromArgs(args: Record<string, unknown>): {
@@ -1305,8 +1373,15 @@ export default function justiceSpikeProbe(pi: {
     registryBySession.delete(sid);
   });
 
+  pi.on("turn_end", (event, ctx) => {
+    const sid = sessionId(ctx);
+    const messageEntryId = typeof event.messageEntryId === "string" ? event.messageEntryId : undefined;
+    recordSessionManagerHistoryReadback(sid, ctx, "turn_end", messageEntryId);
+  });
+
   pi.on("session_shutdown", async (event, ctx) => {
     const sid = sessionId(ctx);
+    recordSessionManagerHistoryReadback(sid, ctx, "session_shutdown");
     registry.invalidateSession(sid, "session_shutdown");
     const reason = typeof event.reason === "string" ? event.reason : "<unknown>";
     restartInvalidations.push({ sessionId: sid, reason });
@@ -1320,6 +1395,7 @@ export default function justiceSpikeProbe(pi: {
     // tree with every required storage class observed.
     await scanSessionStorage(sid, "final_authoritative", ctx);
   });
+
 }
 const registryBySession = new Map<string, NativeSuperpowersTaskCapability>();
 

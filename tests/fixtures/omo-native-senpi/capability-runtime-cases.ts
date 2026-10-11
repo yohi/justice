@@ -337,6 +337,20 @@ export function evaluateCapabilityRuntimeContracts(
       row.sessionManagerEntriesRequired > 0 &&
       row.sessionManagerEntriesObserved === row.sessionManagerEntriesRequired,
   );
+  const sessionManagerHistoryReadbackComplete = rows.some(
+    (row) =>
+      row.event === "session_manager_history_readback" &&
+      row.sessionId === parentSessionId &&
+      row.source === "ReadonlySessionManager.getEntries" &&
+      typeof row.sessionEntriesObserved === "number" &&
+      row.sessionEntriesObserved > 0 &&
+      typeof row.diskEntriesObserved === "number" &&
+      row.diskEntriesObserved > 0 &&
+      row.entryIdsAndBranchesMatch === true &&
+      row.tokenFoundInMemoryEntries === false &&
+      row.tokenFoundInDiskEntries === false &&
+      row.unsafeStorage === false,
+  );
   const assistantToolCallAppendObserved = prow.some(
     (row) =>
       row.event === "assistant_tool_call_append_observed" &&
@@ -345,7 +359,10 @@ export function evaluateCapabilityRuntimeContracts(
       row.capabilityAbsentFromPersistedArguments === true,
   );
   const tokenFreeReadBackValidated =
-    allStorageScansSafe && parentAndChildSessionStarted && finalScanClassesComplete;
+    allStorageScansSafe &&
+    parentAndChildSessionStarted &&
+    finalScanClassesComplete &&
+    sessionManagerHistoryReadbackComplete;
 
   // RG-002.2: real processing failure after capture/sanitation with the runtime's
   // same-role minimal error fallback persisted, token-free, without a raw exception
@@ -500,7 +517,7 @@ export function evaluateCapabilityRuntimeContracts(
         capabilityRestoredAndStripped &&
         tokenFreeReadBackValidated,
       task1_capability_never_enters_persisted_session_history:
-        allStorageScansSafe && finalScanClassesComplete,
+        allStorageScansSafe && finalScanClassesComplete && sessionManagerHistoryReadbackComplete,
       task1_capability_is_removed_before_assistant_tool_call_persistence:
         capabilityStrip !== undefined && allStorageScansSafe && assistantToolCallAppendObserved,
       task1_message_end_fallback_prevents_token_persistence_on_error:

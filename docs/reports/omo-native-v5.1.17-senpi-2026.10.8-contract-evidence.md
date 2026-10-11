@@ -135,6 +135,36 @@ The current `JUSTICE_SPIKE_EVIDENCE_SUMMARY` showed **27 proven / 5 blocked** an
 non-null `blockedAt`; it did not satisfy the all-contracts-proven acceptance
 condition.
 
+## Task 1 follow-up observation — 2026-10-11
+
+The fixture collector and evaluator were tightened to require public
+`ReadonlySessionManager.getEntries()` read-back in addition to the isolated-tree
+scan. The focused spike now completes **42/42 tests**, while correctly retaining
+**27 PROVEN / 5 BLOCKED** in the 32-contract summary. Historical rows above are
+preserved and are not retroactively promoted.
+
+| Contract | Follow-up observation | Status and remaining evidence gap |
+| --- | --- | --- |
+| `task1_authenticated_protocol_affiliation_is_bound_without_prompt_inference` | Activation, outbound receipt, exact call binding, stripped-argument digest, and token-free disk scan are observed. The `turn_end` read-back reports 34 SessionManager entries versus 35 disk entries. | **BLOCKED.** The in-memory and persisted entry/branch sets do not reconcile, so the full authenticated protocol chain is not promoted. |
+| `task1_capability_never_enters_persisted_session_history` | The authoritative isolated-tree scan is token-free, safe, and covers all required storage classes and expected session IDs. SessionManager read-back remains incomplete because its entry set differs from disk. | **BLOCKED.** Resolve the SessionManager/disk branch discrepancy and prove complete in-memory history coverage. |
+| `task1_capability_is_removed_before_assistant_tool_call_persistence` | `message_end` sanitation and the final isolated-tree scan remain token-free. The public extension path provides `turn_end`; it does not expose an `AgentSession.subscribe` `entry_appended` callback. | **BLOCKED.** `turn_end` read-back is not equivalent to observing each append and immediately reconciling its JSONL entry before tool execution. The attempted `--mode rpc` driver stopped at `get_session_stats`; no append evidence was accepted from it. |
+| `task1_message_end_fallback_prevents_token_persistence_on_error` | The provider-stream error control produces a same-role error message with no token or raw exception stack, but its content is not minimal (`minimalContent=false`). No bounded Justice sanitizer-failure injection or exact persisted fallback was observed. | **BLOCKED.** The provider error is Case A and cannot substitute for the distinct Case B Justice-sanitizer failure and fallback contract. |
+| `task1_unknown_tool_capability_echo_is_sanitized_before_persistence` | The mock model emits one unknown-tool call. No corresponding synthetic `tool_result` or sanitation-before-persistence observation is captured (`resultCount=0`, `sanitizedCount=0`). | **BLOCKED.** Exercise and observe a real persisted synthetic result, including the registered invalid-schema alternative if needed. |
+
+No failed boundary is inferred from a helper PASS. The 32-contract accounting
+remains 27 PROVEN / 5 BLOCKED; Tasks 2–14 remain `NOT_AUTHORIZED`.
+
+### Follow-up verification
+
+```text
+Focused spike: 42 passed, 0 failed
+Contract summary: 27 PROVEN, 5 BLOCKED
+TypeScript: PASS (`bun run typecheck`)
+Lint: 0 errors, 291 warnings (`bun run lint`)
+Build: PASS (`bun run build`)
+Full suite: 2,297 passed, 5 skipped; 167 files (166 passed, 1 skipped)
+```
+
 ## Change boundary
 
 Only the Task 1 contract integration test, fixture probe/runtime files under `tests/fixtures/omo-native-senpi/`, and this report are included in the repair. No production source, package manifest/lockfile, config, or CI files are changed. The upstream runtime environment used a deterministic mock provider; no external model/provider request was made.

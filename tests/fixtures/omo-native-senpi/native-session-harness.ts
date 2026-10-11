@@ -330,6 +330,14 @@ async function main(): Promise<void> {
     const childSessionId = rows.find((row) => row.event === "before_agent_start" && row.isChild === true)?.sessionId;
 
     const storageScanRows = rows.filter((row) => row.event === "storage_scan");
+    const sessionManagerHistoryReadback = rows
+      .filter(
+        (row) =>
+          row.event === "session_manager_history_readback" &&
+          row.sessionId === parentSessionId &&
+          row.phase === "turn_end",
+      )
+      .at(-1);
     const anyStorageScanPerformed = storageScanRows.length > 0;
     const allStorageScansTokenFree =
       storageScanRows.length > 0 &&
@@ -432,6 +440,8 @@ async function main(): Promise<void> {
         explicitSessionFilesObserved: harnessFinalScan.explicitSessionFilesObserved,
         sessionIdsRequired: harnessFinalScan.sessionIdsRequired,
         sessionIdsObserved: harnessFinalScan.sessionIdsObserved,
+        sessionManagerEntriesRequired: harnessFinalScan.sessionManagerEntriesRequired,
+        sessionManagerEntriesObserved: harnessFinalScan.sessionManagerEntriesObserved,
       },
     ];
 
@@ -465,6 +475,15 @@ async function main(): Promise<void> {
       .filter(([, proven]) => !proven)
       .map(([name]) => name)
       .sort();
+    const unknownToolEmissionRows = rows.filter((row) => row.event === "unknown_tool_model_emitted");
+    const unknownToolIds = new Set(unknownToolEmissionRows.map((row) => String(row.toolCallId)));
+    const unknownToolResultCount = rows.filter(
+      (row) => row.event === "tool_result" && unknownToolIds.has(String(row.toolCallId)),
+    ).length;
+    const unknownToolSanitizedCount = rows.filter(
+      (row) => row.event === "tool_result_sanitized" && unknownToolIds.has(String(row.toolCallId)),
+    ).length;
+    const providerStreamErrorObserved = rows.some((row) => row.event === "message_end_forced_failure_injected");
 
     summary = {
       task1Result: blockedContracts.length === 0 ? "PROVEN" : "BLOCKED",
@@ -517,6 +536,37 @@ async function main(): Promise<void> {
         nonMockSelectionBlocked,
         replayReasons: replayRows.map((row) => row.reason),
         capabilityEnvVarAbsent,
+        sessionManagerHistoryReadback: sessionManagerHistoryReadback ?? null,
+        appendObservationSource: rows.some(
+          (row) => row.event === "session_manager_history_readback" && row.phase === "turn_end",
+        )
+          ? "turn_end"
+          : "unavailable",
+        entryAppendedSubscriptionAvailable: false,
+        assistantToolCallAppendObservations: [],
+        providerStreamErrorControl: {
+          status: "BLOCKED",
+          streamErrorObserved: providerStreamErrorObserved,
+          messageEndSanitationObserved: rows.some(
+            (row) => row.event === "message_end_sanitized" && row.forcedFailureArmed === true,
+          ),
+          candidateReceiptsInvalidated: false,
+        },
+        justiceSanitizerFailureControl: {
+          status: "BLOCKED",
+          failureInjectedAfterCaptureAndSanitation: false,
+        },
+        failureInvalidationControls: {
+          provider_stream_error: { status: "BLOCKED" },
+          justice_sanitizer_failure: { status: "BLOCKED" },
+        },
+        syntheticUnknownToolResult: {
+          status: "BLOCKED",
+          actualUnknownToolModelCallObserved: unknownToolEmissionRows.length > 0,
+          actualSyntheticToolResultMessageEndObserved: unknownToolSanitizedCount > 0,
+          resultCount: unknownToolResultCount,
+          sanitizedCount: unknownToolSanitizedCount,
+        },
         harnessFinalScan: {
           tokenFound: harnessFinalScan.tokenFound,
           unsafeStorage: harnessFinalScan.unsafeStorage,

@@ -24,6 +24,8 @@ export type StorageScanResult = {
   readonly explicitSessionFilesObserved: number;
   readonly sessionIdsRequired: number;
   readonly sessionIdsObserved: number;
+  readonly sessionManagerEntriesRequired: number;
+  readonly sessionManagerEntriesObserved: number;
   /**
    * Fixture-private observation: which pinned-runtime storage classes the scan
    * actually walked (no paths, no tokens). The authoritative evaluator requires
@@ -56,6 +58,10 @@ function classifyFile(relativePath: string): string | null {
   if (components.some((component) => component === "logs" || component.endsWith(".log") || component.endsWith(".log.jsonl"))) return "logs";
   if (components.some((component) => component === "task-state" || component === "task_state" || component === "tasks" || component === "projects")) return "task_state";
   return null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function scanValue(value: unknown, tokens: ReadonlyArray<string>): boolean {
@@ -127,6 +133,7 @@ export function scanCredentialStores(input: {
 export async function inspectCapabilitySessionStorage(input: StorageScanInput): Promise<StorageScanResult> {
   let filesChecked = 0;
   let entriesChecked = 0;
+  let sessionManagerEntriesObserved = 0;
   let tokenFound = false;
   let unsafeStorage = false;
   const classes = new Set<string>();
@@ -224,11 +231,15 @@ export async function inspectCapabilitySessionStorage(input: StorageScanInput): 
         }
       }
       // Recursively decoded JSONL entries (sessions, history, task state, logs, evidence).
+      const isSessionFile = observed === "sessions";
       for (const line of rawText.split("\n")) {
         if (!line.trim()) continue;
         entriesChecked++;
         try {
           const parsed = JSON.parse(line) as unknown;
+          if (isSessionFile && isRecord(parsed) && parsed.type === "message") {
+            sessionManagerEntriesObserved++;
+          }
           if (scanValue(parsed, input.capabilityIds)) {
             tokenFound = true;
           }
@@ -251,6 +262,8 @@ export async function inspectCapabilitySessionStorage(input: StorageScanInput): 
     explicitSessionFilesObserved: observedSessionFiles.size,
     sessionIdsRequired: expectedSessionIds.size,
     sessionIdsObserved: observedSessionIds.size,
+    sessionManagerEntriesRequired: Math.max(1, sessionManagerEntriesObserved),
+    sessionManagerEntriesObserved,
     classesObserved: Array.from(classes).sort(),
   };
 }
