@@ -11,6 +11,8 @@
 **Requirements:** `docs/superpowers/requirements/2026-09-27-justice-v5-requirements.md`
 **Upstream baselines:** Oh My OpenAgent v5.1.17 (OmO Native), Senpi v2026.10.8, Superpowers v6.4.2
 
+**Current evidence status:** Revised Task 1 is `BLOCKED` with 27/32 contracts PROVEN and 5/32 BLOCKED at evidence HEAD `119dc6df52265cd105be4ab58baf90155479d9ea`. This document-only failure-surface reconciliation does not change that evidence or authorize production work. A fresh Superpowers Review Gate must return READY before the revised Task 1 runtime evidence is rerun; Tasks 2–14 remain NOT AUTHORIZED.
+
 ---
 
 ## 1. Purpose
@@ -213,7 +215,7 @@ Other prose in this Design explains or elaborates these contracts. It is not ind
 | J5D-PROJ-03 | Projection schema/version is bound to artifact-chain and evidence identity. |
 | J5D-REVIEW-01 | Justice observes an existing Superpowers review dispatch and never creates a duplicate review. |
 | J5D-REVIEW-02 | Exact-call capability validation precedes stripping and serialized Conformance Contract augmentation of the existing task prompt before spawn. No pending appendix queue exists. Normalized exact-call/runtime-task/child correlation must be proven per supported mode; mutation/ordering uncertainty yields NOT_PROVEN. |
-| J5D-CAP-01 | §7.5 fixes pure encoding, process-only capabilities/receipts/vetoes, context-copy delivery, assistant/toolResult pre-persistence sanitation, all-tool non-task terminating leak guard before task-only exact-call validation, token-free execution/history/logs/child, batch isolation and same_session_only validity; generic secret containment never creates provenance. |
+| J5D-CAP-01 | §7.5 fixes pure encoding, process-only capabilities/receipts/vetoes, context-copy delivery, assistant/toolResult pre-persistence sanitation, all-tool non-task terminating leak guard before task-only exact-call validation, token-free execution/history/logs/child, batch isolation and same_session_only validity; provider/host stream errors receive normal sanitation plus authority invalidation, while Justice sanitizer failure requires an exact same-role minimal fallback; generic secret containment never creates provenance. |
 | J5D-HARNESS-01 | Revised Task 1 proves A–K in fixtures only with allowlisted child env, pinned deterministic mock provider, no external fallback, non-mock rejection, and secret/capability-safe raw evidence; failure stops for reconciliation. |
 | J5D-REVIEW-03 | Trusted review evidence uses versioned structured results; the current Superpowers scoped dispatch supplies exact marker IDs for its current target set, while persisted trusted lineage evidence separately supplies metadata and a lineage-wide reserved finding-ID set so historical identities cannot be reused by new breakage; empty target sets remain valid for clause-only re-proof. |
 | J5D-REVIEW-04 | Missing, malformed, stale, wrong-scope, untrusted, identity-inconsistent, diff-failed, or incompletely covered final-review evidence fails closed; failed final-evidence attempts never masquerade as trusted closures. |
@@ -706,7 +708,30 @@ The supported profile consists of the audited pinned extension/provider chain wi
 
 Pre-sanitization provider stream events, tool_execution_start (which can carry prepared raw arguments), and other host-local ephemeral event objects are inside this trusted transient memory boundary only. None may be persistently recorded. Task 1 scans actual host/event logs and fails if the assembled profile writes any raw token/event; sanitized exported evidence cannot mask that failure.
 
-Senpi emitMessageEnd catches handler exceptions and continues, so throwing is NOT a persistence veto. The Justice guard must catch its own errors and synchronously replace the canonical assistant with a token-free same-role minimal fallback: content=[], stopReason=error, errorMessage=`justice_capability_outbound_sanitize_failed`, catalog-derived api/provider/model, original numeric timestamp, zero-valued usage/cost; remove all optional model-origin fields. Also clear candidate receipts and invalidate current capability. Apply this fallback in place to event.message before returning it so an optional later handler failure cannot restore the raw original. Call ctx.abort only after sanitation; abort alone is not redaction. Never format raw exceptions/messages into diagnostics. The normal path likewise updates the event.message in place before returning the same-role result. Guard/fallback inability or incompatible host chain is BLOCKED/unsupported; do not issue tokens in that profile. Fault injection after capture/sanitation must prove the fallback actually reaches authoritative storage without the token, not just that acceptance was denied.
+Failure surfaces are separate contracts; provider/host failure is not a Justice sanitation failure.
+
+This interpretation preserves the unchanged Requirements invariant that runtime exceptions use a token-free same-role fallback: here, that exception is a failure inside Justice-owned sanitation which would otherwise escape through Senpi's fail-open handler boundary. A provider stream error is instead host-generated message input to the guard; it requires normal sanitation and authority invalidation, not conversion to Justice's minimal fallback.
+
+**Provider/host stream failure:** A provider stream error may arrive at `message_end` as a host-generated assistant error, potentially carrying partial ToolCall content. Justice runs its normal synchronous message sanitation on that actual canonical message before persistence. The host-generated error shape is not required to equal Justice's minimal fallback. The guard must remove every live/retired capability occurrence from content, ToolCall arguments and metadata; clear/invalidate any candidate outbound receipt associated with the failed message; invalidate capability authority when the failure or partial call makes the activation unusable; and ensure the failed call cannot produce trusted provenance or trusted task/child execution. Do not create a new capability or receipt from the error message. If the failed message is token-free but candidate-receipt invalidation or the no-trusted-execution property is unproven, the runtime profile remains unsupported/NOT_PROVEN.
+
+**Justice sanitizer failure:** Senpi `ExtensionRunner.emitMessageEnd()` catches a handler exception, reports it, then continues with the last accepted message. Throwing is therefore NOT a persistence veto. The Justice guard must catch its own processing failure and return/apply a token-free same-role minimal fallback to the canonical message:
+
+```text
+role = assistant
+content = []
+stopReason = error
+errorMessage = justice_capability_outbound_sanitize_failed
+api/provider/model = catalog-derived safe values
+timestamp = original numeric timestamp
+usage/cost = zero-valued
+optional model-origin fields = removed
+```
+
+It must clear all candidate receipts and invalidate current capability authority. Apply the replacement in place to `event.message` before returning it so later handlers cannot restore the raw original. Call `ctx.abort` only after sanitation; abort alone is not redaction. Never format raw exceptions/messages into diagnostics. A bounded Task 1 fault seam fails inside the actual Justice message_end sanitizer after it has observed the capability-bearing ToolCall and candidate capture/sanitation work; the guard catches that failure and returns the exact fallback rather than throwing through Senpi. The fault seam must not fabricate message_end dispatch, append events, or storage evidence. Task 1 must prove that the canonical fallback reaches authoritative storage, candidate receipts are unusable, no trusted execution occurs, and no raw token/exception is persisted.
+
+The normal sanitized replacement path and Justice-failure fallback both update the canonical `event.message` in place before persistence. Guard/fallback inability or an incompatible host chain is BLOCKED/unsupported; do not issue tokens in that profile.
+
+**Pinned source basis:** Senpi v2026.10.8 (`d56e6a260d9468418a39bc9120945cf98e06b840`), `packages/coding-agent/src/core/extensions/runner.ts::ExtensionRunner.emitMessageEnd` accepts same-role returned replacements, catches handler exceptions and continues; `packages/coding-agent/src/core/agent-session.ts::_emitExtensionEvent` applies an accepted replacement through `_replaceMessageInPlace` before `_processAgentEvent` appends `event.message`. The latter also emits `entry_appended` after `SessionManager.appendMessage`. This provides a supported guard-owned fallback seam; it does not make an exception throw safe.
 
 **ToolResult persistence backstop:** The same message_end guard also handles role=toolResult, including immediate unknown/incomplete/validation-error results. Recursively replace each literal full live/retired token in string keys/values, content, details and metadata with `[JUSTICE-CAPABILITY-REDACTED]`; preserve role, toolCallId/toolName non-secret identity and non-secret result semantics. A secret-bearing identifier substring is redacted using the same literal; unsafe/colliding key replacement falls back instead of persisting the original. Do not create outbound receipts/vetoes/provenance or log the raw result. On sanitation failure return/in-place-apply the exact same-role minimal toolResult fallback: role=toolResult, token-redacted toolCallId/toolName, content=[{type:text,text:justice_capability_outbound_sanitize_failed}], isError=true, original numeric timestamp, no optional details/usage/metadata; invalidate capability/receipts and emit only the fixed error code. This does not require a preceding tool_call or tool_result hook. Task 1 must inspect the actual persisted synthetic result.
 
