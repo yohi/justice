@@ -1,3 +1,5 @@
+/// <reference types="node" />
+
 import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -15,6 +17,18 @@ export type StorageScanInput = {
   readonly excludedRelativePaths?: readonly string[];
 };
 
+export type StorageScanFailureReason =
+  | "root_unavailable"
+  | "explicit_session_file_invalid"
+  | "explicit_session_file_unavailable"
+  | "directory_unreadable"
+  | "entry_unavailable"
+  | "symlink_detected"
+  | "file_unreadable"
+  | "session_jsonl_invalid"
+  | "explicit_session_files_incomplete"
+  | "session_ids_incomplete";
+
 export type StorageScanResult = {
   readonly tokenFound: boolean;
   readonly filesChecked: number;
@@ -26,6 +40,7 @@ export type StorageScanResult = {
   readonly sessionIdsObserved: number;
   readonly sessionManagerEntriesRequired: number;
   readonly sessionManagerEntriesObserved: number;
+  readonly unsafeReasons: readonly StorageScanFailureReason[];
   /**
    * Fixture-private observation: which pinned-runtime storage classes the scan
    * actually walked (no paths, no tokens). The authoritative evaluator requires
@@ -135,7 +150,10 @@ export async function inspectCapabilitySessionStorage(input: StorageScanInput): 
   let entriesChecked = 0;
   let sessionManagerEntriesObserved = 0;
   let tokenFound = false;
-  let unsafeStorage = false;
+  const unsafeReasons = new Set<StorageScanFailureReason>();
+  const markUnsafe = (reason: StorageScanFailureReason): void => {
+    unsafeReasons.add(reason);
+  };
   const classes = new Set<string>();
   const expectedSessionFiles = new Set<string>();
   const observedSessionFiles = new Set<string>();
@@ -145,9 +163,9 @@ export async function inspectCapabilitySessionStorage(input: StorageScanInput): 
 
   // Fail closed: the isolated runtime root itself must be a usable directory.
   try {
-    if (!lstatSync(root).isDirectory()) unsafeStorage = true;
+    if (!lstatSync(root).isDirectory()) markUnsafe("root_unavailable");
   } catch {
-    unsafeStorage = true;
+    markUnsafe("root_unavailable");
   }
 
   // Explicit runtime-provided session paths are an additional fail-closed check
@@ -159,16 +177,16 @@ export async function inspectCapabilitySessionStorage(input: StorageScanInput): 
       const absolutePath = resolve(file);
       const relativePath = relative(root, absolutePath);
       if (relativePath === "" || relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
-        unsafeStorage = true;
+        markUnsafe("explicit_session_file_invalid");
         continue;
       }
       if (!lstatSync(absolutePath).isFile()) {
-        unsafeStorage = true;
+        markUnsafe("explicit_session_file_invalid");
         continue;
       }
       expectedSessionFiles.add(absolutePath);
     } catch {
-      unsafeStorage = true;
+      markUnsafe("explicit_session_file_unavailable");
     }
   }
 
@@ -182,7 +200,7 @@ export async function inspectCapabilitySessionStorage(input: StorageScanInput): 
     try {
       entries = readdirSync(dir);
     } catch {
-      unsafeStorage = true;
+      markUnsafe("directory_unreadable");
       continue;
     }
     for (const entry of entries) {
@@ -192,11 +210,11 @@ export async function inspectCapabilitySessionStorage(input: StorageScanInput): 
       try {
         st = lstatSync(full);
       } catch {
-        unsafeStorage = true;
+        markUnsafe("entry_unavailable");
         continue;
       }
       if (st.isSymbolicLink()) {
-        unsafeStorage = true;
+        markUnsafe("symlink_detected");
         continue;
       }
       if (st.isDirectory()) {
@@ -209,19 +227,12 @@ export async function inspectCapabilitySessionStorage(input: StorageScanInput): 
       const relativePath = posixRelative(root, full);
       const observed = classifyFile(relativePath);
       if (observed) classes.add(observed);
-      if (observed === "sessions") {
-        const basename = relativePath.split("/").at(-1) ?? "";
-        for (const sessionId of expectedSessionIds) {
-          if (basename.endsWith(`_${sessionId}.jsonl`) || basename === `${sessionId}.jsonl`) {
-            observedSessionIds.add(sessionId);
-          }
-        }
-      }
+      if (expectedSessionFiles.has(full)) classes.add("sessions");
       let raw: Buffer;
       try {
         raw = readFileSync(full);
       } catch {
-        unsafeStorage = true;
+        markUnsafe("file_unreadable");
         continue;
       }
       const rawText = raw.toString("utf8");
@@ -230,40 +241,73 @@ export async function inspectCapabilitySessionStorage(input: StorageScanInput): 
           tokenFound = true;
         }
       }
-      // Recursively decoded JSONL entries (sessions, history, task state, logs, evidence).
-      const isSessionFile = observed === "sessions";
-      for (const line of rawText.split("\n")) {
+      const isSessionJsonl =
+        (observed === "sessions" || expectedSessionFiles.has(full)) &&
+        relativePath.toLowerCase().endsWith(".jsonl");
+      const lines = rawText.split(/\r?\n/u);
+      if (lines.at(-1) === "") lines.pop();
+      let headerCount = 0;
+      let nonBlankLineIndex = 0;
+      for (const line of lines) {
         if (!line.trim()) continue;
         entriesChecked++;
         try {
-          const parsed = JSON.parse(line) as unknown;
-          if (isSessionFile && isRecord(parsed) && parsed.type === "message") {
-            sessionManagerEntriesObserved++;
+          const parsed: unknown = JSON.parse(line);
+          if (isSessionJsonl) {
+            if (isRecord(parsed) && parsed.type === "session") {
+              headerCount++;
+              const isExplicitSessionFile = expectedSessionFiles.has(full);
+              const validHeader =
+                nonBlankLineIndex === 0 &&
+                headerCount === 1 &&
+                typeof parsed.id === "string" &&
+                typeof parsed.cwd === "string" &&
+                typeof parsed.timestamp === "string" &&
+                Number.isFinite(Date.parse(parsed.timestamp)) &&
+                (parsed.version === undefined ||
+                  (typeof parsed.version === "number" && Number.isInteger(parsed.version) && parsed.version > 0)) &&
+                (parsed.parentSession === undefined || typeof parsed.parentSession === "string");
+              if (!validHeader) markUnsafe("session_jsonl_invalid");
+              if (typeof parsed.id === "string" && isExplicitSessionFile) {
+                if (expectedSessionIds.size > 0 && !expectedSessionIds.has(parsed.id)) {
+                  markUnsafe("session_jsonl_invalid");
+                } else if (expectedSessionIds.size > 0) {
+                  observedSessionIds.add(parsed.id);
+                }
+              }
+            } else {
+              if (headerCount === 0) markUnsafe("session_jsonl_invalid");
+              else sessionManagerEntriesObserved++;
+            }
           }
           if (scanValue(parsed, input.capabilityIds)) {
             tokenFound = true;
           }
         } catch {
           // Not JSON; raw UTF-8 bytes were already scanned above.
+          if (isSessionJsonl) markUnsafe("session_jsonl_invalid");
         }
+        nonBlankLineIndex++;
       }
+      if (isSessionJsonl && headerCount !== 1) markUnsafe("session_jsonl_invalid");
     }
   }
 
-  if (observedSessionFiles.size !== expectedSessionFiles.size) unsafeStorage = true;
-  if (observedSessionIds.size !== expectedSessionIds.size) unsafeStorage = true;
+  if (observedSessionFiles.size !== expectedSessionFiles.size) markUnsafe("explicit_session_files_incomplete");
+  if (observedSessionIds.size !== expectedSessionIds.size) markUnsafe("session_ids_incomplete");
 
   return {
     tokenFound,
     filesChecked,
     entriesChecked,
-    unsafeStorage,
+    unsafeStorage: unsafeReasons.size > 0,
     explicitSessionFilesRequired: expectedSessionFiles.size,
     explicitSessionFilesObserved: observedSessionFiles.size,
     sessionIdsRequired: expectedSessionIds.size,
     sessionIdsObserved: observedSessionIds.size,
     sessionManagerEntriesRequired: Math.max(1, sessionManagerEntriesObserved),
     sessionManagerEntriesObserved,
+    unsafeReasons: Array.from(unsafeReasons).sort(),
     classesObserved: Array.from(classes).sort(),
   };
 }

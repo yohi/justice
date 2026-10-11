@@ -20,6 +20,10 @@ type SpikeSummary = {
 
 let summary: SpikeSummary = { contracts: {} };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function contract(name: string): void {
   expect(summary.setupError, "runtime setup must succeed before a Native contract can be PROVEN").toBeUndefined();
   expect(summary.contracts[name], `${name} must be PROVEN by captured runtime evidence`).toBe(true);
@@ -86,7 +90,7 @@ describe("Justice v5 OmO Native / Senpi / Superpowers evidence spike", () => {
   it("task1_supported_host_session_batch_has_normalized_binding", () =>
     runtimeContract("task1_supported_host_session_batch_has_normalized_binding"));
   it("task1_authenticated_protocol_affiliation_is_bound_without_prompt_inference", () =>
-    blockedContract("task1_authenticated_protocol_affiliation_is_bound_without_prompt_inference"));
+    runtimeContract("task1_authenticated_protocol_affiliation_is_bound_without_prompt_inference"));
 
   // Additional RED control contracts.
   it("task1_wrong_authorization_and_method_capabilities_are_rejected", () =>
@@ -106,9 +110,9 @@ describe("Justice v5 OmO Native / Senpi / Superpowers evidence spike", () => {
 
   // RG-005 mandatory runtime tests.
   it("task1_capability_never_enters_persisted_session_history", () =>
-    blockedContract("task1_capability_never_enters_persisted_session_history"));
+    runtimeContract("task1_capability_never_enters_persisted_session_history"));
   it("task1_capability_is_removed_before_assistant_tool_call_persistence", () =>
-    blockedContract("task1_capability_is_removed_before_assistant_tool_call_persistence"));
+    runtimeContract("task1_capability_is_removed_before_assistant_tool_call_persistence"));
   it("task1_message_end_fallback_prevents_token_persistence_on_error", () =>
     blockedContract("task1_message_end_fallback_prevents_token_persistence_on_error"));
   it("task1_batch_echo_and_stale_transcripts_cannot_restore_capability", () =>
@@ -119,16 +123,20 @@ describe("Justice v5 OmO Native / Senpi / Superpowers evidence spike", () => {
     runtimeContract("task1_non_task_tool_capability_echo_is_blocked_before_execution"));
   it("task1_unknown_tool_capability_echo_is_sanitized_before_persistence", () =>
     blockedContract("task1_unknown_tool_capability_echo_is_sanitized_before_persistence"));
-  it("preserves 32-contract accounting and reports the five unsupported runtime contracts as BLOCKED", () => {
+  it("preserves 32-contract accounting and retains every contract without complete runtime evidence as BLOCKED", () => {
     expect(Object.keys(summary.contracts)).toHaveLength(32);
     expect(summary.task1Result).toBe("BLOCKED");
-    expect(summary.blockedContracts).toEqual([
+    const contractsRequiringCompleteRuntimeEvidence = [
       "task1_authenticated_protocol_affiliation_is_bound_without_prompt_inference",
-      "task1_capability_is_removed_before_assistant_tool_call_persistence",
       "task1_capability_never_enters_persisted_session_history",
       "task1_message_end_fallback_prevents_token_persistence_on_error",
       "task1_unknown_tool_capability_echo_is_sanitized_before_persistence",
-    ]);
+    ];
+    expect(summary.blockedContracts).toEqual(
+      contractsRequiringCompleteRuntimeEvidence.filter((name) => summary.contracts[name] !== true).sort(),
+    );
+    expect(summary.contracts.task1_message_end_fallback_prevents_token_persistence_on_error).toBe(false);
+    expect(summary.contracts.task1_unknown_tool_capability_echo_is_sanitized_before_persistence).toBe(false);
   });
   it("proves token-free storage coverage from the complete isolated runtime tree and observed session IDs", () => {
     const finalScan = summary.observed?.harnessFinalScan as
@@ -157,18 +165,71 @@ describe("Justice v5 OmO Native / Senpi / Superpowers evidence spike", () => {
   it("reads full parent SessionManager history and reconciles its branches with the actual JSONL", () => {
     expect(summary.observed?.sessionManagerHistoryReadback).toMatchObject({
       source: "ReadonlySessionManager.getEntries",
+      headerValid: true,
+      headerCount: 1,
       sessionEntriesObserved: expect.any(Number),
       diskEntriesObserved: expect.any(Number),
-      entryIdsAndBranchesMatch: false,
+      entryIdsAndBranchesMatch: true,
       tokenFoundInMemoryEntries: false,
       tokenFoundInDiskEntries: false,
       unsafeStorage: false,
     });
   });
-  it("does not promote a turn_end read-back to entry_appended subscription proof", () => {
-    expect(summary.observed?.appendObservationSource).toBe("turn_end");
-    expect(summary.observed?.entryAppendedSubscriptionAvailable).toBe(false);
-    expect(summary.contracts.task1_capability_is_removed_before_assistant_tool_call_persistence).toBe(false);
+  it("requires parent and child session history read-backs for complete branch reconciliation", () => {
+    const coverage = summary.observed?.sessionManagerHistoryCoverage;
+    expect(isRecord(coverage)).toBe(true);
+    if (
+      !isRecord(coverage) ||
+      typeof coverage.expectedSessions !== "number" ||
+      !Array.isArray(coverage.expectedSessionIds) ||
+      !Array.isArray(coverage.startedSessionIds) ||
+      !Array.isArray(coverage.childSessionIds) ||
+      !Array.isArray(coverage.shutdownSessionIds) ||
+      !Array.isArray(coverage.snapshots)
+    ) {
+      throw new Error("parent-child session history coverage is unavailable");
+    }
+    expect(coverage.expectedSessionIds).toEqual(expect.arrayContaining(coverage.startedSessionIds));
+    expect(coverage.expectedSessionIds).toEqual(expect.arrayContaining(coverage.childSessionIds));
+    expect(coverage.childSessionIds.length).toBeGreaterThan(0);
+    expect(coverage.complete).toBe(true);
+    expect(coverage.readbacks).toBe(coverage.expectedSessions);
+    expect(coverage.expectedSessions).toBeGreaterThanOrEqual(2);
+    expect(coverage.shutdownSessionIds).toEqual(expect.arrayContaining(coverage.expectedSessionIds));
+    const shutdownSnapshots = coverage.snapshots.filter(
+      (snapshot): snapshot is Record<string, unknown> => isRecord(snapshot) && snapshot.phase === "session_shutdown",
+    );
+    expect(shutdownSnapshots).toHaveLength(coverage.expectedSessions);
+    expect(
+      shutdownSnapshots.every(
+        (snapshot) =>
+          snapshot.headerValid === true &&
+          snapshot.headerCount === 1 &&
+          typeof snapshot.sessionEntriesObserved === "number" &&
+          snapshot.diskEntriesObserved === snapshot.sessionEntriesObserved &&
+          snapshot.entryIdsAndBranchesMatch === true &&
+          snapshot.tokenFoundInMemoryEntries === false &&
+          snapshot.tokenFoundInDiskEntries === false &&
+          snapshot.unsafeStorage === false,
+      ),
+    ).toBe(true);
+  });
+  it("observes the capability-bearing assistant append and immediate JSONL read-back through public RPC events", () => {
+    expect(summary.observed?.appendObservationSource).toBe("AgentSession.subscribe via Senpi RPC");
+    expect(summary.observed?.entryAppendedSubscriptionAvailable).toBe(true);
+    expect(summary.observed?.assistantToolCallAppendObservations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sessionId: summary.observed?.rpcSessionId,
+          toolCallId: "justice-spike-task-2",
+          subscriptionEvent: "entry_appended",
+          persistedEntryReadBack: true,
+          toolExecutionStartedAfterAppend: true,
+          capabilityAbsentFromArguments: true,
+          descriptionRestored: "original-task-description",
+        }),
+      ]),
+    );
   });
   it("keeps provider stream failure control BLOCKED without receipt invalidation evidence", () => {
     expect(summary.observed?.providerStreamErrorControl).toMatchObject({

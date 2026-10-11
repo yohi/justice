@@ -1,9 +1,10 @@
 // Fixture-only Senpi extension probe. No Justice production imports.
 
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
+import { inspectSessionManagerHistoryReadback } from "./session-history-readback";
 import {
   CREDENTIAL_ENV_VARS,
   FALLBACK_PROBE_SENTINEL,
@@ -47,7 +48,7 @@ let parentSessionId: string | null = null;
 const sandboxRoot = process.env.JUSTICE_SPIKE_SANDBOX_ROOT ?? "";
 const DIRECTIVE_MARKER = "[[justice-capability-directive-v1]]";
 const sessionFiles = new Map<string, string[]>();
-const runtimeSessionIds = new Set<string>();
+const knownPersistedSessionIds = new Set<string>();
 const issuedCapabilityIds = new Set<string>();
 const preSpawnDelivered = new Map<string, boolean>();
 const nonTaskVetoed = new Map<string, boolean>();
@@ -326,8 +327,9 @@ function sessionId(ctx: { readonly sessionManager?: { readonly getSessionId: () 
 
 function sessionFile(ctx: { readonly sessionManager?: { readonly getSessionFile?: () => string } }): string | null {
   try {
-    const fn = ctx.sessionManager?.getSessionFile;
-    if (typeof fn === "function") return String(fn());
+    const manager = ctx.sessionManager;
+    const fn = manager?.getSessionFile;
+    if (typeof fn === "function") return String(fn.call(manager));
     return null;
   } catch {
     return null;
@@ -363,13 +365,24 @@ function scanSessionStorage(
   ctx?: { readonly sessionManager?: { readonly getSessionFile?: () => string } },
 ): Promise<void> {
   const tokens = Array.from(issuedCapabilityIds);
-  const files = new Set(sessionFiles.get(sid) ?? []);
-  for (const [other, paths] of sessionFiles) {
-    if (other !== sid) for (const path of paths) files.add(path);
+  const files = new Set<string>();
+  const sessionIdsToScan = new Set<string>();
+  for (const [sessionIdValue, paths] of sessionFiles) {
+    if (paths.some((path) => existsSync(path))) knownPersistedSessionIds.add(sessionIdValue);
+    if (!knownPersistedSessionIds.has(sessionIdValue)) continue;
+    sessionIdsToScan.add(sessionIdValue);
+    for (const path of paths) files.add(path);
   }
   if (ctx) {
     const sf = sessionFile(ctx);
-    if (sf) files.add(sf);
+    if (sf !== null) {
+      registerSessionFile(sid, sf);
+      if (existsSync(sf)) knownPersistedSessionIds.add(sid);
+      if (knownPersistedSessionIds.has(sid)) {
+        sessionIdsToScan.add(sid);
+        files.add(sf);
+      }
+    }
   }
   if (!sandboxRoot) {
     record({ event: "storage_scan_error", sessionId: sid, label, error: "isolated sandbox root unavailable" });
@@ -378,7 +391,7 @@ function scanSessionStorage(
   return inspectCapabilitySessionStorage({
     isolatedRoot: sandboxRoot,
     sessionFiles: Array.from(files),
-    sessionIds: Array.from(runtimeSessionIds),
+    sessionIds: Array.from(sessionIdsToScan),
     capabilityIds: tokens,
   })
     .then((result) => {
@@ -389,6 +402,7 @@ function scanSessionStorage(
         label,
         tokenFound: result.tokenFound,
         unsafeStorage: result.unsafeStorage,
+        unsafeReasons: result.unsafeReasons,
         filesChecked: result.filesChecked,
         entriesChecked: result.entriesChecked,
         classesObserved: result.classesObserved,
@@ -403,15 +417,6 @@ function scanSessionStorage(
     });
 }
 
-function entryIdentity(value: unknown): string | null {
-  if (!isRecord(value)) return null;
-  const id = value.id;
-  const parentId = value.parentId ?? null;
-  const type = value.type;
-  if (typeof id !== "string" || typeof type !== "string") return null;
-  return JSON.stringify({ id, parentId, type });
-}
-
 function recordSessionManagerHistoryReadback(
   sid: string,
   ctx: Record<string, unknown>,
@@ -422,7 +427,22 @@ function recordSessionManagerHistoryReadback(
   const getEntries = manager?.getEntries;
   const getSessionFile = manager?.getSessionFile;
   if (typeof getEntries !== "function" || typeof getSessionFile !== "function") {
-    record({ event: "session_manager_history_readback", sessionId: sid, unavailable: true, unsafeStorage: true });
+    record({
+      event: "session_manager_history_readback",
+      sessionId: sid,
+      phase,
+      turnEndEntryId: turnEndEntryId ?? null,
+      source: "ReadonlySessionManager.getEntries",
+      headerValid: false,
+      headerCount: 0,
+      sessionEntriesObserved: 0,
+      diskEntriesObserved: 0,
+      entryIdsAndBranchesMatch: false,
+      tokenFoundInMemoryEntries: false,
+      tokenFoundInDiskEntries: false,
+      unsafeStorage: true,
+      failureReasons: ["history_source_unavailable"],
+    });
     return;
   }
 
@@ -430,44 +450,57 @@ function recordSessionManagerHistoryReadback(
     const memoryEntries: unknown = getEntries.call(manager);
     const path = getSessionFile.call(manager);
     if (!Array.isArray(memoryEntries) || typeof path !== "string") {
-      record({ event: "session_manager_history_readback", sessionId: sid, unavailable: true, unsafeStorage: true });
+      record({
+        event: "session_manager_history_readback",
+        sessionId: sid,
+        phase,
+        turnEndEntryId: turnEndEntryId ?? null,
+        source: "ReadonlySessionManager.getEntries",
+        headerValid: false,
+        headerCount: 0,
+        sessionEntriesObserved: 0,
+        diskEntriesObserved: 0,
+        entryIdsAndBranchesMatch: false,
+        tokenFoundInMemoryEntries: false,
+        tokenFoundInDiskEntries: false,
+        unsafeStorage: true,
+        failureReasons: ["history_source_unavailable"],
+      });
       return;
     }
-    const diskText = readFileSync(path, "utf8");
-    const diskEntries: unknown[] = diskText
-      .split("\n")
-      .filter(Boolean)
-      .map((line: string) => {
-        const parsed: unknown = JSON.parse(line);
-        return parsed;
-      });
-    const memoryIdentities = memoryEntries
-      .map((entry: unknown) => entryIdentity(entry))
-      .filter((id: string | null): id is string => id !== null)
-      .sort();
-    const diskIdentities = diskEntries
-      .map((entry: unknown) => entryIdentity(entry))
-      .filter((id: string | null): id is string => id !== null)
-      .sort();
-    const tokens = Array.from(registry.getSanitationTokens());
     record({
       event: "session_manager_history_readback",
-      sessionId: sid,
+      source: "ReadonlySessionManager.getEntries",
       phase,
       turnEndEntryId: turnEndEntryId ?? null,
-      source: "ReadonlySessionManager.getEntries",
-      sessionEntriesObserved: memoryEntries.length,
-      diskEntriesObserved: diskEntries.length,
-      entryIdsAndBranchesMatch:
-        memoryIdentities.length === memoryEntries.length &&
-        diskIdentities.length === diskEntries.length &&
-        JSON.stringify(memoryIdentities) === JSON.stringify(diskIdentities),
-      tokenFoundInMemoryEntries: containsLiteral(memoryEntries, tokens),
-      tokenFoundInDiskEntries: containsLiteral(diskEntries, tokens),
-      unsafeStorage: false,
+      ...inspectSessionManagerHistoryReadback({
+        sessionId: sid,
+        sessionManagerEntries: memoryEntries,
+        sessionJsonl: readFileSync(path, "utf8"),
+        capabilityIds: registry.getSanitationTokens(),
+      }),
     });
-  } catch {
-    record({ event: "session_manager_history_readback", sessionId: sid, unavailable: true, unsafeStorage: true });
+  } catch (error: unknown) {
+    if (error instanceof Error) {
+      record({
+        event: "session_manager_history_readback",
+        sessionId: sid,
+        phase,
+        turnEndEntryId: turnEndEntryId ?? null,
+        source: "ReadonlySessionManager.getEntries",
+        headerValid: false,
+        headerCount: 0,
+        sessionEntriesObserved: 0,
+        diskEntriesObserved: 0,
+        entryIdsAndBranchesMatch: false,
+        tokenFoundInMemoryEntries: false,
+        tokenFoundInDiskEntries: false,
+        unsafeStorage: true,
+        failureReasons: ["history_readback_failed"],
+      });
+      return;
+    }
+    throw error;
   }
 }
 
@@ -510,7 +543,6 @@ export default function justiceSpikeProbe(pi: {
   pi.on("session_start", (event, ctx) => {
     const sid = sessionId(ctx);
     const liveSessionFile = sessionFile(ctx);
-    runtimeSessionIds.add(sid);
     if (liveSessionFile) registerSessionFile(sid, liveSessionFile);
     record({ event: "session_start", sessionId: sid, sessionFile: liveSessionFile, reason: event.reason });
     record({

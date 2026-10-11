@@ -10,6 +10,7 @@ writeFileSync,
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { z } from "zod";
 import {
   decodeTaskCapabilityEnvelope,
   encodeTaskCapabilityEnvelope,
@@ -20,7 +21,8 @@ import {
   issueFixtureCapability,
   setCapabilityRuntimeEvidence,
 } from "./capability-runtime-cases";
-import { inspectCapabilitySessionStorage } from "./capability-session-storage";
+import { inspectCapabilitySessionStorage, REQUIRED_STORAGE_CLASSES } from "./capability-session-storage";
+import { areSessionManagerHistoriesComplete } from "./session-history-readback";
 import {
   installProcessGroupSignalHandlers,
   runInIsolatedProcessGroup,
@@ -40,8 +42,10 @@ const EXPECTED = {
 const fixtureDir = dirname(fileURLToPath(import.meta.url));
 const mockProvider = join(fixtureDir, "task-e2e-mock-provider.ts");
 const probeExtension = join(fixtureDir, "probe-extension.ts");
+const rpcSessionDriver = join(fixtureDir, "rpc-session-driver.ts");
 const BUN = process.env.JUSTICE_SPIKE_BUN ?? "bun";
 const APPENDIX = "[[JUSTICE_SPIKE_REVIEW_APPENDIX]]";
+const RPC_SUMMARY_PREFIX = "JUSTICE_SPIKE_RPC_SESSION_SUMMARY=";
 const CREDENTIAL_ENV_VARS_FOR_EVAL: readonly string[] = Object.freeze([
   "ANTHROPIC_API_KEY",
   "OPENAI_API_KEY",
@@ -73,6 +77,25 @@ type SpikeSummary = {
   readonly blockedAt?: string | null;
   readonly observed?: Readonly<Record<string, unknown>>;
 };
+
+const RpcSessionSummarySchema = z.object({
+  setupError: z.string().optional(),
+  rpcResponseTrace: z.array(z.string()).optional(),
+  sessionId: z.string().optional(),
+  entryAppendedObservations: z.array(z.record(z.string(), z.unknown())).optional(),
+  syntheticToolResultObservations: z.array(z.record(z.string(), z.unknown())).optional(),
+  fallbackAppendObservations: z.array(z.record(z.string(), z.unknown())).optional(),
+}).readonly();
+
+type RpcSessionSummary = z.infer<typeof RpcSessionSummarySchema>;
+
+function readRpcSessionSummary(stdout: string): RpcSessionSummary {
+  const line = stdout.split("\n").find((entry) => entry.startsWith(RPC_SUMMARY_PREFIX));
+  if (line === undefined) throw new Error("RPC session driver produced no summary");
+  const parsed = RpcSessionSummarySchema.safeParse(JSON.parse(line.slice(RPC_SUMMARY_PREFIX.length)) as unknown);
+  if (!parsed.success) throw new Error("RPC session driver summary is invalid");
+  return parsed.data;
+}
 
 async function run(
   args: ReadonlyArray<string>,
@@ -168,6 +191,7 @@ function runtimeEnv(
     JUSTICE_SPIKE_RUNTIME_NODE_MODULES: sandbox.runtimeNodeModules,
     JUSTICE_SPIKE_SIDE_EFFECT_PATH: sandbox.sideEffectPath,
     JUSTICE_SPIKE_TASK_SEND_SIGNAL_PATH: sandbox.taskSendSignalPath,
+    OMO_RPC_CLIENT_CAPABILITIES: "extension_events",
   };
 }
 
@@ -300,10 +324,62 @@ async function main(): Promise<void> {
       { cwd: sandbox.cwd, env: spawnEnvForEval },
     );
 
+    const rpcConfiguration = {
+      command: BUN,
+      commandArgs: [
+        join(omoRoot, "bin/omo.js"),
+        "-e", superpowersRoot,
+        "-e", mockProvider,
+        "-e", probeExtension,
+        "--mode", "rpc",
+        "--multi-session",
+        "--provider", "omo-mock",
+        "--model", "mock-1",
+        "--session-dir", sandbox.sessions,
+      ],
+      cwd: sandbox.cwd,
+      prompts: ["SPIKE_RECOGNIZED_PARENT"],
+      expectedCapabilityCalls: [
+        { toolCallId: "justice-spike-task-2", originalDescription: "original-task-description" },
+        { toolCallId: "justice-spike-task-fallback", originalDescription: "fallback-probe-description" },
+      ],
+      expectedSyntheticToolCallIds: ["justice-spike-unknown-echo"],
+    };
+    const rpcResult = await run([rpcSessionDriver, JSON.stringify(rpcConfiguration)], {
+      cwd: sandbox.cwd,
+      env: spawnEnvForEval,
+    });
+    const rpcSummary = readRpcSessionSummary(rpcResult.stdout);
+    if (rpcSummary.setupError !== undefined) {
+      throw new Error(
+        `RPC session evidence failed: ${rpcSummary.setupError}; responses=${(rpcSummary.rpcResponseTrace ?? []).join(",")}`,
+      );
+    }
+    if (rpcSummary.sessionId === undefined) throw new Error("RPC session identity unavailable");
+
     const rows = evidence(sandbox.evidence);
-    const parentSessionId = rows.find(
+    const rpcAppendObservations = rpcSummary.entryAppendedObservations ?? [];
+    const assistantToolCallAppendObservations: readonly EvidenceRow[] = rpcAppendObservations.map((row) => ({
+      ...row,
+      persistedEntryReadBack: row.immediateJsonlReadBackMatched === true,
+    }));
+    const rpcSyntheticToolResultObservations = rpcSummary.syntheticToolResultObservations ?? [];
+    const rpcAppendEvidenceRows: readonly EvidenceRow[] = assistantToolCallAppendObservations.map((row) => ({
+      ...row,
+      event: "assistant_tool_call_append_observed",
+      entryAppendedObserved: row.subscriptionEvent === "entry_appended",
+      sessionFileReadBackMatched: row.immediateJsonlReadBackMatched === true,
+      capabilityAbsentFromPersistedArguments: row.capabilityAbsentFromArguments === true,
+      toolExecutionStartedAfterAppend: row.toolExecutionStartedAfterAppend === true,
+    }));
+    const rpcSyntheticResultEvidenceRows: readonly EvidenceRow[] = rpcSyntheticToolResultObservations.map((row) => ({
+      ...row,
+      event: "rpc_synthetic_tool_result_append_observed",
+    }));
+    const parentSessionIdValue = rows.find(
       (row) => row.event === "before_agent_start" && typeof row.prompt === "string" && row.prompt.includes("SPIKE_RECOGNIZED_PARENT"),
     )?.sessionId;
+    const parentSessionId = typeof parentSessionIdValue === "string" ? parentSessionIdValue : undefined;
     const parentRows = rows.filter((row) => row.sessionId === parentSessionId);
     const activation = parentRows.find((row) => row.event === "activation_evidence");
     const taskCall = parentRows.find((row) => row.event === "tool_call" && row.toolName === "task");
@@ -327,7 +403,8 @@ async function main(): Promise<void> {
     const capabilityStrip = parentRows.find(
       (row) => row.event === "tool_call_capability_stripped" && row.hadCapability === true,
     );
-    const childSessionId = rows.find((row) => row.event === "before_agent_start" && row.isChild === true)?.sessionId;
+    const childSessionIdValue = rows.find((row) => row.event === "before_agent_start" && row.isChild === true)?.sessionId;
+    const childSessionId = typeof childSessionIdValue === "string" ? childSessionIdValue : undefined;
 
     const storageScanRows = rows.filter((row) => row.event === "storage_scan");
     const sessionManagerHistoryReadback = rows
@@ -335,13 +412,14 @@ async function main(): Promise<void> {
         (row) =>
           row.event === "session_manager_history_readback" &&
           row.sessionId === parentSessionId &&
-          row.phase === "turn_end",
+          row.phase === "session_shutdown",
       )
       .at(-1);
     const anyStorageScanPerformed = storageScanRows.length > 0;
     const allStorageScansTokenFree =
       storageScanRows.length > 0 &&
       storageScanRows.every((row) => row.tokenFound === false && row.unsafeStorage === false);
+    const allStorageScansSafe = allStorageScansTokenFree;
 
     const rawEvidenceText = readFileSync(sandbox.evidence, "utf8");
     const decodedEnvelope = decodeTaskCapabilityEnvelope(fixtureEnvelope);
@@ -418,10 +496,75 @@ async function main(): Promise<void> {
     const harnessFinalScanSafe =
       harnessFinalScan.tokenFound === false &&
       harnessFinalScan.unsafeStorage === false;
+    const finalScanClassesComplete =
+      REQUIRED_STORAGE_CLASSES.every((storageClass) => harnessFinalScan.classesObserved.includes(storageClass)) &&
+      harnessFinalScan.explicitSessionFilesRequired > 0 &&
+      harnessFinalScan.explicitSessionFilesObserved === harnessFinalScan.explicitSessionFilesRequired &&
+      harnessFinalScan.sessionIdsRequired >= 2 &&
+      harnessFinalScan.sessionIdsObserved === harnessFinalScan.sessionIdsRequired &&
+      harnessFinalScan.sessionManagerEntriesRequired > 0 &&
+      harnessFinalScan.sessionManagerEntriesObserved === harnessFinalScan.sessionManagerEntriesRequired;
+    const childSessionIds = Array.from(
+      new Set(
+        rows
+          .filter((row) => row.event === "before_agent_start" && row.isChild === true && typeof row.sessionId === "string")
+          .map((row) => row.sessionId as string),
+      ),
+    );
+    const startedSessionIds = Array.from(
+      new Set(
+        rows
+          .filter((row) => row.event === "session_start" && typeof row.sessionId === "string")
+          .map((row) => row.sessionId as string),
+      ),
+    );
+    const sessionManagerHistoryRows = rows.filter((row) => row.event === "session_manager_history_readback");
+    const expectedHistorySessionIds = Array.from(
+      new Set(
+        [parentSessionId, ...startedSessionIds, ...childSessionIds].filter(
+          (sessionId): sessionId is string => typeof sessionId === "string",
+        ),
+      ),
+    );
+    const shutdownHistorySessionIds = Array.from(
+      new Set(
+        sessionManagerHistoryRows
+          .filter((row) => row.phase === "session_shutdown" && typeof row.sessionId === "string")
+          .map((row) => row.sessionId as string),
+      ),
+    );
+    const expectedHistorySessionIdSet = new Set(expectedHistorySessionIds);
+    const sessionManagerHistoryReadbacksForExpected = shutdownHistorySessionIds.filter((sessionId) =>
+      expectedHistorySessionIdSet.has(sessionId),
+    ).length;
+    const sessionManagerHistoryCoverage = {
+      expectedSessions: expectedHistorySessionIds.length,
+      readbacks: sessionManagerHistoryReadbacksForExpected,
+      expectedSessionIds: expectedHistorySessionIds,
+      startedSessionIds,
+      childSessionIds,
+      shutdownSessionIds: shutdownHistorySessionIds,
+      snapshots: sessionManagerHistoryRows.map((row) => ({
+        sessionId: typeof row.sessionId === "string" ? row.sessionId : null,
+        phase: row.phase,
+        headerValid: row.headerValid === true,
+        headerCount: typeof row.headerCount === "number" ? row.headerCount : null,
+        sessionEntriesObserved: typeof row.sessionEntriesObserved === "number" ? row.sessionEntriesObserved : null,
+        diskEntriesObserved: typeof row.diskEntriesObserved === "number" ? row.diskEntriesObserved : null,
+        entryIdsAndBranchesMatch: row.entryIdsAndBranchesMatch === true,
+        tokenFoundInMemoryEntries: row.tokenFoundInMemoryEntries === true,
+        tokenFoundInDiskEntries: row.tokenFoundInDiskEntries === true,
+        unsafeStorage: row.unsafeStorage !== false,
+        failureReasons: Array.isArray(row.failureReasons) ? row.failureReasons : ["failure_reasons_unavailable"],
+      })),
+      complete: areSessionManagerHistoriesComplete(sessionManagerHistoryRows, expectedHistorySessionIds),
+    };
     const capabilitySideEffectMarkerPresent = existsSync(`${sandbox.sideEffectPath}.capability`);
     const positiveControlMarkerPresent = existsSync(`${sandbox.sideEffectPath}.positive`);
     const evidenceRowsWithHarnessScan: readonly EvidenceRow[] = [
       ...rows,
+      ...rpcAppendEvidenceRows,
+      ...rpcSyntheticResultEvidenceRows,
       {
         event: "fixture_side_effect_post_exit_scan",
         capabilityMarkerPresent: capabilitySideEffectMarkerPresent,
@@ -499,6 +642,7 @@ async function main(): Promise<void> {
       blockedAt: blockedContracts[0] ?? null,
       observed: {
         parentSessionId: parentSessionId ?? null,
+        rpcSessionId: rpcSummary.sessionId,
         activationEvidenceKind: activation?.evidenceKind ?? null,
         activationMethod: activation?.method ?? null,
         taskToolCallId: taskCall?.toolCallId ?? null,
@@ -536,14 +680,30 @@ async function main(): Promise<void> {
         nonMockSelectionBlocked,
         replayReasons: replayRows.map((row) => row.reason),
         capabilityEnvVarAbsent,
+        allStorageScansSafe,
+        finalScanClassesComplete,
         sessionManagerHistoryReadback: sessionManagerHistoryReadback ?? null,
-        appendObservationSource: rows.some(
-          (row) => row.event === "session_manager_history_readback" && row.phase === "turn_end",
-        )
-          ? "turn_end"
+        assistantToolCallAppendObservations,
+        rpcSyntheticToolResultObservations,
+        sessionManagerHistoryCoverage,
+        storageScanOutcomes: storageScanRows.map((row) => ({
+          label: row.label,
+          tokenFound: row.tokenFound,
+          unsafeStorage: row.unsafeStorage,
+          sessionIdsRequired: row.sessionIdsRequired,
+          sessionIdsObserved: row.sessionIdsObserved,
+          explicitSessionFilesRequired: row.explicitSessionFilesRequired,
+          explicitSessionFilesObserved: row.explicitSessionFilesObserved,
+          classesObserved: row.classesObserved,
+          sessionManagerEntriesRequired: row.sessionManagerEntriesRequired,
+          sessionManagerEntriesObserved: row.sessionManagerEntriesObserved,
+        })),
+        appendObservationSource: assistantToolCallAppendObservations.length > 0
+          ? "AgentSession.subscribe via Senpi RPC"
           : "unavailable",
-        entryAppendedSubscriptionAvailable: false,
-        assistantToolCallAppendObservations: [],
+        entryAppendedSubscriptionAvailable: assistantToolCallAppendObservations.some(
+          (row) => row.subscriptionEvent === "entry_appended" && row.persistedEntryReadBack === true,
+        ),
         providerStreamErrorControl: {
           status: "BLOCKED",
           streamErrorObserved: providerStreamErrorObserved,
@@ -577,6 +737,8 @@ async function main(): Promise<void> {
           explicitSessionFilesObserved: harnessFinalScan.explicitSessionFilesObserved,
           sessionIdsRequired: harnessFinalScan.sessionIdsRequired,
           sessionIdsObserved: harnessFinalScan.sessionIdsObserved,
+          sessionManagerEntriesRequired: harnessFinalScan.sessionManagerEntriesRequired,
+          sessionManagerEntriesObserved: harnessFinalScan.sessionManagerEntriesObserved,
           safe: harnessFinalScanSafe,
         },
         nonTaskSideEffectMarkers: {
@@ -600,9 +762,9 @@ async function main(): Promise<void> {
             guardKind: (row.guardResult as { readonly kind?: unknown } | undefined)?.kind,
           })),
         storageScanCount: storageScanRows.length,
-        fallbackInjectionCount: rows.filter((row) => row.event === "message_end_forced_failure_injected").length,
-        fallbackObservedCount: rows.filter((row) => row.event === "message_end_error_fallback_observed").length,
-        fallbackEvidence: rows
+        fallbackInjectionCount: parentRows.filter((row) => row.event === "message_end_forced_failure_injected").length,
+        fallbackObservedCount: parentRows.filter((row) => row.event === "message_end_error_fallback_observed").length,
+        fallbackEvidence: parentRows
           .filter((row) => row.event === "message_end_error_fallback_observed")
           .map((row) => ({
             sameRoleFallback: row.sameRoleFallback,
@@ -613,25 +775,25 @@ async function main(): Promise<void> {
             hadCapabilityToken: row.hadCapabilityToken,
           })),
         failedCallEvidence: (() => {
-          const callId = rows.find((row) => row.event === "message_end_forced_failure_injected")?.toolCallId;
+          const callId = parentRows.find((row) => row.event === "message_end_forced_failure_injected")?.toolCallId;
           if (typeof callId !== "string") return null;
           return {
-            toolCallCount: rows.filter((row) => row.event === "tool_call" && String(row.toolCallId) === callId).length,
-            blockedCount: rows.filter((row) => row.event === "tool_call" && String(row.toolCallId) === callId && row.forcedFailureBlock === true).length,
-            resultCount: rows.filter((row) => row.event === "tool_result" && String(row.toolCallId) === callId).length,
-            runtimeTaskIdentityCount: rows.filter((row) => row.event === "runtime_task_identity_observed" && String(row.toolCallId) === callId).length,
-            outboundReceiptCount: rows.filter((row) => row.event === "capability_outbound_captured" && String(row.toolCallId) === callId).length,
+            toolCallCount: parentRows.filter((row) => row.event === "tool_call" && String(row.toolCallId) === callId).length,
+            blockedCount: parentRows.filter((row) => row.event === "tool_call" && String(row.toolCallId) === callId && row.forcedFailureBlock === true).length,
+            resultCount: parentRows.filter((row) => row.event === "tool_result" && String(row.toolCallId) === callId).length,
+            runtimeTaskIdentityCount: parentRows.filter((row) => row.event === "runtime_task_identity_observed" && String(row.toolCallId) === callId).length,
+            outboundReceiptCount: parentRows.filter((row) => row.event === "capability_outbound_captured" && String(row.toolCallId) === callId).length,
           };
         })(),
-        unknownToolEmissionCount: rows.filter((row) => row.event === "unknown_tool_model_emitted").length,
+        unknownToolEmissionCount: parentRows.filter((row) => row.event === "unknown_tool_model_emitted").length,
         unknownToolEvidence: (() => {
           const callIds = new Set(
-            rows.filter((row) => row.event === "unknown_tool_model_emitted").map((row) => String(row.toolCallId)),
+            parentRows.filter((row) => row.event === "unknown_tool_model_emitted").map((row) => String(row.toolCallId)),
           );
           return {
             callCount: callIds.size,
-            resultCount: rows.filter((row) => row.event === "tool_result" && callIds.has(String(row.toolCallId))).length,
-            sanitizedCount: rows.filter((row) => row.event === "tool_result_sanitized" && callIds.has(String(row.toolCallId))).length,
+            resultCount: parentRows.filter((row) => row.event === "tool_result" && callIds.has(String(row.toolCallId))).length,
+            sanitizedCount: parentRows.filter((row) => row.event === "tool_result_sanitized" && callIds.has(String(row.toolCallId))).length,
           };
         })(),
         activationMethods: Array.from(

@@ -1,6 +1,6 @@
 # OmO Native v5.1.17 / Senpi v2026.10.8 Contract Evidence
 
-**Status:** BLOCKED — Revised Task 1 runtime evidence does not prove all required contracts
+**Status:** BLOCKED — Task 1 currently has 30/32 PROVEN and 2/32 BLOCKED
 **Task:** Justice v5 Implementation Plan — Revised Task 1 Evidence Spike
 **Scope:** tests / fixtures / probes / raw evidence / report only
 
@@ -164,6 +164,99 @@ Lint: 0 errors, 291 warnings (`bun run lint`)
 Build: PASS (`bun run build`)
 Full suite: 2,297 passed, 5 skipped; 167 files (166 passed, 1 skipped)
 ```
+
+## Revised Task A evidence recovery — 2026-10-12
+
+The earlier 27 PROVEN / 5 BLOCKED result remains preserved above as historical
+evidence. A fresh pinned-runtime run after Task A-1 through A-3 produced:
+
+```text
+TASK1_RESULT: BLOCKED
+REQUIRED_CONTRACTS: 32
+PROVEN: 30
+BLOCKED: 2
+BLOCKED_CONTRACTS:
+  task1_message_end_fallback_prevents_token_persistence_on_error
+  task1_unknown_tool_capability_echo_is_sanitized_before_persistence
+TASKS_2_14: NOT_AUTHORIZED
+```
+
+### TypeScript Node type diagnostics
+
+The previously reported fixture diagnostics were unresolved `node:fs`,
+`node:path`, `Buffer`, `NodeJS`, and the narrowing of `current` in the buffer
+scan. The fixture is outside the root TypeScript project's `include` set
+(`src/**/*` only), so editor inference did not consistently load the Node
+ambient declarations. The scoped `tests/types/tsconfig.json` does not include
+this fixture; it is not the source of these diagnostics. Added a file-level
+`/// <reference types="node" />` so the fixture resolves the same Node API
+types independently of inferred project membership. The code type-checks with
+Node declarations loaded, and neither `any` nor a checking suppression was
+introduced.
+
+### Task A-1 — Session history reconciliation
+
+The pinned runtime's JSONL begins with one `type: "session"` header. The
+read-back now requires exactly one leading header with the expected session ID,
+valid timestamp and required header fields; it removes that header from the
+disk `SessionEntry` set and separately scans it for capability tokens. It
+validates every entry type and identity, compares the full multiset of
+`(id, parentId, type)` identities, detects duplicate IDs, and rejects malformed
+or incomplete JSONL and unavailable storage.
+
+The previous 34 memory / 35 disk count difference was caused by comparing
+`SessionManager.getEntries()` (which excludes the header) with raw JSONL rows
+(which include it). The fresh runtime observation confirmed the proper
+comparison is **35 memory entries / 35 disk SessionEntries**, with exact branch
+identity agreement. This conclusion comes from parsing and validating the
+header and comparing all remaining entries, not from subtracting a presumed
+row.
+
+### Task A-2 — Parent and child session coverage
+
+Expected histories are derived from the union of every observed `session_start`
+ID, every observed child-session ID, and the parent ID. The run observed **8
+sessions**, including **6 child sessions**, and required exactly one clean
+`session_shutdown` read-back for each. All **8/8** shutdown snapshots had one
+valid matching header, equal memory/disk entry counts, identical entry IDs,
+`parentId` and types, no token in memory or disk, and `unsafeStorage: false`.
+Repeated `turn_end` snapshots are allowed; malformed snapshots fail closed, and
+duplicate or missing shutdown read-backs block completeness.
+
+The final isolated-tree scan also observed **8/8** expected session IDs, found
+no capability token, reported no unsafe storage, and covered `sessions`,
+`task_state`, `logs`, and `evidence`.
+
+### Task A-3 — Regression coverage
+
+The regression suite covers valid header reconciliation and fail-closed cases
+for malformed, misplaced and duplicate headers; absent entries; duplicate
+entry IDs; `parentId` mismatch and missing parent; unknown entry types; missing
+child read-backs; duplicate shutdown snapshots; unreadable/missing session
+storage; and token-bearing inactive branches. It also verifies that every
+observed session has a complete clean shutdown read-back before the history
+contract can be PROVEN.
+
+### Task A verification
+
+```text
+Focused Task A integration: 43 passed
+Session history regression tests: 17 passed
+Full suite: 2,315 passed, 5 skipped; 168 files (167 passed, 1 skipped)
+TypeScript: PASS (`bun run typecheck`)
+Scoped type fixtures: PASS (`tsc --noEmit --project tests/types/tsconfig.json`)
+Lint: 0 errors, 296 warnings (`bun run lint`)
+Build: PASS (`bun run build`)
+```
+
+One full-suite attempt transiently failed the protected process-supervisor test
+because the terminated descendant was briefly visible as a Linux zombie (`Z`).
+That test passed standalone (1/1), and the subsequent full-suite rerun passed;
+the protected test file was not modified.
+
+The two remaining BLOCKED contracts are still unproven by actual runtime
+observations; no contract was promoted based on a helper-only PASS. Historical
+contract accounting and the pre-#296 BLOCKED record remain intact.
 
 ## Change boundary
 

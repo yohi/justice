@@ -7,6 +7,7 @@ import {
   type NativeSuperpowersTaskCapability,
 } from "./capability-probe";
 import { REQUIRED_STORAGE_CLASSES } from "./capability-session-storage";
+import { areSessionManagerHistoriesComplete } from "./session-history-readback";
 import type { MockStep } from "./task-e2e-mock-provider";
 
 /**
@@ -166,7 +167,7 @@ export type CapabilityRuntimeContracts = {
 export function evaluateCapabilityRuntimeContracts(
   input: CapabilityRuntimeContractsInput,
 ): CapabilityRuntimeContracts {
-  const { rows, parentSessionId, childSessionId, fixtureEnvelope, rawEvidenceText } = input;
+  const { rows, parentSessionId, fixtureEnvelope, rawEvidenceText } = input;
   const prow = parentRows(rows, parentSessionId);
 
   // RG-001: the capability must be delivered via a deep-copied request-local context
@@ -318,12 +319,24 @@ export function evaluateCapabilityRuntimeContracts(
   const finalScanRows = storageScanRows.filter(
     (row) => row.label === "final_authoritative" && row.source === "harness_post_exit_scan",
   );
+  const childSessionIds = Array.from(
+    new Set(
+      rows
+        .filter((row) => row.event === "before_agent_start" && row.isChild === true && typeof row.sessionId === "string")
+        .map((row) => row.sessionId as string),
+    ),
+  );
+  const startedSessionIds = Array.from(
+    new Set(
+      rows
+        .filter((row) => row.event === "session_start" && typeof row.sessionId === "string")
+        .map((row) => row.sessionId as string),
+    ),
+  );
   const parentAndChildSessionStarted =
     typeof parentSessionId === "string" &&
-    typeof childSessionId === "string" &&
-    [parentSessionId, childSessionId].every((sessionId) =>
-      rows.some((row) => row.event === "session_start" && row.sessionId === sessionId),
-    );
+    childSessionIds.length > 0 &&
+    [parentSessionId, ...childSessionIds].every((sessionId) => startedSessionIds.includes(sessionId));
   const finalScanClassesComplete = finalScanRows.some(
     (row) =>
       Array.isArray(row.classesObserved) &&
@@ -337,27 +350,53 @@ export function evaluateCapabilityRuntimeContracts(
       row.sessionManagerEntriesRequired > 0 &&
       row.sessionManagerEntriesObserved === row.sessionManagerEntriesRequired,
   );
-  const sessionManagerHistoryReadbackComplete = rows.some(
-    (row) =>
-      row.event === "session_manager_history_readback" &&
-      row.sessionId === parentSessionId &&
-      row.source === "ReadonlySessionManager.getEntries" &&
-      typeof row.sessionEntriesObserved === "number" &&
-      row.sessionEntriesObserved > 0 &&
-      typeof row.diskEntriesObserved === "number" &&
-      row.diskEntriesObserved > 0 &&
-      row.entryIdsAndBranchesMatch === true &&
-      row.tokenFoundInMemoryEntries === false &&
-      row.tokenFoundInDiskEntries === false &&
-      row.unsafeStorage === false,
+  const sessionManagerHistoryRows = rows.filter((row) => row.event === "session_manager_history_readback");
+  const expectedHistorySessionIds = Array.from(
+    new Set(
+      [parentSessionId, ...startedSessionIds, ...childSessionIds].filter(
+        (sessionId): sessionId is string => typeof sessionId === "string",
+      ),
+    ),
   );
-  const assistantToolCallAppendObserved = prow.some(
-    (row) =>
-      row.event === "assistant_tool_call_append_observed" &&
-      row.entryAppendedObserved === true &&
-      row.sessionFileReadBackMatched === true &&
-      row.capabilityAbsentFromPersistedArguments === true,
+  const sessionManagerHistoryReadbackComplete = areSessionManagerHistoriesComplete(
+    sessionManagerHistoryRows,
+    expectedHistorySessionIds,
   );
+  const assistantAppendRows = rows.filter((row) => row.event === "assistant_tool_call_append_observed");
+  const allCapabilityAppendsReadBackSafely =
+    assistantAppendRows.length === 2 &&
+    assistantAppendRows.every(
+      (row) =>
+        row.subscriptionEvent === "entry_appended" &&
+        row.entryAppendedObserved === true &&
+        row.sessionFileReadBackMatched === true &&
+        row.capabilityAbsentFromPersistedArguments === true &&
+        row.descriptionRestoredMatchesExpected === true,
+    );
+  const executableAppend = assistantAppendRows.find(
+    (row) => row.toolCallId === "justice-spike-task-2" && row.toolExecutionStartedAfterAppend === true,
+  );
+  const assistantToolCallAppendObserved =
+    allCapabilityAppendsReadBackSafely &&
+    executableAppend !== undefined &&
+    typeof executableAppend.sessionId === "string" &&
+    rows.some(
+      (row) =>
+        row.event === "message_end_sanitized" &&
+        row.sessionId === executableAppend.sessionId &&
+        row.toolCallId === executableAppend.toolCallId &&
+        row.toolName === "task" &&
+        row.hadCapability === true,
+    ) &&
+    rows.some(
+      (row) =>
+        row.event === "tool_call" &&
+        row.sessionId === executableAppend.sessionId &&
+        row.toolCallId === executableAppend.toolCallId &&
+        row.toolName === "task" &&
+        row.hadCapability !== true &&
+        !capabilityRuntimeRegistry.containsTokenLiteral(row.inputAfter, capabilityRuntimeRegistry.getSanitationTokens()),
+    );
   const tokenFreeReadBackValidated =
     allStorageScansSafe &&
     parentAndChildSessionStarted &&
@@ -515,9 +554,13 @@ export function evaluateCapabilityRuntimeContracts(
         exactCallBindingValidated &&
         strippedArgsDigestValidated &&
         capabilityRestoredAndStripped &&
+        parentAndChildSessionStarted &&
         tokenFreeReadBackValidated,
       task1_capability_never_enters_persisted_session_history:
-        allStorageScansSafe && finalScanClassesComplete && sessionManagerHistoryReadbackComplete,
+        allStorageScansSafe &&
+        finalScanClassesComplete &&
+        parentAndChildSessionStarted &&
+        sessionManagerHistoryReadbackComplete,
       task1_capability_is_removed_before_assistant_tool_call_persistence:
         capabilityStrip !== undefined && allStorageScansSafe && assistantToolCallAppendObserved,
       task1_message_end_fallback_prevents_token_persistence_on_error:
