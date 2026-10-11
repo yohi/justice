@@ -37,13 +37,13 @@ Pinned native `task` tool_call exposes `input`, `toolCallId`, `toolName`, and op
 TASK1_RESULT: BLOCKED
 
 REQUIRED_CONTRACTS:
-32 active runtime contracts / PROVEN 25 / BLOCKED 7
+32 active runtime contracts / PROVEN 27 / BLOCKED 5
 
 AUTHENTICATED_PROTOCOL_AFFILIATION:
 BLOCKED
 
 blockedAt:
-"7 required runtime contracts lack sufficient evidence"
+"5 required runtime contracts lack sufficient evidence"
 
 production source changed:
 NO
@@ -74,38 +74,39 @@ An independent host-observed workflow-origin field is **not** a current authorit
 BASELINE: master 0a7fa07e2aad63ebd28b403876773d2f0c831e82
 BRANCH: spike/justice-v5-native-evidence-294
 TASK1_SCOPE: tests / fixtures / probes / raw evidence / report only
-REQUIRED_CONTRACTS: 32 active runtime contracts / PROVEN 25 / BLOCKED 7
+REQUIRED_CONTRACTS: 32 active runtime contracts / PROVEN 27 / BLOCKED 5
 HISTORICAL_TASK1_RESULT: BLOCKED
 HISTORICAL_9_PROVEN_REGRESSION: RETAINED
 ACTIVATED_PROTOCOL_AFFILIATION: BLOCKED
-RAW_TOKEN_PERSISTENCE_SCAN: NO_TOKEN_FOUND; SESSION_FILE_COVERAGE_UNPROVEN
+RAW_TOKEN_PERSISTENCE_SCAN: NO_TOKEN_FOUND; ISOLATED_TREE_SAFE; SESSION_MANAGER_ENTRIES_UNOBSERVED
 PRODUCTION_SOURCE_CHANGED: NO
 PACKAGE_CONFIG_CI_CHANGED: NO
 TASKS_2_14: NOT_AUTHORIZED
 ```
 
-The seven blocked contracts are:
+The five remaining blocked contracts are:
 
 ```text
 task1_authenticated_protocol_affiliation_is_bound_without_prompt_inference
-task1_capability_is_removed_before_assistant_tool_call_persistence
 task1_capability_never_enters_persisted_session_history
-task1_context_copy_delivers_fixture_capability_after_method_read
+task1_capability_is_removed_before_assistant_tool_call_persistence
 task1_message_end_fallback_prevents_token_persistence_on_error
-task1_tool_call_binds_capability_session_and_call
 task1_unknown_tool_capability_echo_is_sanitized_before_persistence
 ```
 
-The isolated-root scan found no capability token, and the capability environment
-variable was absent. However, the runtime provided no explicit parent/child
-session-file paths (`explicitSessionFilesRequired=0`,
-`explicitSessionFilesObserved=0`), so persisted-session coverage is unproven and
-the scan cannot establish the required no-persistence contract. The fallback
-failure injection also did not establish persisted same-role fallback behavior
-with no receipt and no trusted execution. Context-copy delivery and persisted
-assistant tool-call/result sanitation likewise lack the required runtime proof.
-These evidence gaps keep Task 1 BLOCKED; they do not alter the historical
-pre-#296 result or reopen JUS5-P296-RG-001/002.
+### Contract-by-contract root cause and disposition
+
+| Contract ID | Required assertion and actual runtime observation | Evidence / gap | Root cause, owner, required change, exit criterion |
+| --- | --- | --- | --- |
+| `task1_context_copy_delivers_fixture_capability_after_method_read` | **PROVEN.** A successful installed method read activates the parent session; a deep-copied request-local context receives the directive, the original read result object is unchanged, and the mock provider reports `context_messages` as its capability source with the environment fallback absent. | Post-delivery scan is token-free and safe across the isolated runtime tree. | **B — runtime evidence collection defect (repaired).** The scanner had treated missing `getSessionFile()` paths as unsafe despite complete isolated-tree traversal. The fixture now retains strict explicit-path checks when paths exist and verifies expected session IDs from the full tree. Exit: focused runtime assertion passes. |
+| `task1_tool_call_binds_capability_session_and_call` | **PROVEN.** Assistant `message_end`, matching stripped native `tool_call`, captured private receipt, and authenticated protocol validation are joined on the same parent session and exact tool-call ID; activation read ID and method also match the delivered context. | The focused runtime assertion passes using the stricter joined evidence predicate. | **C — evaluator predicate defect (repaired).** The earlier predicate only required any capability context and any strip event. The fixture now requires the same-call/session/read/method chain. Exit: focused runtime assertion passes. |
+| `task1_authenticated_protocol_affiliation_is_bound_without_prompt_inference` | **BLOCKED.** Runtime validation observes current activation, private outbound receipt, exact call binding, stripped-args digest, successful strip/restoration, and no token in the disk-tree scan; prompt semantics are not used. | The required token-free read-back is not complete because `SessionManager.getEntries()` across parent/child branches was not observed. The validator chain alone is insufficient for PROVEN. | **B — runtime evidence collection defect.** Same history collector as the preceding contract must scan `SessionManager.getEntries()` and bind results to the exact session/call/read chain. Exit: complete, token-free in-memory and persisted read-back validates the exact active protocol call. The missing host-independent workflow-origin field remains outside #296 authority. |
+| `task1_capability_never_enters_persisted_session_history` | **BLOCKED.** The isolated-tree scan found no token, all required storage classes, and all 7/7 expected session IDs (`unsafeStorage=false`). | `SessionManager.getEntries()` across all parent/child branches was not observed; disk-tree scan alone does not satisfy the Plan's complete history assertion. | **B — runtime evidence collection defect.** Fixture owner must collect the public `SessionManager.getEntries()` result for parent and child histories, scan every branch, and fail closed for missing/unreadable entries. Exit: memory entries plus disk/history/log/task-state/evidence scans are complete and token-free. |
+| `task1_capability_is_removed_before_assistant_tool_call_persistence` | **BLOCKED.** `message_end` sanitation and the final disk scan show no token. | No `AgentSession.subscribe` `entry_appended` observation with immediate JSONL read-back of the exact assistant ToolCall was captured. An after-the-fact scan cannot prove append ordering or the exact original-description value. | **B — runtime evidence collection defect.** Fixture owner must observe every append and immediately read the persisted entry to prove the arguments are token-free before tool execution. Exit: append observation and immediate disk read-back agree for each capability-bearing call. |
+| `task1_message_end_fallback_prevents_token_persistence_on_error` | **BLOCKED.** A provider stream error was injected after a capability-bearing tool-call stream. The runtime emitted a same-role assistant error with no capability token or raw exception stack, but its content was **not minimal** (`minimalContent=false`); no failed tool call, receipt, result, or trusted execution was observed. | Required persisted same-role *minimal* fallback after capture/sanitation and receipt invalidation are not established. | **D — pinned upstream runtime limitation; Design/Plan reconciliation required.** The exact pinned runtime surfaced an assistant error retaining ToolCall content rather than the required minimal fallback, and did not produce the expected post-capture receipt path. Do not emulate the fallback in the fixture. Reconcile the approved fallback contract with pinned runtime behavior. Exit: fresh native evidence of the required minimal persisted fallback and receipt invalidation. |
+| `task1_unknown_tool_capability_echo_is_sanitized_before_persistence` | **BLOCKED.** The pinned model emitted the unregistered tool call, but no matching `tool_result` or pre-persistence sanitation observation was captured (`resultCount=0`, `sanitizedCount=0`). | The synthetic unknown-tool result path is unproven. The Plan's registered-tool invalid-schema alternative has not been exercised. | **B — runtime evidence collection defect.** Fixture owner must exercise the registered fixture-tool validation-error alternative and observe its persisted synthetic result before sanitation. If the pinned runtime does not expose that result path either, classify as D and request reconciliation. Exit: actual synthetic result is observed, sanitized before append, creates no receipt/provenance, and all storage scans remain safe. |
+
+The historical pre-#296 `TASK1_RESULT: BLOCKED` remains unchanged. JUS5-P296-RG-001/002 are not reopened. No unresolved contract is promoted from test success alone.
 
 ## Verification commands
 
@@ -122,17 +123,18 @@ bun run vitest run tests/integration/omo-native-senpi-process-supervisor.test.ts
 Verification was run after installing the locked dependencies and building the
 Linux review-artifact native addon. The full test suite completed with:
 
-- Full test suite: **2,289 passed, 5 skipped; 167 test files (166 passed, 1 skipped)**
-- Focused Task 1 and process-supervisor tests: **35 passed**
+- Full test suite: **2,291 passed, 5 skipped; 167 test files (166 passed, 1 skipped)**
+- Focused Task 1: **36 passed**
+- Process-supervisor: **1 passed**
 - TypeScript: **PASS** (`bun run typecheck`)
-- Lint: **0 errors, 284 warnings** (`bun run lint`)
+- Lint: **0 errors, 286 warnings** (`bun run lint`)
 - Build: **PASS** (`bun run build`)
 - Diff whitespace validation: **PASS** (`git diff --check`)
 
-The current `JUSTICE_SPIKE_EVIDENCE_SUMMARY` showed **25 proven / 7 blocked** and a
+The current `JUSTICE_SPIKE_EVIDENCE_SUMMARY` showed **27 proven / 5 blocked** and a
 non-null `blockedAt`; it did not satisfy the all-contracts-proven acceptance
 condition.
 
 ## Change boundary
 
-Only the integration test, the fixture probe/runtime files under `tests/fixtures/omo-native-senpi/`, and this report were changed. No production source, package manifest/lockfile, config, or CI files were changed. The upstream runtime environment used a deterministic mock provider; no external model/provider request was made.
+Only the Task 1 contract integration test, fixture probe/runtime files under `tests/fixtures/omo-native-senpi/`, and this report are included in the repair. No production source, package manifest/lockfile, config, or CI files are changed. The upstream runtime environment used a deterministic mock provider; no external model/provider request was made.

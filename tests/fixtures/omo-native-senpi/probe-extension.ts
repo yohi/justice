@@ -818,6 +818,8 @@ export default function justiceSpikeProbe(pi: {
             sessionId: sid,
             toolCallId,
             toolName,
+            activationReadToolCallId: activated.get(sid)?.sourceToolCallId ?? null,
+            activationMethod: activated.get(sid)?.method ?? null,
             hadCapability,
             hadOriginalDescription: stripped.originalDescription !== null,
             forcedFailureArmed: isFallbackProbe && stripped.strippedCapability,
@@ -848,6 +850,14 @@ export default function justiceSpikeProbe(pi: {
       // exception stack, and re-scan storage after the persisted fallback append.
       const errorMessageValue = (message as { readonly errorMessage?: unknown }).errorMessage;
       const errorText = typeof errorMessageValue === "string" ? errorMessageValue : "";
+      if (errorText === "justice-spike-provider-stream-failure" && forcedFailureToolCallId !== null) {
+        record({
+          event: "message_end_forced_failure_injected",
+          sessionId: sid,
+          toolCallId: forcedFailureToolCallId,
+          failureSurface: "provider_stream_error",
+        });
+      }
       const minimalContent =
         !Array.isArray(content) ||
         content.every(
@@ -891,14 +901,6 @@ export default function justiceSpikeProbe(pi: {
           );
         }
       }
-    }
-    if (forcedFailureToolCallId !== null) {
-      forcedFailureToolCallIds.add(forcedFailureToolCallId);
-      record({ event: "message_end_forced_failure_injected", sessionId: sid, toolCallId: forcedFailureToolCallId });
-      // Force a real processing failure AFTER capture/sanitation of the capability-bearing
-      // assistant message. The runtime converts this into its same-role minimal error
-      // fallback; no tool executes for this call.
-      throw new Error("justice-spike-forced-processing-failure");
     }
   });
 
@@ -1048,6 +1050,8 @@ export default function justiceSpikeProbe(pi: {
             privateOutboundReceiptValidated: true,
             exactCallBindingValidated: true,
             strippedArgsDigestValidated: true,
+            method: validation.provenance.evidence.method,
+            issuedFromReadToolCallId: validation.provenance.evidence.issuedFromReadToolCallId,
             capabilityDigest: validation.provenance.evidence.capabilityDigest,
             strippedTaskArgsDigest: validation.provenance.evidence.callBindingEvidence.strippedTaskArgsDigest,
             promptSemanticsUsedAsAuthority: false,

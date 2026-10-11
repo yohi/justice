@@ -552,7 +552,38 @@ async function main(): Promise<void> {
         storageScanCount: storageScanRows.length,
         fallbackInjectionCount: rows.filter((row) => row.event === "message_end_forced_failure_injected").length,
         fallbackObservedCount: rows.filter((row) => row.event === "message_end_error_fallback_observed").length,
+        fallbackEvidence: rows
+          .filter((row) => row.event === "message_end_error_fallback_observed")
+          .map((row) => ({
+            sameRoleFallback: row.sameRoleFallback,
+            minimalContent: row.minimalContent,
+            stopReasonObserved: row.stopReasonObserved,
+            errorMessagePresent: row.errorMessagePresent,
+            rawExceptionStack: row.rawExceptionStack,
+            hadCapabilityToken: row.hadCapabilityToken,
+          })),
+        failedCallEvidence: (() => {
+          const callId = rows.find((row) => row.event === "message_end_forced_failure_injected")?.toolCallId;
+          if (typeof callId !== "string") return null;
+          return {
+            toolCallCount: rows.filter((row) => row.event === "tool_call" && String(row.toolCallId) === callId).length,
+            blockedCount: rows.filter((row) => row.event === "tool_call" && String(row.toolCallId) === callId && row.forcedFailureBlock === true).length,
+            resultCount: rows.filter((row) => row.event === "tool_result" && String(row.toolCallId) === callId).length,
+            runtimeTaskIdentityCount: rows.filter((row) => row.event === "runtime_task_identity_observed" && String(row.toolCallId) === callId).length,
+            outboundReceiptCount: rows.filter((row) => row.event === "capability_outbound_captured" && String(row.toolCallId) === callId).length,
+          };
+        })(),
         unknownToolEmissionCount: rows.filter((row) => row.event === "unknown_tool_model_emitted").length,
+        unknownToolEvidence: (() => {
+          const callIds = new Set(
+            rows.filter((row) => row.event === "unknown_tool_model_emitted").map((row) => String(row.toolCallId)),
+          );
+          return {
+            callCount: callIds.size,
+            resultCount: rows.filter((row) => row.event === "tool_result" && callIds.has(String(row.toolCallId))).length,
+            sanitizedCount: rows.filter((row) => row.event === "tool_result_sanitized" && callIds.has(String(row.toolCallId))).length,
+          };
+        })(),
         activationMethods: Array.from(
           new Set(rows.filter((row) => row.event === "activation_evidence").map((row) => String(row.method))),
         ).sort(),

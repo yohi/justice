@@ -70,10 +70,10 @@ describe("Justice v5 OmO Native / Senpi / Superpowers evidence spike", () => {
 
   // Revised A–K capability / pre-spawn protocol contracts.
   it("task1_context_copy_delivers_fixture_capability_after_method_read", () =>
-    blockedContract("task1_context_copy_delivers_fixture_capability_after_method_read"));
+    runtimeContract("task1_context_copy_delivers_fixture_capability_after_method_read"));
   it("task1_model_transports_capability_in_description", () => runtimeContract("task1_model_transports_capability_in_description"));
   it("task1_tool_call_binds_capability_session_and_call", () =>
-    blockedContract("task1_tool_call_binds_capability_session_and_call"));
+    runtimeContract("task1_tool_call_binds_capability_session_and_call"));
   it("task1_probe_strips_capability_before_omo_execution", () => runtimeContract("task1_probe_strips_capability_before_omo_execution"));
   it("task1_host_session_child_receives_pre_spawn_contract_before_output", () =>
     runtimeContract("task1_host_session_child_receives_pre_spawn_contract_before_output"));
@@ -118,10 +118,39 @@ describe("Justice v5 OmO Native / Senpi / Superpowers evidence spike", () => {
     runtimeContract("task1_non_task_tool_capability_echo_is_blocked_before_execution"));
   it("task1_unknown_tool_capability_echo_is_sanitized_before_persistence", () =>
     blockedContract("task1_unknown_tool_capability_echo_is_sanitized_before_persistence"));
-  it("reports Task 1 BLOCKED while any required contract remains unproven", () => {
+  it("reports the five runtime contracts lacking required observable proof", () => {
     expect(summary.task1Result).toBe("BLOCKED");
-    expect(summary.blockedContracts).toContain("task1_message_end_fallback_prevents_token_persistence_on_error");
-    expect(summary.blockedContracts).toContain("task1_capability_never_enters_persisted_session_history");
+    expect(summary.blockedContracts).toEqual([
+      "task1_authenticated_protocol_affiliation_is_bound_without_prompt_inference",
+      "task1_capability_is_removed_before_assistant_tool_call_persistence",
+      "task1_capability_never_enters_persisted_session_history",
+      "task1_message_end_fallback_prevents_token_persistence_on_error",
+      "task1_unknown_tool_capability_echo_is_sanitized_before_persistence",
+    ]);
+  });
+  it("proves token-free storage coverage from the complete isolated runtime tree and observed session IDs", () => {
+    const finalScan = summary.observed?.harnessFinalScan as
+      | {
+          readonly tokenFound?: unknown;
+          readonly unsafeStorage?: unknown;
+          readonly classesObserved?: unknown;
+          readonly sessionIdsRequired?: unknown;
+          readonly sessionIdsObserved?: unknown;
+        }
+      | undefined;
+
+    expect(finalScan).toMatchObject({
+      tokenFound: false,
+      unsafeStorage: false,
+      sessionIdsRequired: expect.any(Number),
+      sessionIdsObserved: finalScan?.sessionIdsRequired,
+    });
+    expect(finalScan?.sessionIdsRequired).toBeGreaterThanOrEqual(2);
+    expect(finalScan?.classesObserved).toEqual(expect.arrayContaining(["sessions", "task_state", "logs", "evidence"]));
+  });
+  it("observes the actual runtime's same-role error fallback after the injected stream failure", () => {
+    expect(summary.observed?.fallbackInjectionCount).toBe(1);
+    expect(summary.observed?.fallbackObservedCount).toBe(1);
   });
   it("does not replay the final scripted processing-failure probe indefinitely", () => {
     expect(summary.observed?.fallbackInjectionCount).toBe(1);

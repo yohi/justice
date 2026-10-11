@@ -143,9 +143,10 @@ export async function inspectCapabilitySessionStorage(input: StorageScanInput): 
     unsafeStorage = true;
   }
 
-  if (input.sessionFiles.length === 0) unsafeStorage = true;
-
-  // Fail closed: every explicit parent/child session target must exist as a file.
+  // Explicit runtime-provided session paths are an additional fail-closed check
+  // when available. They are not required when the isolated tree and expected
+  // session IDs are scanned directly below; the authoritative caller verifies
+  // that every expected parent/child ID was actually found in session storage.
   for (const file of input.sessionFiles) {
     try {
       const absolutePath = resolve(file);

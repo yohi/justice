@@ -53,7 +53,6 @@ export function buildTask1RuntimeMockScript(
           "JUSTICE_CONTINUATION_STEER\nReply CONTINUATION_DONE and keep working in the same task.",
       },
     } as MockStep,
-    fallbackProbeStep() as MockStep,
     {
       type: "tool_call",
       name: "task",
@@ -101,6 +100,7 @@ export function buildTask1RuntimeMockScript(
     unknownCapabilityEchoStep(fixtureEnvelope) as MockStep,
     compactionTriggerStep() as MockStep,
     staleReplayStep() as MockStep,
+    fallbackProbeStep() as MockStep,
     { type: "text", text: "SPIKE_PARENT_DONE" },
   ];
 

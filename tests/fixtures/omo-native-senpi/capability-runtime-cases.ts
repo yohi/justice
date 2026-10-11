@@ -208,7 +208,57 @@ export function evaluateCapabilityRuntimeContracts(
     prow.some((row) => row.event === "tool_call_capability_stripped" && bool(row.hadCapabilityMarker)) &&
     capabilitySourcedFromContext &&
     input.capabilityEnvVarAbsent === true;
-  const capabilityBound = capabilityStrip !== undefined && capabilityContextDelivered;
+  const exactCapabilityCallBinding = prow.some((assistantCall) => {
+    const callId = assistantCall.toolCallId;
+    const readCallId = assistantCall.activationReadToolCallId;
+    const method = assistantCall.activationMethod;
+    if (
+      assistantCall.event !== "message_end_sanitized" ||
+      assistantCall.toolName !== "task" ||
+      assistantCall.hadCapability !== true ||
+      typeof callId !== "string" ||
+      typeof readCallId !== "string" ||
+      typeof method !== "string"
+    ) {
+      return false;
+    }
+    const contextReadMatches = contextCopyDeliveries.some(
+      (row) => row.toolCallId === readCallId && row.method === method && row.readResultMessageFound === true,
+    );
+    const activationMatches = rows.some(
+      (row) =>
+        row.event === "activation_evidence" &&
+        row.sessionId === parentSessionId &&
+        String(row.observedCallOrInputId) === readCallId &&
+        row.method === method,
+    );
+    const callWasStripped = prow.some(
+      (row) =>
+        row.event === "tool_call_capability_stripped" &&
+        row.toolName === "task" &&
+        row.toolCallId === callId &&
+        row.hadCapability === true,
+    );
+    const receiptWasCaptured = prow.some(
+      (row) =>
+        row.event === "capability_outbound_captured" &&
+        row.toolCallId === callId &&
+        row.outboundKind === "captured",
+    );
+    const provenanceWasValidated = prow.some(
+      (row) =>
+        row.event === "authenticated_protocol_affiliation_observed" &&
+        row.toolCallId === callId &&
+        row.method === method &&
+        row.issuedFromReadToolCallId === readCallId &&
+        row.activationBindingValidated === true &&
+        row.privateOutboundReceiptValidated === true &&
+        row.exactCallBindingValidated === true &&
+        row.strippedArgsDigestValidated === true,
+    );
+    return contextReadMatches && activationMatches && callWasStripped && receiptWasCaptured && provenanceWasValidated;
+  });
+  const capabilityBound = capabilityStrip !== undefined && capabilityContextDelivered && exactCapabilityCallBinding;
 
   const rejections = rows.filter((row) => row.event === "capability_presentation_rejected");
   const wrongSessionRejected = rejections.some(
@@ -282,7 +332,17 @@ export function evaluateCapabilityRuntimeContracts(
       row.explicitSessionFilesObserved === row.explicitSessionFilesRequired &&
       typeof row.sessionIdsRequired === "number" &&
       row.sessionIdsRequired >= 2 &&
-      row.sessionIdsObserved === row.sessionIdsRequired,
+      row.sessionIdsObserved === row.sessionIdsRequired &&
+      typeof row.sessionManagerEntriesRequired === "number" &&
+      row.sessionManagerEntriesRequired > 0 &&
+      row.sessionManagerEntriesObserved === row.sessionManagerEntriesRequired,
+  );
+  const assistantToolCallAppendObserved = prow.some(
+    (row) =>
+      row.event === "assistant_tool_call_append_observed" &&
+      row.entryAppendedObserved === true &&
+      row.sessionFileReadBackMatched === true &&
+      row.capabilityAbsentFromPersistedArguments === true,
   );
   const tokenFreeReadBackValidated =
     allStorageScansSafe && parentAndChildSessionStarted && finalScanClassesComplete;
@@ -442,7 +502,7 @@ export function evaluateCapabilityRuntimeContracts(
       task1_capability_never_enters_persisted_session_history:
         allStorageScansSafe && finalScanClassesComplete,
       task1_capability_is_removed_before_assistant_tool_call_persistence:
-        capabilityStrip !== undefined && allStorageScansSafe,
+        capabilityStrip !== undefined && allStorageScansSafe && assistantToolCallAppendObserved,
       task1_message_end_fallback_prevents_token_persistence_on_error:
         messageEndFallbackPreventsTokenPersistence,
       task1_unsupported_in_process_and_nested_calls_remain_untrusted:
@@ -519,6 +579,7 @@ export function fallbackProbeStep(): MockStep {
       max_depth: 1,
       maxDepth: 1,
     },
+    failStreamAfterToolCall: true,
   };
 }
 

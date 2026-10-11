@@ -3,7 +3,13 @@ import { basename, dirname, join } from "node:path";
 
 export type MockStep =
   | { readonly type: "text"; readonly text: string }
-  | { readonly type: "tool_call"; readonly name: string; readonly id?: string; readonly arguments: Readonly<Record<string, unknown>> };
+  | {
+      readonly type: "tool_call";
+      readonly name: string;
+      readonly id?: string;
+      readonly arguments: Readonly<Record<string, unknown>>;
+      readonly failStreamAfterToolCall?: boolean;
+    };
 
 export type MockScript = {
   readonly parentSteps: readonly MockStep[];
@@ -298,6 +304,16 @@ function localStream(
         stream.push({ type: "toolcall_start", contentIndex: 0, partial: { ...result, content: [{ ...toolCall, arguments: {} }] } });
         stream.push({ type: "toolcall_delta", contentIndex: 0, delta: JSON.stringify(step.arguments), partial: result });
         stream.push({ type: "toolcall_end", contentIndex: 0, toolCall, partial: result });
+        if (step.failStreamAfterToolCall === true) {
+          const failed = {
+            ...result,
+            stopReason: "error",
+            errorMessage: "justice-spike-provider-stream-failure",
+          };
+          stream.push({ type: "error", reason: "error", error: failed });
+          stream.end(failed);
+          return;
+        }
       }
       stream.push({ type: "done", reason: result.stopReason, message: result });
       stream.end(result);
