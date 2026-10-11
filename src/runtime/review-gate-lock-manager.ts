@@ -16,6 +16,36 @@ export interface ReviewGateLockManagerOptions {
   readonly provider?: LinuxReviewGateProvider | null;
 }
 
+const witnessLockStates = new WeakMap<ReviewGateLockManager, { gateCount: number }>();
+export function assertWitnessAdmissionOrder(manager: ReviewGateLockManager): void {
+  const state = witnessLockStates.get(manager);
+  if (state === undefined || state.gateCount !== 0)
+    throw new Error("review_gate_witness_lock_order");
+}
+
+export async function withWitnessScopeGateLocks<T>(
+  manager: ReviewGateLockManager,
+  ids: Readonly<{ scopeIds: readonly string[]; gateIds: readonly string[] }>,
+  run: () => Promise<T>,
+): Promise<T> {
+  const held: ReviewGateLockHandle[] = [];
+  try {
+    for (const scope of [...new Set(ids.scopeIds)].sort()) {
+      const lock = await manager.acquireScopeLock(scope);
+      if (lock === "occupied") throw new Error("review_gate_witness_busy_retryable");
+      held.push(lock);
+    }
+    for (const gate of [...new Set(ids.gateIds)].sort()) {
+      const lock = await manager.acquireGateLock(gate);
+      if (lock === "occupied") throw new Error("review_gate_witness_busy_retryable");
+      held.push(lock);
+    }
+    return await run();
+  } finally {
+    for (const lock of held.reverse()) lock.release();
+  }
+}
+
 type InProcessLockState = {
   readonly scopeLocks: Map<string, ReviewGateLockHandle>;
   readonly gateLocks: Map<string, ReviewGateLockHandle>;
@@ -32,6 +62,7 @@ export function createReviewGateLockManager(
   workspaceRoot: string,
   options: ReviewGateLockManagerOptions = {},
 ): ReviewGateLockManager {
+  const witnessLockState = { gateCount: 0 };
   const provider =
     options.provider === undefined
       ? createLinuxReviewGateProvider(workspaceRoot)
@@ -42,6 +73,7 @@ export function createReviewGateLockManager(
     let closed = false;
     const acquire = async (
       operation: () => Promise<ReviewGateLockHandle | "occupied">,
+      isGate = false,
     ): Promise<ReviewGateLockHandle | "occupied"> => {
       if (closed) throw new Error("review_gate_lock_manager_closed");
       const handle = await operation();
@@ -52,10 +84,12 @@ export function createReviewGateLockManager(
           if (released) return;
           released = true;
           heldHandles.delete(tracked);
+          if (isGate) witnessLockState.gateCount -= 1;
           handle.release();
         },
         verifyCloexec: () => handle.verifyCloexec(),
       });
+      if (isGate) witnessLockState.gateCount += 1;
       if (closed) {
         tracked.release();
         throw new Error("review_gate_lock_manager_closed");
@@ -63,9 +97,9 @@ export function createReviewGateLockManager(
       heldHandles.add(tracked);
       return tracked;
     };
-    return {
+    const manager: ReviewGateLockManager = {
       acquireScopeLock: (reviewScopeId) => acquire(() => provider.acquireScopeLock(reviewScopeId)),
-      acquireGateLock: (gateId) => acquire(() => provider.acquireGateLock(gateId)),
+      acquireGateLock: (gateId) => acquire(() => provider.acquireGateLock(gateId), true),
       close: () => {
         if (closed) return;
         closed = true;
@@ -74,6 +108,8 @@ export function createReviewGateLockManager(
         if (ownsProvider) provider.close();
       },
     };
+    witnessLockStates.set(manager, witnessLockState);
+    return manager;
   }
 
   if (options.provider !== null) throw new Error("review_gate_lock_provider_unavailable");
@@ -95,6 +131,7 @@ export function createReviewGateLockManager(
           released = true;
           heldHandles.delete(handle);
           map.delete(id);
+          if (map === gateLocks) witnessLockState.gateCount -= 1;
         }
       },
       verifyCloexec: () => true,
@@ -113,6 +150,7 @@ export function createReviewGateLockManager(
     const handle = makeHandle(map, id);
     map.set(id, handle);
     heldHandles.add(handle);
+    if (map === gateLocks) witnessLockState.gateCount += 1;
     return handle;
   };
 
@@ -121,7 +159,7 @@ export function createReviewGateLockManager(
     id: string,
   ): Promise<ReviewGateLockHandle | "occupied"> => acquire(map, id);
 
-  return {
+  const manager: ReviewGateLockManager = {
     acquireScopeLock: (reviewScopeId) => safeAcquire(scopeLocks, reviewScopeId),
     acquireGateLock: (gateId) => safeAcquire(gateLocks, gateId),
     close: () => {
@@ -131,6 +169,8 @@ export function createReviewGateLockManager(
       heldHandles.clear();
     },
   };
+  witnessLockStates.set(manager, witnessLockState);
+  return manager;
 }
 
 /**
