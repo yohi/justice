@@ -31,6 +31,10 @@ describe("protected canonical target writer", () => {
       originalOperationId: "terminal-1",
       oldOwner: owner.activeOwner,
       newOwner: null,
+      targets: [intent.target],
+      closingSealOperationId: "seal-close-1",
+      expectedTargetWriterFrontier: owner.protectedTargetFrontier,
+      newOwner: null,
       expectedTargetWriterFrontier: owner.protectedTargetFrontier,
       expectedGlobalTargetWriterGeneration: 1,
     };
@@ -84,6 +88,9 @@ describe("protected canonical target writer", () => {
       ...initial,
       purpose: "TERMINAL_REVOKE_ONLY",
       handoffOperationId: "close-empty",
+      newOwner: null,
+      targets: [initial.target],
+      closingSealOperationId: "seal-close-empty",
       newOwner: null,
     };
     await f.witness.prepareTerminalTargetWriterRevoke({

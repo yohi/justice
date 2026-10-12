@@ -92,10 +92,16 @@ const intent: z.ZodType<VerifiedTargetWriterHandoffIntentV1> = z.strictObject({
   purpose: z.enum(["HANDOFF", "TERMINAL_REVOKE_ONLY"]), status: handoffStatus,
   handoffOperationId: id, originalOperationId: id, scopeId: id, gateId: id, generationId: id,
   phase, roundOrdinal: ordinal, protocolFingerprint: text, target,
+  targets: z.array(target), closingSealOperationId: id.nullable(),
   oldOwner: owner.nullable(), newOwner: owner.nullable(), expectedTargetWriterFrontier: text,
   expectedGlobalTargetWriterGeneration: ordinal, expectedGateEventFrontier: text,
   expectedPreImageDigest: text, expectedGitMode: gitMode, pendingNativeEffectReference: text.nullable(),
-}).refine((value) => value.purpose === "TERMINAL_REVOKE_ONLY" ? value.newOwner === null : value.newOwner !== null);
+}).refine((value) => {
+  if (value.purpose === "TERMINAL_REVOKE_ONLY") {
+    return value.newOwner === null && value.targets.length > 0;
+  }
+  return value.newOwner !== null && value.targets.length === 0 && value.closingSealOperationId === null;
+});
 const continuation: z.ZodType<VerifiedTargetWriterHandoffContinuationV1> = z.strictObject({
   status: handoffStatus, handoffOperationId: id, originalOperationId: id, intent,
   protectedTargetFrontier: text, gateEventFrontier: text, globalTargetWriterGeneration: ordinal,

@@ -58,6 +58,8 @@ export const intentSchema = z
     roundOrdinal: ordinal,
     protocolFingerprint: digest,
     target: targetSchema,
+    targets: z.array(targetSchema),
+    closingSealOperationId: id.nullable(),
     oldOwner: owner.nullable(),
     newOwner: owner.nullable(),
     expectedTargetWriterFrontier: digest,
@@ -67,12 +69,13 @@ export const intentSchema = z
     expectedGitMode: mode,
     pendingNativeEffectReference: id.nullable(),
   })
-  .refine(
-    (value) =>
-      (value.purpose === "TERMINAL_REVOKE_ONLY"
-        ? value.newOwner === null
-        : value.newOwner !== null) && value.roundOrdinal <= (value.phase === "design" ? 5 : 3),
-  ) satisfies z.ZodType<VerifiedTargetWriterHandoffIntentV1>;
+  .refine((value) => {
+    const roundOk = value.roundOrdinal <= (value.phase === "design" ? 5 : 3);
+    if (value.purpose === "TERMINAL_REVOKE_ONLY") {
+      return value.newOwner === null && value.targets.length > 0 && roundOk;
+    }
+    return value.newOwner !== null && value.targets.length === 0 && value.closingSealOperationId === null && roundOk;
+  }) satisfies z.ZodType<VerifiedTargetWriterHandoffIntentV1>;
 const lease = z.strictObject({
   installationId: id,
   scopeId: id,

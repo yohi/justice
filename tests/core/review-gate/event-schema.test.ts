@@ -152,6 +152,8 @@ function handoffIntentPayload(): object {
     roundOrdinal: 1,
     protocolFingerprint: DIGEST,
     target: canonicalTarget(),
+    targets: [],
+    closingSealOperationId: null,
     oldOwner: owner(),
     newOwner: owner(),
     expectedTargetWriterFrontier: DIGEST,

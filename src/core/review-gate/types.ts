@@ -411,6 +411,8 @@ export type VerifiedTargetWriterHandoffIntentV1 = Readonly<{
   readonly roundOrdinal: number;
   readonly protocolFingerprint: string;
   readonly target: VerifiedCanonicalMutationTargetV1;
+  readonly targets: ReadonlyArray<VerifiedCanonicalMutationTargetV1>;
+  readonly closingSealOperationId: string | null;
   readonly oldOwner: VerifiedTargetWriterAuthorityV1["activeOwner"];
   readonly newOwner: Readonly<{
     readonly scopeId: string;

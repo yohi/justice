@@ -183,6 +183,8 @@ export async function prepareHandoffFixture(
     roundOrdinal: 1,
     protocolFingerprint: "d".repeat(64),
     target,
+    targets: [],
+    closingSealOperationId: null,
     oldOwner: prior.activeOwner,
     newOwner: {
       scopeId: "scope-1",
