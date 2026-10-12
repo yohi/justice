@@ -62,6 +62,11 @@ const contextDeliveryScanByActivation = new Set<string>();
 const envelopeBySession = new Map<string, string>();
 const forcedFailureToolCallIds = new Set<string>();
 const forcedFailureToolCallIdBySession = new Map<string, string>();
+const providerStreamErrorCallIdBySession = new Map<string, string>();
+const selectedMethodReadCallIdBySession = new Map<string, string>();
+const providerStreamErrorReplayAttemptCounts = new Map<string, number>();
+const failureEpochBySession = new Map<string, number>();
+const methodReadEpochByCallId = new Map<string, number>();
 const unknownToolCallIds = new Set<string>();
 const registeredSchemaProbeCallIds = new Set<string>();
 const syntheticSanitizedCallIds = new Set<string>();
@@ -82,6 +87,7 @@ const runtimeTaskIdsBySession = new Map<string, string>();
 const outboundInputsBySession = new Map<string, Map<string, NativeSuperpowersProvenanceInput>>();
 const failureRetiredCallIdsBySession = new Map<string, Set<string>>();
 const failureRetiredInputsBySession = new Map<string, Map<string, NativeSuperpowersProvenanceInput>>();
+const failureRetiredCapabilityIdsBySession = new Map<string, readonly string[]>();
 const replayRejections: Array<{ readonly reason: string; readonly surface: string }> = [];
 
 function recordCapabilityVerdict(
@@ -517,6 +523,12 @@ function recordSessionManagerHistoryReadback(
         sessionManagerEntries: memoryEntries,
         sessionJsonl: readFileSync(path, "utf8"),
         capabilityIds: registry.getSanitationTokens(),
+        ...(providerStreamErrorCallIdBySession.has(sid)
+          ? { providerStreamErrorCallId: providerStreamErrorCallIdBySession.get(sid) }
+          : {}),
+        ...(selectedMethodReadCallIdBySession.has(sid)
+          ? { selectedMethodReadToolCallId: selectedMethodReadCallIdBySession.get(sid) }
+          : {}),
       }),
     });
   } catch (error: unknown) {
@@ -581,6 +593,7 @@ export default function justiceSpikeProbe(pi: {
   registerFixtureSideEffectTool(pi);
   pi.on("session_start", (event, ctx) => {
     const sid = sessionId(ctx);
+    if (!failureEpochBySession.has(sid)) failureEpochBySession.set(sid, 0);
     const liveSessionFile = sessionFile(ctx);
     if (liveSessionFile) registerSessionFile(sid, liveSessionFile);
     record({ event: "session_start", sessionId: sid, sessionFile: liveSessionFile, reason: event.reason });
@@ -909,6 +922,15 @@ export default function justiceSpikeProbe(pi: {
     if (!isRecord(message)) return;
     const role = (message as { readonly role?: string }).role;
     const content = (message as { readonly content?: unknown }).content;
+    const messageEndSanitationByCallId = new Map<
+      string,
+      Readonly<{
+        readonly callbackObserved: boolean;
+        readonly tokenPresentBeforeSanitization: boolean;
+        readonly tokenAbsentAfterSanitization: boolean;
+        readonly sanitizationChanged: boolean;
+      }>
+    >();
     if (role === "assistant" && Array.isArray(content)) {
       for (let i = 0; i < content.length; i++) {
         const part = content[i];
@@ -926,6 +948,16 @@ export default function justiceSpikeProbe(pi: {
               : {};
           const rawToolCallId = (part as { readonly id?: unknown }).id;
           const toolCallId = typeof rawToolCallId === "string" ? rawToolCallId : "<unknown>";
+          const tokenPresentBeforeSanitization = containsLiteral(args, [...sanitationTokens, CAPABILITY_MARKER]);
+          const tokenAbsentAfterSanitization =
+            !containsLiteral(persistedArguments, [...sanitationTokens, CAPABILITY_MARKER]);
+          const sanitizationChanged = stripped.strippedCapability || sanitizedArguments.changed;
+          messageEndSanitationByCallId.set(toolCallId, {
+            callbackObserved: true,
+            tokenPresentBeforeSanitization,
+            tokenAbsentAfterSanitization,
+            sanitizationChanged,
+          });
           const toolName = (part as { readonly name?: string }).name;
           const prompt =
             typeof (stripped.args as { readonly prompt?: unknown }).prompt === "string"
@@ -1016,6 +1048,10 @@ export default function justiceSpikeProbe(pi: {
             hadCapability,
             hadOriginalDescription: stripped.originalDescription !== null,
             outboundReceiptCaptured: outboundKind === "captured",
+            callbackObserved: true,
+            capabilityTokenPresentBeforeSanitization: tokenPresentBeforeSanitization,
+            capabilityTokenAbsentAfterSanitization: tokenAbsentAfterSanitization,
+            sanitizationChanged,
             forcedFailureArmed: isFallbackProbe && stripped.strippedCapability,
           });
           if (isFallbackProbe && stripped.strippedCapability) {
@@ -1142,7 +1178,9 @@ export default function justiceSpikeProbe(pi: {
       const forcedFailureToolCallId = forcedFailureToolCallIdBySession.get(sid);
       if (errorText === "justice-spike-provider-stream-failure" && forcedFailureToolCallId !== undefined) {
         const failedCandidate = outboundInputsBySession.get(sid)?.get(forcedFailureToolCallId);
+        const errorSanitation = messageEndSanitationByCallId.get(forcedFailureToolCallId);
         const invalidation = invalidateFailureAuthority(sid, "provider_stream_error");
+        providerStreamErrorCallIdBySession.set(sid, forcedFailureToolCallId);
         const postFailureProvenance = failedCandidate === undefined
           ? "unavailable"
           : registry.validate(failedCandidate).provenance.kind;
@@ -1151,18 +1189,27 @@ export default function justiceSpikeProbe(pi: {
           sessionId: sid,
           toolCallId: forcedFailureToolCallId,
           failureSurface: "provider_stream_error",
+          callbackObserved: true,
+          normalMessageEndSanitationApplied:
+            errorSanitation?.callbackObserved === true &&
+            errorSanitation.tokenAbsentAfterSanitization === true,
         });
         record({
           event: "provider_stream_error_authority_invalidated",
           sessionId: sid,
           toolCallId: forcedFailureToolCallId,
           candidateReceiptCaptured: failedCandidate !== undefined,
+          candidateReceiptCount: invalidation.candidateReceiptCount,
           candidateReceiptsInvalidated:
             invalidation.candidateReceiptsInvalidated && postFailureProvenance !== "superpowers",
+          failureEpochBefore: invalidation.failureEpochBefore,
+          failureEpochAfter: invalidation.failureEpochAfter,
           liveCapabilityInvalidated: invalidation.liveCapabilityInvalidated,
           activationInvalidated: invalidation.activationInvalidated,
           postFailureProvenance,
-          normalMessageEndSanitationCompleted: true,
+          normalMessageEndSanitationCompleted:
+            errorSanitation?.callbackObserved === true &&
+            errorSanitation.tokenAbsentAfterSanitization === true,
           hostErrorShapePreserved: true,
         });
         forcedFailureToolCallIdBySession.delete(sid);
@@ -1215,6 +1262,7 @@ export default function justiceSpikeProbe(pi: {
           toolName: typeof resultToolName === "string" ? resultToolName : null,
           toolCallId: toolCallIdText,
           isError: true,
+          callbackObserved: true,
           unknownToolCall,
           registeredSchemaValidationProbe,
           capabilityTokenPresentBeforeSanitization,
@@ -1254,12 +1302,59 @@ export default function justiceSpikeProbe(pi: {
     const before = clone(event.input);
     let fixtureMutation = false;
 
+    if (event.toolName === "read") {
+      const method = methodFromReadPath((event.input as { readonly path?: unknown }).path);
+      if (method !== undefined) {
+        const readCallId = String(event.toolCallId);
+        const readEpochKey = `${sid}:${readCallId}`;
+        const existingFailureEpoch = methodReadEpochByCallId.get(readEpochKey);
+        const failureEpoch = existingFailureEpoch ?? failureEpochBySession.get(sid) ?? 0;
+        if (existingFailureEpoch === undefined) {
+          methodReadEpochByCallId.set(readEpochKey, failureEpoch);
+          record({
+            event: "selected_method_read_started",
+            sessionId: sid,
+            toolCallId: readCallId,
+            method,
+            failureEpoch,
+            source: "tool_call_hook",
+          });
+        }
+        record({
+          event: "selected_method_read_tool_call_observed",
+          sessionId: sid,
+          toolCallId: readCallId,
+          method,
+          failureEpoch,
+        });
+      }
+    }
+
     if (event.toolName === "task_send") {
       const signalPath = process.env.JUSTICE_SPIKE_TASK_SEND_SIGNAL_PATH;
       if (signalPath !== undefined) writeFileSync(signalPath, "task_send observed\n");
     }
 
     if (forcedFailureToolCallIds.has(String(event.toolCallId))) {
+      const callId = String(event.toolCallId);
+      const replayCandidate = failureRetiredInputsBySession.get(sid)?.get(callId);
+      const replayKey = `${sid}:${callId}`;
+      const replayAttemptCount = (providerStreamErrorReplayAttemptCounts.get(replayKey) ?? 0) + 1;
+      providerStreamErrorReplayAttemptCounts.set(replayKey, replayAttemptCount);
+      if (replayCandidate !== undefined && replayAttemptCount > 1) {
+        const replayValidation = registry.validate({
+          ...replayCandidate,
+          taskArgs: event.input as Record<string, unknown>,
+        });
+        record({
+          event: "provider_stream_error_receipt_replay_rejected",
+          sessionId: sid,
+          toolCallId: callId,
+          replayAttemptCount,
+          receiptReplayRejected: replayValidation.provenance.kind !== "superpowers",
+          postFailureProvenance: replayValidation.provenance.kind,
+        });
+      }
       record({
         event: "tool_call",
         sessionId: sid,
@@ -1501,7 +1596,37 @@ export default function justiceSpikeProbe(pi: {
       const method = methodFromReadPath(path);
       if (method) {
         const sourceToolCallId = String(event.toolCallId);
+        const readEpochKey = `${sid}:${sourceToolCallId}`;
+        const readFailureEpoch = methodReadEpochByCallId.get(readEpochKey);
+        const currentFailureEpoch = failureEpochBySession.get(sid) ?? 0;
         const authorizationId = resolveAuthorizationId(sid, method, sourceToolCallId);
+        if (readFailureEpoch === undefined || readFailureEpoch !== currentFailureEpoch) {
+          record({
+            event: "pre_failure_method_read_result_rejected",
+            sessionId: sid,
+            toolCallId: sourceToolCallId,
+            method,
+            readFailureEpoch: readFailureEpoch ?? null,
+            currentFailureEpoch,
+            activationRejected: true,
+            readStartedBeforeInvalidation: readFailureEpoch !== undefined && readFailureEpoch < currentFailureEpoch,
+          });
+          methodReadEpochByCallId.delete(readEpochKey);
+          return;
+        }
+        if (registry.invalidatedReasonFor(authorizationId) !== undefined) {
+          record({
+            event: "cached_activation_reissue_rejected",
+            sessionId: sid,
+            toolCallId: sourceToolCallId,
+            method,
+            failureEpoch: currentFailureEpoch,
+            invalidatedAuthorizationPresent: true,
+          });
+          activated.delete(sid);
+          methodReadEpochByCallId.delete(readEpochKey);
+          return;
+        }
         activated.set(sid, { authorizationId, method, sourceToolCallId, sourcePath: String(path) });
         const binding: NativeSuperpowersActivationBinding = {
           schemaVersion: "justice-native-superpowers-activation-binding-v1",
@@ -1520,7 +1645,10 @@ export default function justiceSpikeProbe(pi: {
           observedCallOrInputId: event.toolCallId,
           method,
           sourcePath: path,
+          failureEpochAtReadStart: readFailureEpoch,
+          failureEpochAtReadResult: currentFailureEpoch,
         });
+        methodReadEpochByCallId.delete(readEpochKey);
       }
     }
 
@@ -1663,6 +1791,16 @@ export default function justiceSpikeProbe(pi: {
   pi.on("session_shutdown", async (event, ctx) => {
     const sid = sessionId(ctx);
     recordSessionManagerHistoryReadback(sid, ctx, "session_shutdown");
+    const retiredCapabilityIds = failureRetiredCapabilityIdsBySession.get(sid) ?? [];
+    const sanitationTokens = new Set(registry.getSanitationTokens());
+    record({
+      event: "failure_retired_sanitation_coverage_at_shutdown",
+      sessionId: sid,
+      retiredCapabilityCount: retiredCapabilityIds.length,
+      retiredTokensStillSanitized:
+        retiredCapabilityIds.length > 0 && retiredCapabilityIds.every((id) => sanitationTokens.has(id)),
+      afterSessionManagerReadback: true,
+    });
     registry.invalidateSession(sid, "session_shutdown");
     const reason = typeof event.reason === "string" ? event.reason : "<unknown>";
     restartInvalidations.push({ sessionId: sid, reason });
@@ -1685,31 +1823,82 @@ type FailureInvalidationObservation = Readonly<{
   readonly candidateReceiptsInvalidated: boolean;
   readonly liveCapabilityInvalidated: boolean;
   readonly activationInvalidated: boolean;
+  readonly failureEpochBefore: number;
+  readonly failureEpochAfter: number;
 }>;
 
 function invalidateFailureAuthority(
   sid: string,
   reason: FailureInvalidationReason,
 ): FailureInvalidationObservation {
+  const failureEpochBefore = failureEpochBySession.get(sid) ?? 0;
+  const failureEpochAfter = failureEpochBefore + 1;
+  failureEpochBySession.set(sid, failureEpochAfter);
+  const previousActivation = activated.get(sid);
+  if (previousActivation !== undefined) {
+    selectedMethodReadCallIdBySession.set(sid, previousActivation.sourceToolCallId);
+  }
   const capability = registryBySession.get(sid);
+  const liveCapabilityWasValidBeforeFailure =
+    capability !== undefined && registry.hasCapabilityForAuthorization(capability.authorizationId);
   const candidates = outboundInputsBySession.get(sid);
   const candidateInputs = Array.from(candidates?.values() ?? []);
+  const retiredCapabilityIds = Array.from(capabilityByActivation.values())
+    .filter((candidate) => candidate.sessionId === sid)
+    .map((candidate) => candidate.capabilityId);
+  if (capability !== undefined && !retiredCapabilityIds.includes(capability.capabilityId)) {
+    retiredCapabilityIds.push(capability.capabilityId);
+  }
   if (capability !== undefined) registry.invalidateCapability(capability.authorizationId, reason);
   registry.invalidateCapabilityForLeak(sid);
   activated.delete(sid);
   registryBySession.delete(sid);
   failureRetiredCallIdsBySession.set(sid, new Set(candidates?.keys() ?? []));
   if (candidates !== undefined) failureRetiredInputsBySession.set(sid, new Map(candidates));
+  failureRetiredCapabilityIdsBySession.set(sid, retiredCapabilityIds);
+  const candidateReplayValidations = candidateInputs.map((input) => {
+    const provenance = registry.validate(input).provenance.kind;
+    const receiptReplayRejected = provenance !== "superpowers";
+    if (receiptReplayRejected) {
+      record({
+        event:
+          reason === "provider_stream_error"
+            ? "provider_stream_error_receipt_replay_rejected"
+            : "justice_sanitizer_failure_receipt_replay_rejected",
+        sessionId: sid,
+        toolCallId: input.parentToolCallId,
+        receiptCapturedBeforeFailure: true,
+        receiptReplayRejected,
+        postFailureProvenance: provenance,
+        failureEpochBefore,
+        failureEpochAfter,
+      });
+    }
+    return receiptReplayRejected;
+  });
   const candidateReceiptsInvalidated =
-    candidateInputs.length > 0 &&
-    candidateInputs.every((input) => registry.validate(input).provenance.kind !== "superpowers");
+    candidateInputs.length > 0 && candidateReplayValidations.every((rejected) => rejected);
   outboundInputsBySession.delete(sid);
+  record({
+    event: "failure_authority_invalidated",
+    sessionId: sid,
+    failureSurface: reason,
+    liveCapabilityWasValidBeforeFailure,
+    activationWasActiveBeforeFailure: previousActivation !== undefined,
+    invalidatedActivationReadToolCallId: previousActivation?.sourceToolCallId ?? null,
+    invalidatedCapabilityReadToolCallId: capability?.issuedFromReadToolCallId ?? null,
+    candidateReceiptCount: candidateInputs.length,
+    failureEpochBefore,
+    failureEpochAfter,
+  });
   return {
     candidateReceiptCount: candidateInputs.length,
     candidateReceiptsInvalidated,
     liveCapabilityInvalidated:
       capability !== undefined && !registry.hasCapabilityForAuthorization(capability.authorizationId),
     activationInvalidated: !activated.has(sid),
+    failureEpochBefore,
+    failureEpochAfter,
   };
 }
 
@@ -1735,7 +1924,18 @@ function issueCapabilityForActivation(
   const cacheKey = `${sid}:${activation.sourceToolCallId}`;
   const cached = capabilityByActivation.get(cacheKey);
   if (cached) {
-    return registry.invalidatedReasonFor(cached.authorizationId) === undefined ? cached : null;
+    if (registry.invalidatedReasonFor(cached.authorizationId) !== undefined) {
+      record({
+        event: "cached_activation_reissue_rejected",
+        sessionId: sid,
+        toolCallId: activation.sourceToolCallId,
+        method: activation.method,
+        failureEpoch: failureEpochBySession.get(sid) ?? 0,
+        invalidatedAuthorizationPresent: true,
+      });
+      return null;
+    }
+    return cached;
   }
   const binding: NativeSuperpowersActivationBinding = {
     schemaVersion: "justice-native-superpowers-activation-binding-v1",
@@ -1753,6 +1953,13 @@ function issueCapabilityForActivation(
   issuedCapabilityIds.add(issuedFixture.capabilityId);
   registryBySession.set(sid, issuedFixture);
   envelopeBySession.set(sid, encodeTaskCapabilityEnvelope(issuedFixture.capabilityId, null));
+  record({
+    event: "capability_issued_after_method_read",
+    sessionId: sid,
+    toolCallId: activation.sourceToolCallId,
+    method: activation.method,
+    failureEpoch: failureEpochBySession.get(sid) ?? 0,
+  });
   return issuedFixture;
 }
 

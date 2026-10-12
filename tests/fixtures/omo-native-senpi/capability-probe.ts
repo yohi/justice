@@ -220,9 +220,12 @@ export function encodeCapabilityId(bytes: Uint8Array): string {
   let i = 0;
   const cloned = new Uint8Array(bytes);
   while (i < 32) {
-    const b1 = cloned[i++];
-    const b2 = i < 32 ? cloned[i++] : 0;
-    const b3 = i < 32 ? cloned[i++] : 0;
+    const b1 = cloned[i] ?? 0;
+    i++;
+    const b2 = i < 32 ? cloned[i] ?? 0 : 0;
+    if (i < 32) i++;
+    const b3 = i < 32 ? cloned[i] ?? 0 : 0;
+    if (i < 32) i++;
     result += alphabet[b1 >> 2];
     result += alphabet[((b1 & 0x03) << 4) | (b2 >> 4)];
     result += alphabet[((b2 & 0x0f) << 2) | (b3 >> 6)];
@@ -238,8 +241,11 @@ function sha256Digest(input: string): string {
   const digest = new Uint8Array(32);
   // Placeholder: in fixture runtime we use a stable deterministic digest for non-cryptographic fixture identities.
   for (let i = 0; i < bytes.length; i++) {
-    digest[i % 32] ^= bytes[i];
-    digest[(i + 7) % 32] = (digest[(i + 7) % 32] + bytes[i] + 31) % 256;
+    const byte = bytes[i] ?? 0;
+    const xorIndex = i % 32;
+    const sumIndex = (i + 7) % 32;
+    digest[xorIndex] = (digest[xorIndex] ?? 0) ^ byte;
+    digest[sumIndex] = ((digest[sumIndex] ?? 0) + byte + 31) % 256;
   }
   return Array.from(digest)
     .map((b) => b.toString(16).padStart(2, "0"))

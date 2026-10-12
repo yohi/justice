@@ -8,6 +8,7 @@ import {
 } from "./capability-probe";
 import { REQUIRED_STORAGE_CLASSES } from "./capability-session-storage";
 import { areSessionManagerHistoriesComplete } from "./session-history-readback";
+import { evaluateSyntheticToolResultEvidence } from "./synthetic-result-evidence";
 import type { MockStep } from "./task-e2e-mock-provider";
 
 /**
@@ -526,35 +527,18 @@ export function evaluateCapabilityRuntimeContracts(
           row.capabilityAbsentFromArguments === true,
       ),
   );
-  const resultHasLinkedMessageEndSanitization = (result: EvidenceRow): boolean => {
-    if (
-      typeof result.sessionId !== "string" ||
-      typeof result.toolCallId !== "string"
-    ) {
-      return false;
-    }
-    const linkedMessageEndObservations = rows.filter(
-      (row) =>
-        row.event === "synthetic_tool_result_message_end_observed" &&
-        row.sanitizerSource === "Senpi message_end callback" &&
-        row.sessionId === result.sessionId &&
-        row.toolCallId === result.toolCallId &&
-        row.isError === true &&
-        (row.unknownToolCall === true || row.registeredSchemaValidationProbe === true) &&
-        row.capabilityTokenAbsentAfterSanitization === true &&
-        (row.capabilityTokenPresentBeforeSanitization === false || row.sanitizationChanged === true),
-    );
-    if (linkedMessageEndObservations.length !== 1) return false;
-    const [observation] = linkedMessageEndObservations;
-    return typeof result.messageId !== "string" ||
-      typeof observation?.messageId !== "string" ||
-      observation.messageId === result.messageId;
-  };
   const unknownToolSyntheticResultRows = rows.filter(
     (row) =>
       row.event === "rpc_synthetic_tool_result_append_observed" &&
       typeof row.toolCallId === "string" &&
       unknownToolCallIds.has(row.toolCallId),
+  );
+  const unknownToolSyntheticEvidence = unknownToolSyntheticResultRows.map((row) =>
+    evaluateSyntheticToolResultEvidence({
+      syntheticResult: row,
+      messageEndObservations: rows,
+      resultKind: "unknown_tool",
+    }),
   );
   const unknownToolSyntheticSanitized =
     unknownToolCallIds.size > 0 &&
@@ -562,14 +546,13 @@ export function evaluateCapabilityRuntimeContracts(
     Array.from(unknownToolCallIds).every((toolCallId) =>
       unknownToolSyntheticResultRows.some((row) => row.toolCallId === toolCallId),
     ) &&
-    unknownToolSyntheticResultRows.every(
-      (row) =>
-        row.entryAppendedObserved === true &&
-        row.isError === true &&
-        row.immediateJsonlReadBackMatched === true &&
-        row.capabilityAbsentFromResult === true &&
-        resultHasLinkedMessageEndSanitization(row),
-    );
+    unknownToolSyntheticEvidence.length === unknownToolSyntheticResultRows.length &&
+    unknownToolSyntheticEvidence.every((evidence) => evidence.sanitationBoundaryProven);
+  const unknownToolTokenRemovalProven =
+    unknownToolCallIds.size > 0 &&
+    unknownToolSyntheticEvidence.length === unknownToolSyntheticResultRows.length &&
+    unknownToolSyntheticEvidence.length > 0 &&
+    unknownToolSyntheticEvidence.every((evidence) => evidence.tokenRemovalProven);
   const noReceiptOrProvenanceForUnknownTool = Array.from(unknownToolCallIds).every(
     (id) =>
       !rows.some((row) => row.event === "capability_outbound_captured" && String(row.toolCallId) === id) &&
@@ -604,6 +587,11 @@ export function evaluateCapabilityRuntimeContracts(
     !rows.some(
       (row) => row.event === "task_provenance_validated" && row.toolCallId === invalidSchemaToolCallId,
     );
+  const registeredSchemaEvidence = evaluateSyntheticToolResultEvidence({
+    syntheticResult: invalidSchemaSyntheticResult,
+    messageEndObservations: rows,
+    resultKind: "registered_schema_validation",
+  });
   const registeredSchemaValidationAlternativeProven =
     invalidSchemaAssistantCall?.subscriptionEvent === "entry_appended" &&
     invalidSchemaAssistantCall.sessionFileReadBackMatched === true &&
@@ -612,7 +600,7 @@ export function evaluateCapabilityRuntimeContracts(
     invalidSchemaSyntheticResult.isError === true &&
     invalidSchemaSyntheticResult.immediateJsonlReadBackMatched === true &&
     invalidSchemaSyntheticResult.capabilityAbsentFromResult === true &&
-    resultHasLinkedMessageEndSanitization(invalidSchemaSyntheticResult) &&
+    registeredSchemaEvidence.sanitationBoundaryProven &&
     !invalidSchemaToolExecuted &&
     invalidSchemaNoReceiptOrProvenance &&
     postUnknownToolScanSafe;
@@ -674,6 +662,9 @@ export function evaluateCapabilityRuntimeContracts(
       noReceiptOrProvenanceForUnknownTool,
       postUnknownToolScanSafe,
       unknownToolSyntheticSanitized,
+      unknownToolTokenRemovalProven,
+      registeredSchemaSanitationBoundaryProven: registeredSchemaEvidence.sanitationBoundaryProven,
+      registeredSchemaTokenRemovalProven: registeredSchemaEvidence.tokenRemovalProven,
       registeredSchemaValidationAlternativeProven,
     },
     contracts: {
@@ -781,7 +772,7 @@ export function nonTaskPositiveControlStep(): MockStep {
   };
 }
 
-export function fallbackProbeStep(): MockStep {
+export function fallbackProbeStep(methodReadPath: string): MockStep {
   return {
     type: "tool_call",
     name: "task",
@@ -796,6 +787,13 @@ export function fallbackProbeStep(): MockStep {
       maxDepth: 1,
     },
     failStreamAfterToolCall: true,
+    additionalToolCalls: [
+      {
+        name: "read",
+        id: "justice-spike-case-a-pre-failure-read",
+        arguments: { path: methodReadPath },
+      },
+    ],
   };
 }
 
@@ -831,27 +829,32 @@ export function sanitizerFailureReceiptReplayStep(fixtureEnvelope: string): Mock
   };
 }
 
-export function lateRetiredCapabilityEchoStep(fixtureEnvelope: string): MockStep {
+export function lateRetiredCapabilityEchoStep(
+  fixtureEnvelope: string,
+  toolCallId = "justice-spike-case-b-late-echo",
+): MockStep {
   return {
     type: "tool_call",
     name: "justice_unknown_echo",
-    id: "justice-spike-case-b-late-echo",
+    id: toolCallId,
     arguments: {
-      prompt: "JUSTICE_CASE_B_LATE_RESPONSE",
+      prompt: "JUSTICE_LATE_RETIRED_CAPABILITY_RESPONSE",
       payload: fixtureEnvelope,
       description: fixtureEnvelope,
     },
   };
 }
 
-export function postFailureReauthorizationProbeStep(): MockStep {
+export function postFailureReauthorizationProbeStep(
+  toolCallId = "justice-spike-post-failure-task",
+): MockStep {
   return {
     type: "tool_call",
     name: "task",
-    id: "justice-spike-post-failure-task",
+    id: toolCallId,
     arguments: {
       category: "quick",
-      prompt: "JUSTICE_POST_FAILURE_REAUTH_PROBE\nRun only after a fresh selected-method read following Case B.",
+      prompt: "JUSTICE_POST_FAILURE_REAUTH_PROBE\nRun only after a fresh selected-method read following authority invalidation.",
       run_in_background: false,
       name: "post-failure-reauthorization-probe",
       description: "post-failure-task-description",

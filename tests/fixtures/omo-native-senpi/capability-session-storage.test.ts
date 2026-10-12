@@ -83,6 +83,72 @@ describe("SessionManager history read-back", () => {
     });
   });
 
+  it("read-backs the exact provider stream-error message from memory and JSONL", () => {
+    const sessionId = "session-provider-error";
+    const callId = "justice-spike-task-fallback";
+    const providerErrorEntry = {
+      type: "message",
+      id: "entry-provider-error",
+      parentId: null,
+      timestamp: "2026-10-11T00:00:03.000Z",
+      message: {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "justice-spike-provider-stream-failure",
+        content: [{ type: "toolCall", id: callId, name: "task", arguments: { description: "safe-label" } }],
+      },
+    };
+    const entries = [messageEntry("entry-1", null), providerErrorEntry];
+    const result = inspectSessionManagerHistoryReadback({
+      sessionId,
+      sessionManagerEntries: entries,
+      sessionJsonl: sessionJsonl(sessionId, entries),
+      capabilityIds: [],
+      providerStreamErrorCallId: callId,
+    });
+
+    expect(result).toMatchObject({
+      providerStreamErrorMemoryEntries: 1,
+      providerStreamErrorDiskEntries: 1,
+      providerStreamErrorTokenFreeInMemory: true,
+      providerStreamErrorTokenFreeInDisk: true,
+      entryIdsAndBranchesMatch: true,
+    });
+  });
+
+  it("keeps the selected-method read result in matched memory and JSONL history", () => {
+    const sessionId = "session-selected-method";
+    const toolCallId = "justice-spike-case-b-reauthorizing-read";
+    const readResultEntry = {
+      type: "message",
+      id: "entry-selected-method",
+      parentId: null,
+      timestamp: "2026-10-11T00:00:03.000Z",
+      message: {
+        role: "toolResult",
+        toolCallId,
+        toolName: "read",
+        isError: false,
+        content: [{ type: "text", text: "selected method content" }],
+      },
+    };
+    const entries = [messageEntry("entry-1", null), readResultEntry];
+    const result = inspectSessionManagerHistoryReadback({
+      sessionId,
+      sessionManagerEntries: entries,
+      sessionJsonl: sessionJsonl(sessionId, entries),
+      capabilityIds: [],
+      selectedMethodReadToolCallId: toolCallId,
+    });
+
+    expect(result).toMatchObject({
+      selectedMethodReadMemoryEntries: 1,
+      selectedMethodReadDiskEntries: 1,
+      selectedMethodReadPersistedInMemory: true,
+      selectedMethodReadPersistedInDisk: true,
+    });
+  });
+
   it("rejects a getEntries result that incorrectly includes the header", () => {
     const sessionId = "session-parent";
     const entries = [messageEntry("entry-1", null)];

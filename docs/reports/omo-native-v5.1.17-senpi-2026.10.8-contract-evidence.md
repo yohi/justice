@@ -417,3 +417,194 @@ above. One preceding full-suite attempt transiently failed the protected,
 untracked process-supervisor test because the terminated descendant was briefly
 visible as a Linux zombie (`Z`). The protected test passed standalone, and the
 full-suite rerun above passed; the protected file remained unchanged.
+
+## Final Task 1 evidence gate repair — 2026-10-12
+
+This section supersedes the preceding `Latest focused-runtime result` verdict,
+which remains preserved above as historical evidence. The repair started from
+Evidence HEAD `765f800dd354ed1ca5c8f0dad19b057dbe92bab3`; the approved Requirements,
+Design, and Implementation Plan blobs were unchanged. The denominator remains
+the same 32 canonical runtime contracts.
+
+### Case A — independent `provider_stream_error` control
+
+**Control / Contract:** `provider_stream_error`, independent of the Justice
+`message_end` failure control (Case B), and excluded from the 32-contract
+denominator.
+
+**Required guarantee:** Real provider stream error, real assistant
+`message_end`, normal sanitation, token-free canonical persistence, captured
+and invalidated candidate receipts, invalidated live capability and current
+activation, old receipt rejection, cached activation rejection, stale pending
+read rejection, fresh selected-method read reauthorization, late assistant and
+toolResult sanitation through shutdown, no trusted execution, and no authority
+from the failed message.
+
+**Runtime observation:** The pinned mock provider emitted the stream error for
+`justice-spike-task-fallback`; the same session's actual `message_end` callback
+observed it and applied normal sanitation. The assistant error entry was found
+once in both `SessionManager.getEntries()` and canonical JSONL, with complete
+entry identity reconciliation and no capability token. Two candidate receipts
+had been captured; the same-session post-failure validation rejected the exact
+captured inputs. The live capability and activation were valid before failure
+and invalid after it. The selected-method read result remained in matched
+memory and disk history, and retired capability tokens remained in the
+sanitation set through session shutdown. No task execution identity, trusted
+provenance, or tool result was observed for the failed Task call.
+
+The RPC driver completed two parent `agent_end` events, but its post-error
+continuation observed only `justice-spike-child-foreign-task` and its result;
+it did not observe the Case A cached-read replay, stale pending read result,
+fresh read, or late echo calls in that session.
+
+**Evidence reference:** `provider_stream_error_emitted`,
+`message_end_forced_failure_injected`, `failure_authority_invalidated`,
+`provider_stream_error_authority_invalidated`,
+`provider_stream_error_receipt_replay_rejected`,
+`session_manager_history_readback`, and
+`failure_retired_sanitation_coverage_at_shutdown` observations from the
+Task 1 fixture; `providerStreamErrorControl` in the focused runtime summary.
+
+**Evaluator predicate:** Case A is `PROVEN` only when every required
+observation is true. Receipt invalidation additionally requires a positive
+captured receipt count and rejection of the exact captured candidate; an empty
+candidate set is not treated as invalidation.
+
+**Status: BLOCKED.**
+
+**Missing evidence:** `cachedActivationReissueRejected`,
+`preFailureReadResultRejected`, `freshReadReauthorized`,
+`lateAssistantSanitized`, and `lateToolResultSanitized`.
+
+**Root cause:** The pinned public runtime did not deliver the in-flight read
+result or the Case A follow-up read/late-response calls after this provider
+stream error. No synthetic hook events or transcript edits were used to fill
+those gaps.
+
+### Unknown-tool synthetic result
+
+**Control / Contract:**
+`task1_unknown_tool_capability_echo_is_sanitized_before_persistence`.
+
+**Required guarantee:** Distinguish execution of the actual `message_end`
+sanitizer boundary from positive proof that a token-bearing result was changed.
+The contract predicate requires matching `sessionId`, `toolCallId`, and
+`messageId`, an observed `entry_appended`, immediate JSONL read-back, a
+token-free persisted result, and no outbound receipt, trusted provenance, or
+side effect.
+
+**Runtime observation:** A real model-issued unknown-tool call produced an
+actual host-generated synthetic toolResult. The real `message_end` callback
+ran, and the result was appended and immediately read back from JSONL with the
+capability token absent. There was no outbound receipt, trusted provenance, or
+side effect. However, both the pre-append callback's `message.id` and the
+post-append result's `messageId` were `null`, so the required exact message
+identity could not be matched. The result entered the sanitizer token-free:
+`token present before sanitation: false`; `sanitizer callback executed: true`;
+`token absent after sanitation: true`; `sanitization changed content: false`.
+
+**Evidence reference:** `synthetic_tool_result_message_end_observed` and
+`rpc_synthetic_tool_result_append_observed` observations for
+`justice-spike-unknown-echo`; `syntheticUnknownToolResult` in the focused
+runtime summary; pure evaluator regressions in
+`synthetic-result-evidence.test.ts`.
+
+**Evaluator predicate:** `evaluateSyntheticToolResultEvidence()` requires all
+three exact identities to be non-empty and equal, the callback to be observed
+from Senpi's real `message_end` boundary, the append/read-back to match, and
+the persisted result to be token-free. Token removal is separately proven
+only when a token was present before, absent afterward, and content changed.
+
+**Status: BLOCKED.**
+
+**Missing evidence:** Exact pre-append/post-append `messageId` correlation.
+Positive token-removal evidence is also not present; the runtime result was
+token-free before sanitation.
+
+**Root cause:** Pinned Senpi's public `message_end` event exposed
+`event.message.id === null` for the host-generated synthetic result. The
+registered invalid-schema control also reached the real callback and was
+persisted, but its callback `messageId` was likewise `null`; it cannot replace
+the required unknown-tool path or satisfy the exact identity join.
+
+### Task 1 overall acceptance
+
+**Control / Contract:** Overall Task 1 acceptance, separate from canonical
+contract accounting.
+
+**Required guarantee:** Exactly 32 canonical contracts, Case A `PROVEN`, Case B
+`PROVEN`, required runtime evidence complete, and mandatory safety checks
+passed. Case A is not a 33rd contract.
+
+**Runtime observation:** `31/32` canonical contracts are proven; the unknown-tool
+contract is blocked by the missing exact message identity. Case A is
+`BLOCKED`; Case B is `PROVEN`; required-runtime-evidence and mandatory-safety
+aggregates are true.
+
+**Evidence reference:** `task1Acceptance` in the final focused runtime
+summary; the canonical boolean map remains exactly 32 entries.
+
+**Evaluator predicate:** `evaluateTask1Acceptance()` gates on the 32-contract
+count/proven count and the independent Case A, Case B, runtime-evidence, and
+safety predicates.
+
+**Status: BLOCKED.**
+
+**Missing evidence:** One canonical contract plus the independent Case A
+follow-up observations listed above.
+
+**Root cause:** The earlier reported `32/32 PROVEN` snapshot over-promoted the
+unknown-tool result without exact message identity. The corrected evaluator
+reclassifies that contract as `BLOCKED`; its denominator and contract name are
+unchanged.
+
+### Final verification for this evidence gate repair
+
+```text
+Focused Task 1 integration: 50 passed, 0 failed
+Canonical runtime contracts: 31/32 PROVEN, 1/32 BLOCKED
+Case A: BLOCKED; receipt invalidation: PROVEN
+Case B: PROVEN
+Unknown-tool contract: BLOCKED; actual message_end: OBSERVED; token removal: NOT_PROVEN
+Task 1 overall acceptance: BLOCKED
+Full suite: 2,342 passed, 5 skipped; 171 files (170 passed, 1 skipped)
+Typecheck: PASS (`bun run typecheck`)
+Scoped fixture TypeScript: PASS (strict, `noUncheckedIndexedAccess`; exact optional properties follow project tsconfig)
+Lint: 0 errors, 311 warnings (`bun run lint`)
+Build: PASS (`bun run build`)
+Markdownlint: NOT RUN; neither `markdownlint-cli2` nor `markdownlint` is installed in the devcontainer
+Devcontainer: PASS
+git diff --check: PASS
+```
+
+**Previous 32/32 regression: FAIL**, with the unknown-tool contract
+reclassified to `BLOCKED` as explained above. Requirements, Design, and
+Implementation Plan remain unchanged. Production source remains unchanged;
+Tasks 2–14 remain `NOT_AUTHORIZED`.
+
+The first final full-suite attempt transiently failed the protected
+`omo-native-senpi-process-supervisor.test.ts` with `expected 'Z' to be null`.
+The test passed standalone (**1/1**), and the full-suite rerun passed with the
+counts above. Its SHA-256 remained
+`843d61995c78cb0acee79f557129e3bbed850e3e1cbc5ebedee4277555b8e7a7` before and
+after both runs; the protected file was not modified.
+
+### Remaining findings
+
+- `RG-310-A-001` — **Major** — Case A stale-read, fresh-read, and late-response
+  evidence is not observable after the pinned provider-stream error. Evidence:
+  the same-session control has five missing post-failure observations, with no
+  corresponding Case A continuation call or result. Minimum resolution: a
+  supported pinned-runtime lifecycle that returns an already-pending selected
+  method read after invalidation and permits a fresh read plus late response in
+  the same session, or an approved contract reconciliation.
+- `RG-310-B-001` — **Major** — Unknown-tool sanitizer callback and persisted
+  synthetic result cannot be joined by `messageId`. Evidence: both public
+  observations expose `messageId: null` for the same session/call. Minimum
+  resolution: a supported stable message identity at the pre-append callback
+  boundary or an approved correlation mechanism.
+- `RG-310-B-002` — **Minor** — Positive capability-token removal from a
+  synthetic result remains unproven. Evidence: token absent before sanitation
+  and `sanitizationChanged: false`; no token-bearing result was fabricated.
+  Minimum resolution: capture a real pinned-runtime synthetic result containing
+  the token before the sanitizer callback.

@@ -9,6 +9,12 @@ export type MockStep =
       readonly id?: string;
       readonly arguments: Readonly<Record<string, unknown>>;
       readonly failStreamAfterToolCall?: boolean;
+      readonly additionalToolCalls?: readonly Readonly<{
+        readonly name: string;
+        readonly id: string;
+        readonly arguments: Readonly<Record<string, unknown>>;
+      }>[];
+      readonly allowDuplicateToolCallId?: boolean;
     };
 
 export type MockScript = {
@@ -205,7 +211,10 @@ function assistantMessage(step: MockStep, call: number, model = "mock-1") {
   const content =
     step.type === "text"
       ? [{ type: "text", text: step.text }]
-      : [{ type: "toolCall", id: step.id ?? `justice-spike-${call}`, name: step.name, arguments: step.arguments }];
+      : [
+          { type: "toolCall", id: step.id ?? `justice-spike-${call}`, name: step.name, arguments: step.arguments },
+          ...(step.additionalToolCalls ?? []).map((toolCall) => ({ type: "toolCall", ...toolCall })),
+        ];
   return {
     role: "assistant",
     content,
@@ -303,16 +312,33 @@ function localStream(
         stream.push({ type: "text_delta", contentIndex: 0, delta: step.text, partial: result });
         stream.push({ type: "text_end", contentIndex: 0, content: step.text, partial: result });
       } else {
-        const toolCall = (result.content as unknown[])[0] as Record<string, unknown>;
-        stream.push({ type: "toolcall_start", contentIndex: 0, partial: { ...result, content: [{ ...toolCall, arguments: {} }] } });
-        stream.push({ type: "toolcall_delta", contentIndex: 0, delta: JSON.stringify(step.arguments), partial: result });
-        stream.push({ type: "toolcall_end", contentIndex: 0, toolCall, partial: result });
+        const toolCalls = result.content as readonly Record<string, unknown>[];
+        for (const [contentIndex, toolCall] of toolCalls.entries()) {
+          stream.push({
+            type: "toolcall_start",
+            contentIndex,
+            partial: { ...result, content: [{ ...toolCall, arguments: {} }] },
+          });
+          stream.push({
+            type: "toolcall_delta",
+            contentIndex,
+            delta: JSON.stringify(toolCall.arguments),
+            partial: result,
+          });
+          stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: result });
+        }
         if (step.failStreamAfterToolCall === true) {
           const failed = {
             ...result,
             stopReason: "error",
             errorMessage: "justice-spike-provider-stream-failure",
           };
+          record({
+            event: "provider_stream_error_emitted",
+            provider: "omo-mock",
+            toolCallId: step.id ?? null,
+            errorKind: "provider_stream_error",
+          });
           stream.push({ type: "error", reason: "error", error: failed });
           stream.end(failed);
           return;
@@ -392,7 +418,12 @@ function nextScriptStep(
     if (issuedIndexes.has(index)) continue;
     const step = steps[index];
     if (step === undefined) continue;
-    if (step.type === "tool_call" && typeof step.id === "string" && hasToolCallId(messages, step.id)) {
+    if (
+      step.type === "tool_call" &&
+      step.allowDuplicateToolCallId !== true &&
+      typeof step.id === "string" &&
+      hasToolCallId(messages, step.id)
+    ) {
       issuedIndexes.add(index);
       continue;
     }

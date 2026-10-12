@@ -16,6 +16,7 @@ const SESSION_ENTRY_TYPES = [
 
 const SESSION_ENTRY_TYPE_SET: ReadonlySet<string> = new Set(SESSION_ENTRY_TYPES);
 const SANITIZER_FAILURE_ERROR = "justice_capability_outbound_sanitize_failed";
+const PROVIDER_STREAM_ERROR = "justice-spike-provider-stream-failure";
 
 type SessionHistoryFailureReason =
   | "empty_jsonl"
@@ -37,6 +38,14 @@ export type SessionManagerHistoryReadback = Readonly<{
   readonly diskEntriesObserved: number;
   readonly sanitizerFailureFallbackMemoryEntries: number;
   readonly sanitizerFailureFallbackDiskEntries: number;
+  readonly providerStreamErrorMemoryEntries: number;
+  readonly providerStreamErrorDiskEntries: number;
+  readonly providerStreamErrorTokenFreeInMemory: boolean;
+  readonly providerStreamErrorTokenFreeInDisk: boolean;
+  readonly selectedMethodReadMemoryEntries: number;
+  readonly selectedMethodReadDiskEntries: number;
+  readonly selectedMethodReadPersistedInMemory: boolean;
+  readonly selectedMethodReadPersistedInDisk: boolean;
   readonly entryIdsAndBranchesMatch: boolean;
   readonly tokenFoundInMemoryEntries: boolean;
   readonly tokenFoundInDiskEntries: boolean;
@@ -167,6 +176,8 @@ export function inspectSessionManagerHistoryReadback(input: {
   readonly sessionManagerEntries: unknown;
   readonly sessionJsonl: string;
   readonly capabilityIds: readonly string[];
+  readonly providerStreamErrorCallId?: string;
+  readonly selectedMethodReadToolCallId?: string;
 }): SessionManagerHistoryReadback {
   const reasons = new Set<SessionHistoryFailureReason>();
   const memoryEntries = Array.isArray(input.sessionManagerEntries) ? input.sessionManagerEntries : [];
@@ -196,6 +207,28 @@ export function inspectSessionManagerHistoryReadback(input: {
   const sanitizerFailureFallbackDiskEntries = diskEntries.filter(
     (entry) => isRecord(entry) && hasSanitizerFailureFallback(entry),
   ).length;
+  const providerStreamErrorCallId = input.providerStreamErrorCallId;
+  const providerStreamErrorMemoryEntries = providerStreamErrorCallId === undefined
+    ? []
+    : memoryEntries.filter(
+        (entry) => isRecord(entry) && hasProviderStreamError(entry, providerStreamErrorCallId),
+      );
+  const providerStreamErrorDiskEntries = providerStreamErrorCallId === undefined
+    ? []
+    : diskEntries.filter(
+        (entry) => isRecord(entry) && hasProviderStreamError(entry, providerStreamErrorCallId),
+      );
+  const selectedMethodReadToolCallId = input.selectedMethodReadToolCallId;
+  const selectedMethodReadMemoryEntries = selectedMethodReadToolCallId === undefined
+    ? []
+    : memoryEntries.filter(
+        (entry) => isRecord(entry) && hasSelectedMethodReadResult(entry, selectedMethodReadToolCallId),
+      );
+  const selectedMethodReadDiskEntries = selectedMethodReadToolCallId === undefined
+    ? []
+    : diskEntries.filter(
+        (entry) => isRecord(entry) && hasSelectedMethodReadResult(entry, selectedMethodReadToolCallId),
+      );
   const memoryValidation = validateEntries(memoryEntries, reasons);
   const diskValidation = validateEntries(diskEntries, reasons);
   const entryIdsAndBranchesMatch =
@@ -216,6 +249,18 @@ export function inspectSessionManagerHistoryReadback(input: {
     diskEntriesObserved: diskEntries.length,
     sanitizerFailureFallbackMemoryEntries,
     sanitizerFailureFallbackDiskEntries,
+    providerStreamErrorMemoryEntries: providerStreamErrorMemoryEntries.length,
+    providerStreamErrorDiskEntries: providerStreamErrorDiskEntries.length,
+    providerStreamErrorTokenFreeInMemory:
+      providerStreamErrorMemoryEntries.length === 1 &&
+      !containsCapability(providerStreamErrorMemoryEntries, input.capabilityIds),
+    providerStreamErrorTokenFreeInDisk:
+      providerStreamErrorDiskEntries.length === 1 &&
+      !containsCapability(providerStreamErrorDiskEntries, input.capabilityIds),
+    selectedMethodReadMemoryEntries: selectedMethodReadMemoryEntries.length,
+    selectedMethodReadDiskEntries: selectedMethodReadDiskEntries.length,
+    selectedMethodReadPersistedInMemory: selectedMethodReadMemoryEntries.length === 1,
+    selectedMethodReadPersistedInDisk: selectedMethodReadDiskEntries.length === 1,
     entryIdsAndBranchesMatch,
     tokenFoundInMemoryEntries: containsCapability(memoryEntries, input.capabilityIds),
     tokenFoundInDiskEntries:
@@ -233,6 +278,30 @@ function hasSanitizerFailureFallback(entry: Record<string, unknown>): boolean {
     entry.message.errorMessage === SANITIZER_FAILURE_ERROR &&
     Array.isArray(entry.message.content) &&
     entry.message.content.length === 0
+  );
+}
+
+function hasProviderStreamError(entry: Record<string, unknown>, toolCallId: string): boolean {
+  if (entry.type !== "message" || !isRecord(entry.message)) return false;
+  const message = entry.message;
+  return (
+    message.role === "assistant" &&
+    message.stopReason === "error" &&
+    message.errorMessage === PROVIDER_STREAM_ERROR &&
+    Array.isArray(message.content) &&
+    message.content.some(
+      (part) => isRecord(part) && part.type === "toolCall" && part.id === toolCallId,
+    )
+  );
+}
+
+function hasSelectedMethodReadResult(entry: Record<string, unknown>, toolCallId: string): boolean {
+  if (entry.type !== "message" || !isRecord(entry.message)) return false;
+  return (
+    entry.message.role === "toolResult" &&
+    entry.message.toolName === "read" &&
+    entry.message.toolCallId === toolCallId &&
+    entry.message.isError !== true
   );
 }
 

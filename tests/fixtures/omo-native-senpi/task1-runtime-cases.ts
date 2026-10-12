@@ -122,7 +122,22 @@ export function buildTask1RuntimeMockScript(
       arguments: { path: skillPath },
     },
     postFailureReauthorizationProbeStep() as MockStep,
-    fallbackProbeStep() as MockStep,
+    fallbackProbeStep(skillPath) as MockStep,
+    lateRetiredCapabilityEchoStep(fixtureEnvelope, "justice-spike-case-a-late-echo") as MockStep,
+    {
+      type: "tool_call",
+      name: "read",
+      id: "justice-spike-case-b-reauthorizing-read",
+      arguments: { path: skillPath },
+      allowDuplicateToolCallId: true,
+    },
+    {
+      type: "tool_call",
+      name: "read",
+      id: "justice-spike-case-a-fresh-read",
+      arguments: { path: skillPath },
+    },
+    postFailureReauthorizationProbeStep("justice-spike-case-a-post-failure-task") as MockStep,
     { type: "text", text: "SPIKE_PARENT_DONE" },
   ];
 
