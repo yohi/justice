@@ -15,9 +15,12 @@
  *    whose completion is not yet durable (restart recovery). Recovery wins
  *    over every other routing so an interrupted side effect is resolved
  *    exactly once before new work is planned.
- * 3. Suspended gates map to `suspended` (with the shared `deriveResumeCursor`
- *    mapping), except a `review_non_convergent` suspension with observed
- *    material progress, which routes to `validate_non_convergence_reentry`.
+ * 3. Suspended gates route the ordinary orchestrator first when a durably
+ *    verified CURRENT upstream blocker (Task 14 verified upstream reopen
+ *    context) exists — except a `reopen_required` suspension, whose reopen is
+ *    already durable — then a `review_non_convergent` suspension with observed
+ *    material progress routes to `validate_non_convergence_reentry`, and the
+ *    rest map to `suspended` (with the shared `deriveResumeCursor` mapping).
  * 4. Coordinator-committed chain steps (review observed, remediation
  *    completed, self-review passed, commit completed, resolutions committed)
  *    take precedence over projection-derived routing so already-committed
@@ -35,6 +38,7 @@
 
 import type {
   CurrentPhaseDisposition,
+  FindingState,
   LineageId,
   RemediationRound,
   ReviewApprovalBindingV1,
@@ -62,6 +66,10 @@ import {
   type MandatoryValidationSchedule,
   type ValidationEvidence,
 } from "./deterministic-validation.js";
+import type {
+  ReviewRestoreDestinationBinding,
+  ReviewRestoreSourceBinding,
+} from "./capabilities.js";
 
 // ---------------------------------------------------------------------------
 // Planning context
@@ -164,6 +172,52 @@ export type ReviewGatePreClearValidationOutcome = Readonly<{
 }>;
 
 /**
+ * Exact restore provenance bound into `prepare_restore` / `recover_restore`
+ * decisions (Task 14). Every field comes from the durably verified upstream
+ * reopen context, never from a guess.
+ */
+export type ReviewGateUpstreamRestoreProof = Readonly<{
+  readonly upstreamFindingEventId: string;
+  readonly currentLineageId: string;
+  readonly restoreOperationId: string;
+  readonly sourceBindingDigest: string;
+  readonly destinationBindingDigest: string;
+  readonly verifiedFrontierHash: string;
+}>;
+
+/**
+ * Verified Task 9/11 + exact Task 10 Git-intent context the Task 18 runtime
+ * coordinator projects for an ordinary ACTIVE/SUSPENDED upstream defect
+ * (PLAN-012 authoritative separation). This is never an NC1 reentry input and
+ * never carries NC1 evidence.
+ */
+export type VerifiedUpstreamReopenContextV1 = Readonly<{
+  readonly gateId: string;
+  readonly generationId: string;
+  readonly currentPhase: ReviewGatePhase;
+  readonly upstreamBlocker: Readonly<{
+    readonly lineageId: string;
+    readonly findingEventId: string;
+    readonly currentOwner: "requirements" | "design";
+    readonly committedAuthorityEventId: string;
+  }>;
+  readonly downstream: Readonly<{
+    readonly phase: ReviewGatePhase;
+    readonly targetPath: string;
+    readonly knownDirtyPostImage: ReviewRestoreSourceBinding;
+    readonly approvedCleanOriginal: ReviewRestoreDestinationBinding;
+    readonly originatingRoundEventId: string;
+  }> | null;
+  readonly restoreCompletion: Readonly<{
+    readonly preparedEventId: string;
+    readonly completionEventId: string;
+    readonly restoreOperationId: string;
+    readonly targetPath: string;
+    readonly verifiedDestinationDigest: string;
+  }> | null;
+  readonly verifiedFrontierHash: string;
+}>;
+/**
  * Coordinator-observed planning context. `artifacts` is required (it comes
  * from the durable GATE_CREATED); every other field is optional evidence that
  * is present only while the corresponding step is in flight.
@@ -187,6 +241,12 @@ export type ReviewGatePlanningContext = Readonly<{
   readonly designClearFingerprint?: string;
   /** Approval binding the coordinator will append with PLAN_CLEAR. */
   readonly preparedApprovalBinding?: ReviewApprovalBindingV1;
+  /**
+   * Task 18-owned verified upstream reopen context (PLAN-012). Its presence is
+   * the only restore/reopen authority for ordinary upstream defects; `undefined`
+   * is not permission to infer or manufacture an upstream reopen.
+   */
+  readonly verifiedUpstreamReopen?: VerifiedUpstreamReopenContextV1;
 }>;
 
 // ---------------------------------------------------------------------------
@@ -237,11 +297,13 @@ export type ReviewGateNextOperation =
       readonly kind: "prepare_restore";
       readonly targetPath: string;
       readonly restoreTo: ReviewArtifactBinding;
+      readonly restoreProof: ReviewGateUpstreamRestoreProof;
     }>
   | Readonly<{
       readonly kind: "recover_restore";
       readonly targetPath: string;
       readonly restoreTo: ReviewArtifactBinding;
+      readonly restoreProof: ReviewGateUpstreamRestoreProof;
     }>
   | Readonly<{
       readonly kind: "prepare_commit";
@@ -261,6 +323,8 @@ export type ReviewGateNextOperation =
       readonly kind: "append_reopen";
       readonly phase: ReviewGatePhase;
       readonly lineageIds: ReadonlyArray<LineageId>;
+      /** Task 10 witnessed completion event bound to this blocker, or null. */
+      readonly verifiedRestoreCompletionEventId: string | null;
     }>
   | Readonly<{
       readonly kind: "run_pre_clear_validation";
@@ -313,6 +377,19 @@ export function planReviewGateNextOperation(
   }
 
   if (projection.status === "suspended") {
+    // PLAN-012 OSC1 precedence: an ordinary suspension with a verified CURRENT
+    // upstream blocker routes through the ordinary orchestrator before the
+    // generic suspended/NC1 selection. A `reopen_required` suspension already
+    // carries the durable reopen for the current upstream landscape — re-facing
+    // it with append_reopen would duplicate the durable reopen — so its generic
+    // mapping stands.
+    if (
+      projection.suspensionReason !== "reopen_required" &&
+      context.verifiedUpstreamReopen !== undefined &&
+      projection.currentUpstreamBlockers.length > 0
+    ) {
+      return planUpstreamReopen(projection, context, projection.currentUpstreamBlockers);
+    }
     if (
       projection.suspensionReason === "review_non_convergent" &&
       context.materialProgressObserved === true
@@ -365,11 +442,7 @@ function planInFlightRecovery(
         detail: "remediation_recovery_conflict",
       });
     case "restore_prepared":
-      return freezeOperation({
-        kind: "recover_restore",
-        targetPath: intent.targetPath,
-        restoreTo: resolveArtifactBinding(context, intent.targetPath),
-      });
+      return planRestoreRecovery(projection, context, intent);
     case "commit_prepared":
       requirePhaseMatch(projection, intent.phase, "commit_prepared");
       requirePhaseArtifact(context, intent.phase, intent.artifactPath);
@@ -439,7 +512,192 @@ function redispatchExternalOperation(
   }
 }
 
+/**
+ * Recover a durably prepared restore. Recovery is bound to the exact verified
+ * provenance — blocker lineage, source/destination bindings, operation id and
+ * pinned frontier. Without verified upstream reopen provenance Core cannot
+ * bind the recovery and never guesses a target.
+ */
+function planRestoreRecovery(
+  projection: ReviewGateProjection,
+  context: ReviewGatePlanningContext,
+  intent: Extract<ReviewGateInFlightIntent, { readonly kind: "restore_prepared" }>,
+): ReviewGateNextOperation {
+  const verified = context.verifiedUpstreamReopen;
+  if (verified === undefined) {
+    return freezeOperation({
+      kind: "suspended",
+      reason: "execution_suspended",
+      detail: "restore_recovery_provenance_missing",
+    });
+  }
+  const blocker = verified.upstreamBlocker;
+  const phaseArtifact =
+    projection.phase === "design" ? context.artifacts.design : context.artifacts.plan;
+  const provenanceInvalid =
+    verified.gateId !== projection.gateId ||
+    verified.currentPhase !== projection.phase ||
+    verified.verifiedFrontierHash.length === 0 ||
+    blocker.lineageId.length === 0 ||
+    blocker.findingEventId.length === 0 ||
+    blocker.committedAuthorityEventId.length === 0 ||
+    !projection.currentUpstreamBlockers.some((id) => id === blocker.lineageId) ||
+    verified.restoreCompletion !== null ||
+    verified.downstream === null ||
+    verified.downstream.targetPath !== intent.targetPath ||
+    intent.targetPath !== phaseArtifact.canonicalPath;
+  if (provenanceInvalid) {
+    return freezeOperation({
+      kind: "suspended",
+      reason: "execution_suspended",
+      detail: "restore_recovery_provenance_missing",
+    });
+  }
+  const provenanceProblem = validateDownstreamProvenance(phaseArtifact, verified.downstream);
+  if (provenanceProblem !== null) {
+    return freezeOperation({
+      kind: "suspended",
+      reason: "execution_suspended",
+      detail: provenanceProblem,
+    });
+  }
+  return freezeOperation({
+    kind: "recover_restore",
+    targetPath: intent.targetPath,
+    restoreTo: phaseArtifact,
+    restoreProof: buildRestoreProof(verified),
+  });
+}
+
+/**
+ * Restore operation identity derived deterministically from the verified
+ * context (`upstream-restore:` prefix) so re-planning is crash-idempotent.
+ */
+function upstreamRestoreOperationId(verified: VerifiedUpstreamReopenContextV1): string {
+  if (verified.downstream === null) {
+    throw new Error("review_gate_orchestrator_restore_operation_without_downstream");
+  }
+  return `upstream-restore:${verified.upstreamBlocker.lineageId}:${verified.downstream.targetPath}:${verified.verifiedFrontierHash}`;
+}
+
+function buildRestoreProof(
+  verified: VerifiedUpstreamReopenContextV1,
+): ReviewGateUpstreamRestoreProof {
+  if (verified.downstream === null) {
+    throw new Error("review_gate_orchestrator_restore_proof_without_downstream");
+  }
+  return Object.freeze({
+    upstreamFindingEventId: verified.upstreamBlocker.findingEventId,
+    currentLineageId: verified.upstreamBlocker.lineageId,
+    restoreOperationId: upstreamRestoreOperationId(verified),
+    sourceBindingDigest: verified.downstream.knownDirtyPostImage.worktree.digest,
+    destinationBindingDigest: verified.downstream.approvedCleanOriginal.worktree.digest,
+    verifiedFrontierHash: verified.verifiedFrontierHash,
+  });
+}
+
+/**
+ * Validate the Task 10 dirty-post-image provenance (P1 over the exact pinned
+ * P0). Returns a block detail, or null when the provenance explains the dirty
+ * state over the same pinned HEAD with unchanged HEAD/index/modes.
+ */
+function validateDownstreamProvenance(
+  phaseArtifact: ReviewArtifactBinding,
+  downstream: NonNullable<VerifiedUpstreamReopenContextV1["downstream"]>,
+): string | null {
+  if (
+    downstream.targetPath.length === 0 ||
+    downstream.originatingRoundEventId.length === 0
+  ) {
+    return "upstream_reopen_dirty_provenance_missing";
+  }
+  const source = downstream.knownDirtyPostImage;
+  const destination = downstream.approvedCleanOriginal;
+
+  // Destination: the exact pinned clean committed original.
+  if (
+    destination.headSha.length === 0 ||
+    destination.headEntry.canonicalPath !== downstream.targetPath ||
+    destination.indexEntry.canonicalPath !== downstream.targetPath ||
+    destination.worktree.canonicalPath !== downstream.targetPath ||
+    destination.worktree.digest !== phaseArtifact.digest ||
+    destination.worktree.gitMode !== phaseArtifact.gitMode ||
+    destination.headEntry.gitMode !== destination.worktree.gitMode
+  ) {
+    return "upstream_reopen_wrong_clean_original";
+  }
+
+  // Source: structurally complete dirty-post-image provenance.
+  if (
+    source.headSha.length === 0 ||
+    source.headEntry.canonicalPath !== downstream.targetPath ||
+    source.indexEntry.canonicalPath !== downstream.targetPath ||
+    source.worktree.canonicalPath !== downstream.targetPath ||
+    source.sourceEventId.length === 0
+  ) {
+    return "upstream_reopen_dirty_provenance_missing";
+  }
+  // Unexplained HEAD drift: the pinned original is no longer HEAD.
+  if (
+    source.headSha !== destination.headSha ||
+    source.headEntry.blobSha !== destination.headEntry.blobSha
+  ) {
+    return "upstream_reopen_changed_head";
+  }
+  // Unexplained staged drift outside the explained dirty state.
+  if (source.indexEntry.blobSha !== destination.indexEntry.blobSha) {
+    return "upstream_reopen_changed_index";
+  }
+  // Unexplained mode drift on the restore channel.
+  if (
+    source.headEntry.gitMode !== destination.headEntry.gitMode ||
+    source.indexEntry.gitMode !== destination.indexEntry.gitMode ||
+    source.worktree.gitMode !== destination.worktree.gitMode
+  ) {
+    return "upstream_reopen_changed_mode";
+  }
+  // A "dirty" post-image equal to the clean original is a contradiction.
+  if (source.worktree.digest === destination.worktree.digest) {
+    return "upstream_reopen_unexplained_dirty_state";
+  }
+  return null;
+}
+
+/**
+ * Validate a witnessed Task 10 restore completion against the pinned clean
+ * original and (when present) the blocked dirty provenance. PREPARED alone
+ * never reopens.
+ */
+function validateRestoreCompletion(
+  phaseArtifact: ReviewArtifactBinding,
+  downstream: VerifiedUpstreamReopenContextV1["downstream"],
+  completion: VerifiedUpstreamReopenContextV1["restoreCompletion"],
+): string | null {
+  if (completion === null) {
+    return null;
+  }
+  if (
+    completion.preparedEventId.length === 0 ||
+    completion.completionEventId.length === 0 ||
+    completion.restoreOperationId.length === 0 ||
+    completion.targetPath !== phaseArtifact.canonicalPath ||
+    completion.verifiedDestinationDigest !== phaseArtifact.digest
+  ) {
+    return "upstream_reopen_forged_restore_completion";
+  }
+  if (
+    downstream !== null &&
+    (downstream.targetPath !== completion.targetPath ||
+      downstream.approvedCleanOriginal.worktree.digest !==
+        completion.verifiedDestinationDigest)
+  ) {
+    return "upstream_reopen_forged_restore_completion";
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
+// Coordinator-committed chain steps
 // Coordinator-committed chain steps
 // ---------------------------------------------------------------------------
 
@@ -687,35 +945,175 @@ function planFromCursor(
   }
 }
 
+/**
+ * Ordinary orchestrator upstream defect handling (OSC1, Task 14): restore the
+ * dirty downstream target first (its `prepare_restore` decision is the phase
+ * reopen state machine's RESTORE_DOWNSTREAM_FIRST), or append the upstream
+ * reopen once the downstream target is clean or the exact Task 10 restore
+ * completion is witnessed. Fail closed on every missing or disagreeing
+ * provenance: the verified context is the only reopen authority.
+ */
 function planUpstreamReopen(
   projection: ReviewGateProjection,
   context: ReviewGatePlanningContext,
   lineageIds: ReadonlyArray<LineageId>,
 ): ReviewGateNextOperation {
-  if (projection.phase === "design") {
-    // Requirements-owned blockers in the Design phase suspend the gate for an
-    // upstream Requirements commit; the Design target itself is untouched.
-    return freezeOperation({ kind: "append_reopen", phase: "design", lineageIds });
+  const blockUpstreamReopen = (detail: string): ReviewGateNextOperation =>
+    freezeOperation({
+      kind: "suspended",
+      reason: "execution_suspended",
+      detail,
+    });
+
+  const verified = context.verifiedUpstreamReopen;
+  if (verified === undefined) {
+    // An undefined upstream context is not permission to infer or manufacture
+    // an upstream reopen.
+    return blockUpstreamReopen("upstream_reopen_context_missing");
+  }
+  // Gate/generation/phase/frontier agreement.
+  if (verified.gateId !== projection.gateId) {
+    return blockUpstreamReopen("upstream_reopen_gate_mismatch");
+  }
+  if (verified.generationId.length === 0) {
+    return blockUpstreamReopen("upstream_reopen_generation_missing");
+  }
+  if (verified.currentPhase !== projection.phase) {
+    return blockUpstreamReopen("upstream_reopen_phase_mismatch");
+  }
+  if (verified.verifiedFrontierHash.length === 0) {
+    return blockUpstreamReopen("upstream_reopen_frontier_missing");
   }
 
-  const designOwned = lineageIds.some((lineageId) => {
-    const finding = projection.findings.get(lineageId);
-    return finding !== undefined && finding.ownerScope === "design";
-  });
-  if (designOwned) {
-    const workspaceStates = context.workspaceStates ?? projection.workspaceStates;
-    const designPath = context.artifacts.design.canonicalPath;
-    if (workspaceStates.get(designPath) !== "clean_committed") {
-      // A Design-owned blocker found in the Plan phase means the approved
-      // Design binding must be restored before the Design phase can reopen.
-      return freezeOperation({
-        kind: "prepare_restore",
-        targetPath: designPath,
-        restoreTo: context.artifacts.design,
-      });
+  // CURRENT upstream blocker agreement.
+  const blocker = verified.upstreamBlocker;
+  if (
+    blocker.lineageId.length === 0 ||
+    blocker.findingEventId.length === 0 ||
+    blocker.committedAuthorityEventId.length === 0
+  ) {
+    return blockUpstreamReopen("upstream_reopen_blocker_provenance_missing");
+  }
+  if (!projection.currentUpstreamBlockers.some((id) => id === blocker.lineageId)) {
+    return blockUpstreamReopen("upstream_reopen_blocker_lineage_not_current");
+  }
+  if (!lineageIds.some((id) => id === blocker.lineageId)) {
+    return blockUpstreamReopen("upstream_reopen_blocker_lineage_not_current");
+  }
+  let finding: FindingState | undefined;
+  for (const current of projection.findings.values()) {
+    if (current.lineageId === blocker.lineageId) {
+      finding = current;
+      break;
     }
   }
-  return freezeOperation({ kind: "append_reopen", phase: "design", lineageIds });
+  if (finding === undefined) {
+    return blockUpstreamReopen("upstream_reopen_blocker_provenance_missing");
+  }
+  if (finding.ownerScope !== "requirements" && finding.ownerScope !== "design") {
+    return blockUpstreamReopen("upstream_reopen_blocker_lineage_not_current");
+  }
+  if (blocker.currentOwner !== finding.ownerScope) {
+    return blockUpstreamReopen("upstream_reopen_blocker_owner_mismatch");
+  }
+
+  const phaseArtifact =
+    projection.phase === "design" ? context.artifacts.design : context.artifacts.plan;
+  const workspaceStates = context.workspaceStates ?? projection.workspaceStates;
+  const workspaceState = workspaceStates.get(phaseArtifact.canonicalPath);
+  if (workspaceState === undefined) {
+    return blockUpstreamReopen("upstream_reopen_unexplained_dirty_state");
+  }
+
+  if (projection.phase === "design") {
+    // Requirements-owned blockers in the Design phase reopen Design; the
+    // Design target itself is untouched and no restore lives below Design.
+    if (verified.downstream !== null) {
+      return blockUpstreamReopen("upstream_reopen_downstream_not_applicable");
+    }
+    if (verified.restoreCompletion !== null) {
+      return blockUpstreamReopen("upstream_reopen_stale_restore_completion");
+    }
+    if (workspaceState !== "clean_committed") {
+      return blockUpstreamReopen("upstream_reopen_unexplained_dirty_state");
+    }
+    return freezeOperation({
+      kind: "append_reopen",
+      phase: "design",
+      lineageIds,
+      verifiedRestoreCompletionEventId: null,
+    });
+  }
+
+  // Plan phase: restore the dirty downstream target first, or reopen once it
+  // is clean (with the Task 10 completion bound in when witnessed).
+  if (workspaceState === "mutation_in_flight") {
+    return blockUpstreamReopen("upstream_reopen_conflicting_restore");
+  }
+  const completionProblem = validateRestoreCompletion(
+    phaseArtifact,
+    verified.downstream,
+    verified.restoreCompletion,
+  );
+  if (completionProblem !== null) {
+    return blockUpstreamReopen(completionProblem);
+  }
+
+  if (verified.restoreCompletion !== null) {
+    // Exactly matched SUCCEEDED/RECOVERED completion reopens on re-projection,
+    // and a completion claimed over a still dirty target contradicts the
+    // workspace witness.
+    if (verified.downstream !== null) {
+      const downstreamProblem = validateDownstreamProvenance(phaseArtifact, verified.downstream);
+      if (downstreamProblem !== null) {
+        return blockUpstreamReopen(downstreamProblem);
+      }
+    }
+    if (workspaceState !== "clean_committed") {
+      return blockUpstreamReopen("upstream_reopen_restore_completion_workspace_conflict");
+    }
+    return freezeOperation({
+      kind: "append_reopen",
+      phase: "design",
+      lineageIds,
+      verifiedRestoreCompletionEventId: verified.restoreCompletion.completionEventId,
+    });
+  }
+
+  if (verified.downstream === null) {
+    if (workspaceState === "known_dirty") {
+      return blockUpstreamReopen("upstream_reopen_dirty_provenance_missing");
+    }
+    // Clean downstream: append the reopen without a speculative restore.
+    return freezeOperation({
+      kind: "append_reopen",
+      phase: "design",
+      lineageIds,
+      verifiedRestoreCompletionEventId: null,
+    });
+  }
+
+  // A known-dirty target without a completion needs exact Task 10 provenance.
+  if (workspaceState !== "known_dirty") {
+    return blockUpstreamReopen("upstream_reopen_unexplained_dirty_state");
+  }
+  if (verified.downstream.phase !== projection.phase) {
+    return blockUpstreamReopen("upstream_reopen_downstream_phase_mismatch");
+  }
+  if (verified.downstream.targetPath !== phaseArtifact.canonicalPath) {
+    // The dirty upstream Design artifact is never the downstream Plan target.
+    return blockUpstreamReopen("upstream_reopen_wrong_downstream_target");
+  }
+  const provenanceProblem = validateDownstreamProvenance(phaseArtifact, verified.downstream);
+  if (provenanceProblem !== null) {
+    return blockUpstreamReopen(provenanceProblem);
+  }
+  return freezeOperation({
+    kind: "prepare_restore",
+    targetPath: verified.downstream.targetPath,
+    restoreTo: phaseArtifact,
+    restoreProof: buildRestoreProof(verified),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -772,18 +1170,6 @@ function requirePhaseArtifact(
   }
 }
 
-function resolveArtifactBinding(
-  context: ReviewGatePlanningContext,
-  targetPath: string,
-): ReviewArtifactBinding {
-  if (context.artifacts.design.canonicalPath === targetPath) {
-    return context.artifacts.design;
-  }
-  if (context.artifacts.plan.canonicalPath === targetPath) {
-    return context.artifacts.plan;
-  }
-  throw new Error("review_gate_orchestrator_unknown_restore_target");
-}
 
 function selfReviewedLineageIds(projection: ReviewGateProjection): LineageId[] {
   const lineageIds: LineageId[] = [];
