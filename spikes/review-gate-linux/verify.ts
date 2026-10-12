@@ -1,17 +1,42 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import * as z from "zod";
 import {
   hasGlibcRuntime,
   loadJusticeLinuxNativeAddon,
   type JusticeLinuxNativeGateRoot,
 } from "../../src/runtime/linux-native-addon";
-import { createLegacyReviewGateEventStore as createReviewGateEventStore } from "../../src/runtime/review-gate-event-store";
+import {
+  createReviewGateEventStore,
+  type ReviewGateEventStoreOptions,
+} from "../../src/runtime/review-gate-event-store";
 import { createReviewGateRecoveryStore } from "../../src/runtime/review-gate-recovery-store";
+import { createLinuxReviewGateProvider } from "../../src/runtime/linux-review-gate-provider";
+import {
+  createReviewGateLockManager,
+  type ReviewGateLockManager,
+} from "../../src/runtime/review-gate-lock-manager";
+import {
+  authorizeFirstWorkspaceEnrollment,
+  createReviewGateScopeWitness,
+  provisionReviewGateWitnessInstallation,
+  type ReviewGateScopeWitness,
+  type TrustedFirstEnrollmentV1,
+} from "../../src/runtime/review-gate-scope-witness";
+import {
+  encodeReviewGateEventRecord,
+  validateReviewGateEventRecord,
+} from "../../src/core/review-gate/event-schema";
+import {
+  computeArtifactDigest,
+  computeCanonicalJsonFingerprint,
+  computeWorkspaceIdentity,
+} from "../../src/core/review-gate/identity";
+import type { ReviewGateEvent } from "../../src/core/review-gate-types";
 
 // Focused host proof for the Linux Review Gate substrate (convergence Task 1
 // Step 5, host-verified from Task 15): lock exclusivity/CLOEXEC/release and
@@ -83,6 +108,45 @@ type SeedEvent = {
   readonly emittedAt: string;
   readonly payload: Record<string, unknown>;
 };
+
+type WitnessTestOptions = Readonly<{
+  readonly admin: ReturnType<typeof generateKeyPairSync>;
+  readonly approve: (payload: unknown) => Promise<string>;
+  readonly witnessDirectory: string;
+}>;
+
+/**
+ * Task 5 witness fixture for one worktree root: binds one lock manager and
+ * returns the witness bound to an absolute witness directory OUTSIDE the
+ * workspace (the Task 5 protection contract rejects directories inside it).
+ */
+async function createWitnessForTest(
+  root: string,
+  writerId: string,
+  options: WitnessTestOptions,
+): Promise<
+  Readonly<{ readonly witness: ReviewGateScopeWitness; readonly lockManager: ReviewGateLockManager }>
+> {
+  const lockManager = createReviewGateLockManager(root, {
+    provider: createLinuxReviewGateProvider(root) ?? null,
+  });
+  const witness = createReviewGateScopeWitness({
+    workspaceRoot: root,
+    workspaceIdentity: computeWorkspaceIdentity(root),
+    witnessDirectory: options.witnessDirectory,
+    hostTrustRoot: options.admin.publicKey,
+    lockManager,
+  });
+  return { witness, lockManager };
+}
+
+function eventStoreOptions(
+  root: string,
+  writerId: string,
+  witness: ReviewGateScopeWitness,
+): ReviewGateEventStoreOptions {
+  return { workspaceIdentity: computeWorkspaceIdentity(root), writerId, witness };
+}
 
 async function runCases(
   root: JusticeLinuxNativeGateRoot,
@@ -158,44 +222,132 @@ async function runCases(
   await run("writer_shard_durable_publish", "runtime ReviewGateEventStore", async () => {
     const gateId = "spike-shard-gate";
     const writerId = "spike-writer";
-    const genesis: SeedEvent = {
+    const designPath = "docs/design.md";
+    const planPath = "docs/plan.md";
+    const scopeId = computeCanonicalJsonFingerprint([gateId, "scope"]);
+    const genesisSeed: SeedEvent = {
       eventType: "GATE_CREATED",
       gateId,
       writerId,
       epochId: `${gateId}-epoch`,
       emittedAt: "2026-10-08T00:00:00.000Z",
-      payload: { reviewScopeId: "spike-scope" },
+      payload: {
+        reviewScopeId: scopeId,
+        designArtifact: {
+          canonicalPath: designPath,
+          digest: "0".repeat(64),
+          gitMode: "100644",
+        },
+        planArtifact: { canonicalPath: planPath, digest: "1".repeat(64), gitMode: "100644" },
+        requirementsResolution: {
+          source: "explicit",
+          canonicalPath: "requirements.md",
+          digest: "2".repeat(64),
+        },
+        reviewProtocolFingerprint: "3".repeat(64),
+      },
     };
-    const store = createReviewGateEventStore(rootDir);
-    await store.appendEvents(gateId, [genesis as never]);
-    const first = await store.readEvents(gateId);
-    if (first.length !== 1) return fail("durable shard must read back the published event");
-    store.close();
 
-    // Durability across a simulated process restart: a fresh store instance
-    // reads the same bytes, and appends survive another close/reopen.
-    const reopened = createReviewGateEventStore(rootDir);
-    const resumed = await reopened.readEvents(gateId);
-    if (resumed.length !== 1 || JSON.stringify(resumed) !== JSON.stringify(first)) {
-      return fail("re-opened store must read the same durable bytes");
-    }
-    const followUp: SeedEvent = {
-      eventType: "DESIGN_CLEAR",
-      gateId,
+    // The authority event store is witness-verified: the spike sandbox is
+    // initialized as a clean Git workspace and the durable shard is published
+    // through one real Task 5 witness (protected store + native CAS).
+    execFileSync("git", ["init", "-q", rootDir]);
+    execFileSync("git", [
+      "-C",
+      rootDir,
+      "-c",
+      "user.name=Spike",
+      "-c",
+      "user.email=spike@example.invalid",
+      "commit",
+      "--allow-empty",
+      "-qm",
+      "genesis",
+    ]);
+    const admin = generateKeyPairSync("ed25519");
+    const approve = async (payload: unknown): Promise<string> =>
+      sign(
+        null,
+        Buffer.from(computeCanonicalJsonFingerprint(payload)),
+        admin.privateKey,
+      ).toString("base64");
+    const witnessDirectory = `${rootDir}.witness`;
+    await provisionReviewGateWitnessInstallation({
+      witnessDirectory,
+      hostTrustRoot: admin.publicKey,
+      authorize: approve,
+    });
+    const { witness, lockManager } = await createWitnessForTest(
+      rootDir,
       writerId,
-      epochId: `${gateId}-epoch`,
-      emittedAt: "2026-10-08T00:00:01.000Z",
-      payload: { designProtocolFingerprint: "spike" },
-    };
-    await reopened.appendEvents(gateId, [followUp as never]);
-    reopened.close();
-    const final = createReviewGateEventStore(rootDir);
-    const appended = await final.readEvents(gateId);
-    final.close();
-    if (appended.length !== 2 || appended[1]?.eventType !== "DESIGN_CLEAR") {
-      return fail("durable shard replace must publish the appended bytes");
+      { admin, approve, witnessDirectory },
+    );
+    try {
+      const store = createReviewGateEventStore(
+        rootDir,
+        eventStoreOptions(rootDir, writerId, witness),
+      );
+      const auth = await authorizeFirstWorkspaceEnrollment({
+        witness,
+        designPath,
+        planPath,
+        workflowNonce: "spike-nonce-1",
+        operationId: "spike-enroll-1",
+        authorize: approve,
+      });
+      await witness.verifyFirstWorkspaceEnrollment(auth);
+      const prepared = await store.prepareVerifiedEventPublication({
+        scopeId,
+        gateId,
+        writerId,
+        operationId: "spike-seed-1",
+        canonicalEvents: [genesisSeed as unknown as ReviewGateEvent],
+        firstEnrollment: {
+          authorization: auth as unknown as TrustedFirstEnrollmentV1,
+          generationId: "spike-generation-1",
+          workflowContinuityId: "spike-continuity-1",
+        },
+      });
+      const seedOutcome = await store.publishPreparedEvent(prepared);
+      if (seedOutcome !== "committed") return fail(`seed publication failed: ${seedOutcome}`);
+      const first = await store.readEvents(gateId);
+      if (first.length !== 1) return fail("durable shard must read back the published event");
+      store.close();
+
+      // Durability across a simulated process restart: a fresh store instance
+      // reads the same bytes, and appends survive another close/reopen.
+      const reopened = createReviewGateEventStore(
+        rootDir,
+        eventStoreOptions(rootDir, writerId, witness),
+      );
+      const resumed = await reopened.readEvents(gateId);
+      if (resumed.length !== 1 || JSON.stringify(resumed) !== JSON.stringify(first)) {
+        return fail("re-opened store must read the same durable bytes");
+      }
+      const followUp: SeedEvent = {
+        eventType: "DESIGN_CLEAR",
+        gateId,
+        writerId,
+        epochId: `${gateId}-epoch`,
+        emittedAt: "2026-10-08T00:00:01.000Z",
+        payload: { designProtocolFingerprint: "spike" },
+      };
+      await reopened.appendEvents(gateId, [followUp as unknown as ReviewGateEvent]);
+      reopened.close();
+      const final = createReviewGateEventStore(
+        rootDir,
+        eventStoreOptions(rootDir, writerId, witness),
+      );
+      const appended = await final.readEvents(gateId);
+      final.close();
+      if (appended.length !== 2 || appended[1]?.eventType !== "DESIGN_CLEAR") {
+        return fail("durable shard replace must publish the appended bytes");
+      }
+      return ok("writer-shard ledger survives close/reopen with atomic publish");
+    } finally {
+      witness.close();
+      lockManager.close();
     }
-    return ok("writer-shard ledger survives close/reopen with atomic publish");
   });
 
   await run("recovery_object_noreplace", "runtime ReviewGateRecoveryStore", async () => {
@@ -352,6 +504,7 @@ async function main(): Promise<void> {
   } finally {
     root?.close();
     await rm(rootDir, { recursive: true, force: true });
+    await rm(`${rootDir}.witness`, { recursive: true, force: true });
   }
 }
 
