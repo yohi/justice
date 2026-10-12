@@ -41,7 +41,10 @@ import {
   type ReviewGateApprovalLookup,
 } from "./review-gate-approval";
 import { createReviewGateGit } from "./review-gate-git";
-import { createReviewGateEventStore, type ReviewGateEventStore } from "./review-gate-event-store";
+import {
+  createLegacyReviewGateEventStore,
+  type ReviewGateEventStore,
+} from "./review-gate-event-store";
 import {
   createReviewGateHistoryService,
   type ReviewGateHistoryService,
@@ -1752,7 +1755,7 @@ function buildSharedReviewGateRuntimeGraph(
       }
     }
 
-    const eventStore = createReviewGateEventStore(root);
+    const eventStore = createLegacyReviewGateEventStore(root);
     const lockManager = createReviewGateLockManager(root, {
       provider: provider ?? null,
     });

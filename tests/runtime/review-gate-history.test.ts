@@ -7,7 +7,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import type { ReviewGateEvent } from "../../src/core/review-gate-types";
 import { computeReviewScopeId } from "../../src/core/review-gate/identity";
 import {
-  createReviewGateEventStore,
+  createLegacyReviewGateEventStore as createReviewGateEventStore,
   type ReviewGateEventStore,
 } from "../../src/runtime/review-gate-event-store";
 import { createReviewGateRecoveryStore } from "../../src/runtime/review-gate-recovery-store";

@@ -11,7 +11,7 @@ import {
   createReviewGateCoordinator,
   type ReviewGateMutationSubstrate,
 } from "../../src/runtime/review-gate-coordinator";
-import { createReviewGateEventStore } from "../../src/runtime/review-gate-event-store";
+import { createLegacyReviewGateEventStore as createReviewGateEventStore } from "../../src/runtime/review-gate-event-store";
 import { createReviewGateGit, computeUnrelatedIndexFingerprint } from "../../src/runtime/review-gate-git";
 import type { ReviewGateWorkspaceProvider } from "../../src/runtime/review-gate-git";
 import { createReviewGateApprovalLookup } from "../../src/runtime/review-gate-approval";

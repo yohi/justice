@@ -10,7 +10,7 @@ import type {
   ReviewGateEvent,
 } from "../../src/core/review-gate-types";
 import { computeReviewScopeId } from "../../src/core/review-gate/identity";
-import { createReviewGateEventStore } from "../../src/runtime/review-gate-event-store";
+import { createLegacyReviewGateEventStore as createReviewGateEventStore } from "../../src/runtime/review-gate-event-store";
 import { createReviewGateProtocolDescriptor } from "../../src/runtime/review-gate-protocol";
 import { createReviewGateApprovalLookup } from "../../src/runtime/review-gate-approval";
 

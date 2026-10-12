@@ -10,7 +10,7 @@ import {
   loadJusticeLinuxNativeAddon,
   type JusticeLinuxNativeGateRoot,
 } from "../../src/runtime/linux-native-addon";
-import { createReviewGateEventStore } from "../../src/runtime/review-gate-event-store";
+import { createLegacyReviewGateEventStore as createReviewGateEventStore } from "../../src/runtime/review-gate-event-store";
 import { createReviewGateRecoveryStore } from "../../src/runtime/review-gate-recovery-store";
 
 // Focused host proof for the Linux Review Gate substrate (convergence Task 1

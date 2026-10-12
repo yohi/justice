@@ -10,7 +10,7 @@ import {
   type VerifiedReviewGateEvent,
 } from "../../src/core/review-gate/event-schema";
 import {
-  createReviewGateEventStore,
+  createLegacyReviewGateEventStore as createReviewGateEventStore,
   type ReviewGateDispatchRecordV1,
   type ReviewGateJournalEventInput,
 } from "../../src/runtime/review-gate-event-store";
