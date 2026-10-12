@@ -137,3 +137,42 @@ describe("createReviewGateProtocolDescriptor (Task 12 Phase A)", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task 13: semantic validator/table semantics are committed in the fingerprint
+// ---------------------------------------------------------------------------
+
+describe("review protocol fingerprints (Task 13 stage/rule semantics)", () => {
+  it("embeds every registered validation stage and compatibility table in the default fingerprints", () => {
+    const baseline = createReviewGateProtocolDescriptor();
+    const regressed = computeReviewGateProtocolFingerprints(baseline.descriptor, "0".repeat(64));
+    // The semantic validator set (including SEMANTIC_CONTEXT_COMPATIBILITY_V1)
+    // and the pinned compatibility table digest live in the semantic contract,
+    // so the default fingerprints must differ from one computed over a
+    // different contract digest.
+    expect(regressed.designProtocolFingerprint).not.toBe(baseline.designProtocolFingerprint);
+    expect(regressed.planProtocolFingerprint).not.toBe(baseline.planProtocolFingerprint);
+    expect(regressed.reviewProtocolFingerprint).not.toBe(baseline.reviewProtocolFingerprint);
+  });
+
+  it("changes every fingerprint when the deterministic validation semantic contract changes", () => {
+    const baseline = createReviewGateProtocolDescriptor();
+    const changed = computeReviewGateProtocolFingerprints(
+      baseline.descriptor,
+      "1".repeat(64),
+    );
+    expect(changed.designProtocolFingerprint).not.toBe(
+      baseline.designProtocolFingerprint,
+    );
+    expect(changed.planProtocolFingerprint).not.toBe(
+      baseline.planProtocolFingerprint,
+    );
+    expect(changed.reviewProtocolFingerprint).not.toBe(
+      baseline.reviewProtocolFingerprint,
+    );
+    // The override is deterministic, not provisional.
+    expect(changed).toEqual(
+      computeReviewGateProtocolFingerprints(baseline.descriptor, "1".repeat(64)),
+    );
+  });
+});

@@ -28,7 +28,11 @@
  * contract violation throws before any payload is produced.
  */
 
-import type { ArtifactDigest } from "./types.js";
+import type {
+  ArtifactDigest,
+  SemanticContextCompatibilityProofV1,
+  SemanticContextInputsV1,
+} from "./types.js";
 import {
   canonicalizeArtifactPath,
   computeArtifactDigest,
@@ -36,6 +40,15 @@ import {
   isValidArtifactPath,
 } from "./identity.js";
 import type { FindingOwnerScope, ReviewPhase } from "./lineage.js";
+import type {
+  RequirementsSectionDiffV1,
+  VerifiedSectionInventory,
+} from "./requirements-section-inventory.js";
+import {
+  REQUIREMENTS_HEADING_ANCHOR_VERSION,
+  buildRequirementsSectionInventory,
+  diffRequirementsSectionInventories,
+} from "./requirements-section-inventory.js";
 
 /** Stages at which deterministic validators can be mandatory. */
 const VALIDATION_STAGES = [
@@ -52,6 +65,7 @@ const VALIDATION_INPUT_KINDS = [
   "REQUIREMENTS_ARTIFACT",
   "APPROVAL_BINDING",
   "PINNED_INPUT_DIGESTS",
+  "SEMANTIC_COMPATIBILITY_INPUTS",
 ] as const;
 export type ValidationInputKind = (typeof VALIDATION_INPUT_KINDS)[number];
 
@@ -709,7 +723,7 @@ function runDesignRequirementsReferenceConsistency(
       ]);
 }
 
-/** Registry pre-populated with the two v4 in-process validators. */
+/** Registry pre-populated with the v4 in-process validators. */
 export function createDefaultDeterministicValidatorRegistry(): DeterministicValidatorRegistry {
   const registry = new DeterministicValidatorRegistry();
   registry.register(
@@ -720,9 +734,778 @@ export function createDefaultDeterministicValidatorRegistry(): DeterministicVali
     DESIGN_REQUIREMENTS_REFERENCE_CONSISTENCY_V1,
     runDesignRequirementsReferenceConsistency,
   );
+  registry.register(
+    SEMANTIC_CONTEXT_COMPATIBILITY_V1,
+    runSemanticContextCompatibility,
+  );
   return registry;
 }
 
+// ---------------------------------------------------------------------------
+// Task 13: semantic-context compatibility validation (registered, on demand)
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// v4 production validator: SEMANTIC_CONTEXT_COMPATIBILITY_V1 (Task 13)
+// ---------------------------------------------------------------------------
+
+/**
+ * Rule-level descriptor of the registered semantic-context compatibility
+ * validator. It is a non-agent, Justice-owned decision: the rule descriptor
+ * owns severity/owner/violation type; worker or model text can never
+ * contribute a semantic verdict.
+ */
+const SEMANTIC_CONTEXT_COMPATIBILITY_RULE: DeterministicValidationRuleDescriptor =
+  Object.freeze({
+    ruleId: "semantic-context-compatibility",
+    severity: "critical",
+    ownerScope: "requirements",
+    violationType: "SEMANTIC_CONTEXT_COMPATIBILITY_BLOCKED",
+    governingReference: "review-gate/dvf1#semantic-context-transition",
+    violatedContract: "review-gate-semantic-context-compatibility-v1/transition-proof",
+  });
+
+/**
+ * Semantic-transition proof owner. The validator is dispatched on demand
+ * under the *existing* active phase operation whenever a semantic context
+ * change is triggered (no fourth mandatory validation stage): it therefore
+ * accepts every current stage and fails closed (PRECONDITION) at each of
+ * them.
+ */
+export const SEMANTIC_CONTEXT_COMPATIBILITY_V1: DeterministicValidatorDescriptor =
+  Object.freeze({
+    validatorId: "SEMANTIC_CONTEXT_COMPATIBILITY_V1",
+    validatorContractVersion: 1,
+    resultSchemaVersion: 1,
+    applicablePhases: Object.freeze(["design", "plan"] as const),
+    executionKind: "IN_PROCESS" as const,
+    declaredInputs: Object.freeze(["SEMANTIC_COMPATIBILITY_INPUTS"] as const),
+    mandatoryStages: Object.freeze([
+      "BASELINE_ADMISSION",
+      "POST_REMEDIATION_SELF_REVIEW",
+      "PRE_CLEAR",
+    ] as const),
+    stageFailurePolicy: Object.freeze({
+      BASELINE_ADMISSION: "PRECONDITION" as const,
+      POST_REMEDIATION_SELF_REVIEW: "PRECONDITION" as const,
+      PRE_CLEAR: "PRECONDITION" as const,
+    }),
+    rules: Object.freeze([SEMANTIC_CONTEXT_COMPATIBILITY_RULE]),
+  });
+
+// ---------------------------------------------------------------------------
+// Immutable pinned semantic compatibility table
+// ---------------------------------------------------------------------------
+
+export type SemanticCompatibilityPolicyRef = Readonly<{
+  readonly contractId: string;
+  readonly version: string;
+}>;
+
+export type SemanticCompatibilityTableRuleV1 = Readonly<{
+  readonly ruleId: string;
+  readonly ruleVersion: string;
+  readonly result: "EQUIVALENT" | "INCOMPATIBLE";
+}>;
+
+export type PinnedBreakingPolicyPairV1 = Readonly<{
+  readonly ruleId: string;
+  readonly ruleVersion: string;
+  readonly from: Readonly<{ readonly contractId: string; readonly version: string }>;
+  readonly to: Readonly<{ readonly contractId: string; readonly version: string }>;
+}>;
+
+const COMPATIBILITY_UNCHANGED_RULE_ID = "REQUIREMENTS_GOVERNING_UNCHANGED_V1";
+const COMPATIBILITY_CHANGED_RULE_ID = "REQUIREMENTS_GOVERNING_CHANGED_V1";
+
+/**
+ * The immutable pinned compatibility table. Exactly the two registered
+ * governing rules plus the pinned breaking policy-version pairs it emits
+ * INCOMPATIBLE for. Claiming a new table rule is a protocol/validator
+ * authority change, not a runtime decision.
+ */
+export const SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_V1 = Object.freeze({
+  tableId: "review-gate-semantic-compatibility-table",
+  tableVersion: "V1",
+  rules: Object.freeze([
+    Object.freeze({
+      ruleId: COMPATIBILITY_UNCHANGED_RULE_ID,
+      ruleVersion: "V1",
+      result: "EQUIVALENT" as const,
+    }),
+    Object.freeze({
+      ruleId: COMPATIBILITY_CHANGED_RULE_ID,
+      ruleVersion: "V1",
+      result: "INCOMPATIBLE" as const,
+    }),
+  ] as readonly SemanticCompatibilityTableRuleV1[]),
+  breakingPolicyPairs: Object.freeze([
+    Object.freeze({
+      ruleId: COMPATIBILITY_CHANGED_RULE_ID,
+      ruleVersion: "V1",
+      from: Object.freeze({
+        contractId: "review-gate-phase-semantic-policy",
+        version: "1",
+      }),
+      to: Object.freeze({
+        contractId: "review-gate-phase-semantic-policy",
+        version: "2",
+      }),
+    }),
+  ] as readonly PinnedBreakingPolicyPairV1[]),
+});
+
+/** Digest of the pinned compatibility table, verified per validation run. */
+export const SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_DIGEST: string =
+  computeCanonicalJsonFingerprint(SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_V1);
+
+// ---------------------------------------------------------------------------
+// Typed validation input and pure evaluation
+// ---------------------------------------------------------------------------
+
+export type SemanticCompatibilityContextInputsV1 = Readonly<{
+  readonly old: SemanticContextInputsV1;
+  readonly new: SemanticContextInputsV1;
+  readonly triggeringAuthorityEventId: string;
+  readonly verifiedFrontierHash: string;
+}>;
+
+/**
+ * Task 13 typed validation input. Inventories and the section diff come from
+ * the real Task 4 pure producers (built by the invocation site from verified
+ * requirement sources); Task 13 only yields a bounded typed proof, never a
+ * Git authority.
+ */
+export type VerifiedCompatibilityValidationInputV1 = Readonly<{
+  readonly old: VerifiedSectionInventory;
+  readonly new: VerifiedSectionInventory;
+  readonly diff: RequirementsSectionDiffV1;
+  /** Uniquely mapped R0 governing section keys. */
+  readonly governingReferenceSectionKeys: readonly string[];
+  readonly oldAuthorityEventId: string;
+  readonly newAuthorityEventId: string;
+  readonly triggerEventId: string;
+  /** Must equal the pinned {@link SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_DIGEST}. */
+  readonly registeredPolicyDigest: string;
+  readonly contextInputs: SemanticCompatibilityContextInputsV1;
+}>;
+
+export type SemanticCompatibilityClassificationV1 = Readonly<{
+  readonly result: "EQUIVALENT" | "INCOMPATIBLE" | "INDETERMINATE";
+  readonly ruleId: string;
+  readonly ruleVersion: string;
+  readonly reason: string;
+}>;
+
+const INDETERMINATE_RULE_ID = "UNCLASSIFIED_SEMANTIC_DELTA_V1";
+
+function indeterminateClassification(reason: string): SemanticCompatibilityClassificationV1 {
+  return Object.freeze({
+    result: "INDETERMINATE" as const,
+    ruleId: INDETERMINATE_RULE_ID,
+    ruleVersion: "V1",
+    reason,
+  });
+}
+
+export type SemanticContextInputsV1NormalizedProjection = Readonly<{
+  readonly phase: SemanticContextInputsV1["phase"];
+  readonly requirements: Readonly<{
+    readonly source: string;
+    readonly canonicalPath: string;
+    readonly gitMode: SemanticContextInputsV1["requirements"]["gitMode"];
+    readonly governingReferenceManifestDigest: string;
+  }>;
+  readonly policy: Readonly<{
+    readonly contractId: string;
+    readonly version: string;
+    readonly semanticFingerprint: string;
+    readonly lineageFingerprint: string;
+    readonly nc1Fingerprint: string;
+    readonly validatorRegistryDigest: string;
+  }>;
+  readonly upstreamApprovedBindingDigest: string | null;
+}>;
+
+/**
+ * Versioned-normalized semantic-governing projection: exactly the fields
+ * whose equality decides EQUIVALENT. Observational event/commit identifiers,
+ * mutable revision metadata and provider identity are excluded.
+ */
+export function normalizedSemanticGoverningProjection(
+  inputs: SemanticContextInputsV1,
+): SemanticContextInputsV1NormalizedProjection {
+  return Object.freeze({
+    phase: inputs.phase,
+    requirements: Object.freeze({
+      source: inputs.requirements.source,
+      canonicalPath: inputs.requirements.canonicalPath,
+      gitMode: inputs.requirements.gitMode,
+      governingReferenceManifestDigest:
+        inputs.requirements.governingReferenceManifestDigest,
+    }),
+    policy: Object.freeze({
+      contractId: inputs.policy.contractId,
+      version: inputs.policy.version,
+      semanticFingerprint: inputs.policy.semanticFingerprint,
+      lineageFingerprint: inputs.policy.lineageFingerprint,
+      nc1Fingerprint: inputs.policy.nc1Fingerprint,
+      validatorRegistryDigest: inputs.policy.validatorRegistryDigest,
+    }),
+    upstreamApprovedBindingDigest:
+      inputs.upstreamApproved === null ? null : inputs.upstreamApproved.bindingDigest,
+  });
+}
+
+function governingProjectionIsEqual(
+  old: SemanticContextInputsV1,
+  current: SemanticContextInputsV1,
+): boolean {
+  return (
+    computeCanonicalJsonFingerprint(normalizedSemanticGoverningProjection(old)) ===
+    computeCanonicalJsonFingerprint(normalizedSemanticGoverningProjection(current))
+  );
+}
+
+type GoverningTopology = "unchanged" | "governing_only" | "unclassified";
+
+function classifyDiffTopology(
+  input: VerifiedCompatibilityValidationInputV1,
+): GoverningTopology {
+  const { diff } = input;
+  const structuralChanges = diff.counts.added + diff.counts.removed + diff.counts.moved;
+  if (diff.preambleChanged || structuralChanges !== 0) return "unclassified";
+  if (diff.counts.modified === 0) return "unchanged";
+  const governing = new Set<string>(input.governingReferenceSectionKeys);
+  for (const change of diff.changes) {
+    if (change.kind === "UNCHANGED") continue;
+    if (change.kind !== "MODIFIED" || !governing.has(change.sectionKey)) {
+      return "unclassified";
+    }
+  }
+  return "governing_only";
+}
+
+/**
+ * Pure compatibility evaluation against the immutable pinned table.
+ * EQUIVALENT only when the full normalized Requirements document, section
+ * inventory and every normalized semantic-governing field are exactly equal.
+ * INCOMPATIBLE only for an exact registered breaking policy pair whose
+ * document delta stays within uniquely mapped governing clauses. Everything
+ * else is INDETERMINATE (BLOCK).
+ */
+export function evaluateSemanticContextCompatibility(
+  input: VerifiedCompatibilityValidationInputV1,
+): SemanticCompatibilityClassificationV1 {
+  if (input.registeredPolicyDigest !== SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_DIGEST) {
+    return indeterminateClassification("unregistered_compatibility_table_digest");
+  }
+  if (
+    input.oldAuthorityEventId.length === 0 ||
+    input.newAuthorityEventId.length === 0 ||
+    input.triggerEventId.length === 0 ||
+    input.contextInputs.verifiedFrontierHash.length === 0 ||
+    input.contextInputs.triggeringAuthorityEventId !== input.triggerEventId ||
+    input.oldAuthorityEventId === input.newAuthorityEventId
+  ) {
+    return indeterminateClassification("incomplete_authority_binding");
+  }
+  const diffBindingsVerified =
+    input.diff.oldInventoryDigest === input.old.inventoryDigest &&
+    input.diff.newInventoryDigest === input.new.inventoryDigest &&
+    input.diff.oldFullDocumentDigest ===
+      input.old.inventory.normalizedDocumentDigest &&
+    input.diff.newFullDocumentDigest ===
+      input.new.inventory.normalizedDocumentDigest;
+  if (!diffBindingsVerified) {
+    return indeterminateClassification("diff_not_bound_to_inventories");
+  }
+  const topology = classifyDiffTopology(input);
+
+  const pairMatchesBreaking =
+    SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_V1.breakingPolicyPairs.some(
+      (pair) =>
+        pair.from.contractId === input.contextInputs.old.policy.contractId &&
+        pair.from.version === input.contextInputs.old.policy.version &&
+        pair.to.contractId === input.contextInputs.new.policy.contractId &&
+        pair.to.version === input.contextInputs.new.policy.version,
+    );
+  if (pairMatchesBreaking) {
+    if (topology !== "governing_only") {
+      return indeterminateClassification(
+        "breaking_pair_with_unclassified_document_delta",
+      );
+    }
+    const changedRule = SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_V1.rules.find(
+      (rule) => rule.ruleId === COMPATIBILITY_CHANGED_RULE_ID,
+    );
+    if (!changedRule) return indeterminateClassification("compatibility_table_corrupt");
+    return Object.freeze({
+      result: changedRule.result,
+      ruleId: changedRule.ruleId,
+      ruleVersion: changedRule.ruleVersion,
+      reason: "registered_breaking_policy_pair",
+    });
+  }
+
+  // Byte-identity of the full normalized document plus the identical
+  // section-tree/preamble digests serve as the exhaustive inventory equality
+  // check (inventoryDigest also carries observational blob identity).
+  if (
+    input.old.inventory.normalizedDocumentDigest ===
+      input.new.inventory.normalizedDocumentDigest &&
+    input.old.inventory.completeSectionTreeDigest ===
+      input.new.inventory.completeSectionTreeDigest &&
+    input.old.inventory.preambleDigest ===
+      input.new.inventory.preambleDigest &&
+    input.old.inventory.atomicSectionCount ===
+      input.new.inventory.atomicSectionCount &&
+    topology === "unchanged" &&
+    governingProjectionIsEqual(input.contextInputs.old, input.contextInputs.new)
+  ) {
+    const unchangedRule = SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_V1.rules.find(
+      (rule) => rule.ruleId === COMPATIBILITY_UNCHANGED_RULE_ID,
+    );
+    if (!unchangedRule) return indeterminateClassification("compatibility_table_corrupt");
+    return Object.freeze({
+      result: unchangedRule.result,
+      ruleId: unchangedRule.ruleId,
+      ruleVersion: unchangedRule.ruleVersion,
+      reason: "normalized_requirements_and_governing_fields_identical",
+    });
+  }
+
+  if (topology === "governing_only") {
+    return indeterminateClassification(
+      "semantic_governing_delta_without_registered_rule",
+    );
+  }
+  return indeterminateClassification("unclassified_semantic_delta");
+}
+
+// ---------------------------------------------------------------------------
+// Typed bounded proof (SemanticContextCompatibilityProofV1)
+// ---------------------------------------------------------------------------
+
+const semanticCompatibilityProofRegistryDigest: string =
+  computeCanonicalJsonFingerprint([
+    REVIEW_INPUT_BINDING_INTEGRITY_V1,
+    DESIGN_REQUIREMENTS_REFERENCE_CONSISTENCY_V1,
+    SEMANTIC_CONTEXT_COMPATIBILITY_V1,
+  ]);
+
+/**
+ * Build the bounded `SemanticContextCompatibilityProofV1` event payload for a
+ * completed semantic compatibility validation. The supplied classification
+ * must equal a fresh pure re-evaluation of the same inputs; a forged verdict
+ * is refused.
+ */
+export function buildSemanticContextCompatibilityProof(args: {
+  readonly input: VerifiedCompatibilityValidationInputV1;
+  readonly classification: SemanticCompatibilityClassificationV1;
+  readonly validationEventId: string;
+  readonly executableDigest: string;
+}): SemanticContextCompatibilityProofV1 {
+  const recomputed = evaluateSemanticContextCompatibility(args.input);
+  if (
+    recomputed.result !== args.classification.result ||
+    recomputed.ruleId !== args.classification.ruleId ||
+    recomputed.ruleVersion !== args.classification.ruleVersion
+  ) {
+    throw new Error("semantic_compatibility_classification_forged");
+  }
+  if (args.validationEventId.length === 0 || args.executableDigest.length === 0) {
+    throw new Error("semantic_compatibility_proof_binding_missing");
+  }
+  const { contextInputs } = args.input;
+  return Object.freeze({
+    validationEventId: args.validationEventId,
+    triggeringAuthorityEventId: args.input.triggerEventId,
+    validatorId: "SEMANTIC_CONTEXT_COMPATIBILITY_V1" as const,
+    validatorVersion: "SEMANTIC_CONTEXT_COMPATIBILITY_V1",
+    executableDigest: args.executableDigest,
+    registryDigest: semanticCompatibilityProofRegistryDigest,
+    compatibilityTableDigest: SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_DIGEST,
+    oldNormalizedInputsDigest: computeCanonicalJsonFingerprint(
+      normalizedSemanticGoverningProjection(contextInputs.old),
+    ),
+    newNormalizedInputsDigest: computeCanonicalJsonFingerprint(
+      normalizedSemanticGoverningProjection(contextInputs.new),
+    ),
+    result: args.classification.result,
+    ruleId: args.classification.ruleId,
+    ruleVersion: args.classification.ruleVersion,
+    // Git-bound requirements delta evidence (witness-verified blobs) belongs
+    // to Task 15's runtime producer; core yields digest-only bounded proof.
+    requirementsDelta: null,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Runner binding: encode/decode the strict declared-input envelope
+// ---------------------------------------------------------------------------
+
+export type SemanticCompatibilityRunnerEncodingV1 = Readonly<{
+  readonly oldSourceText: string;
+  readonly newSourceText: string;
+  readonly oldGitBlobOid: string;
+  readonly newGitBlobOid: string;
+  /** Pinned full normalized-document digests (declared, verified at run). */
+  readonly oldFullDocumentDigest: string;
+  readonly newFullDocumentDigest: string;
+  readonly governingReferenceSectionKeys: readonly string[];
+  readonly oldAuthorityEventId: string;
+  readonly newAuthorityEventId: string;
+  readonly triggerEventId: string;
+  readonly registeredPolicyDigest: string;
+  readonly verifiedFrontierHash: string;
+  readonly oldContextInputs: SemanticContextInputsV1;
+  readonly newContextInputs: SemanticContextInputsV1;
+}>;
+
+/**
+ * Encode the typed validation input into the strict declared-input envelope.
+ * The value digest is the canonical fingerprint over the exact serialized
+ * entries, so any tampering with the envelope is detected at execution.
+ */
+export function encodeSemanticCompatibilityValidatorInput(
+  encoding: SemanticCompatibilityRunnerEncodingV1,
+): ValidationInputValue {
+  const entries = Object.freeze({
+    oldSource: encoding.oldSourceText,
+    newSource: encoding.newSourceText,
+    oldBlobOid: encoding.oldGitBlobOid,
+    newBlobOid: encoding.newGitBlobOid,
+    oldDocumentDigest: encoding.oldFullDocumentDigest,
+    newDocumentDigest: encoding.newFullDocumentDigest,
+    governingSectionKeys: JSON.stringify(encoding.governingReferenceSectionKeys),
+    oldAuthorityEventId: encoding.oldAuthorityEventId,
+    newAuthorityEventId: encoding.newAuthorityEventId,
+    triggerEventId: encoding.triggerEventId,
+    registeredPolicyDigest: encoding.registeredPolicyDigest,
+    verifiedFrontierHash: encoding.verifiedFrontierHash,
+    oldContext: JSON.stringify(encoding.oldContextInputs),
+    newContext: JSON.stringify(encoding.newContextInputs),
+  });
+  return Object.freeze({
+    digest: computeCanonicalJsonFingerprint(entries),
+    entries,
+  });
+}
+
+interface DecodedSemanticCompatibilityInput {
+  readonly oldSourceText: string;
+  readonly newSourceText: string;
+  readonly oldGitBlobOid: string;
+  readonly newGitBlobOid: string;
+  readonly oldFullDocumentDigest: string;
+  readonly newFullDocumentDigest: string;
+  readonly governingReferenceSectionKeys: readonly string[];
+  readonly oldAuthorityEventId: string;
+  readonly newAuthorityEventId: string;
+  readonly triggerEventId: string;
+  readonly registeredPolicyDigest: string;
+  readonly verifiedFrontierHash: string;
+  readonly oldContextInputs: SemanticContextInputsV1;
+  readonly newContextInputs: SemanticContextInputsV1;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isSemanticContextInputsV1(value: unknown): value is SemanticContextInputsV1 {
+  if (!isRecord(value)) return false;
+  const requirements = value.requirements;
+  const policy = value.policy;
+  const upstreamApproved = value.upstreamApproved;
+  if (!isRecord(requirements) || !isRecord(policy)) return false;
+  return (
+    typeof value.workspaceIdentity === "string" &&
+    typeof value.gateId === "string" &&
+    typeof value.generationId === "string" &&
+    (value.phase === "design" || value.phase === "plan") &&
+    typeof value.phaseBaselineId === "string" &&
+    typeof value.comparisonSegmentId === "string" &&
+    typeof requirements.source === "string" &&
+    typeof requirements.canonicalPath === "string" &&
+    typeof requirements.gitBlobOid === "string" &&
+    (requirements.gitMode === "100644" || requirements.gitMode === "100755") &&
+    typeof requirements.authorityEventId === "string" &&
+    typeof requirements.governingReferenceManifestDigest === "string" &&
+    typeof policy.contractId === "string" &&
+    typeof policy.version === "string" &&
+    typeof policy.semanticFingerprint === "string" &&
+    typeof policy.lineageFingerprint === "string" &&
+    typeof policy.nc1Fingerprint === "string" &&
+    typeof policy.validatorRegistryDigest === "string" &&
+    (upstreamApproved === null ||
+      (isRecord(upstreamApproved) &&
+        typeof upstreamApproved.bindingDigest === "string" &&
+        typeof upstreamApproved.authorityEventId === "string"))
+  );
+}
+
+function isNonEmptyEntry(value: string | undefined): value is string {
+  return typeof value === "string" && value.length !== 0;
+}
+
+function parseContextEntry(entry: string | undefined): SemanticContextInputsV1 | null {
+  if (entry === undefined) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(entry);
+  } catch {
+    return null;
+  }
+  return isSemanticContextInputsV1(parsed) ? parsed : null;
+}
+
+function decodeSemanticCompatibilityEntries(
+  entries: Readonly<Record<string, string>>,
+): DecodedSemanticCompatibilityInput | null {
+  let governingKeys: unknown;
+  try {
+    governingKeys = JSON.parse(entries.governingSectionKeys ?? "");
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(governingKeys)) return null;
+  for (const key of governingKeys) {
+    if (typeof key !== "string" || key.length === 0) return null;
+  }
+  const governingKeysTyped = Object.freeze(governingKeys as readonly string[]);
+  if (new Set(governingKeysTyped).size !== governingKeysTyped.length) return null;
+  const oldSource = entries.oldSource;
+  const newSource = entries.newSource;
+  const oldBlobOid = entries.oldBlobOid;
+  const newBlobOid = entries.newBlobOid;
+  const oldDocumentDigest = entries.oldDocumentDigest;
+  const newDocumentDigest = entries.newDocumentDigest;
+  const oldAuthorityEventId = entries.oldAuthorityEventId;
+  const newAuthorityEventId = entries.newAuthorityEventId;
+  const triggerEventId = entries.triggerEventId;
+  const registeredPolicyDigest = entries.registeredPolicyDigest;
+  const verifiedFrontierHash = entries.verifiedFrontierHash;
+  if (
+    !isNonEmptyEntry(oldSource) ||
+    !isNonEmptyEntry(newSource) ||
+    !isNonEmptyEntry(oldBlobOid) ||
+    !isNonEmptyEntry(newBlobOid) ||
+    !isNonEmptyEntry(oldDocumentDigest) ||
+    !isNonEmptyEntry(newDocumentDigest) ||
+    !isNonEmptyEntry(oldAuthorityEventId) ||
+    !isNonEmptyEntry(newAuthorityEventId) ||
+    !isNonEmptyEntry(triggerEventId) ||
+    !isNonEmptyEntry(registeredPolicyDigest) ||
+    !isNonEmptyEntry(verifiedFrontierHash)
+  ) {
+    return null;
+  }
+  const oldContextInputs = parseContextEntry(entries.oldContext);
+  const newContextInputs = parseContextEntry(entries.newContext);
+  if (oldContextInputs === null || newContextInputs === null) return null;
+  return {
+    oldSourceText: oldSource,
+    newSourceText: newSource,
+    oldGitBlobOid: oldBlobOid,
+    newGitBlobOid: newBlobOid,
+    oldFullDocumentDigest: oldDocumentDigest,
+    newFullDocumentDigest: newDocumentDigest,
+    governingReferenceSectionKeys: governingKeysTyped,
+    oldAuthorityEventId,
+    newAuthorityEventId,
+    triggerEventId,
+    registeredPolicyDigest,
+    verifiedFrontierHash,
+    oldContextInputs,
+    newContextInputs,
+  };
+}
+
+function buildCompatibilityValidationInput(
+  decoded: DecodedSemanticCompatibilityInput,
+): VerifiedCompatibilityValidationInputV1 | null {
+  let old: VerifiedSectionInventory;
+  let current: VerifiedSectionInventory;
+  try {
+    // Real Task 4 pure producers: the inventories are independently built
+    // from the raw verified sources inside the runner, never asserted by a
+    // worker claim.
+    old = buildRequirementsSectionInventory(
+      textEncoder.encode(decoded.oldSourceText),
+      decoded.oldGitBlobOid,
+      REQUIREMENTS_HEADING_ANCHOR_VERSION,
+    );
+    current = buildRequirementsSectionInventory(
+      textEncoder.encode(decoded.newSourceText),
+      decoded.newGitBlobOid,
+      REQUIREMENTS_HEADING_ANCHOR_VERSION,
+    );
+  } catch {
+    return null;
+  }
+  // The declared pins must match the independently rebuilt full normalized
+  // document digests; a forged pin degrades to INDETERMINATE, never to a
+  // false PASS/FAIL.
+  if (
+    old.inventory.normalizedDocumentDigest !== decoded.oldFullDocumentDigest ||
+    current.inventory.normalizedDocumentDigest !== decoded.newFullDocumentDigest
+  ) {
+    return null;
+  }
+  const diff = diffRequirementsSectionInventories(old, current);
+  return Object.freeze({
+    old,
+    new: current,
+    diff,
+    governingReferenceSectionKeys: decoded.governingReferenceSectionKeys,
+    oldAuthorityEventId: decoded.oldAuthorityEventId,
+    newAuthorityEventId: decoded.newAuthorityEventId,
+    triggerEventId: decoded.triggerEventId,
+    registeredPolicyDigest: decoded.registeredPolicyDigest,
+    contextInputs: Object.freeze({
+      old: decoded.oldContextInputs,
+      new: decoded.newContextInputs,
+      triggeringAuthorityEventId: decoded.triggerEventId,
+      verifiedFrontierHash: decoded.verifiedFrontierHash,
+    }),
+  });
+}
+
+/**
+ * Registered in-process runner for `SEMANTIC_CONTEXT_COMPATIBILITY_V1`.
+ * Rebuilds both Requirements inventories through the real Task 4 pure
+ * producers, verifies the declared input envelope digests, and classifies
+ * the semantic transition against the immutable pinned compatibility table.
+ * Every tampered/unverifiable envelope degrades to INDETERMINATE; execution
+ * failures are never cached as semantic truth.
+ */
+function runSemanticContextCompatibility(
+  inputs: DeterministicRunnerInput,
+): DeterministicValidatorResult {
+  const ruleId = SEMANTIC_CONTEXT_COMPATIBILITY_RULE.ruleId;
+  const bound = inputs.SEMANTIC_COMPATIBILITY_INPUTS;
+  if (!bound) {
+    return freezeResult("INDETERMINATE", [
+      { ruleId, outcome: "INDETERMINATE", detailDigest: digestDetail(`${ruleId}/missing_declared_input`) },
+    ]);
+  }
+  if (computeCanonicalJsonFingerprint(bound.entries) !== bound.digest) {
+    return freezeResult("INDETERMINATE", [
+      { ruleId, outcome: "INDETERMINATE", detailDigest: digestDetail(`${ruleId}/tampered_envelope`) },
+    ]);
+  }
+  const decoded = decodeSemanticCompatibilityEntries(bound.entries);
+  const typedInput = decoded === null ? null : buildCompatibilityValidationInput(decoded);
+  if (decoded === null || typedInput === null) {
+    return freezeResult("INDETERMINATE", [
+      { ruleId, outcome: "INDETERMINATE", detailDigest: digestDetail(`${ruleId}/invalid_input`) },
+    ]);
+  }
+  const classification = evaluateSemanticContextCompatibility(typedInput);
+  const detailDigest = digestDetail(
+    `${classification.ruleId}\0${classification.result}\0${classification.reason}`,
+  );
+  if (classification.result === "EQUIVALENT") {
+    return freezeResult("PASS", [{ ruleId, outcome: "PASS", detailDigest }]);
+  }
+  if (classification.result === "INCOMPATIBLE") {
+    return freezeResult("FAIL", [
+      { ruleId, outcome: "FAIL", relation: "NEW", detailDigest },
+    ]);
+  }
+  return freezeResult("INDETERMINATE", [
+    { ruleId, outcome: "INDETERMINATE", detailDigest },
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// Durable validation event references (Task 13 evidence reuse)
+// ---------------------------------------------------------------------------
+
+export type DurableValidationEventKind =
+  | "DETERMINISTIC_VALIDATION_COMPLETED"
+  | "DETERMINISTIC_VALIDATION_REUSED";
+
+export type DurableValidationEventReference = Readonly<{
+  readonly schemaVersion: 1;
+  readonly kind: DurableValidationEventKind;
+  readonly validationEventId: string;
+  readonly validatorId: string;
+  readonly stage: ValidationStage;
+  readonly cacheKey: string;
+  /** Canonical fingerprint of the original checked evidence snapshot. */
+  readonly referencedEvidenceDigest: string;
+  readonly ruleIds: readonly string[];
+  /** Original completing event id for REUSED references; null for COMPLETED. */
+  readonly sourceValidationEventId: string | null;
+}>;
+
+function durableValidationEventReference(
+  kind: DurableValidationEventKind,
+  validationEventId: string,
+  evidence: ValidationEvidence,
+  sourceValidationEventId: string | null,
+): DurableValidationEventReference {
+  if (validationEventId.length === 0) {
+    throw new Error("durable_validation_reference_event_id_missing");
+  }
+  if (kind === "DETERMINISTIC_VALIDATION_COMPLETED" && sourceValidationEventId !== null) {
+    throw new Error("durable_validation_reference_completed_has_no_source");
+  }
+  if (kind === "DETERMINISTIC_VALIDATION_REUSED") {
+    if (evidence.kind !== "semantic") {
+      throw new Error("durable_validation_reference_reuse_requires_semantic_evidence");
+    }
+    if (
+      sourceValidationEventId === null ||
+      sourceValidationEventId.length === 0 ||
+      sourceValidationEventId === validationEventId
+    ) {
+      throw new Error("durable_validation_reference_reuse_source_missing");
+    }
+  }
+  return Object.freeze({
+    schemaVersion: 1 as const,
+    kind,
+    validationEventId,
+    validatorId: evidence.validatorId,
+    stage: evidence.stage,
+    cacheKey: evidence.cacheKey,
+    referencedEvidenceDigest: computeCanonicalJsonFingerprint(evidence),
+    ruleIds: Object.freeze(evidence.ruleOutcomes.map((outcome) => outcome.ruleId)),
+    sourceValidationEventId,
+  });
+}
+
+/** Durable reference for a freshly executed (originally checked) validation. */
+export function deterministicValidationCompleted(
+  validationEventId: string,
+  evidence: ValidationEvidence,
+  sourceValidationEventId?: string | null,
+): DurableValidationEventReference {
+  return durableValidationEventReference(
+    "DETERMINISTIC_VALIDATION_COMPLETED",
+    validationEventId,
+    evidence,
+    sourceValidationEventId ?? null,
+  );
+}
+
+/** Durable reference that reuses the original checked evidence verbatim. */
+export function deterministicValidationReused(
+  validationEventId: string,
+  evidence: ValidationEvidence,
+  sourceValidationEventId: string,
+): DurableValidationEventReference {
+  return durableValidationEventReference(
+    "DETERMINISTIC_VALIDATION_REUSED",
+    validationEventId,
+    evidence,
+    sourceValidationEventId,
+  );
+}
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
