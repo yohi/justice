@@ -12,7 +12,7 @@
  *    expected writer frontier against the witness. Durable events live in
  *    per-writer shards at
  *    `.justice/review-gates/events/<reviewScopeId>/<gateId>/<writerId>.jsonl`.
- *    `scope-index.json` stays a non-authoritative cache.
+ *    `locks/scope-index.json` stays a non-authoritative cache.
  *
  *    The legacy V1/V2 convenience surface (`appendEvents`/`readEvents`/…)
  *    keeps its signatures but is witness-verified: an unenrolled Gate, a
@@ -95,7 +95,7 @@ import type {
 
 const REVIEW_GATES_DIR = ".justice/review-gates";
 const EVENTS_DIR = `${REVIEW_GATES_DIR}/events`;
-const SCOPE_INDEX_FILE = `${REVIEW_GATES_DIR}/scope-index.json`;
+const SCOPE_INDEX_FILE = `${REVIEW_GATES_DIR}/locks/scope-index.json`;
 
 /** Temp-file naming used by the atomic rename writes (`<ledger>.<uuid>.tmp`). */
 const JOURNAL_TEMP_PATTERN =

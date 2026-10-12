@@ -808,7 +808,7 @@ describe("ReviewGateEventStore — scope index", () => {
     closeWitnessFixture(ctx);
   });
 
-  it("persists the scope index as JSON under .justice/review-gates/", async () => {
+  it("persists the scope index as JSON under .justice/review-gates/locks/", async () => {
     const ctx = await freshContext("scopeindexfile");
     const store = createReviewGateEventStore(
       ctx.root,
@@ -817,7 +817,7 @@ describe("ReviewGateEventStore — scope index", () => {
     await store.writeScopeIndex("scope-1", "gate-a");
 
     const bytes = await readFile(
-      path.join(ctx.root, ".justice", "review-gates", "scope-index.json"),
+      path.join(ctx.root, ".justice", "review-gates", "locks", "scope-index.json"),
       "utf8",
     );
     expect(JSON.parse(bytes)).toEqual({ "scope-1": "gate-a" });
