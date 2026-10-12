@@ -25,6 +25,8 @@ import {
 import {
   DESIGN_REQUIREMENTS_REFERENCE_CONSISTENCY_V1,
   REVIEW_INPUT_BINDING_INTEGRITY_V1,
+  SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_DIGEST,
+  SEMANTIC_CONTEXT_COMPATIBILITY_V1,
 } from "../core/review-gate/deterministic-validation";
 import { computeCanonicalJsonFingerprint } from "../core/review-gate/identity";
 import {
@@ -132,9 +134,10 @@ export function createReviewGateProtocolDescriptor(): ReviewGateProtocolDescript
 /** Fingerprint only semantic fields; provider identity/revision is not authority. */
 export function computeReviewGateProtocolFingerprints(
   descriptor: ReviewProtocolDescriptorV1,
+  semanticContractDigestOverride?: string,
 ): Omit<ReviewGateProtocolDescriptor, "descriptor"> {
   const { designPhase, planPhase, crossPhase } = descriptor;
-  const semanticContractDigest = computeDeterministicValidationSemanticContractDigest();
+  const semanticContractDigest = semanticContractDigestOverride ?? computeDeterministicValidationSemanticContractDigest();
   const requirementsPolicy = {
     requirementsResolutionPolicyVersion: descriptor.requirementsResolutionPolicyVersion,
     authorityPolicy: {
@@ -189,15 +192,19 @@ type ReviewProtocolPhaseDescriptorV1WithSemantic = ReviewProtocolPhaseDescriptor
  * Task 8 semantic contract digest: the registered production validator
  * descriptors commit their validator id, contract version, result schema
  * version, applicable phases, mandatory stages, stage failure policy, and
- * rule semantics (PF1 §8.4). Runner/sandbox implementation details never
- * enter the digest.
+ * rule semantics (PF1 §8.4). Task 13 adds the registered on-demand semantic
+ * compatibility validator plus the digest of its immutable pinned
+ * compatibility table. Runner/sandbox implementation details never enter
+ * the digest.
  */
 function computeDeterministicValidationSemanticContractDigest(): string {
   return computeCanonicalJsonFingerprint({
     validators: [
       REVIEW_INPUT_BINDING_INTEGRITY_V1,
       DESIGN_REQUIREMENTS_REFERENCE_CONSISTENCY_V1,
+      SEMANTIC_CONTEXT_COMPATIBILITY_V1,
     ],
+    semanticCompatibilityTableDigest: SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_DIGEST,
   });
 }
 
