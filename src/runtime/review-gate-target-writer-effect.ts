@@ -54,6 +54,12 @@ export function createTargetWriterEffect(context: WitnessContext) {
           )
             throw new WitnessBlocked("lease_stale");
           if (entry.lease === null) throw new WitnessBlocked("lease_stale");
+          if (
+            Object.values(state.data.closingSeals).some((seal) =>
+              seal.targets.some((target) => target.targetIdentityDigest === key),
+            )
+          )
+            throw new WitnessBlocked("closing_seal");
           const bound = Object.freeze({ ...entry.lease });
           const recovered = await reconcileTargetEffect(context, entry);
           if (

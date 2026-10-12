@@ -12,6 +12,7 @@ import {
   preparePublicationFixture,
   type WitnessFixture,
 } from "./review-gate-witness-fixtures.js";
+import { createReviewGateLockManager } from "../../src/runtime/review-gate-lock-manager.js";
 
 describe("protected scope witness", () => {
   let f: WitnessFixture;
@@ -211,5 +212,29 @@ describe("protected scope witness", () => {
     expect(await f.witness.rollbackPreparedPublication(input.publicationId)).toBe("rolled_back");
     expect(await f.witness.recoverPreparedPublication(input.publicationId)).toBe("blocked");
     await expect(f.enroll()).rejects.toThrow("enrollment");
+  });
+  it("runs Gate-owned witness transactions while a Gate lock is held", async () => {
+    const manager = createReviewGateLockManager(f.root, { provider: null });
+    const owned = await createWitnessFixture(manager);
+    try {
+      const gateLock = await manager.acquireGateLock("gate-1");
+      if (gateLock === "occupied") throw new Error("fixture gate lock occupied");
+      try {
+        await expect(owned.witness.readInstallation()).rejects.toThrow("lock_order");
+        const observed = await owned.witness.withGateOwnedWitnessTransaction(async (current) => ({
+          hash: current.hash,
+          revision: current.revision,
+        }));
+        expect(observed.hash).toMatch(/^[a-f0-9]{64}$/);
+        expect(observed.revision).toBeGreaterThanOrEqual(0);
+      } finally {
+        gateLock.release();
+      }
+      expect((await owned.witness.readInstallation()).installationId).toHaveLength(36);
+    } finally {
+      owned.witness.close();
+      manager.close();
+      await rm(owned.sandbox, { recursive: true, force: true });
+    }
   });
 });

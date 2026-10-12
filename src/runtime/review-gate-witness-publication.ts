@@ -12,8 +12,11 @@ import {
   workspaceFrom,
   type WitnessContext,
 } from "./review-gate-witness-context.js";
-import { samePublicationValue, validatePublication } from "./review-gate-publication-validation.js";
-import { createPublicationRecords, publicationLockIds } from "./review-gate-publication-record.js";
+import {
+  createPublicationRecords,
+  publicationLockIds,
+  preparePublicationUnlocked,
+} from "./review-gate-publication-record.js";
 import { verifyTerminalPublication } from "./review-gate-witness-terminal-publication.js";
 import { withWitnessScopeGateLocks } from "./review-gate-lock-manager.js";
 
@@ -72,43 +75,7 @@ export function createWitnessPublication(context: WitnessContext) {
       const bytes = Buffer.from(canonicalEventBytes);
       return withWitnessTransaction(
         context,
-        async (current) => {
-          if (current.data.cancelled[input.publicationId] !== undefined)
-            throw new WitnessBlocked("publication_cancelled");
-          const existing =
-            current.data.pending[input.publicationId] ??
-            current.data.committed[input.publicationId];
-          if (existing !== undefined) {
-            const protectedRecord = await readPrepared(current, input.publicationId);
-            if (
-              !samePublicationValue(existing.input, input) ||
-              !protectedRecord.bytes.equals(bytes)
-            )
-              throw new WitnessBlocked("publication_identity_conflict");
-            return "already_prepared";
-          }
-          if (
-            Object.values(current.data.pending).some(
-              (record) => record.input.workspaceIdentity === input.workspaceIdentity,
-            )
-          )
-            throw new WitnessBlocked("publication_busy");
-          await validatePublication(context, current, input, bytes);
-          await context.store.writeBytes(`stage-${input.newTailDigest}.bin`, bytes, true);
-          await context.store.advance("scope", current, {
-            ...current.data,
-            pending: {
-              ...current.data.pending,
-              [input.publicationId]: {
-                input,
-                stagingDigest: input.newTailDigest,
-                byteLength: bytes.length,
-                preparedRevision: current.revision + 1,
-              },
-            },
-          });
-          return "prepared";
-        },
+        async (current) => preparePublicationUnlocked(context, current, input, bytes),
         publicationLockIds(input),
       );
     },

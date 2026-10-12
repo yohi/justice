@@ -96,6 +96,41 @@ export async function withWitnessTransaction<T>(
     throw new WitnessBlocked("host_io");
   }
 }
+/**
+ * Gate-owned protected witness transaction.
+ *
+ * Identical protected-store, installation, workspace-identity, and
+ * registry-CAS discipline to `withWitnessTransaction`, but designed for the
+ * coordinator that already holds the workspace/scope/Gate admission locks:
+ * it never enforces the admission order and never re-acquires the scope or
+ * Gate locks. The caller owns that higher-level admission authority; every
+ * registry mutation still goes through the protected store's CAS `advance`.
+ */
+export async function withGateOwnedWitnessTransaction<T>(
+  context: WitnessContext,
+  run: (current: WitnessTransaction) => Promise<T>,
+): Promise<T> {
+  try {
+    return await context.store.withGuard("installation", async () => {
+      const installation = await readTrustedWitnessInstallation(
+        context.store,
+        context.options.hostTrustRoot,
+      );
+      const observed = await observeGitWorkspace(context.options.workspaceRoot);
+      if (observed.workspaceIdentity !== context.options.workspaceIdentity)
+        throw new WitnessBlocked("workspace_identity");
+      const current = await context.store.read("scope", scopeRegistrySchema);
+      if (current.data.installationId !== installation.installationId)
+        throw new WitnessBlocked("registry_invalid");
+      return run({ ...current, installation, repositoryIdentity: observed.repositoryIdentity });
+    });
+  } catch (error: unknown) {
+    if (error instanceof WitnessBlocked) throw error;
+    if (error instanceof Error && error.message === "review_gate_witness_busy_retryable")
+      throw new WitnessBlocked("busy_retryable");
+    throw new WitnessBlocked("host_io");
+  }
+}
 export function workspaceFrom(current: WitnessTransaction, identity: string): ScopeWorkspace {
   const workspace = current.data.workspaces[identity];
   if (workspace === undefined || workspace.repositoryIdentity !== current.repositoryIdentity)

@@ -66,7 +66,7 @@ export async function provisionReviewGateWitnessInstallation(
       cancelled: {},
       scopeAuthorizations: {},
     });
-    await store.initialize("target", { targets: {}, handoffs: {}, terminals: {} });
+    await store.initialize("target", { targets: {}, handoffs: {}, terminals: {}, closingSeals: {} });
     await store.writeJson("installation.json", installation, true);
     return installationSchema.parse(installation);
   });

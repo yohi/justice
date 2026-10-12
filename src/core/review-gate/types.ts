@@ -458,3 +458,39 @@ export type VerifiedTerminalWriterRevokeV1 = Readonly<{
   readonly nativeNonWriteabilityProofDigest: string;
   readonly nativeEffectDisposition: string;
 }>;
+export type VerifiedTargetWriterClosingSealV1 = Readonly<{
+  readonly marker: "TARGET_CLOSING_SEALED";
+  readonly closingSealOperationId: string;
+  readonly handoffOperationId: string;
+  readonly terminalTransitionOperationId: string;
+  readonly gateId: string;
+  readonly generationId: string;
+  readonly targets: ReadonlyArray<VerifiedCanonicalMutationTargetV1>;
+  readonly publicationId: string;
+  readonly preparedEventDigest: string;
+  readonly preSealWitnessFrontier: string;
+  readonly preSealTargetFrontier: string;
+  readonly targetLeaseHighWatermark: number;
+  readonly sealedReceiptDigest: string | null;
+}>;
+
+export type VerifiedClosingSealReceiptPayloadV1 = Readonly<{
+  readonly domain: "justice-target-closing-seal-receipt-v1";
+  readonly installationId: string;
+  readonly closingSealOperationId: string;
+  readonly handoffOperationId: string;
+  readonly terminalTransitionOperationId: string;
+  readonly gateId: string;
+  readonly generationId: string;
+  readonly publicationId: string;
+  readonly preparedEventDigest: string;
+  readonly targets: ReadonlyArray<VerifiedCanonicalMutationTargetV1>;
+  readonly preSealTargetHead: string;
+  readonly postSealTargetHead: string;
+  readonly nativeEffectDisposition: string;
+}>;
+
+export type VerifiedClosingSealReceiptV1 = Readonly<{
+  readonly payload: VerifiedClosingSealReceiptPayloadV1;
+  readonly signature: string;
+}>;

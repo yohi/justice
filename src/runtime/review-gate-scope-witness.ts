@@ -7,10 +7,12 @@ import { WitnessBlocked } from "./review-gate-protected-store.js";
 import {
   createWitnessContext,
   verifyWitnessJournals,
+  withGateOwnedWitnessTransaction,
   withWitnessTransaction,
   workspaceFrom,
   type WitnessContext,
   type WitnessOptions,
+  type WitnessTransaction,
 } from "./review-gate-witness-context.js";
 import {
   authorizeWorkspace,
@@ -31,6 +33,7 @@ import {
   type NativeRevocationAuthorizer,
 } from "./review-gate-target-writer-handoff.js";
 import { createTerminalTargetWriterRevoke } from "./review-gate-target-writer-revoke.js";
+import { createTerminalIntentPublication } from "./review-gate-target-writer-closing-seal.js";
 import { createTargetWriterEffect } from "./review-gate-target-writer-effect.js";
 import { targetRegistrySchema } from "./review-gate-target-writer-schema.js";
 import { assertWitnessAdmissionOrder } from "./review-gate-lock-manager.js";
@@ -43,6 +46,7 @@ export function createReviewGateScopeWitness(options: ReviewGateScopeWitnessOpti
   const publication = createWitnessPublication(context);
   const handoff = createTargetWriterHandoff(context);
   const terminal = createTerminalTargetWriterRevoke(context);
+  const closingSeal = createTerminalIntentPublication(context);
   async function recoverHandoff(
     input: Readonly<{
       intent: VerifiedTargetWriterHandoffIntentV1;
@@ -57,9 +61,12 @@ export function createReviewGateScopeWitness(options: ReviewGateScopeWitnessOpti
   const witness = Object.freeze({
     ...handoff,
     ...terminal,
+    ...closingSeal,
     ...createTargetWriterEffect(context),
     recoverPreparedTargetWriterHandoff: recoverHandoff,
     fenceAndAdvanceReviewWriterLease: recoverHandoff,
+    withGateOwnedWitnessTransaction: <T>(run: (current: WitnessTransaction) => Promise<T>) =>
+      withGateOwnedWitnessTransaction(context, run),
     async readVerifiedReviewWriterLease(scopeId: string, gateId: string, targetPath: string) {
       return withWitnessTransaction(context, async () => {
         const state = await context.store.read("target", targetRegistrySchema);

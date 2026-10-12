@@ -18,8 +18,9 @@ import {
   authorizeFirstWorkspaceEnrollment,
 } from "../../src/runtime/review-gate-scope-witness.js";
 import { observeGitWorkspace } from "../../src/runtime/review-gate-scope-admission.js";
+import type { ReviewGateLockManager } from "../../src/runtime/review-gate-lock-manager.js";
 
-export async function createWitnessFixture() {
+export async function createWitnessFixture(lockManager?: ReviewGateLockManager) {
   const sandbox = await mkdtemp(join(tmpdir(), "justice-witness-"));
   const root = join(sandbox, "workspace");
   const directory = join(sandbox, "witness");
@@ -53,6 +54,7 @@ export async function createWitnessFixture() {
     ...(await observeGitWorkspace(root)),
     witnessDirectory: directory,
     hostTrustRoot: admin.publicKey,
+    lockManager,
   });
   const enroll = () =>
     authorizeFirstWorkspaceEnrollment({
@@ -66,33 +68,34 @@ export async function createWitnessFixture() {
   return { sandbox, root, directory, admin, approve, witness, enroll };
 }
 export type WitnessFixture = Awaited<ReturnType<typeof createWitnessFixture>>;
+const genesisPublicationEvent = () => ({
+  eventType: "GATE_CREATED" as const,
+  gateId: "gate-1",
+  writerId: "writer-1",
+  epochId: "epoch-1",
+  emittedAt: "2026-10-11T00:00:00.000Z",
+  payload: {
+    reviewScopeId: "scope-1",
+    designArtifact: {
+      canonicalPath: "docs/design.md",
+      digest: "a".repeat(64),
+      gitMode: "100644",
+    },
+    planArtifact: { canonicalPath: "docs/plan.md", digest: "b".repeat(64), gitMode: "100644" },
+    requirementsResolution: {
+      source: "explicit",
+      canonicalPath: "docs/requirements.md",
+      digest: "c".repeat(64),
+    },
+    reviewProtocolFingerprint: "d".repeat(64),
+  },
+});
 export async function preparePublicationFixture(f: WitnessFixture) {
   const auth = await f.enroll();
   await f.witness.verifyFirstWorkspaceEnrollment(auth);
   const prior = await f.witness.readWorkspaceScopeFrontier();
   const installation = await f.witness.readInstallation();
-  const event = {
-    eventType: "GATE_CREATED",
-    gateId: "gate-1",
-    writerId: "writer-1",
-    epochId: "epoch-1",
-    emittedAt: "2026-10-11T00:00:00.000Z",
-    payload: {
-      reviewScopeId: "scope-1",
-      designArtifact: {
-        canonicalPath: "docs/design.md",
-        digest: "a".repeat(64),
-        gitMode: "100644",
-      },
-      planArtifact: { canonicalPath: "docs/plan.md", digest: "b".repeat(64), gitMode: "100644" },
-      requirementsResolution: {
-        source: "explicit",
-        canonicalPath: "docs/requirements.md",
-        digest: "c".repeat(64),
-      },
-      reviewProtocolFingerprint: "d".repeat(64),
-    },
-  };
+  const event = genesisPublicationEvent();
   const bytes = Buffer.from(
     encodeReviewGateEventRecord(validateReviewGateEventRecord(event)) + "\n",
   );
@@ -200,4 +203,67 @@ export async function prepareHandoffFixture(
     expectedGitMode: "100644",
     pendingNativeEffectReference: null,
   };
+}
+export async function buildSubsequentPublicationFixture(
+  f: WitnessFixture,
+  options: Readonly<{
+    publicationId: string;
+    operationId: string;
+    event: unknown;
+  }>,
+) {
+  const prior = await f.witness.readWorkspaceScopeFrontier();
+  const installation = await f.witness.readInstallation();
+  const priorJournalBytes = Buffer.from(
+    encodeReviewGateEventRecord(validateReviewGateEventRecord(genesisPublicationEvent())) + "\n",
+  );
+  const bytes = Buffer.concat([
+    priorJournalBytes,
+    Buffer.from(
+      encodeReviewGateEventRecord(validateReviewGateEventRecord(options.event)) + "\n",
+    ),
+  ]);
+  const priorHead = prior.writerHeads.find(
+    (head) =>
+      head.scopeId === "scope-1" && head.gateId === "gate-1" && head.writerId === "writer-1",
+  );
+  if (priorHead === undefined) throw new Error("fixture writer head missing");
+  const head = {
+    ...priorHead,
+    sequence: priorHead.sequence + 1,
+    hash: computeArtifactDigest(bytes),
+  };
+  const contents = {
+    workspaceIdentity: prior.workspaceIdentity,
+    workspaceEnrollmentId: prior.workspaceEnrollmentId,
+    scopes: prior.scopes,
+    writerHeads: [...prior.writerHeads.filter((entry) => entry !== priorHead), head],
+  };
+  const nextFrontier = {
+    ...contents,
+    globalFrontierHash: computeCanonicalJsonFingerprint(contents),
+  };
+  const input = {
+    installationId: installation.installationId,
+    workspaceIdentity: prior.workspaceIdentity,
+    scopeId: "scope-1",
+    gateId: "gate-1",
+    writerId: "writer-1",
+    operationId: options.operationId,
+    publicationId: options.publicationId,
+    expectedInstallationFrontier: await f.witness.readInstallationFrontierHash(),
+    expectedGlobalFrontier: prior.globalFrontierHash,
+    expectedWriterSequence: priorHead.sequence,
+    expectedWriterHash: priorHead.hash,
+    newWriterSequence: head.sequence,
+    newWriterHash: head.hash,
+    canonicalShardPath: "scope-1/gate-1/writer-1.jsonl",
+    newTailLength: bytes.length,
+    newTailDigest: head.hash,
+    newGlobalFrontier: nextFrontier.globalFrontierHash,
+    firstEnrollmentAuthorizationId: null,
+    payloadSchemaVersion: 1 as const,
+    nextFrontier,
+  };
+  return { input, bytes };
 }

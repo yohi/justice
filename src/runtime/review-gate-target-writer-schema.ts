@@ -10,6 +10,8 @@ import type {
   VerifiedTargetWriterHandoffIntentV1,
   VerifiedReviewWriterLeaseV1,
   VerifiedTerminalWriterRevokeV1,
+  VerifiedTargetWriterClosingSealV1,
+  VerifiedClosingSealReceiptPayloadV1,
 } from "../core/review-gate/types.js";
 const path = z
   .string()
@@ -111,6 +113,39 @@ const revoke = z.strictObject({
   nativeNonWriteabilityProofDigest: digest,
   nativeEffectDisposition: z.string(),
 }) satisfies z.ZodType<VerifiedTerminalWriterRevokeV1>;
+const closingSealSchema = z
+  .strictObject({
+    marker: z.literal("TARGET_CLOSING_SEALED"),
+    closingSealOperationId: id,
+    handoffOperationId: id,
+    terminalTransitionOperationId: id,
+    gateId: id,
+    generationId: id,
+    targets: z.array(targetSchema).min(1),
+    publicationId: id,
+    preparedEventDigest: digest,
+    preSealWitnessFrontier: digest,
+    preSealTargetFrontier: digest,
+    targetLeaseHighWatermark: ordinal,
+    sealedReceiptDigest: digest.nullable(),
+  })
+  .refine((value) => new Set(value.targets.map((target) => target.targetIdentityDigest)).size === value.targets.length) satisfies z.ZodType<VerifiedTargetWriterClosingSealV1>;
+export const closingSealReceiptPayloadSchema = z
+  .strictObject({
+    domain: z.literal("justice-target-closing-seal-receipt-v1"),
+    installationId: id,
+    closingSealOperationId: id,
+    handoffOperationId: id,
+    terminalTransitionOperationId: id,
+    gateId: id,
+    generationId: id,
+    publicationId: id,
+    preparedEventDigest: digest,
+    targets: z.array(targetSchema).min(1),
+    preSealTargetHead: digest,
+    postSealTargetHead: digest,
+    nativeEffectDisposition: z.string(),
+  }) satisfies z.ZodType<VerifiedClosingSealReceiptPayloadV1>;
 const entry = z.strictObject({
   authority,
   physicalIdentity: z.string().regex(/^[0-9]+:[0-9]+$/),
@@ -134,6 +169,7 @@ export const targetRegistrySchema = z.strictObject({
       nativeProofDigests: z.array(digest),
     }),
   ),
+  closingSeals: z.record(id, closingSealSchema),
 });
 export type TargetRegistry = z.infer<typeof targetRegistrySchema>;
 export type TargetEntry = z.infer<typeof entry>;

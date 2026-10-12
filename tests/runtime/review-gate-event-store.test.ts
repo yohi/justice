@@ -1,11 +1,18 @@
-import { readFile, readdir, rm } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { appendFile, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import type { ReviewGateEvent } from "../../src/core/review-gate-types";
 import {
+  encodeReviewGateEventRecord,
+  validateReviewGateEventRecord,
+  type VerifiedReviewGateEvent,
+} from "../../src/core/review-gate/event-schema";
+import {
   createReviewGateEventStore,
   type ReviewGateDispatchRecordV1,
+  type ReviewGateJournalEventInput,
 } from "../../src/runtime/review-gate-event-store";
 
 let currentRoot = "";
@@ -76,6 +83,69 @@ function dispatchRecord(
     completedAt: null,
     ...overrides,
   });
+}
+
+const DIGEST64 = "a".repeat(64);
+const SHA256_OF_EMPTY = createHash("sha256").update("").digest("hex");
+
+function eventsFilePath(root: string, gateId: string): string {
+  return path.join(root, ".justice", "review-gates", gateId, "events.jsonl");
+}
+
+/** Raw V2 typed event (Task 4c FINDING_VALIDATION_COMPLETED) before codec validation. */
+function rawV2FindingValidationEvent(gateId: string, eventId = "v2-event-1"): unknown {
+  return {
+    schemaVersion: 2,
+    eventId,
+    parentEventId: "v2-parent-0",
+    emittedAt: "2026-10-08T00:00:02.000Z",
+    gateId,
+    epochId: "epoch-1",
+    generationId: "generation-1",
+    writerId: "writer-1",
+    eventType: "FINDING_VALIDATION_COMPLETED",
+    payload: {
+      eventType: "FINDING_VALIDATION_COMPLETED",
+      operationId: "op-v2-1",
+      validationEventId: "validation-1",
+      disposition: "ALREADY_RESOLVED",
+      relation: "EXISTING",
+      lineageId: "lineage-1",
+      priorCommittedResolutionEventId: "resolution-1",
+      pinnedBaselineDigest: DIGEST64,
+      semanticContextFingerprint: DIGEST64,
+      validatedAbsenceProofDigest: DIGEST64,
+      witnessedFrontierHash: DIGEST64,
+    },
+  };
+}
+
+function verifiedV2Event(gateId: string, eventId = "v2-event-1"): VerifiedReviewGateEvent {
+  return validateReviewGateEventRecord(rawV2FindingValidationEvent(gateId, eventId));
+}
+
+/** Clone one verified event and inject an unknown top-level field. */
+function withRogueField(event: VerifiedReviewGateEvent): VerifiedReviewGateEvent {
+  const clone = structuredClone(event);
+  (clone as { rogueField?: string }).rogueField = "rogue";
+  return clone;
+}
+
+/** Codec-invalid V1 event: GATE_CREATED payload misses every required field. */
+function brokenPayloadV1Event(gateId: string): ReviewGateEvent {
+  return { ...gateCreatedEvent(gateId), payload: {} } as unknown as ReviewGateEvent;
+}
+
+/** Codec-invalid V1 event: payload carries an unsafe absolute path string. */
+function unsafePathV1Event(gateId: string): ReviewGateEvent {
+  const base = gateCreatedEvent(gateId);
+  return {
+    ...base,
+    payload: {
+      ...base.payload,
+      designArtifact: { canonicalPath: "/etc/passwd", digest: "d1", gitMode: "100644" },
+    },
+  } as unknown as ReviewGateEvent;
 }
 
 describe("ReviewGateEventStore — durable events", () => {
@@ -389,5 +459,324 @@ describe("ReviewGateEventStore — concurrent append interleaving", () => {
 
     expect(await store.readEvents("gate-a")).toHaveLength(2);
     store.close();
+  });
+});
+
+describe("ReviewGateEventStore — durable canonical journal bytes (Task 6)", () => {
+  it("writes newline-terminated canonical codec lines", async () => {
+    const root = freshRoot();
+    const store = createReviewGateEventStore(root);
+    await store.appendEvents("gate-a", [gateCreatedEvent("gate-a")]);
+
+    const bytes = await readFile(eventsFilePath(root, "gate-a"), "utf8");
+    expect(bytes.endsWith("\n")).toBe(true);
+    const lines = bytes.split("\n").filter((line) => line.length > 0);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toBe(
+      encodeReviewGateEventRecord(validateReviewGateEventRecord(gateCreatedEvent("gate-a"))),
+    );
+    store.close();
+  });
+});
+
+describe("ReviewGateEventStore — protected publication CAS (Task 6)", () => {
+  it("reads the unseen-journal frontier as the sha256 of empty content", async () => {
+    const store = createReviewGateEventStore(freshRoot());
+    expect(await store.readFrontierHash("gate-a")).toBe(SHA256_OF_EMPTY);
+    store.close();
+  });
+
+  it("commits a publication when the expected frontier matches and advances it", async () => {
+    const store = createReviewGateEventStore(freshRoot());
+    const expected = await store.readFrontierHash("gate-a");
+
+    const result = await store.publishEvents("gate-a", [gateCreatedEvent("gate-a")], expected);
+
+    expect(result.eventCount).toBe(1);
+    expect(result.frontierHash).not.toBe(expected);
+    expect(result.frontierHash).not.toBe(SHA256_OF_EMPTY);
+    expect(await store.readFrontierHash("gate-a")).toBe(result.frontierHash);
+    expect(await store.readEvents("gate-a")).toHaveLength(1);
+    store.close();
+  });
+
+  it("rejects an empty publication batch", async () => {
+    const store = createReviewGateEventStore(freshRoot());
+    await expect(
+      store.publishEvents("gate-a", [], await store.readFrontierHash("gate-a")),
+    ).rejects.toThrow("review_gate_event_batch_empty");
+    store.close();
+  });
+
+  it("rejects a stale frontier and leaves the journal byte-identical", async () => {
+    const root = freshRoot();
+    const store = createReviewGateEventStore(root);
+    const genesisFrontier = await store.readFrontierHash("gate-a");
+    const first = await store.publishEvents("gate-a", [gateCreatedEvent("gate-a")], genesisFrontier);
+    const bytesAfterFirst = await readFile(eventsFilePath(root, "gate-a"), "utf8");
+
+    await expect(
+      store.publishEvents("gate-a", [designClearEvent("gate-a")], genesisFrontier),
+    ).rejects.toThrow("review_gate_publication_cas_conflict");
+
+    expect(await readFile(eventsFilePath(root, "gate-a"), "utf8")).toBe(bytesAfterFirst);
+    expect(await store.readFrontierHash("gate-a")).toBe(first.frontierHash);
+    expect(await store.readEvents("gate-a")).toHaveLength(1);
+    const files = await readdir(path.join(root, ".justice", "review-gates", "gate-a"));
+    expect(files.every((name) => !name.endsWith(".tmp"))).toBe(true);
+    store.close();
+  });
+
+  it("rejects a foreign expected frontier without creating the gate directory", async () => {
+    const root = freshRoot();
+    const store = createReviewGateEventStore(root);
+
+    await expect(
+      store.publishEvents("gate-a", [gateCreatedEvent("gate-a")], "0".repeat(64)),
+    ).rejects.toThrow("review_gate_publication_cas_conflict");
+    await expect(readdir(path.join(root, ".justice", "review-gates"))).rejects.toThrow();
+    store.close();
+  });
+
+  it("resolves two racing publications with the same expected frontier to exactly one commit", async () => {
+    const store = createReviewGateEventStore(freshRoot());
+    const expected = await store.readFrontierHash("gate-a");
+
+    const results = await Promise.allSettled([
+      store.publishEvents("gate-a", [gateCreatedEvent("gate-a")], expected),
+      store.publishEvents("gate-a", [designClearEvent("gate-a")], expected),
+    ]);
+
+    expect(results[0]?.status).toBe("fulfilled");
+    expect(results[1]?.status).toBe("rejected");
+    if (results[1]?.status === "rejected") {
+      expect(String(results[1].reason)).toContain("review_gate_publication_cas_conflict");
+    }
+    expect(await store.readEvents("gate-a")).toHaveLength(1);
+    expect((await store.readEvents("gate-a"))[0]?.eventType).toBe("GATE_CREATED");
+    store.close();
+  });
+
+  it("keeps the published frontier stable across store restarts", async () => {
+    const root = freshRoot();
+    const first = createReviewGateEventStore(root);
+    const published = await first.publishEvents(
+      "gate-a",
+      [gateCreatedEvent("gate-a")],
+      await first.readFrontierHash("gate-a"),
+    );
+    first.close();
+
+    const second = createReviewGateEventStore(root);
+    expect(await second.readFrontierHash("gate-a")).toBe(published.frontierHash);
+    expect(await second.readEvents("gate-a")).toHaveLength(1);
+    second.close();
+  });
+
+  it("treats a retried publication after a lost acknowledgement as a CAS conflict, not a duplicate", async () => {
+    const root = freshRoot();
+    const store = createReviewGateEventStore(root);
+    const expected = await store.readFrontierHash("gate-a");
+    await store.publishEvents("gate-a", [gateCreatedEvent("gate-a")], expected);
+    store.close(); // simulated crash before the caller saw the acknowledgement
+
+    const restarted = createReviewGateEventStore(root);
+    await expect(
+      restarted.publishEvents("gate-a", [gateCreatedEvent("gate-a")], expected),
+    ).rejects.toThrow("review_gate_publication_cas_conflict");
+    expect(await restarted.readVerifiedEvents("gate-a")).toHaveLength(1);
+    restarted.close();
+  });
+});
+
+describe("ReviewGateEventStore — V1/V2 codec journal (Task 6)", () => {
+  it("round-trips a V2 typed event through the protected publication path", async () => {
+    const store = createReviewGateEventStore(freshRoot());
+    const verified = verifiedV2Event("gate-a");
+
+    const result = await store.publishEvents(
+      "gate-a",
+      [verified],
+      await store.readFrontierHash("gate-a"),
+    );
+
+    expect(result.eventCount).toBe(1);
+    const readBack = await store.readVerifiedEvents("gate-a");
+    expect(readBack).toHaveLength(1);
+    expect(readBack[0]).toEqual(verified);
+    store.close();
+  });
+
+  it("returns V1 and V2 events in commit order on a mixed journal", async () => {
+    const store = createReviewGateEventStore(freshRoot());
+    await store.appendEvents("gate-a", [gateCreatedEvent("gate-a")]);
+    const verified = verifiedV2Event("gate-a");
+    await store.publishEvents("gate-a", [verified], await store.readFrontierHash("gate-a"));
+
+    const events = await store.readVerifiedEvents("gate-a");
+    expect(events.map((event) => ("schemaVersion" in event ? "v2" : "v1"))).toEqual(["v1", "v2"]);
+    store.close();
+  });
+
+  it("round-trips V1 legacy events through the verified read", async () => {
+    const store = createReviewGateEventStore(freshRoot());
+    await store.appendEvents("gate-a", [gateCreatedEvent("gate-a")]);
+    expect(await store.readVerifiedEvents("gate-a")).toEqual([gateCreatedEvent("gate-a")]);
+    store.close();
+  });
+
+  it("fails closed on the legacy read when the journal contains a V2 event", async () => {
+    const store = createReviewGateEventStore(freshRoot());
+    await store.publishEvents(
+      "gate-a",
+      [verifiedV2Event("gate-a")],
+      await store.readFrontierHash("gate-a"),
+    );
+    await expect(store.readEvents("gate-a")).rejects.toThrow("review_gate_event_unsupported_v2");
+    await expect(
+      store.appendEvents("gate-a", [designClearEvent("gate-a")]),
+    ).rejects.toThrow("review_gate_event_unsupported_v2");
+    store.close();
+  });
+
+  it("rejects codec-invalid V1 events on append", async () => {
+    const store = createReviewGateEventStore(freshRoot());
+    await expect(store.appendEvents("gate-a", [brokenPayloadV1Event("gate-a")])).rejects.toThrow(
+      "review_gate_event_schema_invalid",
+    );
+    store.close();
+  });
+
+  it("rejects events whose payload carries an unsafe absolute path", async () => {
+    const store = createReviewGateEventStore(freshRoot());
+    await expect(store.appendEvents("gate-a", [unsafePathV1Event("gate-a")])).rejects.toThrow(
+      "review_gate_event_unsafe_string",
+    );
+    store.close();
+  });
+
+  it("rejects codec-invalid V2 events on publication", async () => {
+    const store = createReviewGateEventStore(freshRoot());
+    const broken: ReviewGateJournalEventInput = withRogueField(verifiedV2Event("gate-a"));
+    await expect(
+      store.publishEvents("gate-a", [broken], await store.readFrontierHash("gate-a")),
+    ).rejects.toThrow("review_gate_event_schema_invalid");
+    expect(await store.readVerifiedEvents("gate-a")).toHaveLength(0);
+    store.close();
+  });
+
+  it("rejects a publication bound to a different gate", async () => {
+    const store = createReviewGateEventStore(freshRoot());
+    await expect(
+      store.publishEvents("gate-a", [gateCreatedEvent("gate-b")], await store.readFrontierHash("gate-a")),
+    ).rejects.toThrow("review_gate_event_gate_mismatch");
+    store.close();
+  });
+});
+
+describe("ReviewGateEventStore — torn-append and crash recovery (Task 6)", () => {
+  it("fails closed on a torn trailing append", async () => {
+    const root = freshRoot();
+    const store = createReviewGateEventStore(root);
+    await store.appendEvents("gate-a", [gateCreatedEvent("gate-a")]);
+    store.close();
+    await appendFile(eventsFilePath(root, "gate-a"), '{"eventType":"DESIGN_CL');
+
+    const reopened = createReviewGateEventStore(root);
+    await expect(reopened.readEvents("gate-a")).rejects.toThrow("review_gate_journal_torn_tail");
+    await expect(reopened.appendEvents("gate-a", [designClearEvent("gate-a")])).rejects.toThrow(
+      "review_gate_journal_torn_tail",
+    );
+    await expect(reopened.readFrontierHash("gate-a")).rejects.toThrow("review_gate_journal_torn_tail");
+    reopened.close();
+  });
+
+  it("recovers a torn tail, keeps committed events, and re-enables publication", async () => {
+    const root = freshRoot();
+    const store = createReviewGateEventStore(root);
+    await store.appendEvents("gate-a", [gateCreatedEvent("gate-a")]);
+    const committedFrontier = await store.readFrontierHash("gate-a");
+    store.close();
+    await appendFile(eventsFilePath(root, "gate-a"), '{"eventType":"DESIGN_CL');
+
+    const reopened = createReviewGateEventStore(root);
+    const recovery = await reopened.recoverJournal("gate-a");
+    expect(recovery.status).toBe("recovered");
+    expect(recovery.eventCount).toBe(1);
+    expect(recovery.frontierHash).toBe(committedFrontier);
+
+    expect(await reopened.readEvents("gate-a")).toHaveLength(1);
+    const healedBytes = await readFile(eventsFilePath(root, "gate-a"), "utf8");
+    expect(healedBytes).toBe(
+      `${encodeReviewGateEventRecord(validateReviewGateEventRecord(gateCreatedEvent("gate-a")))}\n`,
+    );
+
+    const published = await reopened.publishEvents(
+      "gate-a",
+      [designClearEvent("gate-a")],
+      committedFrontier,
+    );
+    expect(published.eventCount).toBe(2);
+    reopened.close();
+  });
+
+  it("reports a healthy journal as clean without rewriting it", async () => {
+    const root = freshRoot();
+    const store = createReviewGateEventStore(root);
+    await store.appendEvents("gate-a", [gateCreatedEvent("gate-a")]);
+    const bytesBefore = await readFile(eventsFilePath(root, "gate-a"), "utf8");
+    const frontier = await store.readFrontierHash("gate-a");
+
+    const recovery = await store.recoverJournal("gate-a");
+
+    expect(recovery).toEqual({ status: "clean", eventCount: 1, frontierHash: frontier });
+    expect(await readFile(eventsFilePath(root, "gate-a"), "utf8")).toBe(bytesBefore);
+    store.close();
+  });
+
+  it("recovers an unseen gate as a clean empty journal", async () => {
+    const store = createReviewGateEventStore(freshRoot());
+    expect(await store.recoverJournal("gate-a")).toEqual({
+      status: "clean",
+      eventCount: 0,
+      frontierHash: SHA256_OF_EMPTY,
+    });
+    store.close();
+  });
+
+  it("fails closed on a corrupt complete line and never repairs it", async () => {
+    const root = freshRoot();
+    const store = createReviewGateEventStore(root);
+    await store.appendEvents("gate-a", [gateCreatedEvent("gate-a")]);
+    store.close();
+    const ledger = eventsFilePath(root, "gate-a");
+    const bytesBefore = await readFile(ledger, "utf8");
+    await writeFile(ledger, `${bytesBefore}{corrupt bytes\n`, "utf8");
+
+    const reopened = createReviewGateEventStore(root);
+    await expect(reopened.readEvents("gate-a")).rejects.toThrow("review_gate_journal_corrupt");
+    await expect(reopened.recoverJournal("gate-a")).rejects.toThrow("review_gate_journal_corrupt");
+    // Fail-closed recovery leaves the corrupt bytes untouched.
+    expect(await readFile(ledger, "utf8")).toBe(`${bytesBefore}{corrupt bytes\n`);
+    reopened.close();
+  });
+
+  it("never promotes a crashed temporary file and sweeps it during recovery", async () => {
+    const root = freshRoot();
+    const store = createReviewGateEventStore(root);
+    await store.appendEvents("gate-a", [gateCreatedEvent("gate-a")]);
+    store.close();
+    const gateDir = path.join(root, ".justice", "review-gates", "gate-a");
+    // Simulate a crash between the temp write and the atomic rename.
+    await writeFile(path.join(gateDir, `events.jsonl.${randomUUID()}.tmp`), '{"partial', "utf8");
+
+    const reopened = createReviewGateEventStore(root);
+    // The journal itself was never touched by the crashed write.
+    expect(await reopened.readEvents("gate-a")).toHaveLength(1);
+    const recovery = await reopened.recoverJournal("gate-a");
+    expect(recovery.status).toBe("clean");
+    const files = await readdir(gateDir);
+    expect(files.filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    reopened.close();
   });
 });

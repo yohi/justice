@@ -3,6 +3,12 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { VerifiedTargetWriterHandoffIntentV1 } from "../../src/core/review-gate/types.js";
 import {
+  computeArtifactDigest,
+  computeCanonicalJsonFingerprint,
+} from "../../src/core/review-gate/identity.js";
+import { createReviewGateLockManager } from "../../src/runtime/review-gate-lock-manager.js";
+import {
+  buildSubsequentPublicationFixture,
   createWitnessFixture,
   prepareHandoffFixture,
   type WitnessFixture,
@@ -154,5 +160,235 @@ describe("protected canonical target writer", () => {
     await expect(
       f.witness.claimTargetWriterForGate({ intent, epochId: lease.epochId }),
     ).rejects.toThrow("native");
+  });
+  async function createSealedCloseFixture() {
+    const manager = createReviewGateLockManager(f.root, { provider: null });
+    const owned = await createWitnessFixture(manager);
+    const intent = await prepareHandoffFixture(owned);
+    await owned.witness.prepareTargetWriterHandoff(intent);
+    const lease = await owned.witness.recoverPreparedTargetWriterHandoff({
+      intent,
+      epochId: "epoch-1",
+      authorizeNativeRevocation: owned.approve,
+    });
+    const owner = await owned.witness.readVerifiedTargetWriterAuthority(intent.target);
+    const terminal: VerifiedTargetWriterHandoffIntentV1 = {
+      ...intent,
+      purpose: "TERMINAL_REVOKE_ONLY",
+      handoffOperationId: "close-1",
+      originalOperationId: "terminal-1",
+      oldOwner: owner.activeOwner,
+      newOwner: null,
+      targets: [intent.target],
+      closingSealOperationId: "seal-close-1",
+      expectedTargetWriterFrontier: owner.protectedTargetFrontier,
+      expectedGlobalTargetWriterGeneration: owner.globalTargetWriterGeneration,
+    };
+    const publication = await buildSubsequentPublicationFixture(owned, {
+      publicationId: "publication-2",
+      operationId: "publication-operation-2",
+      event: {
+        eventType: "ORCHESTRATION_RESUMED",
+        gateId: "gate-1",
+        writerId: "writer-1",
+        epochId: "epoch-1",
+        emittedAt: "2026-10-11T00:00:01.000Z",
+        payload: { resumedAt: "2026-10-11T00:00:01.000Z" },
+      },
+    });
+    return { manager, owned, intent, lease, terminal, publication };
+  }
+  it("installs and verifies the closing seal on the Gate-owned publication path while the Gate lock is held", async () => {
+    const { manager, owned, intent, terminal, publication } = await createSealedCloseFixture();
+    try {
+      const gateLock = await manager.acquireGateLock("gate-1");
+      if (gateLock === "occupied") throw new Error("fixture gate lock occupied");
+      try {
+        await expect(
+          owned.witness.preparePublication(publication.input, publication.bytes),
+        ).rejects.toThrow("lock_order");
+        expect(
+          await owned.witness.prepareTerminalIntentPublication(
+            {
+              intents: [terminal],
+              terminalTransitionOperationId: "terminal-1",
+              publication: publication.input,
+            },
+            publication.bytes,
+          ),
+        ).toBe("prepared");
+      } finally {
+        gateLock.release();
+      }
+      expect(
+        await owned.witness.prepareTerminalIntentPublication(
+          {
+            intents: [terminal],
+            terminalTransitionOperationId: "terminal-1",
+            publication: publication.input,
+          },
+          publication.bytes,
+        ),
+      ).toBe("already_prepared");
+      const digest = computeArtifactDigest(publication.bytes);
+      const marker = await owned.witness.verifyClosingSeal({
+        closingSealOperationId: "seal-close-1",
+        preparedEventDigest: digest,
+      });
+      expect(marker.marker).toBe("TARGET_CLOSING_SEALED");
+      expect(marker.gateId).toBe("gate-1");
+      expect(marker.targets).toEqual([intent.target]);
+      expect(marker.publicationId).toBe("publication-2");
+      expect(marker.preparedEventDigest).toBe(digest);
+      expect(marker.preSealWitnessFrontier).toMatch(/^[a-f0-9]{64}$/);
+      expect(marker.preSealTargetFrontier).toMatch(/^[a-f0-9]{64}$/);
+      expect(marker.targetLeaseHighWatermark).toBe(1);
+      expect(marker.sealedReceiptDigest).toBeNull();
+      await expect(
+        owned.witness.verifyClosingSeal({
+          closingSealOperationId: "seal-close-1",
+          preparedEventDigest: "0".repeat(64),
+        }),
+      ).rejects.toThrow("digest_mismatch");
+      await expect(
+        owned.witness.verifyClosingSeal({
+          closingSealOperationId: "seal-close-2",
+          preparedEventDigest: digest,
+        }),
+      ).rejects.toThrow("closing_seal_unprepared");
+    } finally {
+      owned.witness.close();
+      manager.close();
+      await rm(owned.sandbox, { recursive: true, force: true });
+    }
+  });
+  it("denies a native worker effect on a sealed target after the closing seal is installed", async () => {
+    const { manager, owned, lease, terminal, publication } = await createSealedCloseFixture();
+    try {
+      const gateLock = await manager.acquireGateLock("gate-1");
+      if (gateLock === "occupied") throw new Error("fixture gate lock occupied");
+      try {
+        await owned.witness.prepareTerminalIntentPublication(
+          {
+            intents: [terminal],
+            terminalTransitionOperationId: "terminal-1",
+            publication: publication.input,
+          },
+          publication.bytes,
+        );
+      } finally {
+        gateLock.release();
+      }
+      await expect(
+        owned.witness.withCurrentReviewWriterLease(lease, async (mutate) => {
+          await mutate({ bytes: Buffer.from("sealed-out"), gitMode: "100644" });
+        }),
+      ).rejects.toThrow("closing_seal");
+      expect(await readFile(join(owned.root, "artifact.md"), "utf8")).toBe("original");
+    } finally {
+      owned.witness.close();
+      manager.close();
+      await rm(owned.sandbox, { recursive: true, force: true });
+    }
+  });
+  it("publishes the sealed terminal intent, binds the authenticated sealed receipt, and fails closed on receipt loss", async () => {
+    const { manager, owned, terminal, publication } = await createSealedCloseFixture();
+    try {
+      let receipt: Awaited<ReturnType<typeof owned.witness.publishSealedTerminalIntent>>;
+      const gateLock = await manager.acquireGateLock("gate-1");
+      if (gateLock === "occupied") throw new Error("fixture gate lock occupied");
+      try {
+        await owned.witness.prepareTerminalIntentPublication(
+          {
+            intents: [terminal],
+            terminalTransitionOperationId: "terminal-1",
+            publication: publication.input,
+          },
+          publication.bytes,
+        );
+        receipt = await owned.witness.publishSealedTerminalIntent({
+          closingSealOperationId: "seal-close-1",
+          authorizeSealedReceipt: owned.approve,
+        });
+        expect(receipt.payload.closingSealOperationId).toBe("seal-close-1");
+        expect(receipt.payload.publicationId).toBe("publication-2");
+        expect(receipt.payload.nativeEffectDisposition).toBe("NO_EFFECT");
+        expect(receipt.payload.preSealTargetHead).toMatch(/^[a-f0-9]{64}$/);
+        expect(receipt.payload.postSealTargetHead).toBe(receipt.payload.preSealTargetHead);
+        await expect(
+          owned.witness.publishSealedTerminalIntent({
+            closingSealOperationId: "seal-close-1",
+            authorizeSealedReceipt: owned.approve,
+          }),
+        ).resolves.toEqual(receipt);
+      } finally {
+        gateLock.release();
+      }
+      const digest = computeArtifactDigest(publication.bytes);
+      const sealed = await owned.witness.verifyClosingSeal({
+        closingSealOperationId: "seal-close-1",
+        preparedEventDigest: digest,
+      });
+      if (sealed.sealedReceiptDigest === null) throw new Error("sealed receipt digest missing");
+      expect(sealed.sealedReceiptDigest).toBe(
+        computeCanonicalJsonFingerprint({ payload: receipt.payload, signature: receipt.signature }),
+      );
+      expect(await owned.witness.classifyPreparedPublication("publication-2")).toBe("committed");
+      const heads = (await owned.witness.readWorkspaceScopeFrontier()).writerHeads;
+      expect(heads[heads.length - 1]?.sequence).toBe(2);
+      await rm(join(owned.directory, `sealed-receipt-${sealed.sealedReceiptDigest}.json`));
+      await expect(
+        owned.witness.verifyClosingSeal({
+          closingSealOperationId: "seal-close-1",
+          preparedEventDigest: digest,
+        }),
+      ).rejects.toThrow("receipt_lost");
+    } finally {
+      owned.witness.close();
+      manager.close();
+      await rm(owned.sandbox, { recursive: true, force: true });
+    }
+  });
+  it("recovers a prepared terminal intent publication after a seal-before-witness crash", async () => {
+    const { manager, owned, terminal, publication } = await createSealedCloseFixture();
+    try {
+      const gateLock = await manager.acquireGateLock("gate-1");
+      if (gateLock === "occupied") throw new Error("fixture gate lock occupied");
+      try {
+        expect(
+          await owned.witness.prepareTerminalIntentPublication(
+            {
+              intents: [terminal],
+              terminalTransitionOperationId: "terminal-1",
+              publication: publication.input,
+            },
+            publication.bytes,
+          ),
+        ).toBe("prepared");
+      } finally {
+        gateLock.release();
+      }
+      const receipt = await owned.witness.recoverPreparedTerminalIntentPublication({
+        closingSealOperationId: "seal-close-1",
+        authorizeSealedReceipt: owned.approve,
+      });
+      expect(receipt.payload.publicationId).toBe("publication-2");
+      expect(await owned.witness.classifyPreparedPublication("publication-2")).toBe("committed");
+      await expect(
+        owned.witness.recoverPreparedTerminalIntentPublication({
+          closingSealOperationId: "seal-close-1",
+          authorizeSealedReceipt: owned.approve,
+        }),
+      ).resolves.toEqual(receipt);
+      const sealed = await owned.witness.verifyClosingSeal({
+        closingSealOperationId: "seal-close-1",
+        preparedEventDigest: computeArtifactDigest(publication.bytes),
+      });
+      expect(sealed.sealedReceiptDigest).not.toBeNull();
+    } finally {
+      owned.witness.close();
+      manager.close();
+      await rm(owned.sandbox, { recursive: true, force: true });
+    }
   });
 });
