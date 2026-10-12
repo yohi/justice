@@ -369,7 +369,7 @@ The failed contracts were evidence gaps rather than substituted helper-only pass
 
 ## Latest focused-runtime result — 2026-10-12
 
-A fresh run of the focused Task 1 integration test completed **48/48 tests**. Its
+A fresh run of the focused Task 1 integration test completed **49/49 tests**. Its
 runtime summary reported `task1Result: PROVEN`, an empty `blockedContracts`
 array, and all **32/32** contract booleans true. The pinned OmO Native, Senpi,
 and Superpowers versions and source revisions matched the values listed above.
@@ -386,16 +386,34 @@ token-free history, exact assistant ToolCall append/read-back, and Case A/Case B
 failure assertions. The earlier 29/32, 30/32, and 31/32 snapshots remain
 historical records and are not the current result.
 
+### Per-task execution-mode read-back
+
+The pinned batch Task result contains item IDs and statuses but omits each
+item's `execution_mode`. The harness now correlates each runtime-reported batch
+task ID with its persisted OmO task-state JSON and reads the exact
+`execution_mode` field. Pre-spawn `pending:` bindings are excluded because they
+do not identify spawned tasks; malformed, ambiguous, missing, or unsafe task
+state produces an unavailable mode rather than a configuration-based guess.
+
+The latest observed mode records include five individual Task calls reported as
+`process` in native `tool_result.details.execution_mode` and both batch items
+reported as `process` in `task_state.execution_mode`. Each batch record includes
+the parent tool-call ID, item index, runtime task ID, mode, and evidence source.
+This establishes which pinned shutdown lifecycle applies to both batch children.
+
 ### Latest verification
 
 ```text
-Focused Task 1 integration: 48 passed, 0 failed
+Focused Task 1 integration: 49 passed, 0 failed
 Runtime summary: Task 1 PROVEN; 32 contracts true; 0 blocked
-Full suite: 2,320 passed, 5 skipped; 168 files (167 passed, 1 skipped)
+Full suite: 2,321 passed, 5 skipped; 168 files (167 passed, 1 skipped)
 TypeScript: PASS (`bun run typecheck`)
-Lint: 0 errors, 297 warnings (`bun run lint`)
+Lint: 0 errors, 302 warnings (`bun run lint`)
 Build: PASS (`bun run build`)
 ```
 
 These repository-required checks completed against the fixture and report state
-above.
+above. One preceding full-suite attempt transiently failed the protected,
+untracked process-supervisor test because the terminated descendant was briefly
+visible as a Linux zombie (`Z`). The protected test passed standalone, and the
+full-suite rerun above passed; the protected file remained unchanged.

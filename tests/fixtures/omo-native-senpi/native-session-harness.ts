@@ -1,11 +1,13 @@
 import { spawnSync } from "node:child_process";
 import {
-existsSync,
-mkdirSync,
-mkdtempSync,
-readFileSync,
-rmSync,
-writeFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -122,6 +124,43 @@ async function run(
 
 function json<T = unknown>(path: string): T {
   return JSON.parse(readFileSync(path, "utf8")) as T;
+}
+
+function readTaskStateExecutionMode(
+  agentRoot: string,
+  taskId: string,
+): "in-process" | "process" | null {
+  if (!/^st_[A-Za-z0-9_-]+$/u.test(taskId)) return null;
+  const projectsRoot = join(agentRoot, "projects");
+  let projects: Array<{ readonly name: string; isDirectory(): boolean }>;
+  try {
+    projects = readdirSync(projectsRoot, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+
+  const matches: Array<"in-process" | "process"> = [];
+  for (const project of projects) {
+    if (!project.isDirectory()) continue;
+    const tasksDirectory = join(projectsRoot, project.name, "senpi-task", "tasks");
+    const taskStatePath = join(tasksDirectory, `${taskId}.json`);
+    try {
+      const directoryStat = lstatSync(tasksDirectory);
+      if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) continue;
+      const stateStat = lstatSync(taskStatePath);
+      if (!stateStat.isFile() || stateStat.isSymbolicLink()) return null;
+      const state: unknown = JSON.parse(readFileSync(taskStatePath, "utf8"));
+      const parsed = z.object({
+        task_id: z.string(),
+        execution_mode: z.enum(["in-process", "process"]),
+      }).passthrough().safeParse(state);
+      if (!parsed.success || parsed.data.task_id !== taskId) return null;
+      matches.push(parsed.data.execution_mode);
+    } catch {
+      if (existsSync(taskStatePath)) return null;
+    }
+  }
+  return matches.length === 1 ? matches[0] ?? null : null;
 }
 
 function waitForEvidenceFile(path: string): string {
@@ -797,6 +836,52 @@ async function main(): Promise<void> {
       freshReadReauthorizedAfterFailure &&
       caseBLateEchoSanitized &&
       harnessFinalScanSafe;
+    const directTaskExecutionModes = parentRows
+      .filter((row) => row.event === "tool_result" && row.toolName === "task")
+      .flatMap((row) => {
+        const details = isRecord(row.details) ? row.details : {};
+        if (Array.isArray(details.items) || typeof row.toolCallId !== "string") return [];
+        const runtimeTaskId = typeof details.task_id === "string" ? details.task_id : null;
+        const reportedMode = details.execution_mode;
+        const executionMode =
+          reportedMode === "in-process" || reportedMode === "process"
+            ? reportedMode
+            : runtimeTaskId === null
+              ? null
+              : readTaskStateExecutionMode(sandbox.agent, runtimeTaskId);
+        return [{
+          toolCallId: row.toolCallId,
+          runtimeTaskId,
+          executionMode,
+          modeSource:
+            reportedMode === "in-process" || reportedMode === "process"
+              ? "tool_result.details.execution_mode"
+              : executionMode === null
+                ? "unavailable"
+                : "task_state.execution_mode",
+        }];
+      });
+    const batchTaskExecutionModes = parentRows.flatMap((row) => {
+      if (
+        row.event !== "task_batch_binding_normalized" ||
+        typeof row.runtimeTaskId !== "string" ||
+        typeof row.batchItemIndex !== "number"
+      ) {
+        return [];
+      }
+      const runtimeTaskId = row.runtimeTaskId;
+      const executionMode = readTaskStateExecutionMode(sandbox.agent, runtimeTaskId);
+      return [
+        {
+          toolCallId: typeof row.parentToolCallId === "string" ? row.parentToolCallId : null,
+          batchItemIndex: row.batchItemIndex,
+          runtimeTaskId,
+          executionMode,
+          modeSource: executionMode === null ? "unavailable" : "task_state.execution_mode",
+        },
+      ];
+    });
+    const taskExecutionModes = [...directTaskExecutionModes, ...batchTaskExecutionModes];
 
     summary = {
       task1Result: blockedContracts.length === 0 ? "PROVEN" : "BLOCKED",
@@ -826,15 +911,7 @@ async function main(): Promise<void> {
         taskEventKeys: taskCall?.eventKeys ?? [],
         currentSessionActivationObservedAtTask: taskCall?.currentSessionActivationObserved ?? false,
         runtimeTaskId: runtimeTaskId ?? null,
-        taskExecutionModes: parentRows
-          .filter((row) => row.event === "tool_result" && row.toolName === "task")
-          .map((row) => {
-            const details = isRecord(row.details) ? row.details : {};
-            return {
-              toolCallId: typeof row.toolCallId === "string" ? row.toolCallId : null,
-              executionMode: typeof details.execution_mode === "string" ? details.execution_mode : null,
-            };
-          }),
+        taskExecutionModes,
         taskInputMutationReachedNativeCall: mutableInput,
         authenticatedProtocolAffiliationObserved,
         activationBindingValidated,

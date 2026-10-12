@@ -75,6 +75,33 @@ describe("Justice v5 OmO Native / Senpi / Superpowers evidence spike", () => {
       ]),
     );
   });
+  it("records the observed execution mode for every spawned batch task item", () => {
+    const observations = summary.observed?.taskExecutionModes;
+    expect(Array.isArray(observations)).toBe(true);
+    if (!Array.isArray(observations)) throw new Error("Task execution-mode observations are unavailable");
+    const batchModes = observations.filter(isRecord).filter(
+      (row) => row.toolCallId === "justice-spike-task-batch",
+    );
+    expect(batchModes).toHaveLength(2);
+    expect(batchModes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolCallId: "justice-spike-task-batch",
+          batchItemIndex: 0,
+          runtimeTaskId: expect.stringMatching(/^st_/u),
+          executionMode: "process",
+          modeSource: "task_state.execution_mode",
+        }),
+        expect.objectContaining({
+          toolCallId: "justice-spike-task-batch",
+          batchItemIndex: 1,
+          runtimeTaskId: expect.stringMatching(/^st_/u),
+          executionMode: "process",
+          modeSource: "task_state.execution_mode",
+        }),
+      ]),
+    );
+  });
   it("native_background_task_returns_runtime_id_without_becoming_task_identity", () =>
     contract("native_background_task_returns_runtime_id_without_becoming_task_identity"));
   it("native_task_send_continuation_remains_omo_owned", () =>
