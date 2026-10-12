@@ -22,6 +22,9 @@ export const RpcSessionDriverSummarySchema = z.object({
   rpcResponseTrace: z.array(z.string()).optional(),
   runtimeMode: z.literal("rpc").optional(),
   sessionId: z.string().optional(),
+  listedSessionCount: z.number().optional(),
+  attachedSessionCount: z.number().optional(),
+  closedSessionCount: z.number().optional(),
   agentEndCount: z.number().optional(),
   entryAppendedObservations: z.array(RPC_RECORD_SCHEMA).optional(),
   syntheticToolResultObservations: z.array(RPC_RECORD_SCHEMA).optional(),
@@ -207,6 +210,7 @@ export function observeAppendedEntry(input: {
     syntheticToolResults.push({
       sessionId: input.sessionId,
       entryId: entry.id,
+      messageId: typeof message.id === "string" ? message.id : null,
       toolCallId: message.toolCallId,
       role: message.role,
       isError: message.isError === true,

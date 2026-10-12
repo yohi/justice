@@ -1,6 +1,6 @@
 # OmO Native v5.1.17 / Senpi v2026.10.8 Contract Evidence
 
-**Status:** BLOCKED — Task 1 currently has 31/32 PROVEN and 1/32 BLOCKED
+**Status:** PROVEN — latest focused pinned-runtime run reports 32/32 contracts PROVEN
 **Task:** Justice v5 Implementation Plan — Revised Task 1 Evidence Spike
 **Scope:** tests / fixtures / probes / raw evidence / report only
 
@@ -321,3 +321,81 @@ and the final full-suite rerun passed. Its content and SHA-256 were unchanged.
 ## Change boundary
 
 Only the Task 1 contract integration test, fixture probe/runtime files under `tests/fixtures/omo-native-senpi/`, and this report are included in the repair. No production source, package manifest/lockfile, config, or CI files are changed. The upstream runtime environment used a deterministic mock provider; no external model/provider request was made.
+
+## Prior continuation — 2026-10-12 (superseded by the latest run)
+
+That pinned-runtime focused run was **BLOCKED: 29/32 PROVEN, 3/32 BLOCKED**. Its result is retained as dated prior evidence; the then-current accounting was:
+
+```text
+PROVEN: 29
+BLOCKED:
+  task1_authenticated_protocol_affiliation_is_bound_without_prompt_inference
+  task1_capability_never_enters_persisted_session_history
+  task1_unknown_tool_capability_echo_is_sanitized_before_persistence
+TASKS_2_14: NOT_AUTHORIZED
+```
+
+### Case B — Justice sanitizer failure
+
+Case B is now **PROVEN** by a same-session chain: the real pinned `message_end` callback observed the capability-bearing Task call, captured and sanitized the candidate, injected the bounded Justice sanitizer failure, replaced the canonical assistant message in place, invalidated the candidate receipts/live capability/activation, rejected the old receipt replay, required a fresh selected-method read before reauthorization, and sanitized a late capability echo. The parent session's shutdown read-back found exactly one matching minimal fallback in both `SessionManager.getEntries()` and its JSONL; the two entry sets reconciled, and both were token-free. The failed call had no trusted task identity or authenticated affiliation.
+
+The Case A provider-stream error remains a separate `BLOCKED` control: the host error and authority invalidation were observed, but the control does not yet establish the post-error late-response and stale-authority checks required by the approved plan. Its host-generated error shape is not compared with Justice's minimal Case B fallback.
+
+### Child-session shutdown coverage
+
+The isolated scan remains token-free and safe, and the parent history is complete. The latest run observed nine session IDs (one parent and seven child sessions plus the RPC session), but only two `session_shutdown` history read-backs. The public Senpi RPC `list_sessions` result exposed one attached session; `close_session` successfully closed that handle but did not produce shutdown read-backs for the other child sessions. No shutdown event or persistence evidence is synthesized. The authenticated-protocol and persisted-history contracts remain BLOCKED until each observed session has a complete shutdown read-back.
+
+Pinned-source inspection confirms shutdown ownership is in OmO's task lifecycle (`wireEventBridge` → `suspendOnSessionShutdown`). Senpi's public `close_session` releases only the caller's attached route. The fixture observed one listed/attached/closed RPC route; it did not receive handles for the seven child histories. A bounded graceful-exit wait and a real OmO `task_cancel` of the completed background task also did not yield the missing shutdown records (`task_cancel` returned `noop: completed`). Further progress requires a supported child-session teardown/readback surface or approved contract reconciliation; synthetic events and private APIs remain excluded.
+
+The fresh fixture observation also records `execution_mode: process` for Task calls `justice-spike-task-2`, `justice-spike-task-3`, `justice-spike-nontask-capability-echo`, `justice-spike-stale-replay`, and `justice-spike-post-failure-task`; the batch Task result did not expose its mode. Setting only the fixture's `task.resume_children` to `false` did not increase the shutdown read-back count.
+
+Per the user's fixture-only choice, `task.resume_children=false` was also tested so OmO would dispose resident children rather than park them at parent shutdown. The pinned run still produced only **2/9** shutdown history read-backs, and focused Task 1 remained **43 passed / 3 failed**. This documented setting did not close the evidence gap.
+
+The latest fixture telemetry reports `execution_mode: process` for five individual Task calls; the batch result omits that field. This confirms the gap is on the configured process-child path. An in-process-only fixture would be a different execution profile and has not been used to promote any of the 32 contracts.
+
+The unknown-tool call and synthetic error result were persisted through the RPC observer, with no token in the observed arguments/result. The extension's actual sanitizer callback did not observe the matching synthetic result before persistence, so this contract remains BLOCKED.
+
+### Verification for the superseded run
+
+```text
+Focused Task 1 integration: 44 passed, 3 failed (the three contracts listed above)
+TypeScript: PASS (`bun run typecheck`)
+Lint: 0 errors, 297 warnings (`bun run lint`)
+Build: PASS (`bun run build`)
+Full suite, last run before the latest RPC teardown probe: 2,315 passed, 5 skipped, 3 failed
+```
+
+The failed contracts were evidence gaps rather than substituted helper-only passes. No commit or push was made at that point.
+
+## Latest focused-runtime result — 2026-10-12
+
+A fresh run of the focused Task 1 integration test completed **48/48 tests**. Its
+runtime summary reported `task1Result: PROVEN`, an empty `blockedContracts`
+array, and all **32/32** contract booleans true. The pinned OmO Native, Senpi,
+and Superpowers versions and source revisions matched the values listed above.
+
+The unknown-tool evidence includes the actual assistant ToolCall persisted in
+JSONL with its capability marker/token absent, plus a linked synthetic
+`message_end` sanitizer observation for the same call ID with
+`sanitizationChanged: false`. The registered invalid-schema synthetic result was
+also observed. These are runtime observations, not helper-only evidence. This
+supersedes the earlier unknown-tool BLOCKED snapshots in this report.
+
+The passing contract summary also includes the authenticated protocol,
+token-free history, exact assistant ToolCall append/read-back, and Case A/Case B
+failure assertions. The earlier 29/32, 30/32, and 31/32 snapshots remain
+historical records and are not the current result.
+
+### Latest verification
+
+```text
+Focused Task 1 integration: 48 passed, 0 failed
+Runtime summary: Task 1 PROVEN; 32 contracts true; 0 blocked
+Full suite: 2,320 passed, 5 skipped; 168 files (167 passed, 1 skipped)
+TypeScript: PASS (`bun run typecheck`)
+Lint: 0 errors, 297 warnings (`bun run lint`)
+Build: PASS (`bun run build`)
+```
+
+These repository-required checks completed against the fixture and report state
+above.

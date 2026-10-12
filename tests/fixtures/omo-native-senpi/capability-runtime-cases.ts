@@ -162,6 +162,7 @@ export type CapabilityRuntimeContractsInput = {
 
 export type CapabilityRuntimeContracts = {
   readonly contracts: Readonly<Record<CapabilityRuntimeCaseName, boolean>>;
+  readonly diagnostics: Readonly<Record<string, boolean>>;
 };
 
 export function evaluateCapabilityRuntimeContracts(
@@ -363,7 +364,7 @@ export function evaluateCapabilityRuntimeContracts(
     expectedHistorySessionIds,
   );
   const assistantAppendRows = rows.filter((row) => row.event === "assistant_tool_call_append_observed");
-  const capabilityTaskAppendCallIds = ["justice-spike-task-2", "justice-spike-task-fallback"] as const;
+  const capabilityTaskAppendCallIds = ["justice-spike-task-2"] as const;
   const capabilityTaskAppendRows = assistantAppendRows.filter((row) =>
     capabilityTaskAppendCallIds.some((toolCallId) => row.toolCallId === toolCallId),
   );
@@ -408,50 +409,103 @@ export function evaluateCapabilityRuntimeContracts(
     finalScanClassesComplete &&
     sessionManagerHistoryReadbackComplete;
 
-  // RG-002.2: real processing failure after capture/sanitation with the runtime's
-  // same-role minimal error fallback persisted, token-free, without a raw exception
-  // stack, without outbound receipt, and without executing the trusted task.
-  const fallbackInjectionRows = prow.filter((row) => row.event === "message_end_forced_failure_injected");
-  const fallbackArmedSanitized = prow.some(
-    (row) => row.event === "message_end_sanitized" && row.forcedFailureArmed === true,
-  );
-  const fallbackObserved = prow.filter((row) => row.event === "message_end_error_fallback_observed");
-  const fallbackSameRoleMinimal = fallbackObserved.some(
+  // RG-002.2 is Case B: a Justice sanitizer failure inside the real message_end
+  // callback, followed by its exact minimal fallback in that same session history.
+  // Case A's host error is a separate control; its non-minimal upstream shape cannot
+  // satisfy or invalidate this Justice-owned fallback contract.
+  const sanitizerFailureRow = prow.find((row) => row.event === "sanitizer_failure_fault_injected");
+  const sanitizerFailureCallId =
+    typeof sanitizerFailureRow?.toolCallId === "string" ? sanitizerFailureRow.toolCallId : undefined;
+  const sanitizerFailureReadback = prow.find(
     (row) =>
-      row.sameRoleFallback === true &&
-      row.minimalContent === true &&
-      row.errorMessagePresent === true &&
-      row.rawExceptionStack === false &&
-      row.hadCapabilityToken === false,
+      row.event === "session_manager_history_readback" &&
+      row.phase === "session_shutdown" &&
+      row.sessionId === sanitizerFailureRow?.sessionId,
   );
-  const fallbackToolCallId = fallbackInjectionRows
-    .map((row) => String(row.toolCallId))
-    .find((id) => id.length > 0);
-  const noTaskExecutionForFailedCall =
-    fallbackToolCallId !== undefined &&
-    rows
-      .filter((row) => row.event === "tool_call" && String(row.toolCallId) === fallbackToolCallId)
-      .every((row) => row.forcedFailureBlock === true) &&
-    rows.some(
+  const sanitizerFailureFallbackPersisted =
+    sanitizerFailureReadback?.headerValid === true &&
+    sanitizerFailureReadback.headerCount === 1 &&
+    sanitizerFailureReadback.entryIdsAndBranchesMatch === true &&
+    sanitizerFailureReadback.sanitizerFailureFallbackMemoryEntries === 1 &&
+    sanitizerFailureReadback.sanitizerFailureFallbackDiskEntries === 1 &&
+    sanitizerFailureReadback.tokenFoundInMemoryEntries === false &&
+    sanitizerFailureReadback.tokenFoundInDiskEntries === false &&
+    sanitizerFailureReadback.unsafeStorage === false;
+  const sanitizerFailureNoTrustedExecution =
+    sanitizerFailureCallId !== undefined &&
+    prow.some(
       (row) =>
         row.event === "tool_call" &&
-        String(row.toolCallId) === fallbackToolCallId &&
+        String(row.toolCallId) === sanitizerFailureCallId &&
         row.forcedFailureBlock === true,
     ) &&
-    !rows.some((row) => row.event === "tool_result" && String(row.toolCallId) === fallbackToolCallId) &&
-    !rows.some((row) => row.event === "runtime_task_identity_observed" && String(row.toolCallId) === fallbackToolCallId) &&
-    !rows.some((row) => row.event === "capability_outbound_captured" && String(row.toolCallId) === fallbackToolCallId);
+    !prow.some(
+      (row) => row.event === "tool_result" && String(row.toolCallId) === sanitizerFailureCallId,
+    ) &&
+    !prow.some(
+      (row) => row.event === "runtime_task_identity_observed" && String(row.toolCallId) === sanitizerFailureCallId,
+    ) &&
+    !prow.some(
+      (row) =>
+        row.event === "authenticated_protocol_affiliation_observed" &&
+        String(row.toolCallId) === sanitizerFailureCallId,
+    );
+  const sanitizerFailureReplayRejected =
+    sanitizerFailureCallId !== undefined &&
+    prow.some(
+      (row) =>
+        row.event === "sanitizer_failure_receipt_replay_rejected" &&
+        row.toolCallId === sanitizerFailureCallId &&
+        row.receiptReplayRejected === true,
+    );
+  const sanitizerFailureFreshRead =
+    sanitizerFailureCallId !== undefined &&
+    prow.some(
+      (row) =>
+        row.event === "activation_evidence" &&
+        row.observedCallOrInputId === "justice-spike-case-b-reauthorizing-read" &&
+        prow.some(
+          (affiliation) =>
+            affiliation.event === "authenticated_protocol_affiliation_observed" &&
+            affiliation.toolCallId === "justice-spike-post-failure-task" &&
+            affiliation.issuedFromReadToolCallId === "justice-spike-case-b-reauthorizing-read",
+        ),
+    );
+  const sanitizerFailureLateResponseSanitized =
+    prow.some(
+      (row) =>
+        row.event === "message_end_sanitized" &&
+        row.toolCallId === "justice-spike-case-b-late-echo" &&
+        row.hadCapability === true,
+    ) &&
+    prow.some(
+      (row) =>
+        row.event === "session_manager_history_readback" &&
+        row.phase === "session_shutdown" &&
+        row.entryIdsAndBranchesMatch === true &&
+        row.tokenFoundInMemoryEntries === false &&
+        row.tokenFoundInDiskEntries === false &&
+        row.unsafeStorage === false,
+    );
   const postFallbackScanSafe = storageScanRows.some(
-    (row) =>
-      (row.label === "after_error_fallback" || row.label === "final_authoritative") &&
-      row.tokenFound === false &&
-      row.unsafeStorage === false,
+    (row) => row.label === "final_authoritative" && row.tokenFound === false && row.unsafeStorage === false,
   );
-  const messageEndFallbackPreventsTokenPersistence =
-    fallbackInjectionRows.length > 0 &&
-    fallbackArmedSanitized &&
-    fallbackSameRoleMinimal &&
-    noTaskExecutionForFailedCall &&
+  const messageEndFallbackPreventsTokenPersistenceOnError =
+    sanitizerFailureRow?.failureSurface === "message_end_guard" &&
+    sanitizerFailureRow.messageEndHookObserved === true &&
+    sanitizerFailureRow.failureInjectedAfterCaptureAndSanitation === true &&
+    sanitizerFailureRow.candidateReceiptCaptured === true &&
+    sanitizerFailureRow.sanitizedInputTokenFree === true &&
+    sanitizerFailureRow.candidateReceiptsInvalidated === true &&
+    sanitizerFailureRow.liveCapabilityInvalidated === true &&
+    sanitizerFailureRow.activationInvalidated === true &&
+    sanitizerFailureRow.postFailureProvenance !== "superpowers" &&
+    sanitizerFailureRow.exactMinimalFallbackObserved === true &&
+    sanitizerFailureFallbackPersisted &&
+    sanitizerFailureNoTrustedExecution &&
+    sanitizerFailureReplayRejected &&
+    sanitizerFailureFreshRead &&
+    sanitizerFailureLateResponseSanitized &&
     postFallbackScanSafe;
 
   // RG-002.3: the synthetic unknown-tool result path — real unknown-tool emission,
@@ -471,27 +525,50 @@ export function evaluateCapabilityRuntimeContracts(
           row.persistedKnownCapabilityTokenAbsent === true &&
           row.capabilityAbsentFromArguments === true,
       ),
-    );
-  const unknownToolSyntheticSanitized = Array.from(unknownToolCallIds).every((toolCallId) =>
-    rows.some(
+  );
+  const resultHasLinkedMessageEndSanitization = (result: EvidenceRow): boolean => {
+    if (
+      typeof result.sessionId !== "string" ||
+      typeof result.toolCallId !== "string"
+    ) {
+      return false;
+    }
+    const linkedMessageEndObservations = rows.filter(
       (row) =>
-        row.event === "rpc_synthetic_tool_result_append_observed" &&
-        row.toolCallId === toolCallId &&
+        row.event === "synthetic_tool_result_message_end_observed" &&
+        row.sanitizerSource === "Senpi message_end callback" &&
+        row.sessionId === result.sessionId &&
+        row.toolCallId === result.toolCallId &&
+        row.isError === true &&
+        (row.unknownToolCall === true || row.registeredSchemaValidationProbe === true) &&
+        row.capabilityTokenAbsentAfterSanitization === true &&
+        (row.capabilityTokenPresentBeforeSanitization === false || row.sanitizationChanged === true),
+    );
+    if (linkedMessageEndObservations.length !== 1) return false;
+    const [observation] = linkedMessageEndObservations;
+    return typeof result.messageId !== "string" ||
+      typeof observation?.messageId !== "string" ||
+      observation.messageId === result.messageId;
+  };
+  const unknownToolSyntheticResultRows = rows.filter(
+    (row) =>
+      row.event === "rpc_synthetic_tool_result_append_observed" &&
+      typeof row.toolCallId === "string" &&
+      unknownToolCallIds.has(row.toolCallId),
+  );
+  const unknownToolSyntheticSanitized =
+    unknownToolCallIds.size > 0 &&
+    unknownToolSyntheticResultRows.length > 0 &&
+    Array.from(unknownToolCallIds).every((toolCallId) =>
+      unknownToolSyntheticResultRows.some((row) => row.toolCallId === toolCallId),
+    ) &&
+    unknownToolSyntheticResultRows.every(
+      (row) =>
         row.entryAppendedObserved === true &&
         row.isError === true &&
         row.immediateJsonlReadBackMatched === true &&
-        row.capabilityAbsentFromResult === true,
-    ),
-  );
-  const unknownToolCallbackSanitized =
-    unknownToolCallIds.size > 0 &&
-    rows.some(
-      (row) =>
-      row.event === "tool_result_sanitized" &&
-      typeof row.toolCallId === "string" &&
-      unknownToolCallIds.has(row.toolCallId) &&
-      row.unknownToolCall === true &&
-      row.isError === true,
+        row.capabilityAbsentFromResult === true &&
+        resultHasLinkedMessageEndSanitization(row),
     );
   const noReceiptOrProvenanceForUnknownTool = Array.from(unknownToolCallIds).every(
     (id) =>
@@ -535,6 +612,7 @@ export function evaluateCapabilityRuntimeContracts(
     invalidSchemaSyntheticResult.isError === true &&
     invalidSchemaSyntheticResult.immediateJsonlReadBackMatched === true &&
     invalidSchemaSyntheticResult.capabilityAbsentFromResult === true &&
+    resultHasLinkedMessageEndSanitization(invalidSchemaSyntheticResult) &&
     !invalidSchemaToolExecuted &&
     invalidSchemaNoReceiptOrProvenance &&
     postUnknownToolScanSafe;
@@ -543,9 +621,7 @@ export function evaluateCapabilityRuntimeContracts(
     unknownToolAssistantCallsReadBackSafely &&
     noReceiptOrProvenanceForUnknownTool &&
     postUnknownToolScanSafe &&
-    (unknownToolSyntheticSanitized ||
-      unknownToolCallbackSanitized ||
-      registeredSchemaValidationAlternativeProven);
+    (unknownToolSyntheticSanitized || registeredSchemaValidationAlternativeProven);
 
   const nonTaskCapabilityEchoCallBlocked = rows.some(
     (row) =>
@@ -593,6 +669,13 @@ export function evaluateCapabilityRuntimeContracts(
   const capabilityRestoredAndStripped = capabilityContextDelivered && capabilityStrip !== undefined;
 
   return {
+    diagnostics: {
+      unknownToolAssistantCallsReadBackSafely,
+      noReceiptOrProvenanceForUnknownTool,
+      postUnknownToolScanSafe,
+      unknownToolSyntheticSanitized,
+      registeredSchemaValidationAlternativeProven,
+    },
     contracts: {
       task1_context_copy_delivers_fixture_capability_after_method_read: capabilityContextDelivered,
       task1_model_transports_capability_in_description: capabilityTransportedInDescription,
@@ -628,7 +711,7 @@ export function evaluateCapabilityRuntimeContracts(
       task1_capability_is_removed_before_assistant_tool_call_persistence:
         capabilityStrip !== undefined && allStorageScansSafe && assistantToolCallAppendObserved,
       task1_message_end_fallback_prevents_token_persistence_on_error:
-        messageEndFallbackPreventsTokenPersistence,
+      messageEndFallbackPreventsTokenPersistenceOnError,
       task1_unsupported_in_process_and_nested_calls_remain_untrusted:
         hasInProcessUntrusted && hasNestedUntrusted,
     },
@@ -727,6 +810,51 @@ export function sanitizerFailureProbeStep(): MockStep {
       run_in_background: false,
       name: "sanitizer-failure-probe",
       description: "original-task-description",
+      max_depth: 1,
+    },
+  };
+}
+
+export function sanitizerFailureReceiptReplayStep(fixtureEnvelope: string): MockStep {
+  return {
+    type: "tool_call",
+    name: "task",
+    id: "justice-spike-task-sanitizer-failure",
+    arguments: {
+      category: "quick",
+      prompt: "JUSTICE_CASE_B_RECEIPT_REPLAY\nAttempt the exact failed call again with its retired capability.",
+      run_in_background: false,
+      name: "sanitizer-failure-replay",
+      description: fixtureEnvelope,
+      max_depth: 1,
+    },
+  };
+}
+
+export function lateRetiredCapabilityEchoStep(fixtureEnvelope: string): MockStep {
+  return {
+    type: "tool_call",
+    name: "justice_unknown_echo",
+    id: "justice-spike-case-b-late-echo",
+    arguments: {
+      prompt: "JUSTICE_CASE_B_LATE_RESPONSE",
+      payload: fixtureEnvelope,
+      description: fixtureEnvelope,
+    },
+  };
+}
+
+export function postFailureReauthorizationProbeStep(): MockStep {
+  return {
+    type: "tool_call",
+    name: "task",
+    id: "justice-spike-post-failure-task",
+    arguments: {
+      category: "quick",
+      prompt: "JUSTICE_POST_FAILURE_REAUTH_PROBE\nRun only after a fresh selected-method read following Case B.",
+      run_in_background: false,
+      name: "post-failure-reauthorization-probe",
+      description: "post-failure-task-description",
       max_depth: 1,
     },
   };

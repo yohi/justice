@@ -33,13 +33,6 @@ function runtimeContract(name: string): void {
   contract(name);
 }
 
-function blockedContract(name: string): void {
-  expect(summary.setupError, "runtime setup must succeed before a Native contract can be classified").toBeUndefined();
-  expect(summary.task1Result, "an unproven mandatory contract must block Task 1").toBe("BLOCKED");
-  expect(summary.contracts[name], `${name} must remain BLOCKED until its exact runtime assertion is proven`).toBe(false);
-  expect(summary.blockedContracts).toContain(name);
-}
-
 function evidenceAccountedContract(name: string): void {
   expect(summary.setupError, "runtime setup must succeed before evidence accounting").toBeUndefined();
   expect(summary.blockedContracts).toBeDefined();
@@ -72,6 +65,16 @@ describe("Justice v5 OmO Native / Senpi / Superpowers evidence spike", () => {
     contract("native_task_tool_call_exposes_mutable_input_session_and_tool_call_id"));
   it("native_task_enforces_category_subagent_type_xor", () =>
     runtimeContract("native_task_enforces_category_subagent_type_xor"));
+  it("records the execution mode selected for the pinned runtime task call", () => {
+    expect(summary.observed?.taskExecutionModes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolCallId: "justice-spike-task-2",
+          executionMode: expect.stringMatching(/^(in-process|process)$/u),
+        }),
+      ]),
+    );
+  });
   it("native_background_task_returns_runtime_id_without_becoming_task_identity", () =>
     contract("native_background_task_returns_runtime_id_without_becoming_task_identity"));
   it("native_task_send_continuation_remains_omo_owned", () =>
@@ -120,7 +123,7 @@ describe("Justice v5 OmO Native / Senpi / Superpowers evidence spike", () => {
   it("task1_capability_is_removed_before_assistant_tool_call_persistence", () =>
     runtimeContract("task1_capability_is_removed_before_assistant_tool_call_persistence"));
   it("task1_message_end_fallback_prevents_token_persistence_on_error", () =>
-    blockedContract("task1_message_end_fallback_prevents_token_persistence_on_error"));
+    runtimeContract("task1_message_end_fallback_prevents_token_persistence_on_error"));
   it("task1_batch_echo_and_stale_transcripts_cannot_restore_capability", () =>
     runtimeContract("task1_batch_echo_and_stale_transcripts_cannot_restore_capability"));
   it("task1_unverified_transcript_guard_profile_does_not_issue_capability", () =>
@@ -129,9 +132,9 @@ describe("Justice v5 OmO Native / Senpi / Superpowers evidence spike", () => {
     runtimeContract("task1_non_task_tool_capability_echo_is_blocked_before_execution"));
   it("task1_unknown_tool_capability_echo_is_sanitized_before_persistence", () =>
     evidenceAccountedContract("task1_unknown_tool_capability_echo_is_sanitized_before_persistence"));
-  it("preserves 32-contract accounting and retains every contract without complete runtime evidence as BLOCKED", () => {
+  it("preserves 32-contract accounting and retains only incomplete runtime evidence as BLOCKED", () => {
     expect(Object.keys(summary.contracts)).toHaveLength(32);
-    expect(summary.task1Result).toBe("BLOCKED");
+    expect(summary.task1Result).toBe(summary.blockedContracts?.length ? "BLOCKED" : "PROVEN");
     const contractsRequiringCompleteRuntimeEvidence = [
       "task1_authenticated_protocol_affiliation_is_bound_without_prompt_inference",
       "task1_capability_never_enters_persisted_session_history",
@@ -141,7 +144,7 @@ describe("Justice v5 OmO Native / Senpi / Superpowers evidence spike", () => {
     expect(summary.blockedContracts).toEqual(
       contractsRequiringCompleteRuntimeEvidence.filter((name) => summary.contracts[name] !== true).sort(),
     );
-    expect(summary.contracts.task1_message_end_fallback_prevents_token_persistence_on_error).toBe(false);
+    expect(summary.contracts.task1_message_end_fallback_prevents_token_persistence_on_error).toBe(true);
   });
   it("proves token-free storage coverage from the complete isolated runtime tree and observed session IDs", () => {
     const finalScan = summary.observed?.harnessFinalScan as
@@ -236,7 +239,7 @@ describe("Justice v5 OmO Native / Senpi / Superpowers evidence spike", () => {
       ]),
     );
   });
-  it("reads back the sanitized unknown-tool call and its persisted synthetic error result", () => {
+  it("records the token-free unknown-tool append/result and its linked sanitizer evidence", () => {
     expect(summary.observed?.assistantToolCallAppendObservations).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -262,11 +265,11 @@ describe("Justice v5 OmO Native / Senpi / Superpowers evidence spike", () => {
     );
     expect(summary.contracts.task1_unknown_tool_capability_echo_is_sanitized_before_persistence).toBe(true);
   });
-  it("keeps provider stream failure control BLOCKED without receipt invalidation evidence", () => {
+  it("observes provider stream failure and invalidation while retaining the complete fallback contract gate", () => {
     expect(summary.observed?.providerStreamErrorControl).toMatchObject({
       streamErrorObserved: true,
       status: "BLOCKED",
-      candidateReceiptsInvalidated: false,
+      candidateReceiptsInvalidated: true,
     });
   });
   it("observes the Case B sanitizer fault independently from the Case A provider error", () => {
@@ -274,39 +277,89 @@ describe("Justice v5 OmO Native / Senpi / Superpowers evidence spike", () => {
       streamErrorObserved: true,
       status: "BLOCKED",
     });
-    expect(summary.observed?.justiceSanitizerFailureControl).toMatchObject({
-      status: "BLOCKED",
-      failureInjectedAfterCaptureAndSanitation: true,
-      capabilityReceiptCaptured: true,
-      sanitationCompleted: true,
-      sanitizedInputTokenFree: true,
-      candidateReceiptInvalidated: false,
-      exactMinimalFallbackObserved: false,
+    const caseB = summary.observed?.justiceSanitizerFailureControl;
+    expect(isRecord(caseB)).toBe(true);
+    if (!isRecord(caseB)) throw new Error("Case B runtime control evidence is unavailable");
+    expect(caseB.failureSurface).toBe("message_end_guard");
+    expect(caseB.messageEndHookObserved).toBe(true);
+    expect(caseB.status).toBe("PROVEN");
+    expect(caseB.freshReadReauthorized).toBe(true);
+    expect(caseB.lateResponseSanitized).toBe(true);
+    expect(summary.observed?.sessionManagerHistoryReadback).toMatchObject({
+      sanitizerFailureFallbackMemoryEntries: 1,
+      sanitizerFailureFallbackDiskEntries: 1,
     });
+    if (caseB.status === "PROVEN") {
+      expect(caseB.failureInjectedAfterCaptureAndSanitation).toBe(true);
+      expect(caseB.exactMinimalFallbackObserved).toBe(true);
+      expect(caseB.persistedFallbackReadBackMatched).toBe(true);
+      expect(caseB.candidateReceiptsInvalidated).toBe(true);
+      expect(caseB.liveCapabilityInvalidated).toBe(true);
+      expect(caseB.activationInvalidated).toBe(true);
+      expect(caseB.noTrustedExecution).toBe(true);
+      expect(caseB.oldReceiptReplayRejected).toBe(true);
+      expect(caseB.freshReadReauthorized).toBe(true);
+      expect(caseB.lateResponseSanitized).toBe(true);
+    } else {
+      expect(summary.contracts.task1_message_end_fallback_prevents_token_persistence_on_error).toBe(false);
+    }
   });
-  it("does not claim failure invalidation controls without runtime observations", () => {
+  it("proves Case B only from its same-session fallback and invalidation evidence", () => {
     expect(summary.observed?.failureInvalidationControls).toMatchObject({
       provider_stream_error: {
         status: "BLOCKED",
       },
       justice_sanitizer_failure: {
-        status: "BLOCKED",
+        status: "PROVEN",
       },
     });
   });
-  it("records persisted RPC synthetic results while distinguishing the missing extension callback", () => {
+  it("records persisted RPC synthetic results with the actual extension callback observed", () => {
     const control = summary.observed?.syntheticUnknownToolResult;
     expect(control).toMatchObject({
       actualUnknownToolModelCallObserved: true,
-      actualSyntheticToolResultMessageEndObserved: false,
+      actualSyntheticToolResultMessageEndObserved: true,
       resultCount: 0,
       rpcPersistedSyntheticResultObserved: true,
-      rpcPersistedSyntheticResultCount: 1,
       rpcPersistedResultsReadBackSafely: true,
     });
     if (!isRecord(control)) throw new Error("unknown-tool synthetic result evidence is unavailable");
+    const persistedResultCount = control.rpcPersistedSyntheticResultCount;
+    if (typeof persistedResultCount !== "number") throw new Error("RPC synthetic result count is unavailable");
+    expect(persistedResultCount).toBeGreaterThanOrEqual(1);
     expect(control.status).toBe(
       summary.contracts.task1_unknown_tool_capability_echo_is_sanitized_before_persistence ? "PROVEN" : "BLOCKED",
+    );
+  });
+  it("links the persisted unknown-tool result to its actual message_end sanitizer callback", () => {
+    const control = summary.observed?.syntheticUnknownToolResult;
+    expect(control).toMatchObject({
+      actualUnknownToolModelCallObserved: true,
+      rpcPersistedSyntheticResultObserved: true,
+      rpcPersistedResultsReadBackSafely: true,
+    });
+    if (!isRecord(control)) throw new Error("unknown-tool synthetic result evidence is unavailable");
+    expect(control.messageEndSanitizerObservations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolCallId: "justice-spike-unknown-echo",
+          sanitizerSource: "Senpi message_end callback",
+          capabilityTokenPresentBeforeSanitization: false,
+          capabilityTokenAbsentAfterSanitization: true,
+          unknownToolCall: true,
+        }),
+      ]),
+    );
+  });
+  it("does not infer sanitizer execution from a token-free synthetic result alone", () => {
+    expect(summary.observed?.syntheticUnknownToolResult).toMatchObject({
+      rpcPersistedSyntheticResultObserved: true,
+      rpcPersistedResultsReadBackSafely: true,
+    });
+    expect(summary.contracts.task1_unknown_tool_capability_echo_is_sanitized_before_persistence).toBe(
+      summary.observed?.syntheticUnknownToolResult !== undefined &&
+      Array.isArray((summary.observed.syntheticUnknownToolResult as Record<string, unknown>).messageEndSanitizerObservations) &&
+      ((summary.observed.syntheticUnknownToolResult as Record<string, unknown>).messageEndSanitizerObservations as readonly unknown[]).length > 0,
     );
   });
   it("records the registered invalid-schema control without promoting unpersisted results", () => {

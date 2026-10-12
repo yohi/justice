@@ -22,7 +22,7 @@ import {
   setCapabilityRuntimeEvidence,
 } from "./capability-runtime-cases";
 import { inspectCapabilitySessionStorage, REQUIRED_STORAGE_CLASSES } from "./capability-session-storage";
-import { areSessionManagerHistoriesComplete } from "./session-history-readback";
+import { areSessionManagerHistoriesComplete, isRecord } from "./session-history-readback";
 import {
   installProcessGroupSignalHandlers,
   runInIsolatedProcessGroup,
@@ -82,6 +82,9 @@ const RpcSessionSummarySchema = z.object({
   setupError: z.string().optional(),
   rpcResponseTrace: z.array(z.string()).optional(),
   sessionId: z.string().optional(),
+  listedSessionCount: z.number().optional(),
+  attachedSessionCount: z.number().optional(),
+  closedSessionCount: z.number().optional(),
   entryAppendedObservations: z.array(z.record(z.string(), z.unknown())).optional(),
   syntheticToolResultObservations: z.array(z.record(z.string(), z.unknown())).optional(),
   fallbackAppendObservations: z.array(z.record(z.string(), z.unknown())).optional(),
@@ -266,7 +269,12 @@ async function main(): Promise<void> {
     const omoConfig = {
       memory: { enabled: false },
       max_depth: 1,
-      task: { default_execution_mode: "process", process_runner: "child-process", max_depth: 1 },
+      task: {
+        default_execution_mode: "process",
+        process_runner: "child-process",
+        max_depth: 1,
+        resume_children: false,
+      },
       agents: {
         quick: {
           model: "omo-mock/mock-1",
@@ -344,8 +352,16 @@ async function main(): Promise<void> {
         { toolCallId: "justice-spike-task-fallback", originalDescription: "fallback-probe-description" },
         { toolCallId: "justice-spike-unknown-echo", originalDescription: "original-task-description" },
         { toolCallId: "justice-spike-invalid-schema", originalDescription: null },
+        { toolCallId: "justice-spike-task-sanitizer-failure", originalDescription: "original-task-description" },
+        { toolCallId: "justice-spike-case-b-late-echo", originalDescription: "original-task-description" },
+        { toolCallId: "justice-spike-post-failure-task", originalDescription: "post-failure-task-description" },
       ],
-      expectedSyntheticToolCallIds: ["justice-spike-unknown-echo", "justice-spike-invalid-schema"],
+      expectedSyntheticToolCallIds: [
+        "justice-spike-unknown-echo",
+        "justice-spike-invalid-schema",
+        "justice-spike-task-sanitizer-failure",
+        "justice-spike-case-b-late-echo",
+      ],
     };
     const rpcResult = await run([rpcSessionDriver, JSON.stringify(rpcConfiguration)], {
       cwd: sandbox.cwd,
@@ -366,6 +382,7 @@ async function main(): Promise<void> {
       persistedEntryReadBack: row.immediateJsonlReadBackMatched === true,
     }));
     const rpcSyntheticToolResultObservations = rpcSummary.syntheticToolResultObservations ?? [];
+    const rpcFallbackAppendObservations = rpcSummary.fallbackAppendObservations ?? [];
     const rpcAppendEvidenceRows: readonly EvidenceRow[] = assistantToolCallAppendObservations.map((row) => ({
       ...row,
       event: "assistant_tool_call_append_observed",
@@ -377,6 +394,10 @@ async function main(): Promise<void> {
     const rpcSyntheticResultEvidenceRows: readonly EvidenceRow[] = rpcSyntheticToolResultObservations.map((row) => ({
       ...row,
       event: "rpc_synthetic_tool_result_append_observed",
+    }));
+    const rpcFallbackEvidenceRows: readonly EvidenceRow[] = rpcFallbackAppendObservations.map((row) => ({
+      ...row,
+      event: "rpc_failure_fallback_append_observed",
     }));
     const parentSessionIdValue = rows.find(
       (row) => row.event === "before_agent_start" && typeof row.prompt === "string" && row.prompt.includes("SPIKE_RECOGNIZED_PARENT"),
@@ -567,6 +588,7 @@ async function main(): Promise<void> {
       ...rows,
       ...rpcAppendEvidenceRows,
       ...rpcSyntheticResultEvidenceRows,
+      ...rpcFallbackEvidenceRows,
       {
         event: "fixture_side_effect_post_exit_scan",
         capabilityMarkerPresent: capabilitySideEffectMarkerPresent,
@@ -607,14 +629,15 @@ async function main(): Promise<void> {
       agentSettingsPath: join(sandbox.agent, "settings.json"),
       superpowersRoot,
     }).contracts;
-    const capabilityContracts = evaluateCapabilityRuntimeContracts({
+    const capabilityContractEvaluation = evaluateCapabilityRuntimeContracts({
       rows: evidenceRowsWithHarnessScan,
       parentSessionId,
       childSessionId,
       fixtureEnvelope,
       rawEvidenceText,
       capabilityEnvVarAbsent,
-    }).contracts;
+    });
+    const capabilityContracts = capabilityContractEvaluation.contracts;
     const contracts = { ...hostContracts, ...capabilityContracts };
     const blockedContracts = Object.entries(contracts)
       .filter(([, proven]) => !proven)
@@ -641,8 +664,26 @@ async function main(): Promise<void> {
             row.isError === true &&
             row.immediateJsonlReadBackMatched === true &&
             row.capabilityAbsentFromResult === true,
-        ),
+          ),
       );
+    const unknownToolSanitizerObservations = rows
+      .filter(
+        (row) =>
+          row.event === "synthetic_tool_result_message_end_observed" &&
+          typeof row.toolCallId === "string" &&
+          unknownToolIds.has(row.toolCallId),
+      )
+      .map((row) => ({
+        sessionId: typeof row.sessionId === "string" ? row.sessionId : null,
+        toolCallId: typeof row.toolCallId === "string" ? row.toolCallId : null,
+        messageId: typeof row.messageId === "string" ? row.messageId : null,
+        sanitizerSource: row.sanitizerSource,
+        capabilityTokenPresentBeforeSanitization: row.capabilityTokenPresentBeforeSanitization === true,
+        capabilityTokenAbsentAfterSanitization: row.capabilityTokenAbsentAfterSanitization === true,
+        sanitizationChanged: row.sanitizationChanged === true,
+        unknownToolCall: row.unknownToolCall === true,
+        registeredSchemaValidationProbe: row.registeredSchemaValidationProbe === true,
+      }));
     const registeredSchemaToolCallId = "justice-spike-invalid-schema";
     const registeredSchemaAssistantCall = assistantToolCallAppendObservations.find(
       (row) => row.toolCallId === registeredSchemaToolCallId,
@@ -676,6 +717,86 @@ async function main(): Promise<void> {
     const registeredSchemaValidationStatus = registeredSchemaValidationProven ? "PROVEN" : "BLOCKED";
     const providerStreamErrorObserved = rows.some((row) => row.event === "message_end_forced_failure_injected");
     const sanitizerFailureRow = parentRows.find((row) => row.event === "sanitizer_failure_fault_injected");
+    const sanitizerFailureReadbackMatches =
+      sessionManagerHistoryReadback !== undefined &&
+      sanitizerFailureRow !== undefined &&
+      sessionManagerHistoryReadback.sessionId === sanitizerFailureRow.sessionId &&
+      sessionManagerHistoryReadback.phase === "session_shutdown" &&
+      sessionManagerHistoryReadback.headerValid === true &&
+      sessionManagerHistoryReadback.headerCount === 1 &&
+      sessionManagerHistoryReadback.entryIdsAndBranchesMatch === true &&
+      sessionManagerHistoryReadback.sanitizerFailureFallbackMemoryEntries === 1 &&
+      sessionManagerHistoryReadback.sanitizerFailureFallbackDiskEntries === 1 &&
+      sessionManagerHistoryReadback.tokenFoundInMemoryEntries === false &&
+      sessionManagerHistoryReadback.tokenFoundInDiskEntries === false &&
+      sessionManagerHistoryReadback.unsafeStorage === false;
+    const sanitizerFailureCallId =
+      typeof sanitizerFailureRow?.toolCallId === "string" ? sanitizerFailureRow.toolCallId : undefined;
+    const noTrustedSanitizerFailureExecution =
+      sanitizerFailureCallId !== undefined &&
+      !parentRows.some(
+        (row) =>
+          row.event === "runtime_task_identity_observed" &&
+          String(row.toolCallId) === sanitizerFailureCallId,
+      ) &&
+      !parentRows.some(
+        (row) =>
+          row.event === "authenticated_protocol_affiliation_observed" &&
+          String(row.toolCallId) === sanitizerFailureCallId,
+      );
+    const sanitizerFailureReplayRejected =
+      sanitizerFailureCallId !== undefined &&
+      parentRows.some(
+        (row) =>
+          row.event === "sanitizer_failure_receipt_replay_rejected" &&
+          row.toolCallId === sanitizerFailureCallId &&
+          row.receiptReplayRejected === true,
+      );
+    const caseBFreshRead = parentRows.find(
+      (row) =>
+        row.event === "activation_evidence" &&
+        row.observedCallOrInputId === "justice-spike-case-b-reauthorizing-read",
+    );
+    const caseBReauthorizedTask = parentRows.find(
+      (row) =>
+        row.event === "authenticated_protocol_affiliation_observed" &&
+        row.toolCallId === "justice-spike-post-failure-task",
+    );
+    const caseBFailureRowIndex = parentRows.findIndex((row) => row.event === "sanitizer_failure_fault_injected");
+    const caseBFreshReadIndex = caseBFreshRead === undefined ? -1 : parentRows.indexOf(caseBFreshRead);
+    const caseBReauthorizedTaskIndex =
+      caseBReauthorizedTask === undefined ? -1 : parentRows.indexOf(caseBReauthorizedTask);
+    const freshReadReauthorizedAfterFailure =
+      caseBFailureRowIndex >= 0 &&
+      caseBFreshReadIndex > caseBFailureRowIndex &&
+      caseBReauthorizedTaskIndex > caseBFreshReadIndex &&
+      caseBReauthorizedTask?.issuedFromReadToolCallId === "justice-spike-case-b-reauthorizing-read";
+    const caseBLateEchoSanitized =
+      parentRows.some(
+        (row) =>
+          row.event === "message_end_sanitized" &&
+          row.toolCallId === "justice-spike-case-b-late-echo" &&
+          row.hadCapability === true,
+      ) &&
+      sanitizerFailureReadbackMatches;
+    const sanitizerFailureControlProven =
+      sanitizerFailureRow?.failureSurface === "message_end_guard" &&
+      sanitizerFailureRow.messageEndHookObserved === true &&
+      sanitizerFailureRow.failureInjectedAfterCaptureAndSanitation === true &&
+      sanitizerFailureRow.candidateReceiptCaptured === true &&
+      sanitizerFailureRow.sanitationCompleted === true &&
+      sanitizerFailureRow.sanitizedInputTokenFree === true &&
+      sanitizerFailureRow.candidateReceiptsInvalidated === true &&
+      sanitizerFailureRow.liveCapabilityInvalidated === true &&
+      sanitizerFailureRow.activationInvalidated === true &&
+      sanitizerFailureRow.postFailureProvenance !== "superpowers" &&
+      sanitizerFailureRow.exactMinimalFallbackObserved === true &&
+      sanitizerFailureReadbackMatches &&
+      noTrustedSanitizerFailureExecution &&
+      sanitizerFailureReplayRejected &&
+      freshReadReauthorizedAfterFailure &&
+      caseBLateEchoSanitized &&
+      harnessFinalScanSafe;
 
     summary = {
       task1Result: blockedContracts.length === 0 ? "PROVEN" : "BLOCKED",
@@ -692,6 +813,12 @@ async function main(): Promise<void> {
       observed: {
         parentSessionId: parentSessionId ?? null,
         rpcSessionId: rpcSummary.sessionId,
+        capabilityContractDiagnostics: capabilityContractEvaluation.diagnostics,
+        rpcSessionLifecycle: {
+          listedSessionCount: rpcSummary.listedSessionCount ?? null,
+          attachedSessionCount: rpcSummary.attachedSessionCount ?? null,
+          closedSessionCount: rpcSummary.closedSessionCount ?? null,
+        },
         activationEvidenceKind: activation?.evidenceKind ?? null,
         activationMethod: activation?.method ?? null,
         taskToolCallId: taskCall?.toolCallId ?? null,
@@ -699,6 +826,15 @@ async function main(): Promise<void> {
         taskEventKeys: taskCall?.eventKeys ?? [],
         currentSessionActivationObservedAtTask: taskCall?.currentSessionActivationObserved ?? false,
         runtimeTaskId: runtimeTaskId ?? null,
+        taskExecutionModes: parentRows
+          .filter((row) => row.event === "tool_result" && row.toolName === "task")
+          .map((row) => {
+            const details = isRecord(row.details) ? row.details : {};
+            return {
+              toolCallId: typeof row.toolCallId === "string" ? row.toolCallId : null,
+              executionMode: typeof details.execution_mode === "string" ? details.execution_mode : null,
+            };
+          }),
         taskInputMutationReachedNativeCall: mutableInput,
         authenticatedProtocolAffiliationObserved,
         activationBindingValidated,
@@ -759,27 +895,90 @@ async function main(): Promise<void> {
           messageEndSanitationObserved: rows.some(
             (row) => row.event === "message_end_sanitized" && row.forcedFailureArmed === true,
           ),
-          candidateReceiptsInvalidated: false,
+          candidateReceiptCaptured: parentRows.some(
+            (row) =>
+              row.event === "message_end_sanitized" &&
+              row.forcedFailureArmed === true &&
+              row.outboundReceiptCaptured === true,
+          ),
+          invalidationObserved: parentRows.some(
+            (row) => row.event === "provider_stream_error_authority_invalidated",
+          ),
+          candidateReceiptsInvalidated: parentRows.some(
+            (row) =>
+              row.event === "provider_stream_error_authority_invalidated" &&
+              row.candidateReceiptsInvalidated === true,
+          ),
+          liveCapabilityInvalidated: parentRows.some(
+            (row) =>
+              row.event === "provider_stream_error_authority_invalidated" &&
+              row.liveCapabilityInvalidated === true,
+          ),
+          activationInvalidated: parentRows.some(
+            (row) =>
+              row.event === "provider_stream_error_authority_invalidated" &&
+              row.activationInvalidated === true,
+          ),
+          noTrustedExecution: !parentRows.some(
+            (row) =>
+              row.event === "runtime_task_identity_observed" &&
+              row.toolCallId === parentRows.find(
+                (candidate) => candidate.event === "message_end_forced_failure_injected",
+              )?.toolCallId,
+          ),
         },
         justiceSanitizerFailureControl: {
-          status: "BLOCKED",
+          status: sanitizerFailureControlProven ? "PROVEN" : "BLOCKED",
           failureInjectedAfterCaptureAndSanitation:
             sanitizerFailureRow?.failureInjectedAfterCaptureAndSanitation === true,
           failureSurface: sanitizerFailureRow?.failureSurface ?? "unobserved",
-          capabilityReceiptCaptured: sanitizerFailureRow?.outboundReceiptCaptured === true,
+          messageEndHookObserved: sanitizerFailureRow?.messageEndHookObserved === true,
+          capabilityReceiptCaptured: sanitizerFailureRow?.candidateReceiptCaptured === true,
           sanitationCompleted: sanitizerFailureRow?.sanitationCompleted === true,
           sanitizedInputTokenFree: sanitizerFailureRow?.sanitizedInputTokenFree === true,
-          candidateReceiptInvalidated: sanitizerFailureRow?.candidateReceiptInvalidated === true,
+          candidateReceiptsInvalidated: sanitizerFailureRow?.candidateReceiptsInvalidated === true,
+          liveCapabilityInvalidated: sanitizerFailureRow?.liveCapabilityInvalidated === true,
+          activationInvalidated: sanitizerFailureRow?.activationInvalidated === true,
           postFailureProvenance: sanitizerFailureRow?.postFailureProvenance ?? "unobserved",
-          exactMinimalFallbackObserved: false,
+          exactMinimalFallbackObserved:
+            sanitizerFailureRow?.exactMinimalFallbackObserved === true &&
+            sanitizerFailureReadbackMatches,
+          persistedFallbackReadBackMatched:
+            sanitizerFailureReadbackMatches,
+          sameSessionFallbackReadBackMatched: sanitizerFailureReadbackMatches,
+          noTrustedExecution: noTrustedSanitizerFailureExecution,
+          oldReceiptReplayRejected: sanitizerFailureReplayRejected,
+          freshReadReauthorized: freshReadReauthorizedAfterFailure,
+          lateResponseSanitized: caseBLateEchoSanitized,
+          task1ContractStatus:
+            contracts.task1_message_end_fallback_prevents_token_persistence_on_error ? "PROVEN" : "BLOCKED",
+          fallbackEvidence: sanitizerFailureReadbackMatches
+            ? {
+                sessionId: sessionManagerHistoryReadback?.sessionId ?? null,
+                source: "ReadonlySessionManager.getEntries and matching session JSONL",
+                memoryEntries: sessionManagerHistoryReadback?.sanitizerFailureFallbackMemoryEntries ?? 0,
+                diskEntries: sessionManagerHistoryReadback?.sanitizerFailureFallbackDiskEntries ?? 0,
+                fallbackExactBeforeAppend: sanitizerFailureRow?.exactMinimalFallbackObserved === true,
+                tokenFree: sessionManagerHistoryReadback?.tokenFoundInMemoryEntries === false &&
+                  sessionManagerHistoryReadback?.tokenFoundInDiskEntries === false,
+              }
+            : null,
         },
         failureInvalidationControls: {
-          provider_stream_error: { status: "BLOCKED" },
-          justice_sanitizer_failure: {
+          provider_stream_error: {
             status: "BLOCKED",
+            streamErrorObserved: providerStreamErrorObserved,
+            candidateReceiptsInvalidated: parentRows.some(
+              (row) => row.event === "provider_stream_error_authority_invalidated" && row.candidateReceiptsInvalidated === true,
+            ),
+          },
+          justice_sanitizer_failure: {
+            status: sanitizerFailureControlProven ? "PROVEN" : "BLOCKED",
             failureInjectedAfterCaptureAndSanitation:
               sanitizerFailureRow?.failureInjectedAfterCaptureAndSanitation === true,
-            exactMinimalFallbackObserved: false,
+            exactMinimalFallbackObserved:
+              sanitizerFailureRow?.exactMinimalFallbackObserved === true &&
+              sanitizerFailureReadbackMatches,
           },
         },
         syntheticUnknownToolResult: {
@@ -787,12 +986,13 @@ async function main(): Promise<void> {
             ? "PROVEN"
             : "BLOCKED",
           actualUnknownToolModelCallObserved: unknownToolEmissionRows.length > 0,
-          actualSyntheticToolResultMessageEndObserved: unknownToolSanitizedCount > 0,
+          actualSyntheticToolResultMessageEndObserved: unknownToolSanitizerObservations.length > 0,
           resultCount: unknownToolResultCount,
           sanitizedCount: unknownToolSanitizedCount,
           rpcPersistedSyntheticResultObserved: unknownRpcSyntheticResults.length > 0,
           rpcPersistedSyntheticResultCount: unknownRpcSyntheticResults.length,
           rpcPersistedResultsReadBackSafely: unknownRpcSyntheticResultsReadBackSafely,
+          messageEndSanitizerObservations: unknownToolSanitizerObservations,
         },
         registeredSchemaValidation: {
           attempted: registeredSchemaAssistantCall !== undefined,

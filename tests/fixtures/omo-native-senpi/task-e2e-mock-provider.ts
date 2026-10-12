@@ -102,7 +102,8 @@ function injectCapabilityIntoTaskStep(step: MockStep, envelope: string): MockSte
   const capabilityTransportRequested =
     prompt.includes("JUSTICE_REVIEW_TARGET") ||
     prompt.includes("JUSTICE_FALLBACK_PROBE") ||
-    prompt.includes("JUSTICE_SANITIZER_FAILURE_PROBE");
+    prompt.includes("JUSTICE_SANITIZER_FAILURE_PROBE") ||
+    prompt.includes("JUSTICE_POST_FAILURE_REAUTH_PROBE");
   if (!capabilityTransportRequested) return step;
   if (typeof args.description !== "string" || args.description.length === 0) {
     args.description = envelope;

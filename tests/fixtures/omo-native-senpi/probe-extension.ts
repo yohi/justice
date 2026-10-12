@@ -19,6 +19,7 @@ import {
   type CapabilityRejectionResult,
   type CapabilityVerdict,
   type NativeSuperpowersActivationBinding,
+  type NativeSuperpowersProvenanceInput,
   type NativeSuperpowersTaskCapability,
   type TaskSendContinuationOutcome,
   type TranscriptGuardProfile,
@@ -60,7 +61,9 @@ const capabilityByActivation = new Map<string, NativeSuperpowersTaskCapability>(
 const contextDeliveryScanByActivation = new Set<string>();
 const envelopeBySession = new Map<string, string>();
 const forcedFailureToolCallIds = new Set<string>();
+const forcedFailureToolCallIdBySession = new Map<string, string>();
 const unknownToolCallIds = new Set<string>();
+const registeredSchemaProbeCallIds = new Set<string>();
 const syntheticSanitizedCallIds = new Set<string>();
 const MAX_CAPABILITY_AGE_MS = 3_600_000;
 const CREDENTIAL_SCAN = scanCredentialStores({
@@ -76,6 +79,9 @@ const compactionInvalidations: Array<{ readonly sessionId: string; readonly requ
 const restartInvalidations: Array<{ readonly sessionId: string; readonly reason: string }> = [];
 const taskSendOutcomes: TaskSendContinuationOutcome[] = [];
 const runtimeTaskIdsBySession = new Map<string, string>();
+const outboundInputsBySession = new Map<string, Map<string, NativeSuperpowersProvenanceInput>>();
+const failureRetiredCallIdsBySession = new Map<string, Set<string>>();
+const failureRetiredInputsBySession = new Map<string, Map<string, NativeSuperpowersProvenanceInput>>();
 const replayRejections: Array<{ readonly reason: string; readonly surface: string }> = [];
 
 function recordCapabilityVerdict(
@@ -900,25 +906,26 @@ export default function justiceSpikeProbe(pi: {
   pi.on("message_end", (event, ctx) => {
     const sid = sessionId(ctx);
     const message = event.message;
-    if (!message || typeof message !== "object") return;
+    if (!isRecord(message)) return;
     const role = (message as { readonly role?: string }).role;
     const content = (message as { readonly content?: unknown }).content;
-    let forcedFailureToolCallId: string | null = null;
     if (role === "assistant" && Array.isArray(content)) {
       for (let i = 0; i < content.length; i++) {
         const part = content[i];
         if (part && typeof part === "object" && (part as { readonly type?: string }).type === "toolCall") {
           const args = (part as { readonly arguments?: Record<string, unknown> }).arguments ?? {};
           const stripped = stripCapabilityFromArgs(args);
-          const sanitizedArguments = sanitizeValue(stripped.args, Array.from(issuedCapabilityIds));
+          const sanitationTokens = Array.from(registry.getSanitationTokens());
+          const tokenOutsideDescription = containsLiteral(stripped.args, sanitationTokens);
+          const sanitizedArguments = sanitizeValue(stripped.args, sanitationTokens);
           const persistedArguments =
             sanitizedArguments.value !== null &&
             typeof sanitizedArguments.value === "object" &&
             !Array.isArray(sanitizedArguments.value)
               ? (sanitizedArguments.value as Record<string, unknown>)
               : {};
-          (part as { arguments: Record<string, unknown> }).arguments = persistedArguments;
-          const toolCallId = (part as { readonly id?: string }).id ?? "<unknown>";
+          const rawToolCallId = (part as { readonly id?: unknown }).id;
+          const toolCallId = typeof rawToolCallId === "string" ? rawToolCallId : "<unknown>";
           const toolName = (part as { readonly name?: string }).name;
           const prompt =
             typeof (stripped.args as { readonly prompt?: unknown }).prompt === "string"
@@ -926,6 +933,56 @@ export default function justiceSpikeProbe(pi: {
               : "";
           const isFallbackProbe = toolName === "task" && prompt.includes(FALLBACK_PROBE_SENTINEL);
           const hadCapability = stripped.strippedCapability || sanitizedArguments.changed;
+          const activation = activated.get(sid);
+          const capability = registryBySession.get(sid);
+          let candidateInput: NativeSuperpowersProvenanceInput | undefined;
+          let outboundKind: "captured" | "rejected" | null = null;
+          if (
+            toolName === "task" &&
+            stripped.strippedCapability &&
+            rawToolCallId === toolCallId &&
+            activation !== undefined &&
+            capability !== undefined &&
+            activation.authorizationId === capability.authorizationId &&
+            !tokenOutsideDescription &&
+            !sanitizedArguments.changed
+          ) {
+            candidateInput = {
+              authorizationId: activation.authorizationId,
+              parentSessionId: sid,
+              parentToolCallId: toolCallId,
+              taskArgs: persistedArguments,
+              executionMethod: capability.method,
+            };
+            const outbound = registry.captureOutbound(candidateInput);
+            outboundKind = outbound?.kind === "captured" ? "captured" : "rejected";
+            if (outboundKind === "captured") {
+              const byToolCall = outboundInputsBySession.get(sid) ?? new Map();
+              byToolCall.set(toolCallId, candidateInput);
+              outboundInputsBySession.set(sid, byToolCall);
+            }
+            record({
+              event: "capability_outbound_captured",
+              sessionId: sid,
+              toolCallId,
+              captureSurface: "assistant_message_end_before_append",
+              outboundKind,
+            });
+          } else if (toolName === "task" && stripped.strippedCapability) {
+            record({
+              event: "capability_outbound_capture_unavailable",
+              sessionId: sid,
+              toolCallId,
+              activationAvailable: activation !== undefined,
+              capabilityAvailable: capability !== undefined,
+              activationCapabilityMatch:
+                activation !== undefined && capability !== undefined &&
+                activation.authorizationId === capability.authorizationId,
+              tokenOutsideDescription,
+              sanitizerChangedAdditionalFields: sanitizedArguments.changed,
+            });
+          }
+          (part as { arguments: Record<string, unknown> }).arguments = persistedArguments;
           if (toolName !== "task" && hadCapability) {
             nonTaskVetoed.set(`${sid}:${toolCallId}`, true);
             registry.rememberNonTaskLeak(sid, toolCallId);
@@ -946,6 +1003,9 @@ export default function justiceSpikeProbe(pi: {
               emissionSurface: "assistant_message_end_tool_call",
             });
           }
+          if (toolName === "fixture_schema_validation_probe") {
+            registeredSchemaProbeCallIds.add(toolCallId);
+          }
           record({
             event: "message_end_sanitized",
             sessionId: sid,
@@ -955,10 +1015,106 @@ export default function justiceSpikeProbe(pi: {
             activationMethod: activated.get(sid)?.method ?? null,
             hadCapability,
             hadOriginalDescription: stripped.originalDescription !== null,
+            outboundReceiptCaptured: outboundKind === "captured",
             forcedFailureArmed: isFallbackProbe && stripped.strippedCapability,
           });
           if (isFallbackProbe && stripped.strippedCapability) {
-            forcedFailureToolCallId = toolCallId;
+            forcedFailureToolCallIds.add(toolCallId);
+            forcedFailureToolCallIdBySession.set(sid, toolCallId);
+          }
+
+          if (toolName === "task" && prompt.includes(SANITIZER_FAILURE_SENTINEL)) {
+            const sanitizedInputTokenFree = !containsLiteral(persistedArguments, sanitationTokens);
+            const faultPrerequisites =
+              candidateInput !== undefined &&
+              outboundKind === "captured" &&
+              !tokenOutsideDescription &&
+              !sanitizedArguments.changed &&
+              sanitizedInputTokenFree;
+            let caughtSanitizerFailure = false;
+            if (faultPrerequisites) {
+              try {
+                throw new Error(SANITIZER_FAILURE_MESSAGE);
+              } catch (cause: unknown) {
+                if (cause instanceof Error && cause.message === SANITIZER_FAILURE_MESSAGE) {
+                  caughtSanitizerFailure = true;
+                } else {
+                  throw cause;
+                }
+              }
+            }
+
+            const invalidation = invalidateFailureAuthority(sid, "justice_sanitizer_failure");
+            const postFailureProvenance = candidateInput === undefined
+              ? "unavailable"
+              : registry.validate(candidateInput).provenance.kind;
+            const candidateReceiptsInvalidated =
+              invalidation.candidateReceiptsInvalidated && postFailureProvenance !== "superpowers";
+            const originalTimestamp = isRecord(message) ? message.timestamp : undefined;
+            const fallbackTimestamp = typeof originalTimestamp === "number" ? originalTimestamp : 0;
+            const fallbackMessage = {
+              role: "assistant",
+              content: [],
+              api: "openai-completions",
+              provider: MOCK_PROVIDER_ID,
+              model: MOCK_MODEL_ID,
+              timestamp: fallbackTimestamp,
+              stopReason: "error",
+              errorMessage: "justice_capability_outbound_sanitize_failed",
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+            } as const;
+            const fallbackExact =
+              typeof originalTimestamp === "number" &&
+              fallbackMessage.role === "assistant" &&
+              fallbackMessage.content.length === 0 &&
+              fallbackMessage.stopReason === "error" &&
+              fallbackMessage.errorMessage === "justice_capability_outbound_sanitize_failed" &&
+              fallbackMessage.provider === MOCK_PROVIDER_ID &&
+              fallbackMessage.model === MOCK_MODEL_ID &&
+              fallbackMessage.usage.input === 0 &&
+              fallbackMessage.usage.output === 0 &&
+              fallbackMessage.usage.cacheRead === 0 &&
+              fallbackMessage.usage.cacheWrite === 0 &&
+              fallbackMessage.usage.totalTokens === 0 &&
+              fallbackMessage.usage.cost.total === 0;
+            for (const key of Object.keys(message)) delete message[key];
+            Object.assign(message, fallbackMessage);
+            event.message = message;
+            record({
+              event: "sanitizer_failure_fault_injected",
+              sessionId: sid,
+              toolCallId,
+              failureSurface: "message_end_guard",
+              sanitizerCallback: "Senpi message_end callback",
+              messageEndHookObserved: true,
+              candidateReceiptCaptured: outboundKind === "captured",
+              sanitationCompleted: true,
+              sanitizedInputTokenFree,
+              failureInjectedAfterCaptureAndSanitation: caughtSanitizerFailure && faultPrerequisites,
+              faultPrerequisites,
+              exactMinimalFallbackObserved: fallbackExact,
+              candidateReceiptCount: invalidation.candidateReceiptCount,
+              candidateReceiptsInvalidated,
+              liveCapabilityInvalidated: invalidation.liveCapabilityInvalidated,
+              activationInvalidated: invalidation.activationInvalidated,
+              postFailureProvenance,
+            });
+            record({
+              event: "sanitizer_failure_fallback_replaced",
+              sessionId: sid,
+              toolCallId,
+              sameRole: fallbackMessage.role === role,
+              exactMinimalFallback: fallbackExact,
+              messageReplacedBeforeAppend: true,
+            });
+            return;
           }
         }
       }
@@ -983,13 +1139,33 @@ export default function justiceSpikeProbe(pi: {
       // exception stack, and re-scan storage after the persisted fallback append.
       const errorMessageValue = (message as { readonly errorMessage?: unknown }).errorMessage;
       const errorText = typeof errorMessageValue === "string" ? errorMessageValue : "";
-      if (errorText === "justice-spike-provider-stream-failure" && forcedFailureToolCallId !== null) {
+      const forcedFailureToolCallId = forcedFailureToolCallIdBySession.get(sid);
+      if (errorText === "justice-spike-provider-stream-failure" && forcedFailureToolCallId !== undefined) {
+        const failedCandidate = outboundInputsBySession.get(sid)?.get(forcedFailureToolCallId);
+        const invalidation = invalidateFailureAuthority(sid, "provider_stream_error");
+        const postFailureProvenance = failedCandidate === undefined
+          ? "unavailable"
+          : registry.validate(failedCandidate).provenance.kind;
         record({
           event: "message_end_forced_failure_injected",
           sessionId: sid,
           toolCallId: forcedFailureToolCallId,
           failureSurface: "provider_stream_error",
         });
+        record({
+          event: "provider_stream_error_authority_invalidated",
+          sessionId: sid,
+          toolCallId: forcedFailureToolCallId,
+          candidateReceiptCaptured: failedCandidate !== undefined,
+          candidateReceiptsInvalidated:
+            invalidation.candidateReceiptsInvalidated && postFailureProvenance !== "superpowers",
+          liveCapabilityInvalidated: invalidation.liveCapabilityInvalidated,
+          activationInvalidated: invalidation.activationInvalidated,
+          postFailureProvenance,
+          normalMessageEndSanitationCompleted: true,
+          hostErrorShapePreserved: true,
+        });
+        forcedFailureToolCallIdBySession.delete(sid);
       }
       const minimalContent =
         !Array.isArray(content) ||
@@ -1010,20 +1186,56 @@ export default function justiceSpikeProbe(pi: {
     }
     if (role === "tool" || role === "toolResult") {
       // Synthetic toolResult redaction fallback.
-      const sanitized = sanitizeValue(content, Array.from(issuedCapabilityIds));
+      const resultSanitationTokens = Array.from(
+        new Set([...registry.getSanitationTokens(), CAPABILITY_MARKER]),
+      );
+      const capabilityTokenPresentBeforeSanitization = containsLiteral(content, resultSanitationTokens);
+      const sanitized = sanitizeValue(content, resultSanitationTokens);
+      const capabilityTokenAbsentAfterSanitization =
+        !containsLiteral(sanitized.value, resultSanitationTokens);
+      const resultToolName = (message as { readonly toolName?: unknown }).toolName;
+      const resultToolCallId = (message as { readonly toolCallId?: unknown }).toolCallId;
+      const resultMessageId = (message as { readonly id?: unknown }).id;
+      const toolCallIdText = typeof resultToolCallId === "string" ? resultToolCallId : null;
+      const unknownToolCall = toolCallIdText !== null && unknownToolCallIds.has(toolCallIdText);
+      const registeredSchemaValidationProbe =
+        toolCallIdText !== null && registeredSchemaProbeCallIds.has(toolCallIdText);
+      if (
+        role === "toolResult" &&
+        (message as { readonly isError?: unknown }).isError === true &&
+        toolCallIdText !== null &&
+        (unknownToolCall || registeredSchemaValidationProbe)
+      ) {
+        record({
+          event: "synthetic_tool_result_message_end_observed",
+          sessionId: sid,
+          role,
+          sanitizerSource: "Senpi message_end callback",
+          messageId: typeof resultMessageId === "string" ? resultMessageId : null,
+          toolName: typeof resultToolName === "string" ? resultToolName : null,
+          toolCallId: toolCallIdText,
+          isError: true,
+          unknownToolCall,
+          registeredSchemaValidationProbe,
+          capabilityTokenPresentBeforeSanitization,
+          capabilityTokenAbsentAfterSanitization,
+          sanitizationChanged: sanitized.changed,
+        });
+      }
       if (sanitized.changed) {
         (message as { content: unknown }).content = sanitized.value;
-        const resultToolName = (message as { readonly toolName?: unknown }).toolName;
-        const resultToolCallId = (message as { readonly toolCallId?: unknown }).toolCallId;
-        const toolCallIdText = typeof resultToolCallId === "string" ? resultToolCallId : null;
         record({
           event: "tool_result_sanitized",
           sessionId: sid,
           role,
+          sanitizerSource: "Senpi message_end callback",
+          messageId: typeof resultMessageId === "string" ? resultMessageId : null,
           toolName: typeof resultToolName === "string" ? resultToolName : null,
           toolCallId: toolCallIdText,
           isError: (message as { readonly isError?: unknown }).isError === true,
           unknownToolCall: toolCallIdText !== null && unknownToolCallIds.has(toolCallIdText),
+          capabilityTokenPresentBeforeSanitization,
+          capabilityTokenAbsentAfterSanitization,
         });
         if (toolCallIdText !== null) {
           syntheticSanitizedCallIds.add(toolCallIdText);
@@ -1041,7 +1253,6 @@ export default function justiceSpikeProbe(pi: {
     const sid = sessionId(ctx);
     const before = clone(event.input);
     let fixtureMutation = false;
-    let outboundReceiptCaptured = false;
 
     if (event.toolName === "task_send") {
       const signalPath = process.env.JUSTICE_SPIKE_TASK_SEND_SIGNAL_PATH;
@@ -1124,30 +1335,9 @@ export default function justiceSpikeProbe(pi: {
       }
     }
 
-    // Capture outbound task capability receipt when a model-issued task carries a capability.
     const activation = activated.get(sid);
     const prompt = typeof (event.input as { readonly prompt?: string }).prompt === "string" ? (event.input as { readonly prompt: string }).prompt : "";
     const isUnrelatedTask = event.toolName === "task" && prompt.includes("JUSTICE_UNRELATED_TASK");
-    if (activation && event.toolName === "task" && (stripped.strippedCapability || isUnrelatedTask)) {
-      const capability = registryBySession.get(sid);
-      if (capability) {
-        const outbound = registry.captureOutbound({
-          authorizationId: capability.authorizationId,
-          parentSessionId: sid,
-          parentToolCallId: String(event.toolCallId),
-          taskArgs: event.input as Record<string, unknown>,
-          executionMethod: capability.method,
-        });
-        outboundReceiptCaptured = outbound?.kind === "captured";
-        record({
-          event: "capability_outbound_captured",
-          sessionId: sid,
-          toolCallId: event.toolCallId,
-          outboundKind: outbound?.kind ?? null,
-        });
-      }
-    }
-
     // Fixture validator: report provenance for task calls.
     if (event.toolName === "task" && activation) {
       if (isUnrelatedTask) {
@@ -1227,48 +1417,18 @@ export default function justiceSpikeProbe(pi: {
       return { block: true, reason: guardResult.reason, terminate: true };
     }
 
-    if (event.toolName === "task" && prompt.includes(SANITIZER_FAILURE_SENTINEL)) {
-      const sanitation = sanitizeValue(event.input, registry.getSanitationTokens());
-      const sanitizedInputTokenFree = !containsLiteral(sanitation.value, registry.getSanitationTokens());
-      const failureInjected = (() => {
-        try {
-          throw new Error(SANITIZER_FAILURE_MESSAGE);
-        } catch (cause: unknown) {
-          if (cause instanceof Error && cause.message === SANITIZER_FAILURE_MESSAGE) return true;
-          throw cause;
-        }
-      })();
-
-      const failureMethod = activation?.method;
-      const postFailureProvenance =
-        activation !== undefined &&
-        (failureMethod === "subagent-driven-development" || failureMethod === "executing-plans")
-          ? registry.validate({
-              authorizationId: activation.authorizationId,
-              parentSessionId: sid,
-              parentToolCallId: String(event.toolCallId),
-              taskArgs: event.input as Record<string, unknown>,
-              executionMethod: failureMethod,
-            }).provenance.kind
-          : "unavailable";
-      const candidateReceiptInvalidated =
-        outboundReceiptCaptured &&
-        activation !== undefined &&
-        !registry.hasCapabilityForAuthorization(activation.authorizationId) &&
-        postFailureProvenance !== "superpowers";
-      const failureInjectedAfterCaptureAndSanitation =
-        failureInjected && outboundReceiptCaptured && sanitizedInputTokenFree;
+    const retiredFailureCandidate = failureRetiredInputsBySession
+      .get(sid)
+      ?.get(String(event.toolCallId));
+    if (event.toolName === "task" && retiredFailureCandidate !== undefined) {
+      const replayProvenance = registry.validate(retiredFailureCandidate).provenance;
+      const receiptReplayRejected = replayProvenance.kind !== "superpowers";
       record({
-        event: "sanitizer_failure_fault_injected",
+        event: "sanitizer_failure_receipt_replay_rejected",
         sessionId: sid,
         toolCallId: event.toolCallId,
-        failureSurface: "fixture_tool_call_after_outbound_capture_and_sanitation",
-        outboundReceiptCaptured,
-        sanitationCompleted: true,
-        sanitizedInputTokenFree,
-        failureInjectedAfterCaptureAndSanitation,
-        candidateReceiptInvalidated,
-        postFailureProvenance,
+        receiptReplayRejected,
+        postFailureProvenance: replayProvenance.kind,
       });
       record({
         event: "tool_call",
@@ -1276,9 +1436,9 @@ export default function justiceSpikeProbe(pi: {
         toolName: event.toolName,
         toolCallId: event.toolCallId,
         forcedFailureBlock: true,
-        failureSurface: "fixture_sanitizer_failure",
+        failureSurface: "justice_sanitizer_failure_receipt_replay",
       });
-      return { block: true, reason: "justice_spike_sanitizer_failure", terminate: false };
+      return { block: true, reason: "justice_sanitizer_failure_receipt_replay", terminate: false };
     }
 
     if (event.toolName === "fixture_non_task_side_effect") {
@@ -1512,13 +1672,46 @@ export default function justiceSpikeProbe(pi: {
       shutdownReason: reason,
     });
     record({ event: "session_shutdown", sessionId: sid });
-    // Authoritative final storage scan before the runtime exits; covers the full isolated
-    // tree with every required storage class observed.
-    await scanSessionStorage(sid, "final_authoritative", ctx);
+    // The harness performs the authoritative full-tree scan once after runtime exit; keep this
+    // per-session shutdown callback bounded so child teardown can finish inside Senpi's budget.
   });
 
 }
 const registryBySession = new Map<string, NativeSuperpowersTaskCapability>();
+
+type FailureInvalidationReason = "provider_stream_error" | "justice_sanitizer_failure";
+type FailureInvalidationObservation = Readonly<{
+  readonly candidateReceiptCount: number;
+  readonly candidateReceiptsInvalidated: boolean;
+  readonly liveCapabilityInvalidated: boolean;
+  readonly activationInvalidated: boolean;
+}>;
+
+function invalidateFailureAuthority(
+  sid: string,
+  reason: FailureInvalidationReason,
+): FailureInvalidationObservation {
+  const capability = registryBySession.get(sid);
+  const candidates = outboundInputsBySession.get(sid);
+  const candidateInputs = Array.from(candidates?.values() ?? []);
+  if (capability !== undefined) registry.invalidateCapability(capability.authorizationId, reason);
+  registry.invalidateCapabilityForLeak(sid);
+  activated.delete(sid);
+  registryBySession.delete(sid);
+  failureRetiredCallIdsBySession.set(sid, new Set(candidates?.keys() ?? []));
+  if (candidates !== undefined) failureRetiredInputsBySession.set(sid, new Map(candidates));
+  const candidateReceiptsInvalidated =
+    candidateInputs.length > 0 &&
+    candidateInputs.every((input) => registry.validate(input).provenance.kind !== "superpowers");
+  outboundInputsBySession.delete(sid);
+  return {
+    candidateReceiptCount: candidateInputs.length,
+    candidateReceiptsInvalidated,
+    liveCapabilityInvalidated:
+      capability !== undefined && !registry.hasCapabilityForAuthorization(capability.authorizationId),
+    activationInvalidated: !activated.has(sid),
+  };
+}
 
 
 function resolveAuthorizationId(

@@ -272,6 +272,36 @@ async function main(): Promise<void> {
         if (record.type === "response" && record.success === false) throw new Error("rpc_turn_refused");
       }
     }
+    failureStage = "list_sessions_before_shutdown";
+    const listed = await request("list_sessions", { include_workers: true });
+    const listedData = RpcRecordSchema.safeParse(listed.data);
+    if (!listedData.success || !Array.isArray(listedData.data.sessions)) {
+      throw new Error("rpc_session_list_unavailable_before_shutdown");
+    }
+    const listedSessionCount = listedData.data.sessions.length;
+    const attachedSessions = listedData.data.sessions.flatMap((value: unknown) => {
+      const session = RpcRecordSchema.safeParse(value);
+      if (
+        !session.success ||
+        typeof session.data.sessionId !== "string" ||
+        typeof session.data.attachments !== "number" ||
+        session.data.attachments < 1
+      ) {
+        return [];
+      }
+      return [{ sessionId: session.data.sessionId, kind: session.data.kind }];
+    });
+    const attachedSessionCount = attachedSessions.length;
+    const shutdownSessions = [
+      ...attachedSessions.filter((session) => session.kind === "worker"),
+      ...attachedSessions.filter((session) => session.kind !== "worker"),
+    ];
+    let closedSessionCount = 0;
+    failureStage = "close_session";
+    for (const session of shutdownSessions) {
+      await request("close_session", { sessionId: session.sessionId });
+      closedSessionCount++;
+    }
     failureStage = "shutdown";
     child.stdin.end();
     const exitCode = await closeResult;
@@ -290,6 +320,9 @@ async function main(): Promise<void> {
       setupError: exitCode === 0 && !parseFailure ? undefined : "rpc_session_failed",
       runtimeMode: "rpc",
       sessionId,
+      listedSessionCount,
+      attachedSessionCount,
+      closedSessionCount,
       agentEndCount,
       entryAppendedObservations: appendObservationsWithExecutionOrder,
       syntheticToolResultObservations: syntheticResultObservations,

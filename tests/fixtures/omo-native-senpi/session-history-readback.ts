@@ -15,6 +15,7 @@ const SESSION_ENTRY_TYPES = [
 ] as const;
 
 const SESSION_ENTRY_TYPE_SET: ReadonlySet<string> = new Set(SESSION_ENTRY_TYPES);
+const SANITIZER_FAILURE_ERROR = "justice_capability_outbound_sanitize_failed";
 
 type SessionHistoryFailureReason =
   | "empty_jsonl"
@@ -34,6 +35,8 @@ export type SessionManagerHistoryReadback = Readonly<{
   readonly headerCount: number;
   readonly sessionEntriesObserved: number;
   readonly diskEntriesObserved: number;
+  readonly sanitizerFailureFallbackMemoryEntries: number;
+  readonly sanitizerFailureFallbackDiskEntries: number;
   readonly entryIdsAndBranchesMatch: boolean;
   readonly tokenFoundInMemoryEntries: boolean;
   readonly tokenFoundInDiskEntries: boolean;
@@ -187,6 +190,12 @@ export function inspectSessionManagerHistoryReadback(input: {
   }
 
   const diskEntries = diskRows.slice(1);
+  const sanitizerFailureFallbackMemoryEntries = memoryEntries.filter(
+    (entry) => isRecord(entry) && hasSanitizerFailureFallback(entry),
+  ).length;
+  const sanitizerFailureFallbackDiskEntries = diskEntries.filter(
+    (entry) => isRecord(entry) && hasSanitizerFailureFallback(entry),
+  ).length;
   const memoryValidation = validateEntries(memoryEntries, reasons);
   const diskValidation = validateEntries(diskEntries, reasons);
   const entryIdsAndBranchesMatch =
@@ -205,6 +214,8 @@ export function inspectSessionManagerHistoryReadback(input: {
     headerCount: headers.length,
     sessionEntriesObserved: memoryEntries.length,
     diskEntriesObserved: diskEntries.length,
+    sanitizerFailureFallbackMemoryEntries,
+    sanitizerFailureFallbackDiskEntries,
     entryIdsAndBranchesMatch,
     tokenFoundInMemoryEntries: containsCapability(memoryEntries, input.capabilityIds),
     tokenFoundInDiskEntries:
@@ -213,6 +224,16 @@ export function inspectSessionManagerHistoryReadback(input: {
     unsafeStorage: reasons.size > 0,
     failureReasons: Array.from(reasons).sort(),
   };
+}
+
+function hasSanitizerFailureFallback(entry: Record<string, unknown>): boolean {
+  if (entry.type !== "message" || !isRecord(entry.message)) return false;
+  return (
+    entry.message.role === "assistant" &&
+    entry.message.errorMessage === SANITIZER_FAILURE_ERROR &&
+    Array.isArray(entry.message.content) &&
+    entry.message.content.length === 0
+  );
 }
 
 export function areSessionManagerHistoriesComplete(
