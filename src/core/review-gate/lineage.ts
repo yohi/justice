@@ -26,6 +26,7 @@ import type {
   ReviewGateProjection,
   WriterId,
 } from "./types.js";
+import type { SelfReviewResultV1 } from "./agent-protocol.js";
 
 export type FindingOwnerScope = "requirements" | "design" | "plan";
 export type ReviewPhase = "design" | "plan";
@@ -529,4 +530,274 @@ function getOwnerScopeDepth(scope: FindingOwnerScope): number {
     throw new Error("review_gate_unexpected_scope_or_phase");
   }
   return depth;
+}
+
+
+// ---------------------------------------------------------------------------
+// Task 11 — commit-bound lineage evidence and verified reconciliation
+// ---------------------------------------------------------------------------
+
+export type SemanticBlockerEvidence = Readonly<{
+  readonly lineageId: LineageId;
+  readonly basisDigest: string;
+  readonly semanticLocation: string;
+  readonly ownerScope: FindingOwnerScope;
+  readonly violationType: string;
+  readonly governingReference: string;
+  readonly violatedContract: string;
+  readonly observationEventId: string;
+}>;
+
+export type ValidatedTargetOutcome = Readonly<{
+  readonly lineageId: LineageId;
+  readonly roundOrdinal: number;
+  readonly result: "STILL_PRESENT" | "RESOLVED" | "INDETERMINATE";
+  readonly validationEventId: string;
+  readonly targetEventId: string;
+}>;
+
+export type VerifiedCommittedResolution = Readonly<{
+  readonly lineageId: LineageId;
+  readonly resolutionEventId: string;
+  readonly verifiedCommitOid: string;
+  readonly contextDigest: string;
+}>;
+
+export type VerifiedRegression = Readonly<{
+  readonly lineageId: LineageId;
+  readonly priorResolutionEventId: string;
+  readonly newObservationEventId: string;
+  readonly contextDigest: string;
+}>;
+
+export type VerifiedCommittedResolutionInput = Readonly<{
+  readonly lineageId: LineageId;
+  readonly resolutionEventId: string;
+  readonly verifiedCommitOid: string;
+  readonly contextDigest: string;
+}>;
+
+export function buildVerifiedCommittedResolution(
+  input: VerifiedCommittedResolutionInput,
+): VerifiedCommittedResolution {
+  if (input.verifiedCommitOid.length === 0) {
+    throw new Error("verified_commit_oid_required");
+  }
+  return Object.freeze({ ...input });
+}
+
+export type ResolvedFindingDispositionInput = Readonly<{
+  readonly lineageId: LineageId;
+  readonly decision: "ALREADY_RESOLVED" | "VALID";
+  readonly relation: "EXISTING";
+  readonly validatorEventId: string;
+  readonly contextDigest: string;
+  readonly priorCommittedResolution: VerifiedCommittedResolution | undefined;
+  readonly independentlyVerifiedAbsenceEventId: string | null;
+  readonly independentlyVerifiedPresenceEventId: string | null;
+}>;
+
+export type ResolvedFindingDisposition =
+  | Readonly<{
+      readonly kind: "already_resolved";
+      readonly lineageId: LineageId;
+      readonly validationEventId: string;
+      readonly priorResolutionEventId: string;
+    }>
+  | Readonly<{
+      readonly kind: "lineage_regressed";
+      readonly regression: VerifiedRegression;
+    }>
+  | Readonly<{
+      readonly kind: "block";
+      readonly reason: string;
+    }>;
+
+export function planResolvedFindingDisposition(
+  input: ResolvedFindingDispositionInput,
+): ResolvedFindingDisposition {
+  if (input.decision === "ALREADY_RESOLVED") {
+    if (input.priorCommittedResolution === undefined) {
+      return Object.freeze({
+        kind: "block",
+        reason: "prior_committed_resolution_required",
+      });
+    }
+    return Object.freeze({
+      kind: "already_resolved",
+      lineageId: input.lineageId,
+      validationEventId: input.validatorEventId,
+      priorResolutionEventId: input.priorCommittedResolution.resolutionEventId,
+    });
+  }
+
+  if (
+    input.priorCommittedResolution !== undefined &&
+    input.independentlyVerifiedPresenceEventId !== null
+  ) {
+    return Object.freeze({
+      kind: "lineage_regressed",
+      regression: Object.freeze({
+        lineageId: input.lineageId,
+        priorResolutionEventId: input.priorCommittedResolution.resolutionEventId,
+        newObservationEventId: input.independentlyVerifiedPresenceEventId,
+        contextDigest: input.contextDigest,
+      }),
+    });
+  }
+
+  return Object.freeze({
+    kind: "block",
+    reason: "missing_regression_evidence",
+  });
+}
+
+export type VerifiedSelfReviewReconciliationInput = Readonly<{
+  readonly result: SelfReviewResultV1;
+  readonly expected: Readonly<{
+    readonly operationId: string;
+    readonly gateId: string;
+    readonly phase: ReviewGatePhase;
+    readonly roundOrdinal: number;
+    readonly targetLineageIds: readonly LineageId[];
+    readonly validationEventId: string;
+    readonly targetEventIds: ReadonlyMap<LineageId, string>;
+    readonly contextDigest: string;
+  }>;
+  readonly knownLineages: ReadonlyMap<LineageId, SemanticBlockerEvidence>;
+  readonly priorCommittedResolutions: ReadonlyMap<LineageId, VerifiedCommittedResolution>;
+}>;
+
+export type VerifiedSelfReviewReconciliation = Readonly<{
+  readonly targetOutcomes: readonly ValidatedTargetOutcome[];
+  readonly regressions: readonly VerifiedRegression[];
+}>;
+
+export function reconcileVerifiedSelfReviewBatch(
+  input: VerifiedSelfReviewReconciliationInput,
+): VerifiedSelfReviewReconciliation {
+  const { result, expected, priorCommittedResolutions } = input;
+  if (
+    result.operationId !== expected.operationId ||
+    result.gateId !== expected.gateId ||
+    result.phase !== expected.phase
+  ) {
+    throw new Error("self_review_envelope_mismatch");
+  }
+
+  const targetOutcomes: ValidatedTargetOutcome[] = [];
+  for (const lineageId of expected.targetLineageIds) {
+    const check = result.targetLineageChecks.find((entry) => entry.lineageId === lineageId);
+    if (check === undefined || check.result === "INDETERMINATE") {
+      throw new Error("self_review_indeterminate_target");
+    }
+    const targetEventId = expected.targetEventIds.get(lineageId);
+    if (targetEventId === undefined) {
+      throw new Error("self_review_missing_target_event");
+    }
+    targetOutcomes.push(
+      Object.freeze({
+        lineageId,
+        roundOrdinal: expected.roundOrdinal,
+        result: check.result,
+        validationEventId: expected.validationEventId,
+        targetEventId,
+      }),
+    );
+  }
+
+  const regressions: VerifiedRegression[] = [];
+  for (const finding of result.discoveredFindings) {
+    if (finding.validity !== "VALID" || finding.semanticRelation !== "EXISTING") {
+      continue;
+    }
+    const ref = finding.existingLineageRef as LineageId | undefined;
+    const priorResolution = ref === undefined ? undefined : priorCommittedResolutions.get(ref);
+    if (priorResolution === undefined || ref === undefined) {
+      continue;
+    }
+    regressions.push(
+      Object.freeze({
+        lineageId: ref,
+        priorResolutionEventId: priorResolution.resolutionEventId,
+        newObservationEventId: expected.validationEventId,
+        contextDigest: expected.contextDigest,
+      }),
+    );
+  }
+
+  return Object.freeze({
+    targetOutcomes: Object.freeze(targetOutcomes),
+    regressions: Object.freeze(regressions),
+  });
+}
+
+export type VerifiedCompletedPredecessorTip = Readonly<{
+  readonly gateId: string;
+  readonly generationId: string;
+  readonly scopeId: string;
+  readonly finalizedLedgerDigest: string;
+  readonly lineage: SemanticBlockerEvidence;
+}>;
+
+export type VerifiedCurrentSuccessorLineage = Readonly<{
+  readonly gateId: string;
+  readonly generationId: string;
+  readonly scopeId: string;
+  readonly admittedPredecessorGateId: string;
+  readonly lineage: SemanticBlockerEvidence;
+}>;
+
+export type CrossGenerationReconciliationResultV1 = Readonly<{
+  readonly operationId: string;
+  readonly gateId: string;
+  readonly lineageId: LineageId;
+  readonly verdict: "RELATED_PRIOR_GENERATION" | "NO_PRIOR_MATCH";
+  readonly predecessorLineageRef?: Readonly<{
+    readonly gateId: string;
+    readonly lineageId: LineageId;
+  }>;
+}>;
+
+export type CrossGenerationLineageReconciliationInput = Readonly<{
+  readonly predecessor: VerifiedCompletedPredecessorTip;
+  readonly current: VerifiedCurrentSuccessorLineage;
+  readonly operationId: string;
+  readonly result: CrossGenerationReconciliationResultV1;
+}>;
+
+export type CrossGenerationLineageReconciliation =
+  | Readonly<{
+      readonly kind: "durable_link";
+      readonly predecessorGateId: string;
+      readonly predecessorLineageId: LineageId;
+    }>
+  | Readonly<{ readonly kind: "no_prior_match" }>;
+
+export function planCrossGenerationLineageReconciliation(
+  input: CrossGenerationLineageReconciliationInput,
+): CrossGenerationLineageReconciliation {
+  const { predecessor, current, operationId, result } = input;
+  if (
+    result.operationId !== operationId ||
+    result.gateId !== current.gateId ||
+    result.lineageId !== current.lineage.lineageId
+  ) {
+    return Object.freeze({ kind: "no_prior_match" });
+  }
+
+  if (result.verdict === "RELATED_PRIOR_GENERATION" && result.predecessorLineageRef !== undefined) {
+    if (
+      result.predecessorLineageRef.gateId === predecessor.gateId &&
+      result.predecessorLineageRef.lineageId === predecessor.lineage.lineageId
+    ) {
+      return Object.freeze({
+        kind: "durable_link",
+        predecessorGateId: predecessor.gateId,
+        predecessorLineageId: predecessor.lineage.lineageId,
+      });
+    }
+  }
+
+  return Object.freeze({ kind: "no_prior_match" });
 }
