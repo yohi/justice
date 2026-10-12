@@ -1,10 +1,12 @@
 import { z } from "zod";
 import type { ArtifactDigest, EpochId, FindingId, GateId, LineageId, ReviewGateEvent, ReviewScopeId, WriterId } from "../review-gate-types.js";
 import type {
+  CompletedApprovalBindingV2, DesignClearV2,
   CrossGenerationReconciliationCompletedV2, ExternalOperationDispatchedV2,
-  FindingValidationCompletedV2, LineageRegressedV2, VerifiedCanonicalMutationTargetV1,
+  FindingValidationCompletedV2, GateCreatedV2, LineageRegressedV2, VerifiedCanonicalMutationTargetV1,
   VerifiedSemanticContextTransitionInput, VerifiedTargetWriterHandoffContinuationV1,
   VerifiedTargetWriterHandoffIntentV1, VerifiedTerminalWriterRevokeV1,
+  VerifiedRequirementsBinding, PlanClearV2,
 } from "./types.js";
 
 const textEncoder = new TextEncoder();
@@ -148,6 +150,67 @@ const transition: z.ZodType<VerifiedSemanticContextTransitionInput> = z.strictOb
   && value.triggeringAuthorityEventId === value.proof.triggeringAuthorityEventId
   && value.roundCountersBefore.design === value.roundCountersAfter.design
   && value.roundCountersBefore.plan === value.roundCountersAfter.plan);
+
+const requirementsV2 = z.strictObject({
+  schemaVersion: z.literal(2),
+  source: z.enum(["explicit", "design_declared_reference"]),
+  canonicalPath: text,
+  digest: brandedId<ArtifactDigest>(),
+  gitMode,
+  requirementsGitBlobOid: text,
+  committedBaselineOid: text,
+  workspaceIdentity: text,
+  selectionEvidence: z.strictObject({
+    commandPath: text.optional(),
+    declaration: z.strictObject({
+      designCanonicalPath: text,
+      designDigest: brandedId<ArtifactDigest>(),
+      declarationLine: ordinal,
+      declarationDigest: brandedId<ArtifactDigest>(),
+      declaredCanonicalPath: text,
+    }).optional(),
+  }),
+});
+
+const verifiedRequirementsBinding: z.ZodType<VerifiedRequirementsBinding> = z.strictObject({
+  source: z.enum(["explicit", "design_declared_reference"]),
+  workspaceIdentity: text,
+  canonicalPath: text,
+  digest: brandedId<ArtifactDigest>(),
+  gitMode,
+  gitBlobOid: text,
+  selectedByEventId: id,
+});
+
+const gateCreated: z.ZodType<GateCreatedV2> = z.strictObject({
+  reviewScopeId: brandedId<ReviewScopeId>(),
+  supersedesGateId: id.nullable(),
+  requirementsResolution: requirementsV2,
+  designArtifact: artifact,
+  planArtifact: artifact,
+  reviewProtocolFingerprint: text,
+  designProtocolFingerprint: text,
+  planProtocolFingerprint: text,
+});
+
+const designClear: z.ZodType<DesignClearV2> = z.strictObject({
+  designProtocolFingerprint: text,
+  approvedContextEventId: id,
+});
+
+const planClear: z.ZodType<PlanClearV2> = z.strictObject({
+  completedApprovalBinding: approval,
+  approvedContextEventId: id,
+});
+
+const completedApproval: z.ZodType<CompletedApprovalBindingV2> = z.strictObject({
+  approvalBinding: approval,
+  designClearEventId: id,
+  planClearEventId: id,
+  currentRequirementsAuthorityEventId: id,
+  currentRequirements: verifiedRequirementsBinding,
+});
+
 const v2Base = {
   schemaVersion: z.literal(2), eventId: id, parentEventId: id, emittedAt: timestamp,
   gateId: id, epochId: id, generationId: id, writerId: id,
@@ -156,10 +219,14 @@ function versioned<T extends string, P>(eventType: T, payload: z.ZodType<P>): z.
   return z.strictObject({ ...v2Base, eventType: z.literal(eventType), payload });
 }
 const v2Schema = z.union([
+  versioned("GATE_CREATED", gateCreated),
   versioned("EXTERNAL_OPERATION_DISPATCHED", dispatch),
   versioned("FINDING_VALIDATION_COMPLETED", validation),
   versioned("LINEAGE_REGRESSED", regression),
   versioned("CROSS_GENERATION_RECONCILIATION_COMPLETED", reconciliation),
+  versioned("DESIGN_CLEAR", designClear),
+  versioned("PLAN_CLEAR", planClear),
+  versioned("COMPLETED_APPROVAL_BINDING", completedApproval),
   versioned("TARGET_WRITER_HANDOFF_REQUESTED", intent),
   versioned("TARGET_WRITER_HANDOFF_RESUMED", continuation),
   versioned("TARGET_WRITER_TERMINAL_REVOKED", revoke),
@@ -167,6 +234,8 @@ const v2Schema = z.union([
 ]).refine((value) => {
   if (value.eventId === value.parentEventId) return false;
   switch (value.eventType) {
+    case "GATE_CREATED":
+      return true;
     case "EXTERNAL_OPERATION_DISPATCHED":
       return value.payload.gateId === value.gateId && value.payload.generationId === value.generationId
         && value.payload.epochId === value.epochId;
@@ -175,6 +244,11 @@ const v2Schema = z.union([
         && value.payload.oldInputs.generationId === value.generationId
         && value.payload.triggeringAuthorityEventId !== value.eventId
         && value.payload.proof.validationEventId !== value.eventId;
+    case "DESIGN_CLEAR":
+    case "PLAN_CLEAR":
+      return true;
+    case "COMPLETED_APPROVAL_BINDING":
+      return value.payload.approvalBinding.gateId === value.gateId;
     case "TARGET_WRITER_HANDOFF_REQUESTED":
       return value.payload.status === "REQUESTED" && value.payload.gateId === value.gateId
         && value.payload.generationId === value.generationId;
@@ -193,7 +267,7 @@ const v2Schema = z.union([
     default: return assertNever(value);
   }
 });
-const eventSchema = z.union([legacySchema, v2Schema]).brand<"VerifiedReviewGateEvent">();
+const eventSchema = z.union([v2Schema, legacySchema]).brand<"VerifiedReviewGateEvent">();
 
 /** Schema verification is not authentication of referenced evidence or causal history. */
 export type VerifiedReviewGateEvent = Readonly<z.infer<typeof eventSchema>>;

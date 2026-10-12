@@ -17,22 +17,13 @@ import type {
 import type {
   ScopeEnrollmentV1,
   VerifiedFirstEnrollmentAuthorityV1,
+  VerifiedRequirementsBinding,
 } from "./types.js";
 import { computeCanonicalJsonFingerprint } from "./identity.js";
 
 // ---------------------------------------------------------------------------
 // Verified material DTOs
 // ---------------------------------------------------------------------------
-
-export type VerifiedRequirementsBinding = Readonly<{
-  readonly source: "explicit" | "design_declared_reference";
-  readonly workspaceIdentity: string;
-  readonly canonicalPath: string;
-  readonly digest: ArtifactDigest;
-  readonly gitMode: "100644" | "100755";
-  readonly gitBlobOid: string;
-  readonly selectedByEventId: string;
-}>;
 
 export type VerifiedObservedRequirementsCandidate = Readonly<{
   readonly source: "explicit" | "design_declared_reference";

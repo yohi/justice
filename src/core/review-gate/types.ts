@@ -8,12 +8,29 @@
 export * from "../review-gate-types.js";
 
 import type {
+  ArtifactDigest,
   EpochId,
   LineageId,
+  RequirementsResolutionV2,
   ReviewApprovalBindingV1,
+  ReviewArtifactBinding,
   ReviewGatePhase,
   ReviewGateState,
+  ReviewScopeId,
 } from "../review-gate-types.js";
+
+/**
+ * Immutable Requirements binding used by admission, projection and V2 lifecycle events.
+ */
+export type VerifiedRequirementsBinding = Readonly<{
+  readonly source: "explicit" | "design_declared_reference";
+  readonly workspaceIdentity: string;
+  readonly canonicalPath: string;
+  readonly digest: ArtifactDigest;
+  readonly gitMode: "100644" | "100755";
+  readonly gitBlobOid: string;
+  readonly selectedByEventId: string;
+}>;
 
 /**
  * WSP1 workspace state of a Review Gate target artifact. Real worktree
@@ -220,6 +237,35 @@ export type VerifiedSemanticContextTransitionInput = Readonly<{
   readonly roundCountersBefore: Readonly<{ readonly design: number; readonly plan: number }>;
   readonly roundCountersAfter: Readonly<{ readonly design: number; readonly plan: number }>;
   readonly operationId: string;
+}>;
+
+export type GateCreatedV2 = Readonly<{
+  readonly reviewScopeId: ReviewScopeId;
+  readonly supersedesGateId: string | null;
+  readonly requirementsResolution: RequirementsResolutionV2;
+  readonly designArtifact: ReviewArtifactBinding;
+  readonly planArtifact: ReviewArtifactBinding;
+  readonly reviewProtocolFingerprint: string;
+  readonly designProtocolFingerprint: string;
+  readonly planProtocolFingerprint: string;
+}>;
+
+export type DesignClearV2 = Readonly<{
+  readonly designProtocolFingerprint: string;
+  readonly approvedContextEventId: string;
+}>;
+
+export type PlanClearV2 = Readonly<{
+  readonly completedApprovalBinding: ReviewApprovalBindingV1;
+  readonly approvedContextEventId: string;
+}>;
+
+export type CompletedApprovalBindingV2 = Readonly<{
+  readonly approvalBinding: ReviewApprovalBindingV1;
+  readonly designClearEventId: string;
+  readonly planClearEventId: string;
+  readonly currentRequirementsAuthorityEventId: string;
+  readonly currentRequirements: VerifiedRequirementsBinding;
 }>;
 
 export type ExternalOperationDispatchedV2 = Readonly<{
@@ -493,4 +539,69 @@ export type VerifiedClosingSealReceiptPayloadV1 = Readonly<{
 export type VerifiedClosingSealReceiptV1 = Readonly<{
   readonly payload: VerifiedClosingSealReceiptPayloadV1;
   readonly signature: string;
+}>;
+
+// ---------------------------------------------------------------------------
+// Task 9 evidence interfaces shared with Task 11/12
+// ---------------------------------------------------------------------------
+
+export type VerifiedSemanticContext = Readonly<{
+  readonly workspaceIdentity: string;
+  readonly gateId: string;
+  readonly generationId: string;
+  readonly phase: ReviewGatePhase;
+  readonly phaseBaselineId: string;
+  readonly requirements: SemanticContextInputsV1["requirements"];
+  readonly upstreamApproved: SemanticContextInputsV1["upstreamApproved"];
+  readonly policy: SemanticContextInputsV1["policy"];
+}>;
+
+export type SemanticBlockerEvidence = Readonly<{
+  readonly lineageId: string;
+  readonly findingEventId: string;
+  readonly owner: "requirements" | "design" | "plan";
+  readonly currentStatusEventId: string;
+  readonly committedAuthorityEventId: string;
+}>;
+
+export type ValidatedTargetOutcome = Readonly<{
+  readonly targetPath: string;
+  readonly targetIdentityDigest: string;
+  readonly outcome: "accepted" | "rejected" | "staged";
+  readonly outcomeEventId: string;
+}>;
+
+export type VerifiedCommittedResolution = Readonly<{
+  readonly lineageId: string;
+  readonly resolutionEventId: string;
+  readonly remediationRound: number;
+  readonly semanticContextFingerprint: string;
+}>;
+
+export type VerifiedRegression = Readonly<{
+  readonly lineageId: string;
+  readonly regressionEventId: string;
+  readonly priorCommittedResolutionEventId: string;
+  readonly semanticContextFingerprint: string;
+}>;
+
+export type VerifiedCycleEvidence = Readonly<{
+  readonly roundOrdinal: number;
+  readonly operationId: string;
+  readonly roundStartedEventId: string;
+  readonly pre: Readonly<{
+    readonly eventId: string;
+    readonly blockers: readonly SemanticBlockerEvidence[];
+    readonly blockingCount: number;
+    readonly semanticFingerprint: string;
+  }>;
+  readonly post: Readonly<{
+    readonly eventId: string;
+    readonly blockers: readonly SemanticBlockerEvidence[];
+    readonly blockingCount: number;
+    readonly semanticFingerprint: string;
+  }>;
+  readonly targetOutcomes: readonly ValidatedTargetOutcome[];
+  readonly committedResolutions: readonly VerifiedCommittedResolution[];
+  readonly regressions: readonly VerifiedRegression[];
 }>;
