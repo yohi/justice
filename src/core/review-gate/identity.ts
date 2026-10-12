@@ -58,7 +58,7 @@ const textEncoder = new TextEncoder();
  * Date/Map/Set/RegExp, typed arrays, holes in arrays, non-finite numbers) are
  * rejected so equal data always encodes to equal text.
  */
-function canonicalJsonText(value: unknown): string {
+export function canonicalJsonText(value: unknown): string {
   if (value === undefined) throw new Error("review_gate_canonical_json_unsupported_value");
   if (value === null) return "null";
   switch (typeof value) {
