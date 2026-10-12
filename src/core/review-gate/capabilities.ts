@@ -378,7 +378,6 @@ export type ReviewRestorePrepareInput = Readonly<{
   readonly sourceKnownDirtyBinding: ReviewRestoreSourceBinding;
   readonly targetCleanCommittedBinding: ReviewRestoreDestinationBinding;
 }>;
-
 export type ReviewTargetRestorePreparedPayload = Readonly<{
   readonly preparedId: string;
   readonly preparedAt: string;
@@ -388,6 +387,7 @@ export type ReviewTargetRestorePreparedPayload = Readonly<{
   readonly targetCanonicalPath: string;
   readonly sourceKnownDirtyBinding: ReviewRestoreSourceBinding;
   readonly targetCleanCommittedBinding: ReviewRestoreDestinationBinding;
+  readonly recoveryDigest: string;
 }>;
 
 export type ReviewRestoreResult =
@@ -419,7 +419,6 @@ export type ReviewCommitPrepareInput = Readonly<{
   readonly expectedArtifactDigest: string;
   readonly expectedGitMode: ReviewGitRegularMode;
 }>;
-
 export type ReviewCommitPreparedPayload = Readonly<{
   readonly preparedId: string;
   readonly preparedAt: string;
@@ -437,6 +436,7 @@ export type ReviewCommitPreparedPayload = Readonly<{
   readonly commitMessage: string;
   readonly messageDigest: string;
   readonly unrelatedIndexFingerprint: string;
+  readonly recoveryDigest: string;
 }>;
 
 export type VerifiedReviewCommit = Readonly<{

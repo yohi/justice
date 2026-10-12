@@ -10,13 +10,15 @@ import type { ReviewGateWorkspaceProvider } from "../../src/runtime/review-gate-
 import { buildReviewCommitMessage } from "../../src/core/review-gate/capabilities";
 import { computeArtifactDigest } from "../../src/core/review-gate/identity.js";
 import type {
-  GitIndexEntryBindingV1,
-  GitTreeEntryBindingV1,
-  ReviewCommitPrepareInput,
-  ReviewRestorePrepareInput,
-  ReviewTargetGitBinding,
-  WorktreeArtifactBindingV1,
+GitIndexEntryBindingV1,
+GitTreeEntryBindingV1,
+ReviewCommitPrepareInput,
+ReviewRestorePrepareInput,
+ReviewTargetGitBinding,
+WorktreeArtifactBindingV1,
 } from "../../src/core/review-gate/capabilities";
+import type { ReviewGateRecoveryStore } from "../../src/runtime/review-gate-recovery-store";
+import { canonicalJsonText, computeCanonicalJsonFingerprint } from "../../src/core/review-gate/identity";
 
 const TARGET = ":(glob)*.md";
 const TARGET_V1 = "design target v1\nbe clean\n";
@@ -719,5 +721,102 @@ describe("GIT1 — prepared commit recovery", () => {
       "review_restore_recovery_conflict",
     );
     expect(provider.replaceCalls).toHaveLength(1); // execute only; recovery never rewrites
+  });
+});
+
+
+function createMemoryRecoveryStore(): ReviewGateRecoveryStore {
+  const entries = new Map<string, Buffer>();
+  return {
+    publish: async (digest, bytes) => {
+      if (entries.has(digest)) {
+        const existing = entries.get(digest);
+        return existing !== undefined && existing.equals(bytes) ? "exists" : Promise.reject(new Error("collision"));
+      }
+      entries.set(digest, bytes);
+      return "created";
+    },
+    read: async (digest) => entries.get(digest) ?? null,
+    list: async () => [...entries.keys()],
+    close: () => { /* no-op */ },
+  };
+}
+
+
+describe("GIT1 + recovery store", () => {
+  it("prepareCommit persists a canonical recovery record and returns its digest", async () => {
+    const currentRoot = await initFixture();
+    await writeFile(`${currentRoot}/${TARGET}`, TARGET_V2);
+const provider = createFsProvider(currentRoot);
+    const recoveryStore = createMemoryRecoveryStore();
+    const gate = createReviewGateGit({ rootDir: currentRoot, provider, recoveryStore });
+    const input = mutationCommitInput();
+    const payload = await gate.prepareCommit(input);
+    expect(payload.recoveryDigest).toMatch(/^[a-f0-9]{64}$/u);
+    const stored = await recoveryStore.read(payload.recoveryDigest);
+    expect(stored).not.toBeNull();
+    const recoveryRecord = {
+      phase: payload.phase,
+      roundOrdinal: payload.remediationRound,
+      targetCanonicalPath: payload.targetCanonicalPath,
+      parentHeadSha: payload.parentHeadSha,
+      expectedTargetEntry: payload.expectedTargetEntry,
+      commitMessageDigest: payload.messageDigest,
+      lineageIds: payload.lineageIds,
+      unrelatedIndexFingerprint: payload.unrelatedIndexFingerprint,
+      preparedOperationId: payload.operationId,
+    };
+    const expectedDigest = computeCanonicalJsonFingerprint(recoveryRecord);
+    expect(payload.recoveryDigest).toBe(expectedDigest);
+    expect(stored?.toString("utf8")).toBe(canonicalJsonText(recoveryRecord));
+  });
+
+  it("prepareRestore persists a canonical recovery record and returns its digest", async () => {
+    const currentRoot = await initFixture();
+    await writeFile(`${currentRoot}/${TARGET}`, TARGET_V2);
+    const provider = createFsProvider(currentRoot);
+    const gate = createReviewGateGit({ rootDir: currentRoot, provider });
+    const inspected = await gate.inspectTarget(TARGET);
+    const sourceWorktree: WorktreeArtifactBindingV1 = {
+      canonicalPath: TARGET,
+      digest: computeArtifactDigest(Buffer.from(TARGET_V2, "utf8")),
+      gitMode: "100644",
+    };
+    const input: ReviewRestorePrepareInput = {
+      gateId: "gate-task9",
+      operationId: "op-restore",
+      phase: "design",
+      targetCanonicalPath: TARGET,
+      allowedRestoreTargetPath: TARGET,
+      sourceKnownDirtyBinding: {
+        headSha: inspected.headSha!,
+        headEntry: inspected.headEntry!,
+        indexEntry: inspected.indexEntry!,
+        worktree: sourceWorktree,
+        sourceEventId: "evt-remediation-completed",
+      },
+      targetCleanCommittedBinding: {
+        headSha: inspected.headSha!,
+        headEntry: inspected.headEntry!,
+        indexEntry: inspected.indexEntry!,
+        worktree: { canonicalPath: TARGET, digest: computeArtifactDigest(Buffer.from(TARGET_V1, "utf8")), gitMode: "100644" },
+      },
+    };
+    const recoveryStore = createMemoryRecoveryStore();
+    const gateWithStore = createReviewGateGit({ rootDir: currentRoot, provider, recoveryStore });
+    const payload = await gateWithStore.prepareRestore(input);
+    expect(payload.recoveryDigest).toMatch(/^[a-f0-9]{64}$/u);
+    const stored = await recoveryStore.read(payload.recoveryDigest);
+    expect(stored).not.toBeNull();
+    const recoveryRecord = {
+      phase: payload.phase,
+      targetCanonicalPath: payload.targetCanonicalPath,
+      sourceKnownDirtyBinding: payload.sourceKnownDirtyBinding,
+      targetCleanCommittedBinding: payload.targetCleanCommittedBinding,
+      preparedOperationId: payload.operationId,
+    };
+    const expectedDigest = computeCanonicalJsonFingerprint(recoveryRecord);
+    expect(payload.recoveryDigest).toBe(expectedDigest);
+    expect(stored?.toString("utf8")).toBe(canonicalJsonText(recoveryRecord));
   });
 });
