@@ -9,7 +9,12 @@ import {
 import {
   planReviewGateNextOperation,
   type ReviewGatePlanningContext,
+  type VerifiedUpstreamReopenContextV1,
 } from "../../../src/core/review-gate/orchestrator.js";
+import type {
+  ReviewRestoreDestinationBinding,
+  ReviewRestoreSourceBinding,
+} from "../../../src/core/review-gate/capabilities.js";
 import {
   buildLineageResolution,
   commitLineageRevalidation,
@@ -132,6 +137,90 @@ function reopened(lineageId: LineageId): FindingReopenedV1 {
 const lineageA = "lineage-a" as LineageId;
 const lineageB = "lineage-b" as LineageId;
 
+// Task 14 upstream-reopen (OSC1) verification fixtures. P0 is the pinned clean
+// committed plan artifact; P1 is the dirty uncommitted post-image over it.
+const verificationFrontier = "frontier-" + "f".repeat(62);
+const planDirtyDigest = "".padEnd(64, "b") as ArtifactDigest;
+const planCleanHeadSha = "".padEnd(40, "0");
+
+const planCleanTreeEntry = {
+  canonicalPath: "docs/plan.md",
+  blobSha: "plan-p0-blob",
+  gitMode: "100644" as const,
+};
+
+function planDirtySource(
+  overrides: Partial<ReviewRestoreSourceBinding> = {},
+): ReviewRestoreSourceBinding {
+  return {
+    headSha: planCleanHeadSha,
+    headEntry: planCleanTreeEntry,
+    indexEntry: { ...planCleanTreeEntry, stage: 0 as const },
+    worktree: { canonicalPath: "docs/plan.md", digest: planDirtyDigest, gitMode: "100644" as const },
+    sourceEventId: "plan-source-event-1",
+    ...overrides,
+  };
+}
+
+function planCleanDestination(
+  overrides: Partial<ReviewRestoreDestinationBinding> = {},
+): ReviewRestoreDestinationBinding {
+  return {
+    headSha: planCleanHeadSha,
+    headEntry: planCleanTreeEntry,
+    indexEntry: { ...planCleanTreeEntry, stage: 0 as const },
+    worktree: { canonicalPath: "docs/plan.md", digest, gitMode: "100644" as const },
+    ...overrides,
+  };
+}
+
+const planDownstream = {
+  phase: "plan" as const,
+  targetPath: "docs/plan.md",
+  knownDirtyPostImage: planDirtySource(),
+  approvedCleanOriginal: planCleanDestination(),
+  originatingRoundEventId: "round-event-1",
+};
+
+const planRestoreOperationId = `upstream-restore:${lineageA}:docs/plan.md:${verificationFrontier}`;
+
+function upstreamVerification(
+  overrides: Partial<VerifiedUpstreamReopenContextV1> = {},
+): VerifiedUpstreamReopenContextV1 {
+  return {
+    gateId,
+    generationId: "gen-1",
+    currentPhase: "plan",
+    upstreamBlocker: {
+      lineageId: lineageA,
+      findingEventId: "finding-event-1",
+      currentOwner: "design",
+      committedAuthorityEventId: "authority-1",
+    },
+    downstream: planDownstream,
+    restoreCompletion: null,
+    verifiedFrontierHash: verificationFrontier,
+    ...overrides,
+  };
+}
+
+function requirementsUpstreamVerification(
+  overrides: Partial<VerifiedUpstreamReopenContextV1> = {},
+): VerifiedUpstreamReopenContextV1 {
+  return upstreamVerification({
+    currentPhase: "design",
+    downstream: null,
+    restoreCompletion: null,
+    upstreamBlocker: {
+      lineageId: lineageA,
+      findingEventId: "finding-event-req-1",
+      currentOwner: "requirements",
+      committedAuthorityEventId: "authority-req-1",
+    },
+    ...overrides,
+  });
+}
+
 function planningContext(
   overrides: Omit<ReviewGatePlanningContext, "artifacts"> = {},
 ): ReviewGatePlanningContext {
@@ -195,7 +284,7 @@ describe("planReviewGateNextOperation — state-machine scenarios", () => {
     });
   });
 
-  it("restores a dirty Design target before reopening Design from a Plan-phase Design-owned blocker", () => {
+  it("RESTORE_DOWNSTREAM_FIRST: plans prepare_restore bound to P1→P0 for a plan-phase Design blocker with verified provenance", () => {
     const projection = projectReviewGate([
       created,
       designClear,
@@ -203,31 +292,83 @@ describe("planReviewGateNextOperation — state-machine scenarios", () => {
     ]);
 
     const dirty = planningContext({
-      workspaceStates: new Map([["docs/design.md", "known_dirty" as const]]),
+      workspaceStates: new Map([["docs/plan.md", "known_dirty" as const]]),
+      verifiedUpstreamReopen: upstreamVerification(),
     });
     expect(planReviewGateNextOperation(projection, dirty)).toEqual({
       kind: "prepare_restore",
-      targetPath: "docs/design.md",
-      restoreTo: designArtifact,
-    });
-
-    const clean = planningContext({
-      workspaceStates: new Map([["docs/design.md", "clean_committed" as const]]),
-    });
-    expect(planReviewGateNextOperation(projection, clean)).toEqual({
-      kind: "append_reopen",
-      phase: "design",
-      lineageIds: [lineageA],
+      targetPath: "docs/plan.md",
+      restoreTo: planArtifact,
+      restoreProof: {
+        upstreamFindingEventId: "finding-event-1",
+        currentLineageId: lineageA,
+        restoreOperationId: planRestoreOperationId,
+        sourceBindingDigest: planDirtyDigest,
+        destinationBindingDigest: digest,
+        verifiedFrontierHash: verificationFrontier,
+      },
     });
   });
 
-  it("reopens the Design phase for a Requirements-owned upstream blocker", () => {
-    const projection = projectReviewGate([created, discover(lineageA, "f-a", "requirements")]);
+  it("never selects a dirty upstream Design artifact as the downstream Plan restore target", () => {
+    const projection = projectReviewGate([
+      created,
+      designClear,
+      discover(lineageA, "f-a", "design"),
+    ]);
 
-    expect(planReviewGateNextOperation(projection, planningContext())).toEqual({
+    // Plan is clean while the upstream Design artifact is dirty: no speculative
+    // restore is planned and the Design reopen proceeds.
+    const cleanPlan = planningContext({
+      workspaceStates: new Map([
+        ["docs/design.md", "known_dirty" as const],
+        ["docs/plan.md", "clean_committed" as const],
+      ]),
+      verifiedUpstreamReopen: upstreamVerification({ downstream: null }),
+    });
+    expect(planReviewGateNextOperation(projection, cleanPlan)).toEqual({
       kind: "append_reopen",
       phase: "design",
       lineageIds: [lineageA],
+      verifiedRestoreCompletionEventId: null,
+    });
+
+    // A verified context naming the dirty Design as the restore target is a
+    // target mismatch and must BLOCK instead of restoring it.
+    const wrongTarget = planningContext({
+      workspaceStates: new Map([
+        ["docs/design.md", "known_dirty" as const],
+        ["docs/plan.md", "known_dirty" as const],
+      ]),
+      verifiedUpstreamReopen: upstreamVerification({
+        downstream: { ...planDownstream, targetPath: "docs/design.md" },
+      }),
+    });
+    expect(planReviewGateNextOperation(projection, wrongTarget)).toEqual({
+      kind: "suspended",
+      reason: "execution_suspended",
+      detail: "upstream_reopen_wrong_downstream_target",
+    });
+  });
+
+  it("reopens the Design phase for a verified Requirements-owned upstream blocker", () => {
+    const projection = projectReviewGate([created, discover(lineageA, "f-a", "requirements")]);
+
+    const verified = planningContext({
+      verifiedUpstreamReopen: requirementsUpstreamVerification(),
+    });
+    expect(planReviewGateNextOperation(projection, verified)).toEqual({
+      kind: "append_reopen",
+      phase: "design",
+      lineageIds: [lineageA],
+      verifiedRestoreCompletionEventId: null,
+    });
+
+    // Undefined upstream context is not permission to manufacture a reopen.
+    expect(planReviewGateNextOperation(projection, planningContext())).toEqual({
+      kind: "suspended",
+      reason: "execution_suspended",
+      detail: "upstream_reopen_context_missing",
     });
   });
 
@@ -740,21 +881,55 @@ describe("planReviewGateNextOperation — crash-window planning", () => {
     });
   });
 
-  it("plans restore and commit recovery from their prepared-without-completed windows", () => {
-    const projection = projectReviewGate([created]);
-
+  it("recovers a durable prepared restore only against verified provenance", () => {
+    // The prepared restore belongs to the OSC1 upstream-reopen state machine,
+    // so recovery requires the verified upstream reopen context.
+    const reopenable = projectReviewGate([
+      created,
+      designClear,
+      discover(lineageA, "f-a", "design"),
+    ]);
     expect(
       planReviewGateNextOperation(
-        projection,
+        reopenable,
+        planningContext({
+          inFlight: { kind: "restore_prepared", targetPath: "docs/plan.md" },
+          workspaceStates: new Map([["docs/plan.md", "known_dirty" as const]]),
+          verifiedUpstreamReopen: upstreamVerification(),
+        }),
+      ),
+    ).toEqual({
+      kind: "recover_restore",
+      targetPath: "docs/plan.md",
+      restoreTo: planArtifact,
+      restoreProof: {
+        upstreamFindingEventId: "finding-event-1",
+        currentLineageId: lineageA,
+        restoreOperationId: planRestoreOperationId,
+        sourceBindingDigest: planDirtyDigest,
+        destinationBindingDigest: digest,
+        verifiedFrontierHash: verificationFrontier,
+      },
+    });
+
+    // Without the verified provenance Core cannot bind the recovery: fail closed.
+    const unbound = projectReviewGate([created]);
+    expect(
+      planReviewGateNextOperation(
+        unbound,
         planningContext({
           inFlight: { kind: "restore_prepared", targetPath: "docs/design.md" },
         }),
       ),
     ).toEqual({
-      kind: "recover_restore",
-      targetPath: "docs/design.md",
-      restoreTo: designArtifact,
+      kind: "suspended",
+      reason: "execution_suspended",
+      detail: "restore_recovery_provenance_missing",
     });
+  });
+
+  it("plans commit recovery from its prepared-without-completed window", () => {
+    const projection = projectReviewGate([created]);
 
     expect(
       planReviewGateNextOperation(
@@ -790,5 +965,383 @@ describe("planReviewGateNextOperation — crash-window planning", () => {
         }),
       ),
     ).toEqual({ kind: "dispatch_reviewer", phase: "design" });
+  });
+});
+
+describe("planReviewGateNextOperation — Task 14 upstream reopen state machine", () => {
+  const reopenable = projectReviewGate([
+    created,
+    designClear,
+    discover(lineageA, "f-a", "design"),
+  ]);
+  const nc1Suspended = projectReviewGate([
+    created,
+    designClear,
+    discover(lineageA, "f-a", "design"),
+    event("REVIEW_NON_CONVERGENT", { phase: "plan", lineageIds: [lineageA] }),
+  ]);
+  const dirtyPlanStates = new Map([["docs/plan.md", "known_dirty" as const]]);
+  const cleanPlanStates = new Map([["docs/plan.md", "clean_committed" as const]]);
+  const planRestoreProof = {
+    upstreamFindingEventId: "finding-event-1",
+    currentLineageId: lineageA,
+    restoreOperationId: planRestoreOperationId,
+    sourceBindingDigest: planDirtyDigest,
+    destinationBindingDigest: digest,
+    verifiedFrontierHash: verificationFrontier,
+  };
+
+  it("preempts an ordinary non-convergent suspension with the ordinary orchestrator route", () => {
+    // A verified CURRENT upstream blocker routes through the ordinary
+    // orchestrator before the generic suspended/NC1 selection, without needing
+    // an NC1 stop or MATERIAL_PROGRESS for the reopen itself.
+    expect(
+      planReviewGateNextOperation(
+        nc1Suspended,
+        planningContext({
+          workspaceStates: dirtyPlanStates,
+          verifiedUpstreamReopen: upstreamVerification(),
+        }),
+      ),
+    ).toEqual({
+      kind: "prepare_restore",
+      targetPath: "docs/plan.md",
+      restoreTo: planArtifact,
+      restoreProof: planRestoreProof,
+    });
+
+    expect(
+      planReviewGateNextOperation(
+        nc1Suspended,
+        planningContext({
+          workspaceStates: cleanPlanStates,
+          verifiedUpstreamReopen: upstreamVerification({ downstream: null }),
+        }),
+      ),
+    ).toEqual({
+      kind: "append_reopen",
+      phase: "design",
+      lineageIds: [lineageA],
+      verifiedRestoreCompletionEventId: null,
+    });
+
+    // Without the verified context the NC1 reentry dispatch keeps its existing
+    // behavior unchanged.
+    expect(
+      planReviewGateNextOperation(
+        nc1Suspended,
+        planningContext({ materialProgressObserved: true }),
+      ),
+    ).toEqual({ kind: "validate_non_convergence_reentry", phase: "plan" });
+  });
+
+  it("never re-appends a reopen while the gate is already suspended as reopen_required", () => {
+    // A REOPEN_REQUIRED suspension already carries the durable reopen for the
+    // current upstream landscape; re-planning append_reopen would duplicate it.
+    const reopenedGate = projectReviewGate([
+      created,
+      designClear,
+      discover(lineageA, "f-a", "design"),
+      event("REOPEN_REQUIRED", { phase: "design", lineageIds: [lineageA] }),
+    ]);
+    expect(
+      planReviewGateNextOperation(
+        reopenedGate,
+        planningContext({ verifiedUpstreamReopen: upstreamVerification() }),
+      ),
+    ).toEqual({
+      kind: "suspended",
+      reason: "reopen_required",
+      resumeCursor: { kind: "await_upstream_commit" },
+    });
+  });
+
+  it("appends the reopen bound to a witnessed exact restore completion", () => {
+    expect(
+      planReviewGateNextOperation(
+        reopenable,
+        planningContext({
+          workspaceStates: cleanPlanStates,
+          verifiedUpstreamReopen: upstreamVerification({
+            restoreCompletion: {
+              preparedEventId: "restore-prepared-1",
+              completionEventId: "restore-completed-1",
+              restoreOperationId: planRestoreOperationId,
+              targetPath: "docs/plan.md",
+              verifiedDestinationDigest: digest,
+            },
+          }),
+        }),
+      ),
+    ).toEqual({
+      kind: "append_reopen",
+      phase: "design",
+      lineageIds: [lineageA],
+      verifiedRestoreCompletionEventId: "restore-completed-1",
+    });
+  });
+
+  it("blocks verified contexts that disagree with the projection identity", () => {
+    expect(
+      planReviewGateNextOperation(
+        reopenable,
+        planningContext({
+          workspaceStates: dirtyPlanStates,
+          verifiedUpstreamReopen: upstreamVerification({ gateId: "gate-2" }),
+        }),
+      ),
+    ).toEqual({
+      kind: "suspended",
+      reason: "execution_suspended",
+      detail: "upstream_reopen_gate_mismatch",
+    });
+
+    expect(
+      planReviewGateNextOperation(
+        reopenable,
+        planningContext({
+          workspaceStates: dirtyPlanStates,
+          verifiedUpstreamReopen: upstreamVerification({ currentPhase: "design" }),
+        }),
+      ),
+    ).toEqual({
+      kind: "suspended",
+      reason: "execution_suspended",
+      detail: "upstream_reopen_phase_mismatch",
+    });
+
+    expect(
+      planReviewGateNextOperation(
+        reopenable,
+        planningContext({
+          workspaceStates: dirtyPlanStates,
+          verifiedUpstreamReopen: upstreamVerification({
+            upstreamBlocker: {
+              lineageId: lineageB,
+              findingEventId: "finding-event-b",
+              currentOwner: "design",
+              committedAuthorityEventId: "authority-b",
+            },
+          }),
+        }),
+      ),
+    ).toEqual({
+      kind: "suspended",
+      reason: "execution_suspended",
+      detail: "upstream_reopen_blocker_lineage_not_current",
+    });
+  });
+
+  it("blocks restore provenance that fails the exact P0 or dirty-post-image checks", () => {
+    expect(
+      planReviewGateNextOperation(
+        reopenable,
+        planningContext({
+          workspaceStates: dirtyPlanStates,
+          verifiedUpstreamReopen: upstreamVerification({
+            downstream: {
+              ...planDownstream,
+              approvedCleanOriginal: {
+                ...planDownstream.approvedCleanOriginal,
+                worktree: {
+                  ...planDownstream.approvedCleanOriginal.worktree,
+                  digest: planDirtyDigest,
+                },
+              },
+            },
+          }),
+        }),
+      ),
+    ).toEqual({
+      kind: "suspended",
+      reason: "execution_suspended",
+      detail: "upstream_reopen_wrong_clean_original",
+    });
+
+    expect(
+      planReviewGateNextOperation(
+        reopenable,
+        planningContext({
+          workspaceStates: dirtyPlanStates,
+          verifiedUpstreamReopen: upstreamVerification({
+            downstream: {
+              ...planDownstream,
+              knownDirtyPostImage: planDirtySource({
+                headSha: "".padEnd(40, "1"),
+              }),
+            },
+          }),
+        }),
+      ),
+    ).toEqual({
+      kind: "suspended",
+      reason: "execution_suspended",
+      detail: "upstream_reopen_changed_head",
+    });
+
+    expect(
+      planReviewGateNextOperation(
+        reopenable,
+        planningContext({
+          workspaceStates: dirtyPlanStates,
+          verifiedUpstreamReopen: upstreamVerification({
+            downstream: {
+              ...planDownstream,
+              knownDirtyPostImage: planDirtySource({
+                indexEntry: {
+                  ...planDownstream.knownDirtyPostImage.indexEntry,
+                  blobSha: "staged-drift-blob",
+                },
+              }),
+            },
+          }),
+        }),
+      ),
+    ).toEqual({
+      kind: "suspended",
+      reason: "execution_suspended",
+      detail: "upstream_reopen_changed_index",
+    });
+
+    expect(
+      planReviewGateNextOperation(
+        reopenable,
+        planningContext({
+          workspaceStates: dirtyPlanStates,
+          verifiedUpstreamReopen: upstreamVerification({
+            downstream: {
+              ...planDownstream,
+              knownDirtyPostImage: planDirtySource({
+                worktree: {
+                  canonicalPath: "docs/plan.md",
+                  digest: planDirtyDigest,
+                  gitMode: "100755",
+                },
+              }),
+            },
+          }),
+        }),
+      ),
+    ).toEqual({
+      kind: "suspended",
+      reason: "execution_suspended",
+      detail: "upstream_reopen_changed_mode",
+    });
+  });
+
+  it("blocks unexplained dirty provenance and conflicting restores", () => {
+    // Dirty workspace without verified restore intent: unexplained.
+    expect(
+      planReviewGateNextOperation(
+        reopenable,
+        planningContext({
+          workspaceStates: dirtyPlanStates,
+          verifiedUpstreamReopen: upstreamVerification({ downstream: null }),
+        }),
+      ),
+    ).toEqual({
+      kind: "suspended",
+      reason: "execution_suspended",
+      detail: "upstream_reopen_dirty_provenance_missing",
+    });
+
+    // Verified dirty post-image while the target is already clean: stale intent.
+    expect(
+      planReviewGateNextOperation(
+        reopenable,
+        planningContext({
+          workspaceStates: cleanPlanStates,
+          verifiedUpstreamReopen: upstreamVerification(),
+        }),
+      ),
+    ).toEqual({
+      kind: "suspended",
+      reason: "execution_suspended",
+      detail: "upstream_reopen_unexplained_dirty_state",
+    });
+
+    // A restore already in flight on the same target is a conflicting restore.
+    expect(
+      planReviewGateNextOperation(
+        reopenable,
+        planningContext({
+          workspaceStates: new Map([["docs/plan.md", "mutation_in_flight" as const]]),
+          verifiedUpstreamReopen: upstreamVerification(),
+        }),
+      ),
+    ).toEqual({
+      kind: "suspended",
+      reason: "execution_suspended",
+      detail: "upstream_reopen_conflicting_restore",
+    });
+  });
+
+  it("blocks forged or workspace-contradicting restore completions", () => {
+    expect(
+      planReviewGateNextOperation(
+        reopenable,
+        planningContext({
+          workspaceStates: cleanPlanStates,
+          verifiedUpstreamReopen: upstreamVerification({
+            restoreCompletion: {
+              preparedEventId: "restore-prepared-1",
+              completionEventId: "restore-completed-1",
+              restoreOperationId: planRestoreOperationId,
+              targetPath: "docs/plan.md",
+              verifiedDestinationDigest: planDirtyDigest,
+            },
+          }),
+        }),
+      ),
+    ).toEqual({
+      kind: "suspended",
+      reason: "execution_suspended",
+      detail: "upstream_reopen_forged_restore_completion",
+    });
+
+    expect(
+      planReviewGateNextOperation(
+        reopenable,
+        planningContext({
+          workspaceStates: dirtyPlanStates,
+          verifiedUpstreamReopen: upstreamVerification({
+            restoreCompletion: {
+              preparedEventId: "restore-prepared-1",
+              completionEventId: "restore-completed-1",
+              restoreOperationId: planRestoreOperationId,
+              targetPath: "docs/plan.md",
+              verifiedDestinationDigest: digest,
+            },
+          }),
+        }),
+      ),
+    ).toEqual({
+      kind: "suspended",
+      reason: "execution_suspended",
+      detail: "upstream_reopen_restore_completion_workspace_conflict",
+    });
+  });
+
+  it("blocks a verified context whose blocker owner disagrees with the projection", () => {
+    expect(
+      planReviewGateNextOperation(
+        reopenable,
+        planningContext({
+          workspaceStates: dirtyPlanStates,
+          verifiedUpstreamReopen: upstreamVerification({
+            upstreamBlocker: {
+              lineageId: lineageA,
+              findingEventId: "finding-event-req-1",
+              currentOwner: "requirements",
+              committedAuthorityEventId: "authority-req-1",
+            },
+          }),
+        }),
+      ),
+    ).toEqual({
+      kind: "suspended",
+      reason: "execution_suspended",
+      detail: "upstream_reopen_blocker_owner_mismatch",
+    });
   });
 });
