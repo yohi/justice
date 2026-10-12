@@ -560,11 +560,13 @@ export class ReviewGateGit {
       if (parentCommitId === undefined || parentCommitId !== payload.parentHeadSha) {
         throw verificationFailed("commit parent is not the prepared parent");
       }
+      const expectedMessage = buildReviewCommitMessage(payload.phase, payload.remediationRound, payload.lineageIds);
       if (
         computeArtifactDigest(Buffer.from(message, "utf8")) !== payload.messageDigest ||
-        message !== payload.commitMessage
+        message !== payload.commitMessage ||
+        message !== expectedMessage
       ) {
-        throw verificationFailed("commit message does not match the prepared digest");
+        throw verificationFailed("commit message does not match the prepared canonical format");
       }
       // Full parent→commit changed-entry set; deliberately NOT path-scoped so
       // any accidental extra committed path is detected.
