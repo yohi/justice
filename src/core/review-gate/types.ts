@@ -605,3 +605,135 @@ export type VerifiedCycleEvidence = Readonly<{
   readonly committedResolutions: readonly VerifiedCommittedResolution[];
   readonly regressions: readonly VerifiedRegression[];
 }>;
+
+
+// ---------------------------------------------------------------------------
+// Task 10 — exact-artifact Git commit and restore event payloads
+// ---------------------------------------------------------------------------
+
+export type ReviewCommitPreparedV2 = Readonly<{
+  readonly phase: ReviewGatePhase;
+  readonly roundOrdinal: number;
+  readonly targetCanonicalPath: string;
+  readonly parentHeadSha: string;
+  readonly expectedTargetEntry: Readonly<{
+    readonly canonicalPath: string;
+    readonly blobSha: string;
+    readonly gitMode: "100644" | "100755";
+  }>;
+  readonly commitMessageDigest: string;
+  readonly lineageIds: ReadonlyArray<LineageId>;
+  readonly unrelatedIndexFingerprint: string;
+  readonly preparedOperationId: string;
+  readonly preparedRecoveryDigest: string;
+}>;
+
+export type RemediationCommitSucceededV2 = Readonly<{
+  readonly preparedEventId: string;
+  readonly commitId: string;
+  readonly parentCommitId: string;
+  readonly targetEntry: Readonly<{
+    readonly canonicalPath: string;
+    readonly blobSha: string;
+    readonly gitMode: "100644" | "100755";
+  }>;
+  readonly changedPaths: ReadonlyArray<string>;
+  readonly verifiedMessageDigest: string;
+}>;
+
+export type ReviewCommitFailedV2 = Readonly<{
+  readonly preparedEventId: string;
+  readonly failureKind: "git_failure" | "scope_violation" | "verification_failure";
+  readonly reasonDigest: string;
+}>;
+
+export type ReviewTargetRestorePreparedV2 = Readonly<{
+  readonly phase: ReviewGatePhase;
+  readonly targetCanonicalPath: string;
+  readonly sourceKnownDirtyBinding: Readonly<{
+    readonly headSha: string;
+    readonly headEntry: Readonly<{
+      readonly canonicalPath: string;
+      readonly blobSha: string;
+      readonly gitMode: "100644" | "100755";
+    }>;
+    readonly indexEntry: Readonly<{
+      readonly canonicalPath: string;
+      readonly blobSha: string;
+      readonly gitMode: "100644" | "100755";
+      readonly stage: 0;
+    }>;
+    readonly worktree: Readonly<{
+      readonly canonicalPath: string;
+      readonly digest: string;
+      readonly gitMode: "100644" | "100755";
+    }>;
+  }>;
+  readonly targetCleanCommittedBinding: Readonly<{
+    readonly headSha: string;
+    readonly headEntry: Readonly<{
+      readonly canonicalPath: string;
+      readonly blobSha: string;
+      readonly gitMode: "100644" | "100755";
+    }>;
+    readonly indexEntry: Readonly<{
+      readonly canonicalPath: string;
+      readonly blobSha: string;
+      readonly gitMode: "100644" | "100755";
+      readonly stage: 0;
+    }>;
+    readonly worktree: Readonly<{
+      readonly canonicalPath: string;
+      readonly digest: string;
+      readonly gitMode: "100644" | "100755";
+    }>;
+  }>;
+  readonly preparedOperationId: string;
+  readonly preparedRecoveryDigest: string;
+}>;
+
+export type ReviewTargetRestoreSucceededV2 = Readonly<{
+  readonly preparedEventId: string;
+  readonly verifiedDestinationBinding: Readonly<{
+    readonly headSha: string;
+    readonly headEntry: Readonly<{
+      readonly canonicalPath: string;
+      readonly blobSha: string;
+      readonly gitMode: "100644" | "100755";
+    }>;
+    readonly indexEntry: Readonly<{
+      readonly canonicalPath: string;
+      readonly blobSha: string;
+      readonly gitMode: "100644" | "100755";
+      readonly stage: 0;
+    }>;
+    readonly worktree: Readonly<{
+      readonly canonicalPath: string;
+      readonly digest: string;
+      readonly gitMode: "100644" | "100755";
+    }>;
+  }>;
+}>;
+
+export type ReviewTargetRestoreRecoveredV2 = Readonly<{
+  readonly preparedEventId: string;
+  readonly verifiedDestinationBinding: Readonly<{
+    readonly headSha: string;
+    readonly headEntry: Readonly<{
+      readonly canonicalPath: string;
+      readonly blobSha: string;
+      readonly gitMode: "100644" | "100755";
+    }>;
+    readonly indexEntry: Readonly<{
+      readonly canonicalPath: string;
+      readonly blobSha: string;
+      readonly gitMode: "100644" | "100755";
+      readonly stage: 0;
+    }>;
+    readonly worktree: Readonly<{
+      readonly canonicalPath: string;
+      readonly digest: string;
+      readonly gitMode: "100644" | "100755";
+    }>;
+  }>;
+}>;

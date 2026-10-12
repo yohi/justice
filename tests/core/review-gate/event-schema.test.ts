@@ -16,11 +16,18 @@ const V2_EVENT_TYPES = [
   "TARGET_WRITER_HANDOFF_RESUMED",
   "TARGET_WRITER_TERMINAL_REVOKED",
   "SEMANTIC_CONTEXT_TRANSITION",
+  "REVIEW_COMMIT_PREPARED",
+  "REMEDIATION_COMMIT_SUCCEEDED",
+  "REVIEW_COMMIT_FAILED",
+  "REVIEW_TARGET_RESTORE_PREPARED",
+  "REVIEW_TARGET_RESTORE_SUCCEEDED",
+  "REVIEW_TARGET_RESTORE_RECOVERED",
 ] as const;
 const V2_PAYLOADS = [externalOperationPayload(), findingValidationPayload(), lineageRegressedPayload(),
   crossGenerationPayload(), handoffIntentPayload(), handoffContinuationPayload(),
-  terminalRevokePayload(), semanticTransitionPayload()];
-
+  terminalRevokePayload(), semanticTransitionPayload(), reviewCommitPreparedPayload(),
+  remediationCommitSucceededPayload(), reviewCommitFailedPayload(), reviewTargetRestorePreparedPayload(),
+  reviewTargetRestoreSucceededPayload(), reviewTargetRestoreRecoveredPayload()];
 function legacyRecord(eventType: ReviewGateEvent["eventType"], payload: object): object {
   return { eventType, gateId: "gate-1", writerId: "writer-1", epochId: "epoch-1",
     emittedAt: "2026-10-11T00:00:00.000Z", payload };
@@ -258,6 +265,75 @@ function semanticTransitionPayload(): object {
   };
 }
 
+function gitTargetBinding(): object {
+  return {
+    headSha: "head-".repeat(8),
+    headEntry: { canonicalPath: "docs/design.md", blobSha: DIGEST, gitMode: "100644" },
+    indexEntry: { canonicalPath: "docs/design.md", blobSha: DIGEST, gitMode: "100644", stage: 0 },
+    worktree: { canonicalPath: "docs/design.md", digest: DIGEST, gitMode: "100644" },
+  };
+}
+
+function reviewCommitPreparedPayload(): object {
+  return {
+    phase: "design",
+    roundOrdinal: 1,
+    targetCanonicalPath: "docs/design.md",
+    parentHeadSha: "head-".repeat(8),
+    expectedTargetEntry: { canonicalPath: "docs/design.md", blobSha: DIGEST, gitMode: "100644" },
+    commitMessageDigest: DIGEST,
+    lineageIds: ["lineage-1"],
+    unrelatedIndexFingerprint: DIGEST,
+    preparedOperationId: "operation-1",
+    preparedRecoveryDigest: DIGEST,
+  };
+}
+
+function remediationCommitSucceededPayload(): object {
+  return {
+    preparedEventId: "event-prepared",
+    commitId: "commit-".repeat(8),
+    parentCommitId: "head-".repeat(8),
+    targetEntry: { canonicalPath: "docs/design.md", blobSha: DIGEST, gitMode: "100644" },
+    changedPaths: ["docs/design.md"],
+    verifiedMessageDigest: DIGEST,
+  };
+}
+
+function reviewCommitFailedPayload(): object {
+  return {
+    preparedEventId: "event-prepared",
+    failureKind: "git_failure",
+    reasonDigest: DIGEST,
+  };
+}
+
+function reviewTargetRestorePreparedPayload(): object {
+  return {
+    phase: "plan",
+    targetCanonicalPath: "docs/plan.md",
+    sourceKnownDirtyBinding: gitTargetBinding(),
+    targetCleanCommittedBinding: gitTargetBinding(),
+    preparedOperationId: "operation-1",
+    preparedRecoveryDigest: DIGEST,
+  };
+}
+
+function reviewTargetRestoreSucceededPayload(): object {
+  return {
+    preparedEventId: "event-prepared",
+    verifiedDestinationBinding: gitTargetBinding(),
+  };
+}
+
+function reviewTargetRestoreRecoveredPayload(): object {
+  return {
+    preparedEventId: "event-prepared",
+    verifiedDestinationBinding: gitTargetBinding(),
+  };
+}
+
+
 describe("validateReviewGateEventRecord", () => {
   it.each(Object.entries({
     ARTIFACT_BINDINGS_UPDATED: { designArtifact: { canonicalPath: "design.md", digest: DIGEST, gitMode: "100644" }, planArtifact: { canonicalPath: "plan.md", digest: DIGEST, gitMode: "100755" } },
@@ -327,10 +403,14 @@ describe("validateReviewGateEventRecord", () => {
     ["FINDING_VALIDATION_COMPLETED", findingValidationPayload()],
     ["LINEAGE_REGRESSED", lineageRegressedPayload()],
     ["CROSS_GENERATION_RECONCILIATION_COMPLETED", crossGenerationPayload()],
-    ["TARGET_WRITER_HANDOFF_REQUESTED", handoffIntentPayload()],
-    ["TARGET_WRITER_HANDOFF_RESUMED", handoffContinuationPayload()],
     ["TARGET_WRITER_TERMINAL_REVOKED", terminalRevokePayload()],
     ["SEMANTIC_CONTEXT_TRANSITION", semanticTransitionPayload()],
+    ["REVIEW_COMMIT_PREPARED", reviewCommitPreparedPayload()],
+    ["REMEDIATION_COMMIT_SUCCEEDED", remediationCommitSucceededPayload()],
+    ["REVIEW_COMMIT_FAILED", reviewCommitFailedPayload()],
+    ["REVIEW_TARGET_RESTORE_PREPARED", reviewTargetRestorePreparedPayload()],
+    ["REVIEW_TARGET_RESTORE_SUCCEEDED", reviewTargetRestoreSucceededPayload()],
+    ["REVIEW_TARGET_RESTORE_RECOVERED", reviewTargetRestoreRecoveredPayload()],
   ] as const)("accepts strict V2 %s records", (eventType, payload) => {
     const record = v2Record(eventType, payload);
     expect(validateReviewGateEventRecord(record)).toEqual(record);
@@ -360,9 +440,12 @@ describe("validateReviewGateEventRecord", () => {
     v2Record("TARGET_WRITER_HANDOFF_RESUMED", { ...handoffContinuationPayload(), handoffOperationId: "handoff-other" }),
     v2Record("TARGET_WRITER_HANDOFF_RESUMED", { ...handoffContinuationPayload(), originalOperationId: "operation-other" }),
     v2Record("CROSS_GENERATION_RECONCILIATION_COMPLETED", { ...crossGenerationPayload(), predecessorLineageId: "lineage-current" }),
+    v2Record("REMEDIATION_COMMIT_SUCCEEDED", { ...remediationCommitSucceededPayload(), changedPaths: ["docs/design.md", "docs/extra.md"] }),
+    v2Record("REVIEW_COMMIT_FAILED", { ...reviewCommitFailedPayload(), failureKind: "timeout" }),
   ])("rejects inconsistent local causal bindings %#", (record) => {
     expect(() => validateReviewGateEventRecord(record)).toThrow();
   });
+
 
   it("accepts inclusive UTF-8 bounds without retaining mutable input aliases", () => {
     const record = legacyRecord("EXECUTION_SUSPENDED", { reason: "é".repeat(2048) });

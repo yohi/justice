@@ -3,7 +3,10 @@ import type { ArtifactDigest, EpochId, FindingId, GateId, LineageId, ReviewGateE
 import type {
   CompletedApprovalBindingV2, DesignClearV2,
   CrossGenerationReconciliationCompletedV2, ExternalOperationDispatchedV2,
-  FindingValidationCompletedV2, GateCreatedV2, LineageRegressedV2, VerifiedCanonicalMutationTargetV1,
+  FindingValidationCompletedV2, GateCreatedV2, LineageRegressedV2,
+  RemediationCommitSucceededV2, ReviewCommitFailedV2, ReviewCommitPreparedV2,
+  ReviewTargetRestorePreparedV2, ReviewTargetRestoreRecoveredV2, ReviewTargetRestoreSucceededV2,
+  VerifiedCanonicalMutationTargetV1,
   VerifiedSemanticContextTransitionInput, VerifiedTargetWriterHandoffContinuationV1,
   VerifiedTargetWriterHandoffIntentV1, VerifiedTerminalWriterRevokeV1,
   VerifiedRequirementsBinding, PlanClearV2,
@@ -211,6 +214,49 @@ const completedApproval: z.ZodType<CompletedApprovalBindingV2> = z.strictObject(
   currentRequirements: verifiedRequirementsBinding,
 });
 
+const gitTreeEntry = z.strictObject({ canonicalPath: text, blobSha: id, gitMode });
+const gitIndexEntry = z.strictObject({ canonicalPath: text, blobSha: id, gitMode, stage: z.literal(0) });
+const worktreeBinding = z.strictObject({ canonicalPath: text, digest: brandedId<ArtifactDigest>(), gitMode });
+const gitTargetBinding = z.strictObject({
+  headSha: id,
+  headEntry: gitTreeEntry,
+  indexEntry: gitIndexEntry,
+  worktree: worktreeBinding,
+});
+
+const reviewCommitPrepared: z.ZodType<ReviewCommitPreparedV2> = z.strictObject({
+  phase, roundOrdinal: ordinal, targetCanonicalPath: text, parentHeadSha: id,
+  expectedTargetEntry: gitTreeEntry, commitMessageDigest: brandedId<ArtifactDigest>(),
+  lineageIds: z.array(brandedId<LineageId>()), unrelatedIndexFingerprint: brandedId<ArtifactDigest>(),
+  preparedOperationId: id, preparedRecoveryDigest: brandedId<ArtifactDigest>(),
+});
+
+const remediationCommitSucceeded: z.ZodType<RemediationCommitSucceededV2> = z.strictObject({
+  preparedEventId: id, commitId: id, parentCommitId: id, targetEntry: gitTreeEntry,
+  changedPaths: z.array(text).min(1).max(1), verifiedMessageDigest: brandedId<ArtifactDigest>(),
+});
+
+const reviewCommitFailed: z.ZodType<ReviewCommitFailedV2> = z.strictObject({
+  preparedEventId: id,
+  failureKind: z.enum(["git_failure", "scope_violation", "verification_failure"]),
+  reasonDigest: brandedId<ArtifactDigest>(),
+});
+
+const reviewTargetRestorePrepared: z.ZodType<ReviewTargetRestorePreparedV2> = z.strictObject({
+  phase, targetCanonicalPath: text, sourceKnownDirtyBinding: gitTargetBinding,
+  targetCleanCommittedBinding: gitTargetBinding, preparedOperationId: id,
+  preparedRecoveryDigest: brandedId<ArtifactDigest>(),
+});
+
+const reviewTargetRestoreSucceeded: z.ZodType<ReviewTargetRestoreSucceededV2> = z.strictObject({
+  preparedEventId: id, verifiedDestinationBinding: gitTargetBinding,
+});
+
+const reviewTargetRestoreRecovered: z.ZodType<ReviewTargetRestoreRecoveredV2> = z.strictObject({
+  preparedEventId: id, verifiedDestinationBinding: gitTargetBinding,
+});
+
+
 const v2Base = {
   schemaVersion: z.literal(2), eventId: id, parentEventId: id, emittedAt: timestamp,
   gateId: id, epochId: id, generationId: id, writerId: id,
@@ -224,6 +270,12 @@ const v2Schema = z.union([
   versioned("FINDING_VALIDATION_COMPLETED", validation),
   versioned("LINEAGE_REGRESSED", regression),
   versioned("CROSS_GENERATION_RECONCILIATION_COMPLETED", reconciliation),
+  versioned("REVIEW_COMMIT_PREPARED", reviewCommitPrepared),
+  versioned("REMEDIATION_COMMIT_SUCCEEDED", remediationCommitSucceeded),
+  versioned("REVIEW_COMMIT_FAILED", reviewCommitFailed),
+  versioned("REVIEW_TARGET_RESTORE_PREPARED", reviewTargetRestorePrepared),
+  versioned("REVIEW_TARGET_RESTORE_SUCCEEDED", reviewTargetRestoreSucceeded),
+  versioned("REVIEW_TARGET_RESTORE_RECOVERED", reviewTargetRestoreRecovered),
   versioned("DESIGN_CLEAR", designClear),
   versioned("PLAN_CLEAR", planClear),
   versioned("COMPLETED_APPROVAL_BINDING", completedApproval),
@@ -231,7 +283,8 @@ const v2Schema = z.union([
   versioned("TARGET_WRITER_HANDOFF_RESUMED", continuation),
   versioned("TARGET_WRITER_TERMINAL_REVOKED", revoke),
   versioned("SEMANTIC_CONTEXT_TRANSITION", transition),
-]).refine((value) => {
+])
+.refine((value) => {
   if (value.eventId === value.parentEventId) return false;
   switch (value.eventType) {
     case "GATE_CREATED":
@@ -264,6 +317,12 @@ const v2Schema = z.union([
         && value.payload.predecessorLineageId !== value.payload.currentLineageId;
     case "FINDING_VALIDATION_COMPLETED":
     case "LINEAGE_REGRESSED": return true;
+    case "REVIEW_COMMIT_PREPARED":
+    case "REMEDIATION_COMMIT_SUCCEEDED":
+    case "REVIEW_COMMIT_FAILED":
+    case "REVIEW_TARGET_RESTORE_PREPARED":
+    case "REVIEW_TARGET_RESTORE_SUCCEEDED":
+    case "REVIEW_TARGET_RESTORE_RECOVERED": return true;
     default: return assertNever(value);
   }
 });
