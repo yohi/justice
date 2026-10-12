@@ -13,7 +13,12 @@ import {
 } from "../../src/runtime/review-gate-coordinator";
 import { execFileSync } from "node:child_process";
 import { generateKeyPairSync, sign } from "node:crypto";
-import { createReviewGateEventStore } from "../../src/runtime/review-gate-event-store";
+import {
+  createLegacyReviewGateEventStore,
+  createReviewGateEventStore,
+  type ReviewGateEventStore,
+  type ReviewGatePublicationResult,
+} from "../../src/runtime/review-gate-event-store";
 import { createLinuxReviewGateProvider } from "../../src/runtime/linux-review-gate-provider";
 import {
   createReviewGateLockManager,
@@ -52,6 +57,13 @@ import {
 import { projectReviewGate } from "../../src/core/review-gate/projection";
 import type { ReviewGateEvent, ReviewGatePhase } from "../../src/core/review-gate-types";
 import type { HookEvent, HookResponse } from "../../src/core/types";
+import {
+  publishVerifiedLegacyBridge,
+  verifyLegacyContinuation,
+  type LegacyGateSnapshot,
+} from "../../src/runtime/review-gate-legacy-bridge";
+import { encodeLegacyBridgeMarkerReason } from "../../src/core/review-gate/legacy-execution";
+
 
 // ---------------------------------------------------------------------------
 // Shared deterministic harness: in-memory durable store + fake agent runner
@@ -2251,6 +2263,236 @@ describe("restart recovery — real Git lifecycle (Review Focus 4-7)", () => {
     await expect(fixture.git.recoverPreparedCommit(secondPrepare)).rejects.toThrow(
       /review_commit_recovery_conflict/,
     );
+  });
+});
+// ---------------------------------------------------------------------------
+// Legacy continuation bridge (Task 8) — a real legacy layout through the
+// immutable snapshot verification and the idempotent authority-side bridge,
+// including restart after a crash between PREPARED and COMMITTED.
+// ---------------------------------------------------------------------------
+
+describe("legacy continuation bridge (Task 8)", () => {
+  type RawEvent = Record<string, unknown>;
+
+  const LEGACY_GATE_ID = "legacy-restart-gate";
+  const LEGACY_EPOCH = "epoch-legacy-restart-1";
+  const LEGACY_WRITER = "justice-core";
+  const LEGACY_T0 = "2026-09-02T00:00:00.000Z";
+  const LEGACY_T1 = "2026-09-02T00:05:00.000Z";
+  const LEGACY_T2 = "2026-09-02T00:10:00.000Z";
+
+  const legacyEncoder = new TextEncoder();
+  const legacyDigest = (index: number): string =>
+    computeArtifactDigest(legacyEncoder.encode(`legacy-bridge-bytes-${index}`));
+
+  const legacyRequirements = Object.freeze({
+    source: "explicit",
+    canonicalPath: "docs/requirements/restart.md",
+    digest: legacyDigest(3),
+  });
+  const legacyDesignBinding = Object.freeze({
+    canonicalPath: "docs/specs/restart-design.md",
+    digest: legacyDigest(1),
+    gitMode: "100644",
+  });
+  const legacyPlanBinding = Object.freeze({
+    canonicalPath: "docs/plans/restart-plan.md",
+    digest: legacyDigest(2),
+    gitMode: "100644",
+  });
+
+  const legacyEvent = (eventType: string, payload: RawEvent, emittedAt: string): RawEvent => ({
+    eventType,
+    gateId: LEGACY_GATE_ID,
+    writerId: LEGACY_WRITER,
+    epochId: LEGACY_EPOCH,
+    emittedAt,
+    payload,
+  });
+
+  const legacyEvents: readonly RawEvent[] = [
+    {
+      eventType: "GATE_CREATED",
+      gateId: LEGACY_GATE_ID,
+      writerId: LEGACY_WRITER,
+      epochId: LEGACY_EPOCH,
+      emittedAt: LEGACY_T0,
+      payload: {
+        reviewScopeId: "scope-legacy-restart",
+        designArtifact: legacyDesignBinding,
+        planArtifact: legacyPlanBinding,
+        requirementsResolution: legacyRequirements,
+        reviewProtocolFingerprint: "rt-legacy-1",
+      },
+    },
+    legacyEvent(
+      "FINDING_DISCOVERED",
+      {
+        lineageId: "lineage-legacy-1",
+        findingId: "finding-legacy-1",
+        observedPhase: "design",
+        ownerScope: "design",
+        descriptionDigest: legacyDigest(4),
+      },
+      LEGACY_T1,
+    ),
+    legacyEvent(
+      "EXECUTION_SUSPENDED",
+      { reason: "review_dispatch_unavailable" },
+      LEGACY_T2,
+    ),
+  ];
+
+  const legacyDispatch: RawEvent = {
+    dispatchId: "disp-legacy-1",
+    operationId: "op-legacy-1",
+    operation: "review_candidates",
+    phase: "design",
+    dispatchedAt: LEGACY_T1,
+    completedAt: LEGACY_T1,
+  };
+
+  const legacyJsonl = (records: readonly RawEvent[]): string =>
+    `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+
+  function markerReasons(events: readonly ReviewGateEvent[]): readonly string[] {
+    return events
+      .filter(
+        (entry): entry is Extract<ReviewGateEvent, { eventType: "EXECUTION_SUSPENDED" }> =>
+          entry.eventType === "EXECUTION_SUSPENDED" && entry.payload.reason.startsWith("LEGACY_BRIDGE:"),
+      )
+      .map((entry) => entry.payload.reason);
+  }
+
+  interface LegacyBridgeFixture {
+    readonly legacyEventsPath: string;
+    readonly legacyDispatchesPath: string;
+    readonly authorityRoot: string;
+    readonly snapshot: LegacyGateSnapshot;
+  }
+
+  async function buildLegacyFixture(): Promise<LegacyBridgeFixture> {
+    const root = await mkdtemp(path.join(tmpdir(), "justice-rg-legacy-bridge-"));
+    tempRoots.push(root);
+    const legacyRoot = path.join(root, "legacy");
+    const authorityRoot = path.join(root, "authority");
+    const gateDir = path.join(legacyRoot, ".justice", "review-gates", LEGACY_GATE_ID);
+    await mkdir(gateDir, { recursive: true });
+    const legacyEventsPath = path.join(gateDir, "events.jsonl");
+    const legacyDispatchesPath = path.join(gateDir, "dispatches.jsonl");
+    await writeFile(legacyEventsPath, legacyJsonl(legacyEvents));
+    await writeFile(legacyDispatchesPath, legacyJsonl([legacyDispatch]));
+    const eventsBytes = await readFile(legacyEventsPath);
+    const dispatchesBytes = await readFile(legacyDispatchesPath);
+    const snapshot: LegacyGateSnapshot = Object.freeze({
+      gateId: LEGACY_GATE_ID,
+      eventsBytes,
+      dispatchesBytes,
+      recoveryObjectRefs: [
+        Object.freeze({
+          refKind: "requirements_authority",
+          refId: "recovery-legacy-req-1",
+          storeDigest: legacyDigest(3),
+          canonicalPath: legacyRequirements.canonicalPath,
+          gitBlobOid: "a".repeat(40),
+          commitOid: "b".repeat(40),
+        }),
+      ],
+      trustedFrontier: Object.freeze({
+        eventsDigest: computeArtifactDigest(eventsBytes),
+        dispatchesDigest: computeArtifactDigest(dispatchesBytes),
+        recoveryRefsDigest: computeCanonicalJsonFingerprint([{
+          refKind: "requirements_authority", refId: "recovery-legacy-req-1", storeDigest: legacyDigest(3),
+          canonicalPath: legacyRequirements.canonicalPath, gitBlobOid: "a".repeat(40), commitOid: "b".repeat(40),
+        }]),
+        scopeGitDigest: computeCanonicalJsonFingerprint([
+          { reviewScopeId: "scope-legacy-restart", canonicalDesignPath: legacyDesignBinding.canonicalPath, canonicalPlanPath: legacyPlanBinding.canonicalPath },
+          { workspaceIdentity: "workspace-legacy-restart", designGitMode: "100644", planGitMode: "100644" },
+        ]),
+        generationOrdinal: 1,
+        observedAt: LEGACY_T2,
+      }),
+      scopeIdentity: Object.freeze({
+        reviewScopeId: "scope-legacy-restart",
+        canonicalDesignPath: legacyDesignBinding.canonicalPath,
+        canonicalPlanPath: legacyPlanBinding.canonicalPath,
+      }),
+      gitIdentity: Object.freeze({
+        workspaceIdentity: "workspace-legacy-restart",
+        designGitMode: "100644",
+        planGitMode: "100644",
+      }),
+    });
+    return { legacyEventsPath, legacyDispatchesPath, authorityRoot, snapshot };
+  }
+
+  function crashAfterSecondBridgeWrite(base: ReviewGateEventStore): ReviewGateEventStore {
+    let bridgeWrites = 0;
+    return {
+      ...base,
+      publishEvents: async (gateId, batch, expectedFrontierHash): Promise<ReviewGatePublicationResult> => {
+        bridgeWrites += 1;
+        if (bridgeWrites >= 2) throw new Error("bridge_crash_test");
+        return base.publishEvents(gateId, batch, expectedFrontierHash);
+      },
+    };
+  }
+
+  it("verifies the on-disk legacy gate, publishes the bridge once, and preserves the original JSONL", async () => {
+    const fixture = await buildLegacyFixture();
+    const verification = verifyLegacyContinuation(fixture.snapshot);
+    if (verification.kind !== "VERIFIED") {
+      throw new Error(`expected VERIFIED: ${verification.reason}`);
+    }
+    const preparedReason = encodeLegacyBridgeMarkerReason("prepared", verification.value.bridgeDigest);
+    const committedReason = encodeLegacyBridgeMarkerReason("committed", verification.value.bridgeDigest);
+
+    const authorityStore = createLegacyReviewGateEventStore(fixture.authorityRoot);
+    expect(await publishVerifiedLegacyBridge(verification.value, authorityStore)).toBe("committed");
+
+    // Restart: a fresh store instance observes the durable bridge markers.
+    const restarted = createLegacyReviewGateEventStore(fixture.authorityRoot);
+    expect(markerReasons(await restarted.readEvents(LEGACY_GATE_ID))).toEqual([
+      preparedReason,
+      committedReason,
+    ]);
+    expect(await publishVerifiedLegacyBridge(verification.value, restarted)).toBe("already_committed");
+    expect(markerReasons(await restarted.readEvents(LEGACY_GATE_ID))).toEqual([
+      preparedReason,
+      committedReason,
+    ]);
+
+    // The stored bridge never invents lineage or round provenance.
+    const authorityEvents = await restarted.readEvents(LEGACY_GATE_ID);
+    expect(authorityEvents.some((entry) => entry.eventType.startsWith("FINDING_"))).toBe(false);
+
+    // The original legacy JSONL bytes are immutable.
+    expect((await readFile(fixture.legacyEventsPath)).toString()).toBe(legacyJsonl(legacyEvents));
+    expect((await readFile(fixture.legacyDispatchesPath)).toString()).toBe(legacyJsonl([legacyDispatch]));
+  });
+
+  it("completes a crashed prepared-only bridge on restart without doubling markers", async () => {
+    const fixture = await buildLegacyFixture();
+    const verification = verifyLegacyContinuation(fixture.snapshot);
+    if (verification.kind !== "VERIFIED") {
+      throw new Error(`expected VERIFIED: ${verification.reason}`);
+    }
+    const preparedReason = encodeLegacyBridgeMarkerReason("prepared", verification.value.bridgeDigest);
+    const committedReason = encodeLegacyBridgeMarkerReason("committed", verification.value.bridgeDigest);
+
+    const crashStore = crashAfterSecondBridgeWrite(createLegacyReviewGateEventStore(fixture.authorityRoot));
+    await expect(publishVerifiedLegacyBridge(verification.value, crashStore)).rejects.toThrow(
+      /bridge_crash_test/,
+    );
+
+    const restarted = createLegacyReviewGateEventStore(fixture.authorityRoot);
+    expect(markerReasons(await restarted.readEvents(LEGACY_GATE_ID))).toEqual([preparedReason]);
+    expect(await publishVerifiedLegacyBridge(verification.value, restarted)).toBe("committed");
+    expect(markerReasons(await restarted.readEvents(LEGACY_GATE_ID))).toEqual([
+      preparedReason,
+      committedReason,
+    ]);
+    expect(await publishVerifiedLegacyBridge(verification.value, restarted)).toBe("already_committed");
   });
 });
 

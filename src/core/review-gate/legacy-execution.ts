@@ -1,4 +1,10 @@
 import type { ReviewArtifactFindingV1 } from "../types";
+import { deriveResumeCursor } from "./resume-cursor.js";
+import type {
+  RequirementsResolutionV1,
+  ReviewApprovalBindingV1,
+} from "../review-gate-types.js";
+import type { ReviewGateProjection, ReviewGateResumeCursor } from "./types.js";
 
 export const REVIEW_GATE_EXECUTION_MARKER = "[JUSTICE: PLAN REVIEW GATE EXECUTION]";
 export const REVIEW_GATE_REMEDIATION_MARKER = "[JUSTICE: PLAN REVIEW GATE REMEDIATION]";
@@ -209,4 +215,96 @@ export function extractReviewGateIdFromTaskPrompt(prompt: unknown): string | und
   if (!prompt.startsWith(REVIEW_GATE_EXECUTION_MARKER)) return undefined;
   const match = prompt.match(/^\[JUSTICE: PLAN REVIEW GATE EXECUTION\]\nGate-ID: ([A-Za-z0-9-]+)$/m);
   return match?.[1];
+}
+
+/** Evidence already authenticated independently, before legacy migration. */
+export type LegacyRecoveryObjectRef = Readonly<{
+  readonly refKind: "requirements_authority" | "prepared_commit" | "prepared_restore" | "inherited_clear";
+  readonly refId: string;
+  readonly storeDigest: string;
+  readonly canonicalPath?: string;
+  readonly gitBlobOid?: string;
+  readonly commitOid?: string;
+  readonly disposition?: "committed" | "rolled_back";
+  readonly phase?: "design" | "plan";
+  readonly roundOrdinal?: number;
+  readonly lineageIds?: readonly string[];
+  readonly predecessorGateId?: string;
+}>;
+
+export type LegacyGateSnapshot = Readonly<{
+  readonly gateId: string;
+  readonly eventsBytes: Uint8Array | readonly number[];
+  readonly dispatchesBytes: Uint8Array | readonly number[] | null;
+  readonly recoveryObjectRefs: readonly LegacyRecoveryObjectRef[];
+  /** Supplied by an independent trusted reader; never constructed by this bridge. */
+  readonly trustedFrontier: Readonly<{
+    readonly eventsDigest: string;
+    readonly dispatchesDigest: string;
+    readonly recoveryRefsDigest: string;
+    readonly scopeGitDigest: string;
+    readonly generationOrdinal: number;
+    readonly observedAt: string;
+  }> | null;
+  readonly scopeIdentity: Readonly<{
+    readonly reviewScopeId: string;
+    readonly canonicalDesignPath: string;
+    readonly canonicalPlanPath: string;
+  }>;
+  readonly gitIdentity: Readonly<{
+    readonly workspaceIdentity: string;
+    readonly designGitMode: "100644" | "100755";
+    readonly planGitMode: "100644" | "100755";
+  }>;
+}>;
+
+export type VerifiedLegacyGate = Readonly<{
+  readonly snapshot: LegacyGateSnapshot;
+  readonly bridgeDigest: string;
+  readonly verifiedEventsDigest: string;
+  readonly finalEpochId: string;
+  readonly writerId: string;
+  readonly epochCounters: Readonly<{
+    readonly generationOrdinal: number;
+    readonly epochCount: number;
+    readonly designRoundCount: number;
+    readonly planRoundCount: number;
+  }>;
+  readonly requirementsResolution: RequirementsResolutionV1;
+  readonly commitBinding: ReviewApprovalBindingV1 | null;
+  readonly commitResolutionBindings: readonly LegacyRecoveryObjectRef[];
+  readonly resumeCursor: ReviewGateResumeCursor;
+  readonly historicalInheritedClears: readonly Readonly<{
+    readonly eventType: "DESIGN_CLEAR_INHERITED";
+    readonly epochId: string;
+    readonly emittedAt: string;
+  }>[];
+}>;
+
+export type LegacyVerificationResult =
+  | Readonly<{ readonly kind: "VERIFIED"; readonly value: VerifiedLegacyGate }>
+  | Readonly<{ readonly kind: "BLOCK"; readonly reason: string }>;
+
+/** No historical inherited CLEAR is supplied to this projection. */
+export function deriveLegacyResumeCursor(projection: ReviewGateProjection): ReviewGateResumeCursor {
+  return deriveResumeCursor(projection);
+}
+
+export function encodeLegacyBridgeMarkerReason(
+  kind: "prepared" | "committed",
+  bridgeDigest: string,
+): string {
+  return `LEGACY_BRIDGE:${kind === "prepared" ? "PREPARED" : "COMMITTED"}:${bridgeDigest}`;
+}
+
+export function decodeLegacyBridgeMarkerReason(reason: string): Readonly<{
+  readonly kind: "prepared" | "committed";
+  readonly bridgeDigest: string;
+}> | undefined {
+  const match = /^LEGACY_BRIDGE:(PREPARED|COMMITTED):([a-f0-9]{64})$/u.exec(reason);
+  if (match?.[2] === undefined) return undefined;
+  return Object.freeze({
+    kind: match[1] === "PREPARED" ? "prepared" : "committed",
+    bridgeDigest: match[2],
+  });
 }
