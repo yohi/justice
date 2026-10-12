@@ -333,7 +333,7 @@ describe("GIT1 — exact-artifact commit", () => {
       expect(payload.messageDigest).toBe(computeArtifactDigest(Buffer.from(expectedMessage, "utf8")));
       expect(expectedMessage).toBe(
         [
-          "docs: address design review round 2",
+          "[Justice] remediation round 2",
           "",
           "Review-Gate: design",
           "Review-Round: 2",

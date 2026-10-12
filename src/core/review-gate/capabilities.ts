@@ -450,7 +450,6 @@ export type ReviewCommitRecoveryResult =
   | Readonly<{ readonly status: "safe_to_reexecute" }>
   | Readonly<{ readonly status: "recovered"; readonly commit: VerifiedReviewCommit }>;
 
-/** GIT1 §30.2 commit message base format (lineage IDs sorted, comma-separated). */
 export function buildReviewCommitMessage(
   phase: ReviewPhase,
   remediationRound: number,
@@ -458,7 +457,7 @@ export function buildReviewCommitMessage(
 ): string {
   const sorted = [...lineageIds].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
   return [
-    `docs: address ${phase} review round ${remediationRound}`,
+    `[Justice] remediation round ${remediationRound}`,
     "",
     `Review-Gate: ${phase}`,
     `Review-Round: ${remediationRound}`,
