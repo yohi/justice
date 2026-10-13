@@ -928,6 +928,51 @@ describe("planReviewGateNextOperation — crash-window planning", () => {
     });
   });
 
+  it("suspends restore recovery when verified provenance is for the design phase", () => {
+    const designPath = designArtifact.canonicalPath;
+    const designHeadEntry = { ...planCleanTreeEntry, canonicalPath: designPath };
+    const downstream = {
+      ...planDownstream,
+      phase: "design" as const,
+      targetPath: designPath,
+      knownDirtyPostImage: {
+        ...planDirtySource(),
+        headEntry: designHeadEntry,
+        indexEntry: { ...designHeadEntry, stage: 0 as const },
+        worktree: { ...planDirtySource().worktree, canonicalPath: designPath },
+      },
+      approvedCleanOriginal: {
+        ...planCleanDestination(),
+        headEntry: designHeadEntry,
+        indexEntry: { ...designHeadEntry, stage: 0 as const },
+        worktree: { ...planCleanDestination().worktree, canonicalPath: designPath },
+      },
+    };
+    const projection = projectReviewGate([created, discover(lineageA, "f-a", "requirements")]);
+
+    const decision = planReviewGateNextOperation(
+      projection,
+      planningContext({
+        inFlight: { kind: "restore_prepared", targetPath: designPath },
+        workspaceStates: new Map([[designPath, "known_dirty" as const]]),
+        verifiedUpstreamReopen: upstreamVerification({
+          currentPhase: "design",
+          upstreamBlocker: {
+            ...upstreamVerification().upstreamBlocker,
+            currentOwner: "requirements",
+          },
+          downstream,
+        }),
+      }),
+    );
+
+    expect(decision).toMatchObject({
+      kind: "suspended",
+      reason: "execution_suspended",
+      detail: "restore_recovery_provenance_missing",
+    });
+  });
+
   it.each([
     ["empty generation", { generationId: "" }],
     ["phase mismatch", { currentPhase: "design" as const }],

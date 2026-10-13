@@ -539,6 +539,7 @@ function planRestoreRecovery(
   );
   const provenanceInvalid =
     verified.gateId !== projection.gateId ||
+    projection.phase !== "plan" ||
     verified.generationId.length === 0 ||
     verified.currentPhase !== projection.phase ||
     verified.verifiedFrontierHash.length === 0 ||
