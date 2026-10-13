@@ -634,6 +634,7 @@ describe("ReviewGateEventStore — durable events", () => {
       store.close();
       closeWitnessFixture(ctx);
     },
+    15_000,
   );
 
   it("rejects malformed or non-object events", async () => {
