@@ -1859,7 +1859,7 @@ async function buildSharedReviewGateRuntimeGraph(
         ),
     });
     const history = createReviewGateHistoryService({ rootDir: root, eventStore });
-    const approval = createReviewGateApprovalLookup({ eventStore, workspaceReader, protocol });
+    const approval = createReviewGateApprovalLookup({ eventStore, workspaceReader, protocol, workspaceRoot: root });
     return Object.freeze({ root, eventStore, witness, coordinator, history, approval });
   } catch (err) {
     warn("[Justice] Review Gate runtime graph construction failed; coordinator not configured", err);
