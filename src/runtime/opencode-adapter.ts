@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { lstatSync } from "node:fs";
 import type { Hooks, ToolDefinition } from "@opencode-ai/plugin";
 import {
   isJusticeImplementCommand,
@@ -1787,12 +1788,26 @@ async function buildSharedReviewGateRuntimeGraph(
           witnessDirectory,
           lockManager,
         });
-        await candidate.readInstallation();
-        witness = candidate;
+        let installationExists = true;
+        try {
+          lstatSync(path.join(witnessDirectory, "installation.json"));
+        } catch (error: unknown) {
+          if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+            installationExists = false;
+          } else {
+            throw error;
+          }
+        }
+        if (!installationExists) {
+          candidate.close();
+          candidate = null;
+        } else {
+          await candidate.readInstallation();
+          witness = candidate;
+        }
       } catch (err) {
         candidate?.close();
-        witness = null;
-        warn("[Justice] Review Gate witness unavailable; legacy event store retained", err);
+        throw err;
       }
     }
 

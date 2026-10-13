@@ -497,17 +497,22 @@ export function projectVerifiedGateTip(
   const rounds = { design: 0, plan: 0 };
   const countedOperations = new Set<string>();
   let suspensionReason: string | null = null;
+  let executionSuspended = false;
+  let reopenRequired = false;
+  let nc1Reason: "round_limit_exhausted" | "review_non_convergent" | null = null;
   let nc1Stop: VerifiedNC1StopV1 | null = null;
 
   for (const event of input.events) {
     if (!isV2Event(event)) {
       switch (event.eventType) {
         case "REOPEN_REQUIRED":
+          reopenRequired = true;
           suspensionReason = "reopen_required";
           break;
         case "ROUND_LIMIT_EXHAUSTED": {
           const phase = event.payload.phase;
           suspensionReason = "round_limit_exhausted";
+          nc1Reason = "round_limit_exhausted";
           const remainingRounds = phase === "design"
             ? MAX_DESIGN_REMEDIATION_ROUNDS - rounds.design
             : MAX_PLAN_REMEDIATION_ROUNDS - rounds.plan;
@@ -517,6 +522,7 @@ export function projectVerifiedGateTip(
         case "REVIEW_NON_CONVERGENT": {
           const phase = event.payload.phase;
           suspensionReason = "review_non_convergent";
+          nc1Reason = "review_non_convergent";
           const remainingRounds = phase === "design"
             ? MAX_DESIGN_REMEDIATION_ROUNDS - rounds.design
             : MAX_PLAN_REMEDIATION_ROUNDS - rounds.plan;
@@ -524,11 +530,16 @@ export function projectVerifiedGateTip(
           break;
         }
         case "EXECUTION_SUSPENDED":
-          suspensionReason = "execution_suspended";
+          executionSuspended = true;
+          if (suspensionReason === null) suspensionReason = "execution_suspended";
           break;
         case "ORCHESTRATION_RESUMED":
-          suspensionReason = null;
-          nc1Stop = null;
+          executionSuspended = false;
+          suspensionReason = reopenRequired ? "reopen_required" : nc1Reason;
+          break;
+        case "FINDING_REOPENED":
+          reopenRequired = false;
+          suspensionReason = nc1Reason ?? (executionSuspended ? "execution_suspended" : null);
           break;
         default:
           break;

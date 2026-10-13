@@ -253,6 +253,33 @@ describe("projectVerifiedGateTip", () => {
     expect(tip.rounds).toEqual({ design: 1, plan: 0 });
   });
 
+  it("preserves NC1 stop when orchestration resumes after execution suspension", () => {
+    const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+    const nonConvergent = validateReviewGateEventRecord({
+      eventType: "REVIEW_NON_CONVERGENT", gateId: "gate-1", writerId: "writer-1",
+      epochId: "epoch-1", emittedAt: "2026-10-11T00:00:00.500Z",
+      payload: { phase: "design", lineageIds: [] },
+    });
+    const suspended = validateReviewGateEventRecord({
+      eventType: "EXECUTION_SUSPENDED", gateId: "gate-1", writerId: "writer-1",
+      epochId: "epoch-1", emittedAt: "2026-10-11T00:00:01.000Z",
+      payload: { reason: "execution failed" },
+    });
+    const resumed = validateReviewGateEventRecord({
+      eventType: "ORCHESTRATION_RESUMED", gateId: "gate-1", writerId: "writer-1",
+      epochId: "epoch-1", emittedAt: "2026-10-11T00:00:02.000Z",
+      payload: { resumedAt: "2026-10-11T00:00:02.000Z" },
+    });
+
+    const tip = projectVerifiedGateTip({
+      gateId: "gate-1", scopeId: "scope-1", events: [genesis, nonConvergent, suspended, resumed],
+      frontier: frontier() as VerifiedScopeFrontier,
+    });
+
+    expect(tip).toMatchObject({ status: "suspended", suspensionReason: "review_non_convergent" });
+    expect(tip.nc1Stop).not.toBeNull();
+  });
+
   it("clears suspension layers after an orchestration resume event", () => {
     const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
     const suspended = validateReviewGateEventRecord({

@@ -475,23 +475,25 @@ export function createPrivateRawResponseStore(
       assertOpen();
       assertIds(operationId, dispatchAttemptId);
       try {
-        await authenticate();
-        const snapshot = await tryReadLedger();
-        const record = snapshot?.data.records[
-          privateResponseRecordKey(operationId, dispatchAttemptId)
-        ];
-        if (record === undefined) return null;
-        if (record.status === "TOMBSTONED") {
-          throw new Error("review_gate_response_evidence_unavailable");
-        }
-        const bytes = await store.readBytes(bytesName(record.contentDigest));
-        if (
-          bytes.length !== record.byteLength ||
-          computeArtifactDigest(bytes) !== record.contentDigest
-        ) {
-          throw new Error("review_gate_response_evidence_unavailable");
-        }
-        return { bytes, record };
+        return await store.withGuard("private-response", async () => {
+          await authenticate();
+          const snapshot = await tryReadLedger();
+          const record = snapshot?.data.records[
+            privateResponseRecordKey(operationId, dispatchAttemptId)
+          ];
+          if (record === undefined) return null;
+          if (record.status === "TOMBSTONED") {
+            throw new Error("review_gate_response_evidence_unavailable");
+          }
+          const bytes = await store.readBytes(bytesName(record.contentDigest));
+          if (
+            bytes.length !== record.byteLength ||
+            computeArtifactDigest(bytes) !== record.contentDigest
+          ) {
+            throw new Error("review_gate_response_evidence_unavailable");
+          }
+          return { bytes, record };
+        });
       } catch (error: unknown) {
         if (error instanceof WitnessBlocked) {
           throw new Error("review_gate_response_evidence_unavailable", { cause: error });

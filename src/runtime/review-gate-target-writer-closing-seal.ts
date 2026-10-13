@@ -133,6 +133,24 @@ export function createTerminalIntentPublication(context: WitnessContext) {
       const publication = publicationSchema.parse(input.publication);
       if (publication.gateId !== first.gateId) throw new WitnessBlocked("terminal_intent");
       const bytes = Buffer.from(canonicalEventBytes);
+      try {
+        const events = bytes.toString("utf8").trimEnd().split("\n").map((line) =>
+          validateReviewGateEventRecord(JSON.parse(line)),
+        );
+        const terminalEvents = events.slice(publication.expectedWriterSequence);
+        if (
+          terminalEvents.length === 0 ||
+          terminalEvents.some((event) =>
+            event.eventType !== "TARGET_WRITER_HANDOFF_REQUESTED" ||
+            event.payload.purpose !== "TERMINAL_REVOKE_ONLY" ||
+            event.payload.closingSealOperationId !== closingSealOperationId ||
+            event.gateId !== publication.gateId
+          )
+        ) throw new WitnessBlocked("terminal_intent");
+      } catch (error: unknown) {
+        if (error instanceof WitnessBlocked) throw error;
+        throw new WitnessBlocked("terminal_intent");
+      }
       return withGateOwnedWitnessTransaction(context, async (current) => {
         const state = await context.store.read("target", targetRegistrySchema);
         const targets = { ...state.data.targets };

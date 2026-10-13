@@ -186,6 +186,20 @@ export async function commitPublicationUnlocked(
       },
     },
   });
+  const retainedPublicationFiles = new Set<string>();
+  for (const record of Object.values(pending)) {
+    retainedPublicationFiles.add(`stage-${record.stagingDigest}.bin`);
+  }
+  for (const [publicationId, record] of Object.entries(current.data.committed)) {
+    if (Object.hasOwn(committed, publicationId)) {
+      retainedPublicationFiles.add(`stage-${record.stagingDigest}.bin`);
+    }
+  }
+  retainedPublicationFiles.add(`stage-${record.stagingDigest}.bin`);
+  for (const writerHead of publication.nextFrontier.writerHeads) {
+    retainedPublicationFiles.add(`journal-${writerHead.hash}.bin`);
+  }
+  await context.store.removePublicationFiles(retainedPublicationFiles);
   return "advanced";
 }
 

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
-import { link, lstat, mkdir, open, rename, unlink } from "node:fs/promises";
+import { link, lstat, mkdir, open, rename, unlink, readdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -122,6 +122,20 @@ export class ProtectedWitnessStore {
     } catch (error: unknown) {
       if (error instanceof WitnessBlocked) throw error;
       throw new WitnessBlocked("registry_unavailable");
+    }
+  }
+  async removePublicationFiles(retainedNames: ReadonlySet<string>): Promise<void> {
+    await this.checkProtection();
+    for (const name of await readdir(this.directory)) {
+      if ((name.startsWith("stage-") || name.startsWith("journal-")) && !retainedNames.has(name)) {
+        await unlink(join(this.directory, name));
+      }
+    }
+    const directory = await open(this.directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    try {
+      await directory.sync();
+    } finally {
+      await directory.close();
     }
   }
   async readJson<T>(name: string, schema: z.ZodType<T>): Promise<T> {
