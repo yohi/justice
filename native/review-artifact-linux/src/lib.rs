@@ -11,6 +11,7 @@ use napi::bindgen_prelude::{Buffer, Either};
 use napi::{Error, Result};
 use napi_derive::napi;
 use sha2::{Digest, Sha256};
+mod witness_journal;
 
 const SYS_OPENAT2: libc::c_long = 437;
 const SYS_RENAMEAT2: libc::c_long = 316;
@@ -577,55 +578,73 @@ impl ReviewGateRoot {
     }
 
     #[napi]
-    #[must_use]
-    pub fn list_scope_ids(&self) -> Vec<String> {
-        let _ = self.directory_fds();
-        // Skeleton: scope discovery arrives with the durable event store.
-        Vec::new()
+    /// # Errors
+    /// Rejects closed roots, unknown journal namespaces, and filesystem failures.
+    pub fn list_scope_ids(&self) -> Result<Vec<String>> {
+        let (_, gates, _, _) = self.directory_fds()?;
+        witness_journal::verify_namespace(gates.as_raw_fd())
+            .map_err(|error| map_io_error(&error, "review_gate_journal_unavailable"))?;
+        witness_journal::list(gates.as_raw_fd(), "events", false)
+            .map_err(|error| map_io_error(&error, "review_gate_journal_unavailable"))
     }
 
     #[napi]
-    #[must_use]
+    /// # Errors
+    /// Rejects invalid identifiers, closed roots, unsafe entries, and filesystem failures.
     #[allow(clippy::needless_pass_by_value)]
-    pub fn list_gate_ids(&self, review_scope_id: String) -> Vec<String> {
-        let _ = self.directory_fds();
-        let _ = gate_lock_id(&review_scope_id);
-        // Skeleton: gate discovery arrives with the durable event store.
-        Vec::new()
+    pub fn list_gate_ids(&self, review_scope_id: String) -> Result<Vec<String>> {
+        let (_, gates, _, _) = self.directory_fds()?;
+        gate_lock_id(&review_scope_id)?;
+        witness_journal::list(
+            gates.as_raw_fd(),
+            &format!("events/{review_scope_id}"),
+            false,
+        )
+        .map_err(|error| map_io_error(&error, "review_gate_journal_unavailable"))
     }
 
     #[napi]
-    #[must_use]
+    /// # Errors
+    /// Rejects invalid identifiers, closed roots, unsafe entries, and filesystem failures.
     #[allow(clippy::needless_pass_by_value)]
-    pub fn list_writer_ids(&self, review_scope_id: String, gate_id: String) -> Vec<String> {
-        let _ = self.directory_fds();
-        let _ = gate_lock_id(&review_scope_id);
-        let _ = gate_lock_id(&gate_id);
-        // Skeleton: writer discovery arrives with the durable event store.
-        Vec::new()
+    pub fn list_writer_ids(&self, review_scope_id: String, gate_id: String) -> Result<Vec<String>> {
+        let (_, gates, _, _) = self.directory_fds()?;
+        gate_lock_id(&review_scope_id)?;
+        gate_lock_id(&gate_id)?;
+        witness_journal::list(
+            gates.as_raw_fd(),
+            &format!("events/{review_scope_id}/{gate_id}"),
+            true,
+        )
+        .map_err(|error| map_io_error(&error, "review_gate_journal_unavailable"))
     }
 
     #[napi]
-    #[must_use]
+    /// # Errors
+    /// Rejects invalid identifiers, unsafe shards, closed roots, and filesystem failures.
     #[allow(clippy::needless_pass_by_value)]
     pub fn read_writer_shard(
         &self,
         review_scope_id: String,
         gate_id: String,
         writer_id: String,
-    ) -> Option<Buffer> {
-        let _ = self.directory_fds();
-        let _ = gate_lock_id(&review_scope_id);
-        let _ = gate_lock_id(&gate_id);
-        let _ = gate_lock_id(&writer_id);
-        // Skeleton: shard reads arrive with the durable event store.
-        None
+    ) -> Result<Option<Buffer>> {
+        let (_, gates, _, _) = self.directory_fds()?;
+        gate_lock_id(&review_scope_id)?;
+        gate_lock_id(&gate_id)?;
+        gate_lock_id(&writer_id)?;
+        witness_journal::read(
+            gates.as_raw_fd(),
+            &format!("events/{review_scope_id}/{gate_id}/{writer_id}.jsonl"),
+        )
+        .map(|bytes| bytes.map(Buffer::from))
+        .map_err(|error| map_io_error(&error, "review_gate_journal_unavailable"))
     }
 
     #[napi]
     /// # Errors
     /// Returns a stable N-API error when the root is closed or any id/digest
-    /// argument is invalid; the durable replace itself lands in later tasks.
+    /// argument is invalid, the preimage mismatches, or durable publication fails.
     #[allow(clippy::needless_pass_by_value)]
     pub fn durable_replace_writer_shard(
         &self,
@@ -635,15 +654,22 @@ impl ReviewGateRoot {
         previous_digest: Option<String>,
         bytes: Buffer,
     ) -> Result<()> {
-        self.directory_fds()?;
+        let (_, gates, _, _) = self.directory_fds()?;
         gate_lock_id(&review_scope_id)?;
         gate_lock_id(&gate_id)?;
         gate_lock_id(&writer_id)?;
         if let Some(digest) = &previous_digest {
             recovery_digest(digest)?;
         }
-        let _ = bytes.len();
-        Ok(())
+        witness_journal::replace(
+            gates.as_raw_fd(),
+            &review_scope_id,
+            &gate_id,
+            &writer_id,
+            previous_digest.as_deref(),
+            bytes.as_ref(),
+        )
+        .map_err(|error| map_io_error(&error, "review_gate_journal_replace_failed"))
     }
 
     #[napi]

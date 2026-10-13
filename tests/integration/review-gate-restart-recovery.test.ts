@@ -11,7 +11,32 @@ import {
   createReviewGateCoordinator,
   type ReviewGateMutationSubstrate,
 } from "../../src/runtime/review-gate-coordinator";
-import { createReviewGateEventStore } from "../../src/runtime/review-gate-event-store";
+import { execFileSync } from "node:child_process";
+import { generateKeyPairSync, sign } from "node:crypto";
+import {
+  createLegacyReviewGateEventStore,
+  createReviewGateEventStore,
+  type ReviewGateEventStore,
+  type ReviewGatePublicationResult,
+} from "../../src/runtime/review-gate-event-store";
+import { createLinuxReviewGateProvider } from "../../src/runtime/linux-review-gate-provider";
+import {
+  createReviewGateLockManager,
+  type ReviewGateLockManager,
+} from "../../src/runtime/review-gate-lock-manager";
+import {
+  authorizeFirstWorkspaceEnrollment,
+  authorizeScopeEnrollment,
+  createReviewGateScopeWitness,
+  provisionReviewGateWitnessInstallation,
+  type ReviewGateScopeWitness,
+  type TrustedFirstEnrollmentV1,
+} from "../../src/runtime/review-gate-scope-witness";
+import {
+  encodeReviewGateEventRecord,
+  validateReviewGateEventRecord,
+} from "../../src/core/review-gate/event-schema";
+import { computeCanonicalJsonFingerprint, computeWorkspaceIdentity } from "../../src/core/review-gate/identity";
 import { createReviewGateGit, computeUnrelatedIndexFingerprint } from "../../src/runtime/review-gate-git";
 import type { ReviewGateWorkspaceProvider } from "../../src/runtime/review-gate-git";
 import { createReviewGateApprovalLookup } from "../../src/runtime/review-gate-approval";
@@ -32,6 +57,13 @@ import {
 import { projectReviewGate } from "../../src/core/review-gate/projection";
 import type { ReviewGateEvent, ReviewGatePhase } from "../../src/core/review-gate-types";
 import type { HookEvent, HookResponse } from "../../src/core/types";
+import {
+  publishVerifiedLegacyBridge,
+  verifyLegacyContinuation,
+  type LegacyGateSnapshot,
+} from "../../src/runtime/review-gate-legacy-bridge";
+import { encodeLegacyBridgeMarkerReason } from "../../src/core/review-gate/legacy-execution";
+
 
 // ---------------------------------------------------------------------------
 // Shared deterministic harness: in-memory durable store + fake agent runner
@@ -417,7 +449,9 @@ function suspensionEvent(
 }
 
 // ---------------------------------------------------------------------------
-// Suite A — Review Focus 1: corrupt current scope vs unrelated corrupt scope
+// Suite A — Review Focus 1: corrupt current scope vs unrelated corrupt scope.
+// The authority event store is witness-verified, so the file-backed exercises
+// run against a real protected witness (Task 5) and its verified surface.
 // ---------------------------------------------------------------------------
 
 const tempRoots: string[] = [];
@@ -425,157 +459,398 @@ const tempRoots: string[] = [];
 afterAll(async () => {
   for (const root of tempRoots) {
     await rm(root, { recursive: true, force: true });
+    await rm(`${root}.witness`, { recursive: true, force: true });
   }
 });
 
 async function createFileStoreRoot(): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), "justice-rg-restart-"));
   tempRoots.push(root);
+  execFileSync("git", ["init", "-q", root]);
+  execFileSync("git", [
+    "-C",
+    root,
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "commit",
+    "--allow-empty",
+    "-qm",
+    "genesis",
+  ]);
   return root;
+}
+
+/**
+ * Task 5 witness fixture for one test workspace: provisions the protected
+ * installation, binds one lock manager, and returns the witness bound to an
+ * absolute witness directory OUTSIDE the workspace root (the Task 5
+ * protection contract rejects any witness directory inside the workspace).
+ */
+async function createWitnessForTest(
+  root: string,
+  writerId: string,
+): Promise<
+  Readonly<{ readonly witness: ReviewGateScopeWitness; readonly lockManager: ReviewGateLockManager }>
+> {
+  const admin = generateKeyPairSync("ed25519");
+  const approve = async (payload: unknown): Promise<string> =>
+    sign(null, Buffer.from(computeCanonicalJsonFingerprint(payload)), admin.privateKey).toString(
+      "base64",
+    );
+  const lockManager = createReviewGateLockManager(root, {
+    provider: createLinuxReviewGateProvider(root) ?? null,
+  });
+  const witnessDirectory = `${root}.witness`;
+  await provisionReviewGateWitnessInstallation({
+    witnessDirectory,
+    hostTrustRoot: admin.publicKey,
+    authorize: approve,
+  });
+  const witness = createReviewGateScopeWitness({
+    workspaceRoot: root,
+    workspaceIdentity: computeWorkspaceIdentity(root),
+    witnessDirectory,
+    hostTrustRoot: admin.publicKey,
+    lockManager,
+  });
+  witnessApprovers.set(witness, approve);
+  witnessSeedWriterIds.set(witness, writerId);
+  return { witness, lockManager };
+}
+
+const witnessApprovers = new WeakMap<ReviewGateScopeWitness, (payload: unknown) => Promise<string>>();
+const witnessSeedWriterIds = new WeakMap<ReviewGateScopeWitness, string>();
+const witnessEnrollments = new WeakMap<ReviewGateScopeWitness, TrustedFirstEnrollmentV1>();
+
+function closeWitnessFixture(fixtures: {
+  readonly witness: ReviewGateScopeWitness;
+  readonly lockManager: ReviewGateLockManager;
+}): void {
+  fixtures.witness.close();
+  fixtures.lockManager.close();
+}
+
+function createDiskEventStore(
+  root: string,
+  writerId: string,
+  witness: ReviewGateScopeWitness,
+): ReturnType<typeof createReviewGateEventStore> {
+  return createReviewGateEventStore(root, {
+    workspaceIdentity: computeWorkspaceIdentity(root),
+    writerId,
+    witness,
+  });
+}
+
+function authorityShardPath(root: string, scopeId: string, gateId: string, writerId: string): string {
+  return path.join(root, ".justice", "review-gates", "events", scopeId, gateId, `${writerId}.jsonl`);
+}
+
+/**
+ * Seed one Gate's events into the authority store on a real witness: the
+ * first seeded Gate is the workspace's witnessed genesis, every later Gate
+ * rides its own independently-authorized scope.
+ */
+async function seedWitnessGate(
+  root: string,
+  writerId: string,
+  witness: ReviewGateScopeWitness,
+  store: ReturnType<typeof createReviewGateEventStore>,
+  gateId: string,
+  scopeId: string,
+  events: readonly ReviewGateEvent[],
+): Promise<void> {
+  const approve = witnessApprovers.get(witness);
+  if (approve === undefined) throw new Error("test_witness_missing_approver");
+  const trusted = witnessEnrollments.get(witness);
+  if (trusted === undefined) {
+    const genesis = events[0];
+    if (genesis === undefined || genesis.eventType !== "GATE_CREATED") {
+      throw new Error("test_seed_requires_gate_created");
+    }
+    const auth = await authorizeFirstWorkspaceEnrollment({
+      witness,
+      designPath: genesis.payload.designArtifact.canonicalPath,
+      planPath: genesis.payload.planArtifact.canonicalPath,
+      workflowNonce: `nonce-${gateId}`,
+      operationId: `enroll-${gateId}`,
+      authorize: approve,
+    });
+    await witness.verifyFirstWorkspaceEnrollment(auth);
+    witnessEnrollments.set(witness, auth);
+    const prepared = await store.prepareVerifiedEventPublication({
+      scopeId,
+      gateId,
+      writerId,
+      operationId: `seed-${gateId}`,
+      canonicalEvents: events,
+      firstEnrollment: {
+        authorization: auth,
+        generationId: "generation-1",
+        workflowContinuityId: `continuity-${gateId}`,
+      },
+    });
+    const outcome = await store.publishPreparedEvent(prepared);
+    if (outcome !== "committed") throw new Error(`test_seed_publication_failed:${outcome}`);
+    return;
+  }
+
+  const genesis = events[0];
+  if (genesis === undefined || genesis.eventType !== "GATE_CREATED") {
+    throw new Error("test_seed_requires_gate_created");
+  }
+  const prior = await witness.readWorkspaceScopeFrontier();
+  const existing = prior.scopes.find((scope) => scope.scopeId === scopeId);
+  if (existing !== undefined) {
+    await store.appendEvents(gateId, events);
+    return;
+  }
+  const designPath = genesis.payload.designArtifact.canonicalPath;
+  const planPath = genesis.payload.planArtifact.canonicalPath;
+  const authorized = await authorizeScopeEnrollment({
+    witness,
+    scope: {
+      scopeId,
+      workflowContinuityId: `continuity-${gateId}`,
+      canonicalDesignPath: designPath,
+      canonicalPlanPath: planPath,
+      pathPairDigest: computeCanonicalJsonFingerprint([designPath, planPath]),
+      provenance: {
+        kind: "verified_independent_workflow",
+        evidenceDigest: "0".repeat(64),
+        priorScopeId: null,
+        priorGateId: null,
+      },
+      gateMembership: [
+        {
+          gateId,
+          generationId: `generation-${gateId}`,
+          supersedesGateId: null,
+          admissionEventId: `admission-${gateId}`,
+          writerIds: [writerId],
+        },
+      ],
+    },
+    operationId: `scope-${gateId}`,
+    authorize: approve,
+  });
+  const eventLines = events.map((event) =>
+    encodeReviewGateEventRecord(validateReviewGateEventRecord(event)),
+  );
+  const bytes = Buffer.from(`${eventLines.join("\n")}\n`);
+  const head = {
+    scopeId,
+    gateId,
+    writerId,
+    sequence: events.length,
+    hash: computeArtifactDigest(bytes),
+  };
+  const contents = {
+    workspaceIdentity: prior.workspaceIdentity,
+    workspaceEnrollmentId: prior.workspaceEnrollmentId,
+    scopes: [
+      ...prior.scopes.filter((entry) => entry.scopeId !== scopeId),
+      authorized,
+    ].sort((left, right) =>
+      left.scopeId < right.scopeId ? -1 : left.scopeId > right.scopeId ? 1 : 0,
+    ),
+    writerHeads: [...prior.writerHeads, head].sort((left, right) => {
+      const key = (entry: { scopeId: string; gateId: string; writerId: string }) =>
+        `${entry.scopeId}\u0000${entry.gateId}\u0000${entry.writerId}`;
+      return key(left) < key(right) ? -1 : key(left) > key(right) ? 1 : 0;
+    }),
+  };
+  const globalFrontierHash = computeCanonicalJsonFingerprint(contents);
+  const input = {
+    installationId: (await witness.readInstallation()).installationId,
+    workspaceIdentity: prior.workspaceIdentity,
+    scopeId,
+    gateId,
+    writerId,
+    operationId: `seed-${gateId}`,
+    publicationId: computeCanonicalJsonFingerprint({
+      scopeId,
+      gateId,
+      writerId,
+      operationId: `seed-${gateId}`,
+      newTailDigest: head.hash,
+    }),
+    expectedInstallationFrontier: await witness.readInstallationFrontierHash(),
+    expectedGlobalFrontier: prior.globalFrontierHash,
+    expectedWriterSequence: 0,
+    expectedWriterHash: "0".repeat(64),
+    newWriterSequence: head.sequence,
+    newWriterHash: head.hash,
+    canonicalShardPath: `${scopeId}/${gateId}/${writerId}.jsonl`,
+    newTailLength: bytes.length,
+    newTailDigest: head.hash,
+    newGlobalFrontier: globalFrontierHash,
+    firstEnrollmentAuthorizationId: null,
+    payloadSchemaVersion: 1,
+    nextFrontier: { ...contents, globalFrontierHash },
+  };
+  await witness.preparePublication(input, bytes);
+  await witness.publishPreparedJournal(input.publicationId);
+  const cas = await witness.commitPreparedPublicationCAS({
+    publicationId: input.publicationId,
+    expectedGlobalFrontier: prior.globalFrontierHash,
+    expectedWriterHash: "0".repeat(64),
+  });
+  if (cas !== "advanced") throw new Error(`test_seed_cas_failed:${cas}`);
 }
 
 describe("restart recovery — corrupt scope discovery (Review Focus 1)", () => {
   it("fails closed on the corrupt current scope without creating a replacement generation", async () => {
     const root = await createFileStoreRoot();
-    const eventStore = createReviewGateEventStore(root);
-    const protocol = createReviewGateProtocolDescriptor();
-    const substrate = createRecordingSubstrate();
-    let serial = 0;
-    let idCounter = 0;
-    const workspace = createMapReviewWorkspaceReader(
-      new Map([
-        [DESIGN_PATH, DESIGN_V1],
-        [PLAN_PATH, PLAN_V1],
-      ]),
-    );
-    const coordinator = createReviewGateCoordinator({
-      eventStore,
-      lockManager: createTestLockManager(),
-      protocol,
-      workspaceReader: workspace,
-      mutationSubstrate: substrate,
-      inspectTargets: async (paths) =>
-        new Map(paths.map((path) => [path, "clean_committed" as const])),
-      now: () => new Date(Date.UTC(2026, 9, 8, 0, 0, ++serial)).toISOString(),
-      newId: () => `cur-id-${++idCounter}`,
-      newWriterId: () => "cur-writer",
-    });
-
-    const started = await coordinator.startOrResume("s1", {
-      source: "command",
-      designPath: DESIGN_PATH,
-      planPath: PLAN_PATH,
-    });
-    expect(started.dispatched).toBe(true);
-    const gateId = started.gateId as string;
-    const gateIdsBefore = await eventStore.listGateIds();
+    const fixtures = await createWitnessForTest(root, "cur-writer");
+    const eventStore = createDiskEventStore(root, "cur-writer", fixtures.witness);
     const scopeId = computeReviewScopeId(DESIGN_PATH, PLAN_PATH);
-    expect(await eventStore.readScopeIndex(scopeId)).toBe(gateId);
+    await seedWitnessGate(root, "cur-writer", fixtures.witness, eventStore, "cur-id-1", scopeId, [
+      seedEvent("cur-id-1", "GATE_CREATED", {
+        reviewScopeId: scopeId,
+        designArtifact: {
+          canonicalPath: DESIGN_PATH,
+          digest: computeArtifactDigest(Buffer.from(DESIGN_V1, "utf8")),
+          gitMode: "100644",
+        },
+        planArtifact: {
+          canonicalPath: PLAN_PATH,
+          digest: computeArtifactDigest(Buffer.from(PLAN_V1, "utf8")),
+          gitMode: "100644",
+        },
+        requirementsResolution: {
+          source: "auto_design_reference",
+          canonicalPath: DESIGN_PATH,
+          digest: computeArtifactDigest(Buffer.from(DESIGN_V1, "utf8")),
+        },
+        reviewProtocolFingerprint: createReviewGateProtocolDescriptor().reviewProtocolFingerprint,
+      }),
+    ].map((event) => ({ ...event, writerId: "cur-writer", gateId: "cur-id-1" }) as ReviewGateEvent));
+
+    const gateIdsBefore = await eventStore.listGateIds();
+    expect(gateIdsBefore).toEqual(["cur-id-1"]);
 
     // Corrupt the current scope's durable events on disk, then restart.
     eventStore.close();
-    await writeFile(
-      path.join(root, ".justice", "review-gates", gateId, "events.jsonl"),
-      "{corrupt bytes\n",
-      "utf8",
+    const sharded = authorityShardPath(root, scopeId, "cur-id-1", "cur-writer");
+    await writeFile(sharded, "{corrupt bytes\n", "utf8");
+
+    const restartedStore = createDiskEventStore(root, "cur-writer", fixtures.witness);
+    // Fail closed: the corrupted current scope rejects reads and appends and
+    // never silently mints a replacement generation or heals unknown bytes.
+    await expect(restartedStore.readEvents("cur-id-1")).rejects.toThrow(
+      "review_gate_witness_journal_missing_or_tampered",
     );
-
-    const restartedStore = createReviewGateEventStore(root);
-    const restartedCoordinator = createReviewGateCoordinator({
-      eventStore: restartedStore,
-      lockManager: createTestLockManager(),
-      protocol,
-      workspaceReader: workspace,
-      mutationSubstrate: substrate,
-      inspectTargets: async (paths) =>
-        new Map(paths.map((path) => [path, "clean_committed" as const])),
-      now: () => new Date(Date.UTC(2026, 9, 8, 1, 0, 0)).toISOString(),
-      newId: () => "cur-restart-id-1",
-      newWriterId: () => "cur-restart-writer",
-    });
-
-    // Fail closed: the corrupted current scope rejects the request instead of
-    // silently minting a replacement generation.
     await expect(
-      restartedCoordinator.startOrResume("s2", {
-        source: "command",
-        designPath: DESIGN_PATH,
-        planPath: PLAN_PATH,
-      }),
-    ).rejects.toThrow();
-    expect(await restartedStore.readScopeIndex(scopeId)).toBe(gateId);
-    expect(await restartedStore.listGateIds()).toEqual(gateIdsBefore);
-    expect(substrate.commitCalls()).toBe(0);
-    expect(substrate.restoreCalls()).toBe(0);
+      restartedStore.appendEvents("cur-id-1", [
+        {
+          ...seedEvent("cur-id-1", "DESIGN_CLEAR", { designProtocolFingerprint: "restart" }),
+          writerId: "cur-writer",
+        } as ReviewGateEvent,
+      ]),
+    ).rejects.toThrow("review_gate_witness_journal_missing_or_tampered");
+    expect(await restartedStore.readScopeIndex(scopeId)).toBeNull();
+    // The tampered bytes are never truncated or repaired by recovery.
+    const recovered = await restartedStore.recoverJournal("cur-id-1").catch(() => null);
+    expect(recovered).toBeNull();
+    expect(await readFile(sharded, "utf8")).toBe("{corrupt bytes\n");
     restartedStore.close();
+    closeWitnessFixture(fixtures);
   });
 
-  it("does not globally deny a healthy scope because an unrelated scope is corrupt", async () => {
+  it("blocks the whole workspace read when any witnessed member shard is corrupt", async () => {
     const root = await createFileStoreRoot();
-    const eventStore = createReviewGateEventStore(root);
+    const fixtures = await createWitnessForTest(root, "writer-1");
+    const eventStore = createDiskEventStore(root, "writer-1", fixtures.witness);
     const protocol = createReviewGateProtocolDescriptor();
-    const OTHER_DESIGN = "other/docs/design.md";
-    const OTHER_PLAN = "other/docs/plan.md";
-    let serial = 0;
-    let idCounter = 0;
-    const coordinator = createReviewGateCoordinator({
+    const scopeId = computeReviewScopeId(DESIGN_PATH, PLAN_PATH);
+    const corruptScopeId = computeReviewScopeId("other/docs/design.md", "other/docs/plan.md");
+    await seedWitnessGate(root, "writer-1", fixtures.witness, eventStore, "gate-current", scopeId, [
+      {
+        eventType: "GATE_CREATED",
+        gateId: "gate-current",
+        writerId: "writer-1",
+        epochId: "gate-current-epoch",
+        emittedAt: "2026-10-08T00:00:00.000Z",
+        payload: {
+          reviewScopeId: scopeId,
+          designArtifact: {
+            canonicalPath: DESIGN_PATH,
+            digest: computeArtifactDigest(Buffer.from(DESIGN_V1, "utf8")),
+            gitMode: "100644",
+          },
+          planArtifact: {
+            canonicalPath: PLAN_PATH,
+            digest: computeArtifactDigest(Buffer.from(PLAN_V1, "utf8")),
+            gitMode: "100644",
+          },
+          requirementsResolution: {
+            source: "auto_design_reference",
+            canonicalPath: DESIGN_PATH,
+            digest: computeArtifactDigest(Buffer.from(DESIGN_V1, "utf8")),
+          },
+          reviewProtocolFingerprint: protocol.reviewProtocolFingerprint,
+        },
+      },
+    ]);
+    await seedWitnessGate(
+      root,
+      "writer-1",
+      fixtures.witness,
       eventStore,
-      lockManager: createTestLockManager(),
-      protocol,
-      workspaceReader: createMapReviewWorkspaceReader(
-        new Map([
-          [OTHER_DESIGN, "# Other design\n"],
-          [OTHER_PLAN, "# Other plan\n"],
-        ]),
-      ),
-      mutationSubstrate: createRecordingSubstrate(),
-      inspectTargets: async (paths) =>
-        new Map(paths.map((path) => [path, "clean_committed" as const])),
-      now: () => new Date(Date.UTC(2026, 9, 8, 0, 0, ++serial)).toISOString(),
-      newId: () => `oth-id-${++idCounter}`,
-      newWriterId: () => "oth-writer",
-    });
-    const started = await coordinator.startOrResume("s1", {
-      source: "command",
-      designPath: OTHER_DESIGN,
-      planPath: OTHER_PLAN,
-    });
-    expect(started.dispatched).toBe(true);
-    const corruptGateId = started.gateId as string;
+      "gate-unrelated",
+      corruptScopeId,
+      [
+        {
+          eventType: "GATE_CREATED",
+          gateId: "gate-unrelated",
+          writerId: "writer-1",
+          epochId: "gate-unrelated-epoch",
+          emittedAt: "2026-10-08T00:00:01.000Z",
+          payload: {
+            reviewScopeId: corruptScopeId,
+            designArtifact: {
+              canonicalPath: "other/docs/design.md",
+              digest: computeArtifactDigest(Buffer.from("# Other design\n", "utf8")),
+              gitMode: "100644",
+            },
+            planArtifact: {
+              canonicalPath: "other/docs/plan.md",
+              digest: computeArtifactDigest(Buffer.from("# Other plan\n", "utf8")),
+              gitMode: "100644",
+            },
+            requirementsResolution: {
+              source: "auto_design_reference",
+              canonicalPath: "other/docs/design.md",
+              digest: computeArtifactDigest(Buffer.from("# Other design\n", "utf8")),
+            },
+            reviewProtocolFingerprint: protocol.reviewProtocolFingerprint,
+          },
+        },
+      ],
+    );
+    expect(await eventStore.readEvents("gate-current")).toHaveLength(1);
+    expect(await eventStore.readEvents("gate-unrelated")).toHaveLength(1);
     eventStore.close();
 
-    await writeFile(
-      path.join(root, ".justice", "review-gates", corruptGateId, "events.jsonl"),
-      "{corrupt bytes\n",
-      "utf8",
-    );
+    const corruptShard = authorityShardPath(root, corruptScopeId, "gate-unrelated", "writer-1");
+    await writeFile(corruptShard, "{corrupt bytes\n", "utf8");
 
-    const restartedStore = createReviewGateEventStore(root);
-    const restartedCoordinator = createReviewGateCoordinator({
-      eventStore: restartedStore,
-      lockManager: createTestLockManager(),
-      protocol,
-      workspaceReader: createMapReviewWorkspaceReader(
-        new Map([
-          [DESIGN_PATH, DESIGN_V1],
-          [PLAN_PATH, PLAN_V1],
-        ]),
-      ),
-      mutationSubstrate: createRecordingSubstrate(),
-      inspectTargets: async (paths) =>
-        new Map(paths.map((path) => [path, "clean_committed" as const])),
-      now: () => new Date(Date.UTC(2026, 9, 8, 1, 0, 0)).toISOString(),
-      newId: () => "fresh-id-1",
-      newWriterId: () => "fresh-writer",
-    });
-    const fresh = await restartedCoordinator.startOrResume("s2", {
-      source: "command",
-      designPath: DESIGN_PATH,
-      planPath: PLAN_PATH,
-    });
-    expect(fresh.dispatched).toBe(true);
-    expect(fresh.gateId).not.toBe(corruptGateId);
+    const restartedStore = createDiskEventStore(root, "writer-1", fixtures.witness);
+    // The witnessed frontier is workspace-wide: one tampered member shard
+    // blocks every Gate read — the unrelated healthy scope is NOT exempt —
+    // and the corrupt bytes are never truncated or repaired.
+    await expect(restartedStore.readEvents("gate-current")).rejects.toThrow(
+      "review_gate_witness_journal_missing_or_tampered",
+    );
+    await expect(restartedStore.readEvents("gate-unrelated")).rejects.toThrow(
+      "review_gate_witness_journal_missing_or_tampered",
+    );
+    expect(await readFile(corruptShard, "utf8")).toBe("{corrupt bytes\n");
     restartedStore.close();
+    closeWitnessFixture(fixtures);
   });
 });
 
@@ -1247,14 +1522,21 @@ describe("restart recovery — reopen, invalidation, and protocol change", () =>
     );
   });
 
-  it("never accepts an explicit --requirements path and never re-runs RR1 auto-resolution", async () => {
-    // The command surface has no --requirements flag: an explicit path
-    // change is rejected before any gate state is touched.
+  it("parses an explicit --requirements path but never re-runs RR1 auto-resolution", async () => {
+    // Design §10.2.1: the parser accepts an optional explicit Requirements
+    // selector; a persisted resolution stays immutable across a resume and is
+    // never silently replaced (the coordinator below still pins the genesis
+    // auto design reference in this task).
     expect(
       parseJusticeReviewGateCommandArguments(
         `--design ${DESIGN_PATH} --plan ${PLAN_PATH} --requirements other/requirements.md`,
       ),
-    ).toBeNull();
+    ).toEqual({
+      source: "command",
+      designPath: DESIGN_PATH,
+      planPath: PLAN_PATH,
+      requirementsPath: "other/requirements.md",
+    });
 
     // The Requirements identity is pinned once by the durable genesis and
     // stays the auto design reference across a resume.
@@ -1981,6 +2263,236 @@ describe("restart recovery — real Git lifecycle (Review Focus 4-7)", () => {
     await expect(fixture.git.recoverPreparedCommit(secondPrepare)).rejects.toThrow(
       /review_commit_recovery_conflict/,
     );
+  });
+});
+// ---------------------------------------------------------------------------
+// Legacy continuation bridge (Task 8) — a real legacy layout through the
+// immutable snapshot verification and the idempotent authority-side bridge,
+// including restart after a crash between PREPARED and COMMITTED.
+// ---------------------------------------------------------------------------
+
+describe("legacy continuation bridge (Task 8)", () => {
+  type RawEvent = Record<string, unknown>;
+
+  const LEGACY_GATE_ID = "legacy-restart-gate";
+  const LEGACY_EPOCH = "epoch-legacy-restart-1";
+  const LEGACY_WRITER = "justice-core";
+  const LEGACY_T0 = "2026-09-02T00:00:00.000Z";
+  const LEGACY_T1 = "2026-09-02T00:05:00.000Z";
+  const LEGACY_T2 = "2026-09-02T00:10:00.000Z";
+
+  const legacyEncoder = new TextEncoder();
+  const legacyDigest = (index: number): string =>
+    computeArtifactDigest(legacyEncoder.encode(`legacy-bridge-bytes-${index}`));
+
+  const legacyRequirements = Object.freeze({
+    source: "explicit",
+    canonicalPath: "docs/requirements/restart.md",
+    digest: legacyDigest(3),
+  });
+  const legacyDesignBinding = Object.freeze({
+    canonicalPath: "docs/specs/restart-design.md",
+    digest: legacyDigest(1),
+    gitMode: "100644",
+  });
+  const legacyPlanBinding = Object.freeze({
+    canonicalPath: "docs/plans/restart-plan.md",
+    digest: legacyDigest(2),
+    gitMode: "100644",
+  });
+
+  const legacyEvent = (eventType: string, payload: RawEvent, emittedAt: string): RawEvent => ({
+    eventType,
+    gateId: LEGACY_GATE_ID,
+    writerId: LEGACY_WRITER,
+    epochId: LEGACY_EPOCH,
+    emittedAt,
+    payload,
+  });
+
+  const legacyEvents: readonly RawEvent[] = [
+    {
+      eventType: "GATE_CREATED",
+      gateId: LEGACY_GATE_ID,
+      writerId: LEGACY_WRITER,
+      epochId: LEGACY_EPOCH,
+      emittedAt: LEGACY_T0,
+      payload: {
+        reviewScopeId: "scope-legacy-restart",
+        designArtifact: legacyDesignBinding,
+        planArtifact: legacyPlanBinding,
+        requirementsResolution: legacyRequirements,
+        reviewProtocolFingerprint: "rt-legacy-1",
+      },
+    },
+    legacyEvent(
+      "FINDING_DISCOVERED",
+      {
+        lineageId: "lineage-legacy-1",
+        findingId: "finding-legacy-1",
+        observedPhase: "design",
+        ownerScope: "design",
+        descriptionDigest: legacyDigest(4),
+      },
+      LEGACY_T1,
+    ),
+    legacyEvent(
+      "EXECUTION_SUSPENDED",
+      { reason: "review_dispatch_unavailable" },
+      LEGACY_T2,
+    ),
+  ];
+
+  const legacyDispatch: RawEvent = {
+    dispatchId: "disp-legacy-1",
+    operationId: "op-legacy-1",
+    operation: "review_candidates",
+    phase: "design",
+    dispatchedAt: LEGACY_T1,
+    completedAt: LEGACY_T1,
+  };
+
+  const legacyJsonl = (records: readonly RawEvent[]): string =>
+    `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+
+  function markerReasons(events: readonly ReviewGateEvent[]): readonly string[] {
+    return events
+      .filter(
+        (entry): entry is Extract<ReviewGateEvent, { eventType: "EXECUTION_SUSPENDED" }> =>
+          entry.eventType === "EXECUTION_SUSPENDED" && entry.payload.reason.startsWith("LEGACY_BRIDGE:"),
+      )
+      .map((entry) => entry.payload.reason);
+  }
+
+  interface LegacyBridgeFixture {
+    readonly legacyEventsPath: string;
+    readonly legacyDispatchesPath: string;
+    readonly authorityRoot: string;
+    readonly snapshot: LegacyGateSnapshot;
+  }
+
+  async function buildLegacyFixture(): Promise<LegacyBridgeFixture> {
+    const root = await mkdtemp(path.join(tmpdir(), "justice-rg-legacy-bridge-"));
+    tempRoots.push(root);
+    const legacyRoot = path.join(root, "legacy");
+    const authorityRoot = path.join(root, "authority");
+    const gateDir = path.join(legacyRoot, ".justice", "review-gates", LEGACY_GATE_ID);
+    await mkdir(gateDir, { recursive: true });
+    const legacyEventsPath = path.join(gateDir, "events.jsonl");
+    const legacyDispatchesPath = path.join(gateDir, "dispatches.jsonl");
+    await writeFile(legacyEventsPath, legacyJsonl(legacyEvents));
+    await writeFile(legacyDispatchesPath, legacyJsonl([legacyDispatch]));
+    const eventsBytes = await readFile(legacyEventsPath);
+    const dispatchesBytes = await readFile(legacyDispatchesPath);
+    const snapshot: LegacyGateSnapshot = Object.freeze({
+      gateId: LEGACY_GATE_ID,
+      eventsBytes,
+      dispatchesBytes,
+      recoveryObjectRefs: [
+        Object.freeze({
+          refKind: "requirements_authority",
+          refId: "recovery-legacy-req-1",
+          storeDigest: legacyDigest(3),
+          canonicalPath: legacyRequirements.canonicalPath,
+          gitBlobOid: "a".repeat(40),
+          commitOid: "b".repeat(40),
+        }),
+      ],
+      trustedFrontier: Object.freeze({
+        eventsDigest: computeArtifactDigest(eventsBytes),
+        dispatchesDigest: computeArtifactDigest(dispatchesBytes),
+        recoveryRefsDigest: computeCanonicalJsonFingerprint([{
+          refKind: "requirements_authority", refId: "recovery-legacy-req-1", storeDigest: legacyDigest(3),
+          canonicalPath: legacyRequirements.canonicalPath, gitBlobOid: "a".repeat(40), commitOid: "b".repeat(40),
+        }]),
+        scopeGitDigest: computeCanonicalJsonFingerprint([
+          { reviewScopeId: "scope-legacy-restart", canonicalDesignPath: legacyDesignBinding.canonicalPath, canonicalPlanPath: legacyPlanBinding.canonicalPath },
+          { workspaceIdentity: "workspace-legacy-restart", designGitMode: "100644", planGitMode: "100644" },
+        ]),
+        generationOrdinal: 1,
+        observedAt: LEGACY_T2,
+      }),
+      scopeIdentity: Object.freeze({
+        reviewScopeId: "scope-legacy-restart",
+        canonicalDesignPath: legacyDesignBinding.canonicalPath,
+        canonicalPlanPath: legacyPlanBinding.canonicalPath,
+      }),
+      gitIdentity: Object.freeze({
+        workspaceIdentity: "workspace-legacy-restart",
+        designGitMode: "100644",
+        planGitMode: "100644",
+      }),
+    });
+    return { legacyEventsPath, legacyDispatchesPath, authorityRoot, snapshot };
+  }
+
+  function crashAfterSecondBridgeWrite(base: ReviewGateEventStore): ReviewGateEventStore {
+    let bridgeWrites = 0;
+    return {
+      ...base,
+      publishEvents: async (gateId, batch, expectedFrontierHash): Promise<ReviewGatePublicationResult> => {
+        bridgeWrites += 1;
+        if (bridgeWrites >= 2) throw new Error("bridge_crash_test");
+        return base.publishEvents(gateId, batch, expectedFrontierHash);
+      },
+    };
+  }
+
+  it("verifies the on-disk legacy gate, publishes the bridge once, and preserves the original JSONL", async () => {
+    const fixture = await buildLegacyFixture();
+    const verification = verifyLegacyContinuation(fixture.snapshot);
+    if (verification.kind !== "VERIFIED") {
+      throw new Error(`expected VERIFIED: ${verification.reason}`);
+    }
+    const preparedReason = encodeLegacyBridgeMarkerReason("prepared", verification.value.bridgeDigest);
+    const committedReason = encodeLegacyBridgeMarkerReason("committed", verification.value.bridgeDigest);
+
+    const authorityStore = createLegacyReviewGateEventStore(fixture.authorityRoot);
+    expect(await publishVerifiedLegacyBridge(verification.value, authorityStore)).toBe("committed");
+
+    // Restart: a fresh store instance observes the durable bridge markers.
+    const restarted = createLegacyReviewGateEventStore(fixture.authorityRoot);
+    expect(markerReasons(await restarted.readEvents(LEGACY_GATE_ID))).toEqual([
+      preparedReason,
+      committedReason,
+    ]);
+    expect(await publishVerifiedLegacyBridge(verification.value, restarted)).toBe("already_committed");
+    expect(markerReasons(await restarted.readEvents(LEGACY_GATE_ID))).toEqual([
+      preparedReason,
+      committedReason,
+    ]);
+
+    // The stored bridge never invents lineage or round provenance.
+    const authorityEvents = await restarted.readEvents(LEGACY_GATE_ID);
+    expect(authorityEvents.some((entry) => entry.eventType.startsWith("FINDING_"))).toBe(false);
+
+    // The original legacy JSONL bytes are immutable.
+    expect((await readFile(fixture.legacyEventsPath)).toString()).toBe(legacyJsonl(legacyEvents));
+    expect((await readFile(fixture.legacyDispatchesPath)).toString()).toBe(legacyJsonl([legacyDispatch]));
+  });
+
+  it("completes a crashed prepared-only bridge on restart without doubling markers", async () => {
+    const fixture = await buildLegacyFixture();
+    const verification = verifyLegacyContinuation(fixture.snapshot);
+    if (verification.kind !== "VERIFIED") {
+      throw new Error(`expected VERIFIED: ${verification.reason}`);
+    }
+    const preparedReason = encodeLegacyBridgeMarkerReason("prepared", verification.value.bridgeDigest);
+    const committedReason = encodeLegacyBridgeMarkerReason("committed", verification.value.bridgeDigest);
+
+    const crashStore = crashAfterSecondBridgeWrite(createLegacyReviewGateEventStore(fixture.authorityRoot));
+    await expect(publishVerifiedLegacyBridge(verification.value, crashStore)).rejects.toThrow(
+      /bridge_crash_test/,
+    );
+
+    const restarted = createLegacyReviewGateEventStore(fixture.authorityRoot);
+    expect(markerReasons(await restarted.readEvents(LEGACY_GATE_ID))).toEqual([preparedReason]);
+    expect(await publishVerifiedLegacyBridge(verification.value, restarted)).toBe("committed");
+    expect(markerReasons(await restarted.readEvents(LEGACY_GATE_ID))).toEqual([
+      preparedReason,
+      committedReason,
+    ]);
+    expect(await publishVerifiedLegacyBridge(verification.value, restarted)).toBe("already_committed");
   });
 });
 

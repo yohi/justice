@@ -58,6 +58,11 @@ export type ReviewCrossPhasePoliciesV1 = Readonly<{
 
 export type ReviewProtocolDescriptorV1 = Readonly<{
   readonly descriptorVersion: 1;
+  readonly requirementsResolutionPolicyVersion: number;
+  readonly authorityPolicy: Readonly<{
+    readonly historical: number;
+    readonly current: number;
+  }>;
   readonly crossPhase: ReviewCrossPhasePoliciesV1;
   readonly designPhase: ReviewProtocolPhaseDescriptorV1;
   readonly planPhase: ReviewProtocolPhaseDescriptorV1;
@@ -109,12 +114,34 @@ export function createReviewGateProtocolDescriptor(): ReviewGateProtocolDescript
 
   const descriptor: ReviewProtocolDescriptorV1 = Object.freeze({
     descriptorVersion: 1,
+    requirementsResolutionPolicyVersion: 1,
+    authorityPolicy: Object.freeze({ historical: 1, current: 1 }),
     crossPhase,
     designPhase,
     planPhase,
   });
 
   assertDescriptorConsistency(descriptor, semanticContractDigest);
+
+  return Object.freeze({
+    descriptor,
+    ...computeReviewGateProtocolFingerprints(descriptor),
+  });
+}
+
+/** Fingerprint only semantic fields; provider identity/revision is not authority. */
+export function computeReviewGateProtocolFingerprints(
+  descriptor: ReviewProtocolDescriptorV1,
+): Omit<ReviewGateProtocolDescriptor, "descriptor"> {
+  const { designPhase, planPhase, crossPhase } = descriptor;
+  const semanticContractDigest = computeDeterministicValidationSemanticContractDigest();
+  const requirementsPolicy = {
+    requirementsResolutionPolicyVersion: descriptor.requirementsResolutionPolicyVersion,
+    authorityPolicy: {
+      historical: descriptor.authorityPolicy.historical,
+      current: descriptor.authorityPolicy.current,
+    },
+  };
 
   // Shared semantics are explicitly represented inside every affected phase
   // fingerprint payload (PF1 §8).
@@ -131,6 +158,7 @@ export function createReviewGateProtocolDescriptor(): ReviewGateProtocolDescript
     descriptorVersion: descriptor.descriptorVersion,
     phase: "design",
     crossPhase,
+    ...requirementsPolicy,
     ...designPhaseWithSemantic,
   });
   const planProtocolFingerprint = computeCanonicalJsonFingerprint({
@@ -142,12 +170,12 @@ export function createReviewGateProtocolDescriptor(): ReviewGateProtocolDescript
   const reviewProtocolFingerprint = computeCanonicalJsonFingerprint({
     descriptorVersion: descriptor.descriptorVersion,
     crossPhase,
+    ...requirementsPolicy,
     designPhase: designPhaseWithSemantic,
     planPhase: planPhaseWithSemantic,
   });
 
   return Object.freeze({
-    descriptor,
     reviewProtocolFingerprint,
     designProtocolFingerprint,
     planProtocolFingerprint,
@@ -179,6 +207,9 @@ function assertDescriptorConsistency(
 ): void {
   if (
     descriptor.descriptorVersion !== 1 ||
+    descriptor.requirementsResolutionPolicyVersion !== 1 ||
+    descriptor.authorityPolicy.historical !== 1 ||
+    descriptor.authorityPolicy.current !== 1 ||
     descriptor.crossPhase.controllerRelayContractVersion !== 1 ||
     descriptor.crossPhase.sharedFindingValidatorContractVersion !== 1 ||
     descriptor.crossPhase.sharedSeverityPolicyVersion !== 1 ||

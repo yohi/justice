@@ -4,13 +4,18 @@ import {
   MAX_PLAN_REMEDIATION_ROUNDS,
 } from "../../src/core/review-gate-types";
 import { computeReviewGatePromptContractDigests } from "../../src/core/review-gate/agent-protocol";
-import { createReviewGateProtocolDescriptor } from "../../src/runtime/review-gate-protocol";
+import {
+  computeReviewGateProtocolFingerprints,
+  createReviewGateProtocolDescriptor,
+} from "../../src/runtime/review-gate-protocol";
 
 describe("createReviewGateProtocolDescriptor (Task 12 Phase A)", () => {
   it("builds the v1 descriptor with the exact cross-phase policy versions", () => {
     const result = createReviewGateProtocolDescriptor();
 
     expect(result.descriptor.descriptorVersion).toBe(1);
+    expect(result.descriptor.requirementsResolutionPolicyVersion).toBe(1);
+    expect(result.descriptor.authorityPolicy).toEqual({ historical: 1, current: 1 });
     expect(result.descriptor.crossPhase).toEqual({
       controllerRelayContractVersion: 1,
       maxDesignRemediationRounds: 5,
@@ -95,8 +100,40 @@ describe("createReviewGateProtocolDescriptor (Task 12 Phase A)", () => {
 
     expect(Object.isFrozen(result)).toBe(true);
     expect(Object.isFrozen(result.descriptor)).toBe(true);
+    expect(Object.isFrozen(result.descriptor.authorityPolicy)).toBe(true);
     expect(Object.isFrozen(result.descriptor.crossPhase)).toBe(true);
     expect(Object.isFrozen(result.descriptor.designPhase)).toBe(true);
     expect(Object.isFrozen(result.descriptor.planPhase)).toBe(true);
+  });
+
+  it.each([
+    { requirementsResolutionPolicyVersion: 2 },
+    { authorityPolicy: { historical: 2, current: 1 } },
+    { authorityPolicy: { historical: 1, current: 2 } },
+  ])("changes Design and global fingerprints when Requirements policy changes: %j", (policy) => {
+    const baseline = createReviewGateProtocolDescriptor();
+    const changed = { ...baseline.descriptor, ...policy };
+
+    const fingerprints = computeReviewGateProtocolFingerprints(changed);
+
+    expect(fingerprints.designProtocolFingerprint).not.toBe(baseline.designProtocolFingerprint);
+    expect(fingerprints.reviewProtocolFingerprint).not.toBe(baseline.reviewProtocolFingerprint);
+    expect(fingerprints.planProtocolFingerprint).toBe(baseline.planProtocolFingerprint);
+  });
+
+  it.each([
+    { providerIdentity: "replacement-provider" },
+    { providerRevision: "replacement-revision" },
+  ])("preserves all fingerprints when only provider metadata changes: %j", (metadata) => {
+    const baseline = createReviewGateProtocolDescriptor();
+    const changed = { ...baseline.descriptor, ...metadata };
+
+    const fingerprints = computeReviewGateProtocolFingerprints(changed);
+
+    expect(fingerprints).toEqual({
+      designProtocolFingerprint: baseline.designProtocolFingerprint,
+      planProtocolFingerprint: baseline.planProtocolFingerprint,
+      reviewProtocolFingerprint: baseline.reviewProtocolFingerprint,
+    });
   });
 });

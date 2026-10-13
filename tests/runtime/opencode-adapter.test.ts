@@ -9,6 +9,7 @@ import {
   PACKET_PAYLOAD_MARKER,
   REVIEW_GATE_AGENT_REVIEWER,
 } from "../../src/core/review-gate/agent-protocol";
+import { RETRY_DEPRECATED_WARNING } from "../../src/core/review-gate-command";
 import {
   createTestReviewGateCoordinator,
 } from "../helpers/review-gate-coordinator";
@@ -1043,6 +1044,9 @@ describe("OpenCodeAdapter.onCommandExecuteBefore", () => {
       designPath: "docs/specs/design.md",
       planPath: "docs/plans/implementation-plan.md",
       legacyRetryOption: 4,
+      // The parser embeds the stable RTY1 deprecation warning on the parsed
+      // command response whenever a legacy --retry option is present.
+      retryDeprecatedWarning: RETRY_DEPRECATED_WARNING,
     });
     expect(output.parts).toHaveLength(1);
     expect(output.parts[0]).not.toBe(hostSubtaskPart);

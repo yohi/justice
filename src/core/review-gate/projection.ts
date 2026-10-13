@@ -1,8 +1,11 @@
 import type {
+  CompletedApprovalBindingV2,
   CompletedApprovalBindingV1,
+  DesignClearV2,
   DesignClearMilestone,
   FindingState,
   GateCreatedV1,
+  GateCreatedV2,
   LineageId,
   PlanClearMilestone,
   RemediationRound,
@@ -12,7 +15,19 @@ import type {
   ReviewGateProjection,
   ReviewGateState,
   ReviewTargetWorkspaceState,
+  VerifiedRequirementsBinding,
+  VerifiedScopeFrontier,
 } from "./types.js";
+import type { RequirementsAuthoritySnapshotV1 } from "../review-gate-types.js";
+import { MAX_DESIGN_REMEDIATION_ROUNDS, MAX_PLAN_REMEDIATION_ROUNDS } from "../review-gate-types.js";
+import type { VerifiedReviewGateEvent } from "./event-schema.js";
+import type {
+  VerifiedCompletedBindingSnapshot,
+  VerifiedGateContextBinding,
+  VerifiedGateTip,
+  VerifiedNC1StopV1,
+  VerifiedUnfinishedBindingSnapshot,
+} from "./admission.js";
 import { computeCanonicalJsonFingerprint } from "./identity.js";
 
 export function getInitialReviewGateState(gateCreated: GateCreatedV1): ReviewGateState {
@@ -347,4 +362,279 @@ function sameBinding(left: ReviewApprovalBindingV1, right: ReviewApprovalBinding
 
 function assertNever(value: never): never {
   throw new Error(`Unexpected ReviewGateEvent: ${String(value)}`);
+}
+
+type V2Envelope = Readonly<{
+  schemaVersion: 2;
+  eventId: string;
+  parentEventId: string;
+  emittedAt: string;
+  gateId: string;
+  epochId: string;
+  generationId: string;
+  writerId: string;
+}>;
+
+function isV2Event(
+  event: VerifiedReviewGateEvent,
+): event is VerifiedReviewGateEvent & V2Envelope {
+  return "schemaVersion" in event && event.schemaVersion === 2;
+}
+
+function getV2GateCreated(
+  events: readonly VerifiedReviewGateEvent[],
+): (VerifiedReviewGateEvent & V2Envelope & { readonly eventType: "GATE_CREATED"; readonly payload: GateCreatedV2 }) | null {
+  const first = events[0];
+  if (first === undefined) return null;
+  if (!isV2Event(first)) return null;
+  if (first.eventType !== "GATE_CREATED") return null;
+  return first as VerifiedReviewGateEvent & V2Envelope & { readonly eventType: "GATE_CREATED"; readonly payload: GateCreatedV2 };
+}
+
+function v2RequirementsBinding(
+  requirements: GateCreatedV2["requirementsResolution"],
+  selectedByEventId: string,
+): VerifiedRequirementsBinding {
+  return Object.freeze({
+    source: requirements.source,
+    workspaceIdentity: requirements.workspaceIdentity,
+    canonicalPath: requirements.canonicalPath,
+    digest: requirements.digest,
+    gitMode: requirements.gitMode,
+    gitBlobOid: requirements.requirementsGitBlobOid,
+    selectedByEventId,
+  });
+}
+
+function buildContextBinding(
+  payload: GateCreatedV2,
+  selectedByEventId: string,
+): VerifiedGateContextBinding {
+  return Object.freeze({
+    requirements: v2RequirementsBinding(payload.requirementsResolution, selectedByEventId),
+    design: payload.designArtifact,
+    plan: payload.planArtifact,
+    globalProtocolFingerprint: payload.reviewProtocolFingerprint,
+    designProtocolFingerprint: payload.designProtocolFingerprint,
+    planProtocolFingerprint: payload.planProtocolFingerprint,
+  });
+}
+
+function contextDigest(context: VerifiedGateContextBinding): string {
+  return computeCanonicalJsonFingerprint({
+    requirements: {
+      source: context.requirements.source,
+      workspaceIdentity: context.requirements.workspaceIdentity,
+      canonicalPath: context.requirements.canonicalPath,
+      digest: context.requirements.digest,
+      gitMode: context.requirements.gitMode,
+      gitBlobOid: context.requirements.gitBlobOid,
+    },
+    design: context.design,
+    plan: context.plan,
+    globalProtocolFingerprint: context.globalProtocolFingerprint,
+    designProtocolFingerprint: context.designProtocolFingerprint,
+    planProtocolFingerprint: context.planProtocolFingerprint,
+  });
+}
+
+function makeNc1Stop(
+  stopEventId: string,
+  phase: ReviewGatePhase,
+  epochId: string,
+  effectiveContext: VerifiedGateContextBinding,
+  frontierHash: string,
+  remainingRounds: number,
+): VerifiedNC1StopV1 {
+  return Object.freeze({
+    stopEventId,
+    phase,
+    epochId,
+    stoppedContextDigest: contextDigest(effectiveContext),
+    remainingRounds,
+    witnessFrontierAtStop: frontierHash,
+    protocolRelease: Object.freeze({
+      stopEventId,
+      historicalReleaseId: null,
+      historicalReleaseProofDigest: null,
+      historicalPublisherTrustPolicyVersion: null,
+    }),
+  });
+}
+
+/** Pure projection of a verified V2 event history into a `VerifiedGateTip`. */
+export function projectVerifiedGateTip(
+  input: Readonly<{
+    gateId: string;
+    scopeId: string;
+    events: readonly VerifiedReviewGateEvent[];
+    frontier: VerifiedScopeFrontier;
+    persistedAuthority?: RequirementsAuthoritySnapshotV1 | null;
+  }>,
+): VerifiedGateTip {
+  void input.persistedAuthority;
+
+  const gateCreated = getV2GateCreated(input.events);
+  if (gateCreated === null) {
+    throw new Error("review_gate_tip_missing_v2_gate_created");
+  }
+  if (gateCreated.gateId !== input.gateId) {
+    throw new Error("review_gate_tip_gate_id_mismatch");
+  }
+
+  const gateCreatedEventId = gateCreated.eventId;
+  const gateGenerationId = gateCreated.generationId;
+  const frontierHash = input.frontier.globalFrontierHash;
+
+  const admissionContext = buildContextBinding(gateCreated.payload, gateCreatedEventId);
+  const effectiveContext = admissionContext;
+  let authorityEventId = gateCreatedEventId;
+  let operationId = gateCreatedEventId;
+
+  let ownDesignClear: VerifiedUnfinishedBindingSnapshot["ownDesignClear"] = null;
+  let completedApproval: VerifiedCompletedBindingSnapshot | null = null;
+
+  const rounds = { design: 0, plan: 0 };
+  const countedOperations = new Set<string>();
+  let suspensionReason: string | null = null;
+  let executionSuspended = false;
+  let reopenRequired = false;
+  let nc1Reason: "round_limit_exhausted" | "review_non_convergent" | null = null;
+  let nc1Stop: VerifiedNC1StopV1 | null = null;
+
+  for (const event of input.events) {
+    if (!isV2Event(event)) {
+      switch (event.eventType) {
+        case "REOPEN_REQUIRED":
+          reopenRequired = true;
+          suspensionReason = "reopen_required";
+          break;
+        case "ROUND_LIMIT_EXHAUSTED": {
+          const phase = event.payload.phase;
+          suspensionReason = "round_limit_exhausted";
+          nc1Reason = "round_limit_exhausted";
+          const remainingRounds = phase === "design"
+            ? MAX_DESIGN_REMEDIATION_ROUNDS - rounds.design
+            : MAX_PLAN_REMEDIATION_ROUNDS - rounds.plan;
+          nc1Stop = makeNc1Stop("synthetic-v1-stop", phase, event.epochId, effectiveContext, frontierHash, remainingRounds);
+          break;
+        }
+        case "REVIEW_NON_CONVERGENT": {
+          const phase = event.payload.phase;
+          suspensionReason = "review_non_convergent";
+          nc1Reason = "review_non_convergent";
+          const remainingRounds = phase === "design"
+            ? MAX_DESIGN_REMEDIATION_ROUNDS - rounds.design
+            : MAX_PLAN_REMEDIATION_ROUNDS - rounds.plan;
+          nc1Stop = makeNc1Stop("synthetic-v1-stop", phase, event.epochId, effectiveContext, frontierHash, remainingRounds);
+          break;
+        }
+        case "EXECUTION_SUSPENDED":
+          executionSuspended = true;
+          if (suspensionReason === null) suspensionReason = "execution_suspended";
+          break;
+        case "ORCHESTRATION_RESUMED":
+          executionSuspended = false;
+          suspensionReason = reopenRequired ? "reopen_required" : nc1Reason;
+          break;
+        case "FINDING_REOPENED":
+          reopenRequired = false;
+          suspensionReason = nc1Reason ?? (executionSuspended ? "execution_suspended" : null);
+          break;
+        default:
+          break;
+      }
+      continue;
+    }
+
+    if (event.gateId !== input.gateId || event.generationId !== gateGenerationId) {
+      throw new Error("review_gate_tip_event_identity_mismatch");
+    }
+
+    switch (event.eventType) {
+      case "EXTERNAL_OPERATION_DISPATCHED": {
+        if (event.payload.role !== "remediator" || countedOperations.has(event.payload.operationId)) break;
+        countedOperations.add(event.payload.operationId);
+        const phase = event.payload.phase;
+        if (phase === "design") rounds.design += 1;
+        else rounds.plan += 1;
+        break;
+      }
+      case "SEMANTIC_CONTEXT_TRANSITION": {
+        authorityEventId = event.eventId;
+        operationId = event.payload.operationId;
+        break;
+      }
+      case "DESIGN_CLEAR": {
+        const payload = event.payload as unknown as DesignClearV2;
+        ownDesignClear = Object.freeze({
+          eventId: event.eventId,
+          approvedContextEventId: payload.approvedContextEventId,
+          approvedRequirementsAuthorityEventId: authorityEventId,
+          approvedDesign: effectiveContext.design,
+          designProtocolFingerprint: payload.designProtocolFingerprint,
+        });
+        break;
+      }
+      case "COMPLETED_APPROVAL_BINDING": {
+        const payload = event.payload as unknown as CompletedApprovalBindingV2;
+        completedApproval = Object.freeze({
+          approvalEventId: event.eventId,
+          gateId: input.gateId,
+          generationId: gateGenerationId,
+          historicalRequirementsV2EventId: gateCreatedEventId,
+          historicalRequirements: gateCreated.payload.requirementsResolution,
+          currentRequirementsAuthorityEventId: payload.currentRequirementsAuthorityEventId,
+          currentRequirements: payload.currentRequirements,
+          design: payload.approvalBinding.designArtifact,
+          plan: payload.approvalBinding.planArtifact,
+          designClearEventId: payload.designClearEventId,
+          planClearEventId: payload.planClearEventId,
+          globalProtocolFingerprint: gateCreated.payload.reviewProtocolFingerprint,
+          verifiedHistoryFrontier: frontierHash,
+        });
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  if (completedApproval !== null) {
+    return Object.freeze({
+      status: "completed",
+      gateId: input.gateId,
+      generationId: gateGenerationId,
+      scopeId: input.scopeId,
+      supersedesGateId: gateCreated.payload.supersedesGateId,
+      completedApproval,
+    });
+  }
+
+  const lastVerifiedBinding: VerifiedUnfinishedBindingSnapshot = Object.freeze({
+    admission: Object.freeze({
+      gateCreatedEventId,
+      historicalRequirementsV2EventId: gateCreatedEventId,
+      context: admissionContext,
+    }),
+    effective: Object.freeze({
+      context: effectiveContext,
+      authorityEventId,
+      operationId,
+      verifiedHistoryFrontier: frontierHash,
+    }),
+    ownDesignClear,
+  });
+
+  return Object.freeze({
+    status: suspensionReason === null ? "active" : "suspended",
+    gateId: input.gateId,
+    generationId: gateGenerationId,
+    scopeId: input.scopeId,
+    supersedesGateId: gateCreated.payload.supersedesGateId,
+    rounds: Object.freeze({ design: rounds.design, plan: rounds.plan }),
+    suspensionReason,
+    lastVerifiedBinding,
+    nc1Stop,
+  });
 }

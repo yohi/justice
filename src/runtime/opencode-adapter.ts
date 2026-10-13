@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
+import { lstatSync } from "node:fs";
 import type { Hooks, ToolDefinition } from "@opencode-ai/plugin";
 import {
   isJusticeImplementCommand,
@@ -41,7 +43,16 @@ import {
   type ReviewGateApprovalLookup,
 } from "./review-gate-approval";
 import { createReviewGateGit } from "./review-gate-git";
-import { createReviewGateEventStore, type ReviewGateEventStore } from "./review-gate-event-store";
+import {
+  createLegacyReviewGateEventStore,
+  createReviewGateEventStore,
+  type ReviewGateEventStore,
+} from "./review-gate-event-store";
+import {
+  createReviewGateScopeWitness,
+  type ReviewGateScopeWitness,
+} from "./review-gate-scope-witness";
+import { computeWorkspaceIdentity } from "../core/review-gate/identity";
 import {
   createReviewGateHistoryService,
   type ReviewGateHistoryService,
@@ -129,6 +140,7 @@ interface GenericEventInput {
 interface SharedReviewGateRuntimeGraph {
   readonly root: string;
   readonly eventStore: ReviewGateEventStore;
+  readonly witness: ReviewGateScopeWitness | null;
   readonly coordinator: ReviewGateCoordinator;
   readonly history: ReviewGateHistoryService;
   readonly approval: ReviewGateApprovalLookup;
@@ -388,7 +400,7 @@ export class OpenCodeAdapter {
       // Task 12: one shared Review Gate runtime service graph per workspace.
       // Storing/reusing the same services for Task 13 history and Task 14
       // approval lookup is mandatory; no parallel stores are created.
-      const reviewGateRuntimeGraph = buildSharedReviewGateRuntimeGraph(
+      const reviewGateRuntimeGraph = await buildSharedReviewGateRuntimeGraph(
         root,
         {
           readWorkspaceFile: async (path) =>
@@ -399,6 +411,7 @@ export class OpenCodeAdapter {
         (message, ...extra) => {
           void this.log("warn", message, ...extra);
         },
+        writerId,
       );
       if (reviewGateRuntimeGraph !== null) {
         justice.getPlanBridge().setReviewGateCoordinator(reviewGateRuntimeGraph.coordinator);
@@ -1723,11 +1736,12 @@ function responseModifiedArgs(
  * the coordinator runs in mutation-unavailable mode and refuses side effects
  * that would mutate the workspace without falling back to unsafe mutation.
  */
-function buildSharedReviewGateRuntimeGraph(
+async function buildSharedReviewGateRuntimeGraph(
   workspaceRoot: string,
   workspaceReader: ReviewGateWorkspaceReader,
   warn: (message: string, ...extra: unknown[]) => void,
-): SharedReviewGateRuntimeGraph | null {
+  writerId: string,
+): Promise<SharedReviewGateRuntimeGraph | null> {
   try {
     const overrideRaw = process.env.JUSTICE_REVIEW_GATE_ROOT;
     const overrideApplied =
@@ -1752,10 +1766,60 @@ function buildSharedReviewGateRuntimeGraph(
       }
     }
 
-    const eventStore = createReviewGateEventStore(root);
     const lockManager = createReviewGateLockManager(root, {
       provider: provider ?? null,
     });
+
+    // Task 5 witness: one protected workspace witness per graph. Creation is
+    // attempted only when the native provider exists; a missing, misprotected
+    // or unprovisioned witness directory degrades to the legacy bridge.
+    let witness: ReviewGateScopeWitness | null = null;
+    if (provider !== null) {
+      let candidate: ReviewGateScopeWitness | null = null;
+      try {
+        const witnessDirectoryEnv = process.env["JUSTICE_REVIEW_GATE_WITNESS_DIR"];
+        const witnessDirectory =
+          witnessDirectoryEnv === undefined || witnessDirectoryEnv.trim().length === 0
+            ? path.resolve(root, ".justice/review-gates/witness")
+            : witnessDirectoryEnv.trim();
+        candidate = createReviewGateScopeWitness({
+          workspaceRoot: root,
+          workspaceIdentity: computeWorkspaceIdentity(root),
+          witnessDirectory,
+          lockManager,
+        });
+        let installationExists = true;
+        try {
+          lstatSync(path.join(witnessDirectory, "installation.json"));
+        } catch (error: unknown) {
+          if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+            installationExists = false;
+          } else {
+            throw error;
+          }
+        }
+        if (!installationExists) {
+          candidate.close();
+          candidate = null;
+        } else {
+          await candidate.readInstallation();
+          witness = candidate;
+        }
+      } catch (err) {
+        candidate?.close();
+        throw err;
+      }
+    }
+
+    const eventStore =
+      witness === null
+        ? createLegacyReviewGateEventStore(root)
+        : createReviewGateEventStore(root, {
+            workspaceIdentity: computeWorkspaceIdentity(root),
+            writerId,
+            witness,
+          });
+
     const recoveryStore = createReviewGateRecoveryStore(root);
     const protocol = createReviewGateProtocolDescriptor();
 
@@ -1794,7 +1858,7 @@ function buildSharedReviewGateRuntimeGraph(
     });
     const history = createReviewGateHistoryService({ rootDir: root, eventStore });
     const approval = createReviewGateApprovalLookup({ eventStore, workspaceReader, protocol });
-    return Object.freeze({ root, eventStore, coordinator, history, approval });
+    return Object.freeze({ root, eventStore, witness, coordinator, history, approval });
   } catch (err) {
     warn("[Justice] Review Gate runtime graph construction failed; coordinator not configured", err);
     return null;

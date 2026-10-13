@@ -110,3 +110,30 @@ function canonicalJsonContents(value: object): string {
 export function computeCanonicalJsonFingerprint(value: unknown): string {
   return computeArtifactDigest(textEncoder.encode(canonicalJsonText(value)));
 }
+
+/**
+ * Stable, versioned authority identity for a canonical absolute workspace
+ * root. The absolute host path is only ever hashed: the derived identity can
+ * be persisted and logged without leaking the host path.
+ */
+export function computeWorkspaceIdentity(canonicalWorkspaceRoot: string): string {
+  if (canonicalWorkspaceRoot.length === 0) {
+    throw new Error("review_gate_invalid_workspace_identity_input");
+  }
+  return createHash("sha256")
+    .update(`justice-workspace-identity-v1\0${canonicalWorkspaceRoot}`)
+    .digest("hex");
+}
+
+/**
+ * Stable, versioned authority identity for a canonical absolute Git common
+ * directory. The absolute host path is only ever hashed.
+ */
+export function computeRepositoryIdentity(canonicalGitCommonDir: string): string {
+  if (canonicalGitCommonDir.length === 0) {
+    throw new Error("review_gate_invalid_repository_identity_input");
+  }
+  return createHash("sha256")
+    .update(`justice-repository-identity-v1\0${canonicalGitCommonDir}`)
+    .digest("hex");
+}

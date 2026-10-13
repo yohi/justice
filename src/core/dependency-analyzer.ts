@@ -1,32 +1,13 @@
 /* eslint-disable security/detect-unsafe-regex -- Dependency markers are deliberately constrained and regex-parsed. */
 import type { PlanTask } from "./types";
+import { scanMarkdownFenceLines } from "./markdown-fence-scanner";
 
 const DEPENDS_GLOBAL_REGEX = /\(depends:\s*(task-\d+(?:\s*,\s*task-\d+)*)\)/gi;
 
 function hasInterfacesMarker(rawBody: string): boolean {
-  let fence: { readonly character: "`" | "~"; readonly length: number } | null = null;
-
-  for (const line of rawBody.split(/\r?\n/)) {
-    const trimmedLine = line.trim();
-    const fenceMatch = trimmedLine.match(/^(`{3,}|~{3,})\s*$/);
-
-    if (fenceMatch) {
-      const fenceCharacter = fenceMatch[1]?.[0];
-      if (fenceCharacter === "`" || fenceCharacter === "~") {
-        const fenceLength = fenceMatch[1]?.length ?? 0;
-        if (fence === null) {
-          fence = { character: fenceCharacter, length: fenceLength };
-        } else if (fence.character === fenceCharacter && fenceLength >= fence.length) {
-          fence = null;
-        }
-      }
-      continue;
-    }
-
-    if (fence === null && trimmedLine === "**Interfaces:**") return true;
-  }
-
-  return false;
+  return scanMarkdownFenceLines(rawBody).some(
+    (entry) => !entry.insideFence && entry.line.trim() === "**Interfaces:**",
+  );
 }
 
 /**

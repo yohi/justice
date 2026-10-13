@@ -114,6 +114,54 @@ describe("DependencyAnalyzer", () => {
       expect(analyzer.getParallelizable(tasks).map((task) => task.id)).toEqual(["task-2", "task-3"]);
     });
 
+    it("ignores language-fenced Interfaces and task headings", () => {
+      const withFencedInterfaces = makeTasks().map((task) =>
+        task.id === "task-2"
+          ? {
+              ...task,
+              rawBody: `${task.rawBody}\n\`\`\`markdown\n**Interfaces:**\n### Task 99: fenced example\n\`\`\``,
+            }
+          : task,
+      );
+
+      // A language-fenced marker and heading must not trigger conservative sequential execution.
+      expect(analyzer.getParallelizable(withFencedInterfaces).map((task) => task.id)).toEqual([
+        "task-2",
+        "task-3",
+      ]);
+
+      // An unfenced exact marker still enforces sequential execution.
+      const withUnfencedInterfaces = makeTasks().map((task) =>
+        task.id === "task-2" ? { ...task, rawBody: `${task.rawBody}\n**Interfaces:**` } : task,
+      );
+      expect(analyzer.getParallelizable(withUnfencedInterfaces).map((task) => task.id)).toEqual([
+        "task-2",
+      ]);
+    });
+
+    it("ignores tilde language fences and requires a matching close length", () => {
+      const tildeFenced = makeTasks().map((task) =>
+        task.id === "task-2"
+          ? { ...task, rawBody: `${task.rawBody}\n~~~text\n**Interfaces:**\n~~~` }
+          : task,
+      );
+      expect(analyzer.getParallelizable(tildeFenced).map((task) => task.id)).toEqual([
+        "task-2",
+        "task-3",
+      ]);
+
+      // A 3-character run must not close a 4-character opening fence, so the marker stays fenced.
+      const shortClose = makeTasks().map((task) =>
+        task.id === "task-2"
+          ? { ...task, rawBody: `${task.rawBody}\n\`\`\`\`markdown\n\`\`\`\n**Interfaces:**` }
+          : task,
+      );
+      expect(analyzer.getParallelizable(shortClose).map((task) => task.id)).toEqual([
+        "task-2",
+        "task-3",
+      ]);
+    });
+
     it("does not enter conservative mode for prose containing the word Interfaces", () => {
       const tasks = makeTasks().map((task) =>
         task.id === "task-2"

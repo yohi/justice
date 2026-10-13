@@ -8,6 +8,7 @@ import type {
 } from "../../src/runtime/linux-review-gate-provider";
 import {
   acquireGateLockChain,
+  assertWitnessAdmissionOrder,
   createReviewGateLockManager,
   type ReviewGateLockManager,
 } from "../../src/runtime/review-gate-lock-manager";
@@ -19,6 +20,18 @@ vi.mock("../../src/runtime/linux-review-gate-provider", async (importOriginal) =
 });
 
 const tempRoots: string[] = [];
+
+it("rejects a witness workspace guard while its manager holds a Gate lease", async () => {
+  const manager = createReviewGateLockManager(freshRoot(), { provider: null });
+  const gate = await manager.acquireGateLock("gate-order");
+  try {
+    expect(() => assertWitnessAdmissionOrder(manager)).toThrow("lock_order");
+  } finally {
+    if (gate !== "occupied") gate.release();
+    manager.close();
+  }
+  expect(() => assertWitnessAdmissionOrder(manager)).not.toThrow();
+});
 
 afterAll(async () => {
   for (const root of tempRoots) {

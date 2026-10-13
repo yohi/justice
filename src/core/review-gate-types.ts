@@ -52,6 +52,85 @@ export type RequirementsResolutionV1 = Readonly<{
   }> | undefined;
 }>;
 
+/**
+ * Verified identity of one Git-tracked Review Gate artifact pinned from a
+ * single locked workspace/Git snapshot. `fsIdentity` is the secure native
+ * `(device,inode)` pair — runtime-only evidence that never becomes a
+ * persisted absolute path. Equal content digests alone never prove aliasing.
+ */
+export type VerifiedTrackedArtifactIdentity = Readonly<{
+  readonly canonicalPath: string;
+  readonly workspaceIdentity: string;
+  readonly repositoryIdentity: string;
+  readonly gitBlobOid: string;
+  readonly digest: ArtifactDigest;
+  readonly gitMode: "100644" | "100755";
+  readonly fsIdentity: Readonly<{ readonly device: string; readonly inode: string }>;
+}>;
+
+/**
+ * Versioned V2 Requirements resolution provenance (Design §10.2.4). New
+ * generations pin this immutable record in `GATE_CREATED`; legacy V1 events
+ * keep their own `RequirementsResolutionV1` shape and are never upcast.
+ */
+export type RequirementsResolutionV2 = Readonly<{
+  readonly schemaVersion: 2;
+  readonly source: "explicit" | "design_declared_reference";
+  readonly canonicalPath: string;
+  readonly digest: ArtifactDigest;
+  readonly gitMode: "100644" | "100755";
+  readonly requirementsGitBlobOid: string;
+  readonly committedBaselineOid: string;
+  readonly workspaceIdentity: string;
+  readonly selectionEvidence: Readonly<{
+    readonly commandPath?: string;
+    readonly declaration?: Readonly<{
+      readonly designCanonicalPath: string;
+      readonly designDigest: ArtifactDigest;
+      readonly declarationLine: number;
+      readonly declarationDigest: ArtifactDigest;
+      readonly declaredCanonicalPath: string;
+    }>;
+  }>;
+}>;
+
+/**
+ * Current, causally verified Requirements authority. This preserves immutable
+ * V2 admission provenance separately from the effective Requirements and
+ * committed Design identities used for subsequent review and approval checks.
+ */
+export type RequirementsAuthoritySnapshotV1 = Readonly<{
+  readonly schemaVersion: 1;
+  readonly historicalResolutionEventId: string;
+  readonly currentAuthorityEventId: string;
+  readonly producingOperationId: string;
+  readonly workspaceIdentity: string;
+  readonly repositoryIdentity: string;
+  readonly requirements: Readonly<{
+    readonly source: "explicit" | "design_declared_reference";
+    readonly selectedCanonicalPath: string;
+    readonly canonicalPath: string;
+    readonly gitBlobOid: string;
+    readonly digest: ArtifactDigest;
+    readonly gitMode: "100644" | "100755";
+  }>;
+  readonly design: Readonly<{
+    readonly canonicalPath: string;
+    readonly digest: ArtifactDigest;
+    readonly gitMode: "100644" | "100755";
+    readonly verifiedCommitOid: string;
+    readonly verifiedTreeOid: string;
+    readonly phaseProtocolFingerprint: string;
+    readonly marker: Readonly<{
+      readonly presence: "present" | "absent";
+      readonly validPreamblePosition: boolean;
+      readonly declaredCanonicalPath: string | null;
+      readonly declarationLine: number | null;
+      readonly declarationDigest: ArtifactDigest | null;
+    }>;
+  }>;
+}>;
+
 export type DesignProtocolDescriptorV1 = Readonly<{
   readonly designReviewContractVersion: string;
   readonly findingValidatorContractVersion: string;
