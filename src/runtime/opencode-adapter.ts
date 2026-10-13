@@ -1834,6 +1834,7 @@ async function buildSharedReviewGateRuntimeGraph(
         },
       },
       targetEffectBroker: witness ?? undefined,
+      workspaceIdentity: computeWorkspaceIdentity(root),
     });
 
     const coordinator = createReviewGateCoordinator({
