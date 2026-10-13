@@ -101,6 +101,7 @@ import {
   type ReviewGateLockManager,
 } from "./review-gate-lock-manager";
 import type { ReviewGateProtocolDescriptor } from "./review-gate-protocol";
+import type { ReviewGateScopeAdmission } from "./review-gate-scope-admission";
 
 export type ReviewGateCoordinatorLockPhase =
   | "reviewing"
@@ -169,6 +170,7 @@ export interface ReviewGateCoordinatorOptions {
   readonly now?: () => string;
   readonly newId?: () => string;
   readonly newWriterId?: () => string;
+  readonly scopeAdmission?: ReviewGateScopeAdmission | null;
 }
 
 export interface ReviewGateCoordinator {

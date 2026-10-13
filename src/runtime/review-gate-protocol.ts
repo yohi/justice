@@ -75,6 +75,18 @@ export type ReviewGateProtocolDescriptor = Readonly<{
   readonly reviewProtocolFingerprint: string;
   readonly designProtocolFingerprint: string;
   readonly planProtocolFingerprint: string;
+  /**
+   * Task 18 protocol-release authority fields. `releaseDescriptorDigest` is
+   * the exact identity of the installed canonical descriptor bytes (the
+   * descriptor plus its semantic validation contract), and
+   * `trustedPublisherPolicyVersion` pins the publisher trust policy that the
+   * verified release authority anchors against.
+   */
+  readonly releaseDescriptorDigest: string;
+  readonly releaseAuthority: Readonly<{
+    readonly schemaVersion: "justice-protocol-release-v1";
+    readonly trustedPublisherPolicyVersion: string;
+  }>;
 }>;
 
 /**
@@ -123,19 +135,38 @@ export function createReviewGateProtocolDescriptor(): ReviewGateProtocolDescript
     planPhase,
   });
 
+
   assertDescriptorConsistency(descriptor, semanticContractDigest);
+
+  const releaseDescriptorDigest = computeCanonicalJsonFingerprint({
+    domain: "justice-protocol-release-v1",
+    descriptor,
+    deterministicValidationSemanticContract: semanticContractDigest,
+  });
 
   return Object.freeze({
     descriptor,
     ...computeReviewGateProtocolFingerprints(descriptor),
+    releaseDescriptorDigest,
+    releaseAuthority: Object.freeze({
+      schemaVersion: "justice-protocol-release-v1" as const,
+      trustedPublisherPolicyVersion: String(descriptor.authorityPolicy.current),
+    }),
   });
 }
+
+
+export type ReviewGateProtocolFingerprints = Readonly<{
+  readonly reviewProtocolFingerprint: string;
+  readonly designProtocolFingerprint: string;
+  readonly planProtocolFingerprint: string;
+}>;
 
 /** Fingerprint only semantic fields; provider identity/revision is not authority. */
 export function computeReviewGateProtocolFingerprints(
   descriptor: ReviewProtocolDescriptorV1,
   semanticContractDigestOverride?: string,
-): Omit<ReviewGateProtocolDescriptor, "descriptor"> {
+): ReviewGateProtocolFingerprints {
   const { designPhase, planPhase, crossPhase } = descriptor;
   const semanticContractDigest = semanticContractDigestOverride ?? computeDeterministicValidationSemanticContractDigest();
   const requirementsPolicy = {

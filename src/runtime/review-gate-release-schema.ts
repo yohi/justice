@@ -52,6 +52,11 @@ export const releaseManifestSchema = z.strictObject({
   validatorRegistryDigest: digest,
   semanticPolicyRegistryDigest: digest,
   keyRotationReference: digest.nullable(),
+  releaseDescriptorDigest: digest,
+  releaseAuthority: z.strictObject({
+    schemaVersion: z.literal("justice-protocol-release-v1"),
+    trustedPublisherPolicyVersion: id,
+  }),
 });
 export const releaseEvidenceSchema = z.strictObject({
   manifest: releaseManifestSchema,
