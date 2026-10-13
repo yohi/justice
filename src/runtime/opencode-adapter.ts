@@ -60,6 +60,9 @@ import {
 import { createReviewGateLockManager } from "./review-gate-lock-manager";
 import { createReviewGateRecoveryStore } from "./review-gate-recovery-store";
 import { createReviewGateProtocolDescriptor } from "./review-gate-protocol";
+import { createReviewGateScopeAdmission } from "./review-gate-scope-admission";
+import { resolveRequirementsForAdmission } from "./review-gate-requirements";
+import { createVerifiedProtocolReleaseProvider } from "./review-gate-protocol-release-authority";
 import {
   createReviewGateCoordinator,
   type ReviewGateCoordinator,
@@ -1836,13 +1839,30 @@ async function buildSharedReviewGateRuntimeGraph(
       targetEffectBroker: witness ?? undefined,
       workspaceIdentity: computeWorkspaceIdentity(root),
     });
+    const workspaceIdentity = computeWorkspaceIdentity(root);
+
+    const protocolRelease: ReturnType<typeof createVerifiedProtocolReleaseProvider> = {
+      readVerifiedPhaseProtocolDelta: async () => "BLOCK",
+    };
+
+    const scopeAdmission = createReviewGateScopeAdmission({
+      witness,
+      eventStore,
+      lockManager,
+      workspaceReader,
+      requirementsResolver: resolveRequirementsForAdmission,
+      protocolRelease,
+    });
 
     const coordinator = createReviewGateCoordinator({
       eventStore,
       lockManager,
       protocol,
       workspaceReader,
+      workspaceRoot: root,
+      workspaceIdentity,
       mutationSubstrate,
+      scopeAdmission,
       inspectTargets: async (paths) =>
         new Map(
           await Promise.all(
