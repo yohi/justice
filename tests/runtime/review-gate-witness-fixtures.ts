@@ -217,11 +217,12 @@ export async function buildSubsequentPublicationFixture(
   const priorJournalBytes = Buffer.from(
     encodeReviewGateEventRecord(validateReviewGateEventRecord(genesisPublicationEvent())) + "\n",
   );
+  const tailBytes = Buffer.from(
+    encodeReviewGateEventRecord(validateReviewGateEventRecord(options.event)) + "\n",
+  );
   const bytes = Buffer.concat([
     priorJournalBytes,
-    Buffer.from(
-      encodeReviewGateEventRecord(validateReviewGateEventRecord(options.event)) + "\n",
-    ),
+    tailBytes,
   ]);
   const priorHead = prior.writerHeads.find(
     (head) =>
@@ -258,8 +259,8 @@ export async function buildSubsequentPublicationFixture(
     newWriterSequence: head.sequence,
     newWriterHash: head.hash,
     canonicalShardPath: "scope-1/gate-1/writer-1.jsonl",
-    newTailLength: bytes.length,
-    newTailDigest: head.hash,
+    newTailLength: tailBytes.length,
+    newTailDigest: computeArtifactDigest(tailBytes),
     newGlobalFrontier: nextFrontier.globalFrontierHash,
     firstEnrollmentAuthorizationId: null,
     payloadSchemaVersion: 1 as const,

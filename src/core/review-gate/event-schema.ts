@@ -289,7 +289,7 @@ function canonicalText(value: unknown, field = "", ancestors: readonly object[] 
   switch (typeof value) {
     case "string": {
       const limit = /Ids?$/u.test(field) ? 256 : 4096;
-      if (textEncoder.encode(value).length > limit || /sk-ant-|ghp_|github_pat_|sk-[a-zA-Z0-9]/u.test(value)
+      if (textEncoder.encode(value).length > limit || /(?<![a-zA-Z0-9])sk-(?:ant-|[a-zA-Z0-9])|ghp_|github_pat_/u.test(value)
         || /(?:^|\s)(?:\/|[a-zA-Z]:[\\/]|\\\\|~\/)/u.test(value) || value.includes("\0")) {
         throw new Error("review_gate_event_unsafe_string");
       }

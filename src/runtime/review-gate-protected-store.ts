@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
-import { lstat, mkdir, open, rename } from "node:fs/promises";
+import { link, lstat, mkdir, open, rename, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -136,40 +136,48 @@ export class ProtectedWitnessStore {
     await this.checkProtection();
     this.validateName(name);
     const destination = join(this.directory, name);
-    const temporary = immutable ? destination : join(this.directory, `tmp-${randomUUID()}`);
-    let file;
+    const temporary = join(this.directory, `tmp-${randomUUID()}`);
     try {
-      file = await open(
+      const file = await open(
         temporary,
         constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
         0o600,
       );
-    } catch (error: unknown) {
-      if (
-        immutable &&
-        error instanceof Error &&
-        "code" in error &&
-        error.code === "EEXIST" &&
-        (await this.readBytes(name)).equals(Buffer.from(bytes))
-      )
-        return;
+      try {
+        await file.writeFile(bytes);
+        await file.sync();
+      } finally {
+        await file.close();
+      }
+      if (immutable) {
+        try {
+          await link(temporary, destination);
+        } catch (error: unknown) {
+          if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+          if (!(await this.readBytes(name)).equals(Buffer.from(bytes)))
+            throw new WitnessBlocked("durability");
+        }
+        await unlink(temporary);
+      } else {
+        await rename(temporary, destination);
+      }
+      const directory = await open(
+        this.directory,
+        constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+      );
+      try {
+        await directory.sync();
+      } finally {
+        await directory.close();
+      }
+    } catch {
+      try {
+        await unlink(temporary);
+      } catch (cleanupError: unknown) {
+        if (!(cleanupError instanceof Error && "code" in cleanupError && cleanupError.code === "ENOENT"))
+          throw new WitnessBlocked("durability");
+      }
       throw new WitnessBlocked("durability");
-    }
-    try {
-      await file.writeFile(bytes);
-      await file.sync();
-    } finally {
-      await file.close();
-    }
-    if (!immutable) await rename(temporary, destination);
-    const directory = await open(
-      this.directory,
-      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
-    );
-    try {
-      await directory.sync();
-    } finally {
-      await directory.close();
     }
   }
   async writeJson(name: string, data: unknown, immutable = false): Promise<void> {

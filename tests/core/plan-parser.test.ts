@@ -129,6 +129,14 @@ describe("PlanParser", () => {
       expect(tasks[1].steps[0].lineNumber).toBe(10);
     });
 
+    it("does not parse checkboxes inside fenced blocks while preserving later line numbers", () => {
+      const tasks = parser.parse(
+        ["## Task 1: Real task", "```md", "- [ ] example", "```", "- [ ] real step"].join("\n"),
+      );
+
+      expect(tasks[0].steps).toMatchObject([{ description: "real step", lineNumber: 5 }]);
+    });
+
     it("does not treat a four-space-indented code fence as an opening fence", () => {
       const tasks = parser.parse(
         ["## Task 1: Real task", "    ```markdown", "### Task 2: Next real task"].join("\n"),

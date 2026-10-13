@@ -45,13 +45,21 @@ export const publicationSchema = z.strictObject({
   newWriterSequence: z.number().int().positive(),
   newWriterHash: digest,
   canonicalShardPath: z.string().max(1024),
-  newTailLength: z.number().int().positive().max(65536),
+  newTailLength: z.number().int().positive().max(64 * 1024),
   newTailDigest: digest,
   newGlobalFrontier: digest,
   firstEnrollmentAuthorizationId: id.nullable(),
   payloadSchemaVersion: z.literal(1),
   nextFrontier: frontierSchema,
 }) satisfies z.ZodType<PreparedWitnessPublicationV1>;
+const committedPublicationSchema = z.strictObject({
+  input: publicationSchema.omit({ nextFrontier: true }).extend({
+    nextFrontier: frontierSchema.optional(),
+  }),
+  stagingDigest: digest,
+  byteLength: z.number().int().positive(),
+  preparedRevision: z.number().int().positive(),
+});
 const workspaceSchema = z.strictObject({
   repositoryIdentity: digest,
   frontier: frontierSchema,
@@ -69,7 +77,7 @@ export const scopeRegistrySchema = z.strictObject({
   workspaces: z.record(digest, workspaceSchema),
   nonces: z.record(id, z.enum(["pending", "consumed"])),
   pending: z.record(id, pendingSchema),
-  committed: z.record(id, pendingSchema),
+  committed: z.record(id, committedPublicationSchema),
   cancelled: z.record(id, pendingSchema),
   scopeAuthorizations: z.record(
     id,

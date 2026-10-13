@@ -11,6 +11,10 @@ const transactionSchema = z.strictObject({
   expected: headSchema,
   next: headSchema,
 });
+const verifiedHistoryHeads = new WeakMap<
+  ProtectedWitnessStore,
+  Map<string, Readonly<{ revision: number; hash: string }>>
+>();
 
 export async function readProtectedSnapshot<T>(
   store: ProtectedWitnessStore,
@@ -54,8 +58,18 @@ export async function readProtectedSnapshot<T>(
     computeCanonicalJsonFingerprint(contents) !== hash
   )
     throw new WitnessBlocked("registry_invalid");
-  let previousHash = "0".repeat(64);
-  for (let revision = 0; revision <= head.revision; revision += 1) {
+  const namespaceHeads = verifiedHistoryHeads.get(store) ?? new Map();
+  if (!verifiedHistoryHeads.has(store)) verifiedHistoryHeads.set(store, namespaceHeads);
+  const cached = namespaceHeads.get(namespace);
+  if (
+    cached !== undefined &&
+    (head.revision < cached.revision ||
+      (head.revision === cached.revision && head.hash !== cached.hash))
+  )
+    throw new WitnessBlocked("registry_rollback");
+  let previousHash = cached?.hash ?? "0".repeat(64);
+  const firstUnverifiedRevision = (cached?.revision ?? -1) + 1;
+  for (let revision = firstUnverifiedRevision; revision <= head.revision; revision += 1) {
     const historical =
       revision === head.revision
         ? snapshot
@@ -69,5 +83,6 @@ export async function readProtectedSnapshot<T>(
       throw new WitnessBlocked("registry_history");
     previousHash = historicalHash;
   }
+  namespaceHeads.set(namespace, { revision: head.revision, hash: head.hash });
   return { data: snapshot.data, hash, revision: snapshot.revision };
 }

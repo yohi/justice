@@ -13,6 +13,7 @@ import {
   type WitnessFixture,
 } from "./review-gate-witness-fixtures.js";
 import { createReviewGateLockManager } from "../../src/runtime/review-gate-lock-manager.js";
+import { createPrivateRawResponseStore } from "../../src/runtime/review-gate-recovery-store.js";
 
 describe("protected scope witness", () => {
   let f: WitnessFixture;
@@ -99,6 +100,45 @@ describe("protected scope witness", () => {
         hostTrustRoot: f.admin.publicKey,
       }),
     ).toThrow("protection");
+  });
+  it("rejects a witness directory that contains the workspace", async () => {
+    const identity = await observeGitWorkspace(f.root);
+    expect(() => createReviewGateScopeWitness({
+      workspaceRoot: f.root,
+      ...identity,
+      witnessDirectory: f.sandbox,
+      hostTrustRoot: f.admin.publicKey,
+    })).toThrow("protection");
+  });
+  it("retains shared private response bytes until the last live record is collected", async () => {
+    const store = createPrivateRawResponseStore(f.directory, {
+      maxResponseBytes: 1024,
+      maxPendingPerGateBytes: 4096,
+      maxPendingPerInstallationBytes: 8192,
+    }, f.admin.publicKey);
+    const bytes = Buffer.from("shared response evidence");
+    const first = await store.stage({
+      operationId: "operation-1", dispatchAttemptId: "attempt-1", gateId: "gate-1", bytes,
+    });
+    const second = await store.stage({
+      operationId: "operation-2", dispatchAttemptId: "attempt-2", gateId: "gate-1", bytes,
+    });
+
+    await store.markResultCommittedPendingApply(first.record.operationId, first.record.dispatchAttemptId);
+    await store.markFullyApplied(first.record.operationId, first.record.dispatchAttemptId);
+    await expect(store.tombstoneAndCollect(first.record.operationId, first.record.dispatchAttemptId))
+      .resolves.toBe("collected");
+    await expect(store.tombstoneAndCollect(first.record.operationId, first.record.dispatchAttemptId))
+      .resolves.toBe("already_collected");
+    expect((await store.readExact(second.record.operationId, second.record.dispatchAttemptId))?.bytes)
+      .toEqual(bytes);
+
+    await store.markResultCommittedPendingApply(second.record.operationId, second.record.dispatchAttemptId);
+    await store.markFullyApplied(second.record.operationId, second.record.dispatchAttemptId);
+    await store.tombstoneAndCollect(second.record.operationId, second.record.dispatchAttemptId);
+    await expect(store.readExact(second.record.operationId, second.record.dispatchAttemptId))
+      .rejects.toThrow("review_gate_response_evidence_unavailable");
+    store.close();
   });
   it("uses an OS guard across independently opened witness instances", async () => {
     let unlock = (): void => {};
@@ -201,10 +241,34 @@ describe("protected scope witness", () => {
     await expect(f.witness.readWorkspaceScopeFrontier()).rejects.toThrow("journal");
     expect(await readFile(join(f.directory, "scope-head.json"))).toEqual(before);
   });
+  it("does not persist a full next frontier in a committed publication record", async () => {
+    const { input, bytes } = await preparePublicationFixture(f);
+    await f.witness.preparePublication(input, bytes);
+    await f.witness.publishPreparedJournal(input.publicationId);
+    expect(await f.witness.recoverPreparedPublication(input.publicationId)).toBe("advanced");
+
+    const head = JSON.parse(await readFile(join(f.directory, "scope-head.json"), "utf8")) as {
+      readonly revision: number;
+    };
+    const snapshot = JSON.parse(
+      await readFile(join(f.directory, `scope-${head.revision}.json`), "utf8"),
+    ) as { readonly data: { readonly committed: Record<string, { readonly input: object }> } };
+    expect(snapshot.data.committed[input.publicationId]?.input).not.toHaveProperty("nextFrontier");
+  });
   it("blocks a missing installation-wide history snapshot", async () => {
     await f.enroll();
     await rm(join(f.directory, "scope-0.json"));
-    await expect(f.witness.readInstallationFrontierHash()).rejects.toThrow("registry");
+    const restarted = createReviewGateScopeWitness({
+      workspaceRoot: f.root,
+      ...(await observeGitWorkspace(f.root)),
+      witnessDirectory: f.directory,
+      hostTrustRoot: f.admin.publicKey,
+    });
+    try {
+      await expect(restarted.readInstallationFrontierHash()).rejects.toThrow("registry");
+    } finally {
+      restarted.close();
+    }
   });
   it("rolls back only an unpublished prepared operation without restoring nonce authority", async () => {
     const { input, bytes } = await preparePublicationFixture(f);

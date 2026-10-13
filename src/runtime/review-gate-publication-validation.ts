@@ -49,10 +49,9 @@ export async function validatePublication(
     input.expectedWriterHash !== (priorHead?.hash ?? "0".repeat(64)) ||
     input.expectedWriterSequence !== (priorHead?.sequence ?? 0) ||
     input.canonicalShardPath !== `${input.scopeId}/${input.gateId}/${input.writerId}.jsonl` ||
-    bytes.byteLength > 65536 ||
-    input.newTailLength !== bytes.byteLength ||
-    input.newTailDigest !== computeArtifactDigest(bytes) ||
-    input.newWriterHash !== input.newTailDigest ||
+    bytes.byteLength > 8 * 1024 * 1024 ||
+    input.newTailLength > 64 * 1024 ||
+    input.newWriterHash !== computeArtifactDigest(bytes) ||
     input.newGlobalFrontier !== input.nextFrontier.globalFrontierHash ||
     input.nextFrontier.workspaceIdentity !== previous.workspaceIdentity ||
     input.nextFrontier.workspaceEnrollmentId !== previous.workspaceEnrollmentId ||
@@ -82,20 +81,29 @@ export async function validatePublication(
     });
   if (records.length !== input.newWriterSequence) throw new WitnessBlocked("publication_sequence");
   await verifyTerminalPublication(context, current, records.slice(input.expectedWriterSequence));
+  let priorBytes: Buffer | null = null;
   if (priorHead !== undefined) {
-    const priorBytes = await context.provider?.readWriterShard(
+    const observedBytes = await context.provider?.readWriterShard(
       input.scopeId,
       input.gateId,
       input.writerId,
     );
     if (
-      priorBytes === undefined ||
-      priorBytes === null ||
-      computeArtifactDigest(priorBytes) !== input.expectedWriterHash ||
-      !Buffer.from(bytes).subarray(0, priorBytes.length).equals(priorBytes)
+      observedBytes === undefined ||
+      observedBytes === null ||
+      computeArtifactDigest(observedBytes) !== input.expectedWriterHash ||
+      !Buffer.from(bytes).subarray(0, observedBytes.length).equals(observedBytes)
     )
       throw new WitnessBlocked("publication_preimage");
+    priorBytes = observedBytes;
   }
+  const tail = Buffer.from(bytes).subarray(priorBytes?.length ?? 0);
+  if (
+    tail.byteLength !== input.newTailLength ||
+    computeArtifactDigest(tail) !== input.newTailDigest ||
+    tail.byteLength > 64 * 1024
+  )
+    throw new WitnessBlocked("publication_bytes");
   for (const priorScope of previous.scopes) {
     const nextScope = input.nextFrontier.scopes.find(
       (scope) => scope.scopeId === priorScope.scopeId,

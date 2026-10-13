@@ -42,7 +42,7 @@ export class PlanParser {
           startOffset: lineStartOffset,
         };
       } else if (currentTask) {
-        const checkboxMatch = line.match(CHECKBOX_ANY_REGEX);
+        const checkboxMatch = insideFence ? null : line.match(CHECKBOX_ANY_REGEX);
         if (checkboxMatch?.[2] !== undefined && checkboxMatch[3] !== undefined) {
           const stepNum = currentTask.steps.length + 1;
           currentTask.steps.push({

@@ -695,6 +695,16 @@ function evaluateExistingUnfinishedTip(
     });
   }
 
+  if (tip.status === "suspended" && tip.suspensionReason !== "execution_suspended") {
+    return Object.freeze({
+      kind: "STAY_SUSPENDED",
+      gateId: tip.gateId,
+      generationId: tip.generationId,
+      nc1StopEventId: tip.nc1Stop?.stopEventId ?? null,
+      witnessFrontierHash: input.verifiedFrontierHash,
+    });
+  }
+
   // ACTIVE or ordinary SUSPENDED with exact binding: resume.
   return Object.freeze({
     kind: "RESUME",

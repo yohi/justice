@@ -4,7 +4,11 @@ import { appendFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/pro
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { encodeReviewGateEventRecord, validateReviewGateEventRecord } from "../../src/core/review-gate/event-schema";
+import {
+  encodeReviewGateEventRecord,
+  validateReviewGateEventRecord,
+  type VerifiedReviewGateEvent,
+} from "../../src/core/review-gate/event-schema";
 import type { ReviewGateEvent as ReviewGateEventV1 } from "../../src/core/review-gate-types";
 import {
   computeArtifactDigest,
@@ -24,7 +28,12 @@ import {
   type ReviewGateScopeWitness,
   type TrustedFirstEnrollmentV1,
 } from "../../src/runtime/review-gate-scope-witness";
-import { createReviewGateEventStore, type ReviewGateDispatchRecordV1 } from "../../src/runtime/review-gate-event-store";
+import {
+  createLegacyReviewGateEventStore,
+  createReviewGateEventStore,
+  type ReviewGateDispatchRecordV1,
+  type ReviewGateJournalEventInput,
+} from "../../src/runtime/review-gate-event-store";
 
 const TEST_WRITER_ID = "writer-1";
 const DESIGN_PATH = "docs/design.md";
@@ -659,6 +668,25 @@ describe("ReviewGateEventStore — durable events", () => {
 });
 
 describe("ReviewGateEventStore — dispatch records", () => {
+  it("moves legacy dispatch journals outside the native witness namespace", async () => {
+    const root = await freshRoot("dispatchmigration");
+    const legacyDirectory = path.join(root, ".justice", "review-gates", "gate-old");
+    const legacyFile = path.join(legacyDirectory, "dispatches.jsonl");
+    const record = dispatchRecord("operation-old");
+    await mkdir(legacyDirectory, { recursive: true });
+    await writeFile(legacyFile, `${JSON.stringify(record)}\n`);
+    const store = createLegacyReviewGateEventStore(root);
+
+    await expect(readFile(legacyFile)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(
+      path.join(root, ".justice", "review-gate-dispatches", "gate-old.jsonl"),
+      "utf8",
+    )).toBe(`${JSON.stringify(record)}\n`);
+    expect(await store.listDispatches("gate-old")).toEqual([record]);
+    expect(await readdir(path.join(root, ".justice", "review-gates"))).toEqual([]);
+    store.close();
+  });
+
   it("records, lists, and marks dispatches completed", async () => {
     const ctx = await freshContext("dispatch");
     const store = createReviewGateEventStore(
@@ -1014,6 +1042,72 @@ describe("ReviewGateEventStore — protected publication CAS (Task 6)", () => {
     closeWitnessFixture(ctx);
   });
 
+  it("recovers once when the first prepared publication CAS reports blocked", async () => {
+    const ctx = await freshContext("recovercas");
+    const seedStore = createReviewGateEventStore(
+      ctx.root,
+      eventStoreOptions(ctx.root, ctx.writerId, ctx.witness),
+    );
+    await seedGate(ctx, seedStore, "gate-a", [gateCreatedEvent("gate-a")]);
+    seedStore.close();
+    let commitCalls = 0;
+    let recoveryCalls = 0;
+    const witness = {
+      ...ctx.witness,
+      commitPreparedPublicationCAS: async () => {
+        commitCalls += 1;
+        return "blocked" as const;
+      },
+      recoverPreparedPublication: async (publicationId: string) => {
+        recoveryCalls += 1;
+        return ctx.witness.recoverPreparedPublication(publicationId);
+      },
+    };
+    const store = createReviewGateEventStore(
+      ctx.root,
+      eventStoreOptions(ctx.root, ctx.writerId, witness),
+    );
+
+    await expect(store.publishEvents(
+      "gate-a",
+      [designClearEvent("gate-a")],
+      await store.readFrontierHash("gate-a"),
+    )).resolves.toMatchObject({ eventCount: 2 });
+    expect(commitCalls).toBe(1);
+    expect(recoveryCalls).toBe(1);
+    store.close();
+    closeWitnessFixture(ctx);
+  });
+
+  it("limits each publication tail to 64 KiB while allowing a shard to grow past 64 KiB", async () => {
+    const ctx = await freshContext("longshard");
+    const store = createReviewGateEventStore(
+      ctx.root,
+      eventStoreOptions(ctx.root, ctx.writerId, ctx.witness),
+    );
+    await seedGate(ctx, store, "gate-a", [gateCreatedEvent("gate-a")]);
+
+    for (let batch = 0; batch < 5; batch += 1) {
+      const current = await store.readEvents("gate-a");
+      const events = Array.from({ length: 5 }, (_, index): ReviewGateEventV1 => ({
+        eventType: "EXECUTION_SUSPENDED",
+        gateId: "gate-a" as ReviewGateEventV1["gateId"],
+        writerId: ctx.writerId as ReviewGateEventV1["writerId"],
+        epochId: `epoch-${batch}-${index}` as ReviewGateEventV1["epochId"],
+        emittedAt: "2026-10-12T00:00:00.000Z",
+        payload: { reason: "x".repeat(3000) },
+      }));
+      await store.publishEvents("gate-a", events, await store.readFrontierHash("gate-a"));
+      expect(current.length).toBe(1 + batch * events.length);
+    }
+
+    const shard = await readFile(authorityShardPath(ctx.root, "scope-gate-a", "gate-a"));
+    expect(shard.length).toBeGreaterThan(64 * 1024);
+    expect(await store.readEvents("gate-a")).toHaveLength(26);
+    store.close();
+    closeWitnessFixture(ctx);
+  });
+
   it("rejects an empty publication batch", async () => {
     const ctx = await freshContext("publisheempty");
     const store = createReviewGateEventStore(
@@ -1340,7 +1434,11 @@ describe("ReviewGateEventStore — tamper and crash recovery (Task 6)", () => {
     expect(await store.readEvents("gate-a")).toHaveLength(2);
     expect((await store.readEvents("gate-a"))[1]?.eventType).toBe("DESIGN_CLEAR");
     expect(await store.readFrontierHash("gate-a")).not.toBe(expected);
-    // Idempotent: the same recovery classifies as already committed.
+    await store.publishEvents(
+      "gate-a",
+      [{ ...designClearEvent("gate-a"), epochId: "epoch-later" }],
+      await store.readFrontierHash("gate-a"),
+    );
     expect(await store.recoverPreparedPublication(prepared.publicationId)).toBe(
       "already_committed",
     );

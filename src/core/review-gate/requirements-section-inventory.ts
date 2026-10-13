@@ -80,7 +80,7 @@ export class RequirementsSectionInventoryError extends Error {
   }
 }
 const encoder = new TextEncoder();
-const decoder = new TextDecoder();
+const decoder = new TextDecoder("utf-8", { fatal: true });
 const verifiedInventories = new WeakSet<VerifiedSectionInventory>();
 const verifiedDiffs = new WeakSet<RequirementsSectionDiffV1>();
 function isAnchorId(id: string): boolean {
@@ -94,7 +94,13 @@ export function buildRequirementsSectionInventory(
   sourceGitBlobOid: string,
   parserVersion: string,
 ): VerifiedSectionInventory {
-  const text = decoder.decode(sourceBytes).replaceAll("\r\n", "\n");
+  let text: string;
+  try {
+    text = decoder.decode(sourceBytes).replaceAll("\r\n", "\n");
+  } catch (error) {
+    if (error instanceof TypeError) throw new RequirementsSectionInventoryError("invalid_inventory");
+    throw error;
+  }
   const normalizedBytes = encoder.encode(text);
   if (normalizedBytes.length > 4 * 1024 * 1024) throw new RequirementsSectionInventoryError("limit_exceeded");
   const span = (startByte: number, endByte: number): SectionSpan => Object.freeze({

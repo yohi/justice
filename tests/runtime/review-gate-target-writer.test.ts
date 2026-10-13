@@ -3,10 +3,11 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { VerifiedTargetWriterHandoffIntentV1 } from "../../src/core/review-gate/types.js";
 import {
-  computeArtifactDigest,
   computeCanonicalJsonFingerprint,
 } from "../../src/core/review-gate/identity.js";
 import { createReviewGateLockManager } from "../../src/runtime/review-gate-lock-manager.js";
+import { ProtectedWitnessStore } from "../../src/runtime/review-gate-protected-store.js";
+import { targetRegistrySchema } from "../../src/runtime/review-gate-target-writer-schema.js";
 import {
   buildSubsequentPublicationFixture,
   createWitnessFixture,
@@ -40,8 +41,6 @@ describe("protected canonical target writer", () => {
       targets: [intent.target],
       closingSealOperationId: "seal-close-1",
       expectedTargetWriterFrontier: owner.protectedTargetFrontier,
-      newOwner: null,
-      expectedTargetWriterFrontier: owner.protectedTargetFrontier,
       expectedGlobalTargetWriterGeneration: 1,
     };
     await f.witness.prepareTerminalTargetWriterRevoke({
@@ -74,6 +73,33 @@ describe("protected canonical target writer", () => {
       f.witness.claimTargetWriterForGate({ intent, epochId: "epoch-1" }),
     ).rejects.toThrow("fence");
   });
+  it("rejects a claimed lease whose attempt does not match the requested owner", async () => {
+    const intent = await prepareHandoffFixture(f);
+    await f.witness.prepareTargetWriterHandoff(intent);
+    await f.witness.fencePreviousTargetWriter({ intent, authorizeNativeRevocation: f.approve });
+    const lease = await f.witness.claimTargetWriterForGate({ intent, epochId: "epoch-1" });
+    const protectedStore = new ProtectedWitnessStore(f.directory);
+    await protectedStore.withGuard("installation", async () => {
+      const snapshot = await protectedStore.read("target", targetRegistrySchema);
+      const key = intent.target.targetIdentityDigest;
+      const entry = snapshot.data.targets[key];
+      if (entry === undefined) throw new Error("fixture_target_missing");
+      const { protectedLeaseProofDigest: _oldProof, ...priorLease } = lease;
+      void _oldProof;
+      const body = { ...priorLease, operationId: "mutation-2", attemptId: "attempt-2" };
+      const tamperedLease = {
+        ...body,
+        protectedLeaseProofDigest: computeCanonicalJsonFingerprint(body),
+      };
+      await protectedStore.advance("target", snapshot, {
+        ...snapshot.data,
+        targets: { ...snapshot.data.targets, [key]: { ...entry, lease: tamperedLease } },
+      });
+    });
+
+    await expect(f.witness.claimTargetWriterForGate({ intent, epochId: lease.epochId }))
+      .rejects.toThrow("lease_retry_conflict");
+  });
   it("rejects forged native revocation and leaves the owner unchanged", async () => {
     const intent = await prepareHandoffFixture(f);
     await f.witness.prepareTargetWriterHandoff(intent);
@@ -97,7 +123,6 @@ describe("protected canonical target writer", () => {
       newOwner: null,
       targets: [initial.target],
       closingSealOperationId: "seal-close-empty",
-      newOwner: null,
     };
     await f.witness.prepareTerminalTargetWriterRevoke({
       intents: [intent],
@@ -198,6 +223,26 @@ describe("protected canonical target writer", () => {
     });
     return { manager, owned, intent, lease, terminal, publication };
   }
+  it("does not leave a publication prepared when terminal frontier validation fails", async () => {
+    const { manager, owned, terminal, publication } = await createSealedCloseFixture();
+    try {
+      await expect(owned.witness.prepareTerminalIntentPublication(
+        {
+          intents: [{ ...terminal, expectedTargetWriterFrontier: "f".repeat(64) }],
+          terminalTransitionOperationId: "terminal-1",
+          publication: publication.input,
+        },
+        publication.bytes,
+      )).rejects.toThrow("terminal_frontier");
+
+      await expect(owned.witness.classifyPreparedPublication(publication.input.publicationId))
+        .resolves.toBe("blocked");
+    } finally {
+      manager.close();
+      owned.witness.close();
+      await rm(owned.sandbox, { recursive: true, force: true });
+    }
+  });
   it("installs and verifies the closing seal on the Gate-owned publication path while the Gate lock is held", async () => {
     const { manager, owned, intent, terminal, publication } = await createSealedCloseFixture();
     try {
@@ -230,7 +275,7 @@ describe("protected canonical target writer", () => {
           publication.bytes,
         ),
       ).toBe("already_prepared");
-      const digest = computeArtifactDigest(publication.bytes);
+      const digest = publication.input.newTailDigest;
       const marker = await owned.witness.verifyClosingSeal({
         closingSealOperationId: "seal-close-1",
         preparedEventDigest: digest,
@@ -324,7 +369,7 @@ describe("protected canonical target writer", () => {
       } finally {
         gateLock.release();
       }
-      const digest = computeArtifactDigest(publication.bytes);
+      const digest = publication.input.newTailDigest;
       const sealed = await owned.witness.verifyClosingSeal({
         closingSealOperationId: "seal-close-1",
         preparedEventDigest: digest,
@@ -382,7 +427,7 @@ describe("protected canonical target writer", () => {
       ).resolves.toEqual(receipt);
       const sealed = await owned.witness.verifyClosingSeal({
         closingSealOperationId: "seal-close-1",
-        preparedEventDigest: computeArtifactDigest(publication.bytes),
+        preparedEventDigest: publication.input.newTailDigest,
       });
       expect(sealed.sealedReceiptDigest).not.toBeNull();
     } finally {

@@ -20,6 +20,14 @@ const buildRequirementsSectionInventory = (
 );
 
 describe("buildRequirementsSectionInventory", () => {
+  it("rejects invalid UTF-8 as an invalid inventory", () => {
+    expect(() => buildRequirementsSectionInventoryFromBytes(
+      new Uint8Array([0xc3, 0x28]),
+      SOURCE_GIT_BLOB_OID,
+      REQUIREMENTS_HEADING_ANCHOR_VERSION,
+    )).toThrow("requirements_section_invalid_inventory");
+  });
+
   it("records the exact Design §8 inventory DTO from byte/blob input", () => {
     const bytes = new TextEncoder().encode("Preamble\n## Authentication {#authentication}\nMFA\n");
     const inventory = buildRequirementsSectionInventoryFromBytes(

@@ -19,6 +19,7 @@ import type {
   VerifiedScopeFrontier,
 } from "./types.js";
 import type { RequirementsAuthoritySnapshotV1 } from "../review-gate-types.js";
+import { MAX_DESIGN_REMEDIATION_ROUNDS, MAX_PLAN_REMEDIATION_ROUNDS } from "../review-gate-types.js";
 import type { VerifiedReviewGateEvent } from "./event-schema.js";
 import type {
   VerifiedCompletedBindingSnapshot,
@@ -477,6 +478,9 @@ export function projectVerifiedGateTip(
   if (gateCreated === null) {
     throw new Error("review_gate_tip_missing_v2_gate_created");
   }
+  if (gateCreated.gateId !== input.gateId) {
+    throw new Error("review_gate_tip_gate_id_mismatch");
+  }
 
   const gateCreatedEventId = gateCreated.eventId;
   const gateGenerationId = gateCreated.generationId;
@@ -491,6 +495,7 @@ export function projectVerifiedGateTip(
   let completedApproval: VerifiedCompletedBindingSnapshot | null = null;
 
   const rounds = { design: 0, plan: 0 };
+  const countedOperations = new Set<string>();
   let suspensionReason: string | null = null;
   let nc1Stop: VerifiedNC1StopV1 | null = null;
 
@@ -503,19 +508,27 @@ export function projectVerifiedGateTip(
         case "ROUND_LIMIT_EXHAUSTED": {
           const phase = event.payload.phase;
           suspensionReason = "round_limit_exhausted";
-          const remainingRounds = phase === "design" ? 5 - rounds.design : 3 - rounds.plan;
+          const remainingRounds = phase === "design"
+            ? MAX_DESIGN_REMEDIATION_ROUNDS - rounds.design
+            : MAX_PLAN_REMEDIATION_ROUNDS - rounds.plan;
           nc1Stop = makeNc1Stop("synthetic-v1-stop", phase, event.epochId, effectiveContext, frontierHash, remainingRounds);
           break;
         }
         case "REVIEW_NON_CONVERGENT": {
           const phase = event.payload.phase;
           suspensionReason = "review_non_convergent";
-          const remainingRounds = phase === "design" ? 5 - rounds.design : 3 - rounds.plan;
+          const remainingRounds = phase === "design"
+            ? MAX_DESIGN_REMEDIATION_ROUNDS - rounds.design
+            : MAX_PLAN_REMEDIATION_ROUNDS - rounds.plan;
           nc1Stop = makeNc1Stop("synthetic-v1-stop", phase, event.epochId, effectiveContext, frontierHash, remainingRounds);
           break;
         }
         case "EXECUTION_SUSPENDED":
           suspensionReason = "execution_suspended";
+          break;
+        case "ORCHESTRATION_RESUMED":
+          suspensionReason = null;
+          nc1Stop = null;
           break;
         default:
           break;
@@ -523,8 +536,14 @@ export function projectVerifiedGateTip(
       continue;
     }
 
+    if (event.gateId !== input.gateId || event.generationId !== gateGenerationId) {
+      throw new Error("review_gate_tip_event_identity_mismatch");
+    }
+
     switch (event.eventType) {
       case "EXTERNAL_OPERATION_DISPATCHED": {
+        if (event.payload.role !== "remediator" || countedOperations.has(event.payload.operationId)) break;
+        countedOperations.add(event.payload.operationId);
         const phase = event.payload.phase;
         if (phase === "design") rounds.design += 1;
         else rounds.plan += 1;

@@ -4,7 +4,7 @@ import {
   validateReviewGateEventRecord,
   type VerifiedReviewGateEvent,
 } from "../core/review-gate/event-schema.js";
-import { projectReviewGateState } from "../core/review-gate/projection.js";
+import { projectReviewGateState, projectVerifiedGateTip } from "../core/review-gate/projection.js";
 import type { ScopeEnrollmentV1, ReviewGateEvent } from "../core/review-gate/types.js";
 import { WitnessBlocked } from "./review-gate-protected-store.js";
 import {
@@ -38,13 +38,25 @@ export async function assertCompletedPredecessor(
     .toString("utf8")
     .trimEnd()
     .split("\n")
-    .map((line) => validateReviewGateEventRecord(JSON.parse(line)))
-    .filter(
+    .map((line) => validateReviewGateEventRecord(JSON.parse(line)));
+  if (records.some((event) => "schemaVersion" in event)) {
+    if (
+      projectVerifiedGateTip({
+        gateId,
+        scopeId,
+        events: records,
+        frontier: workspace.frontier,
+      }).status !== "completed"
+    )
+      throw new WitnessBlocked("scope_predecessor_unfinished");
+  } else {
+    const legacyRecords = records.filter(
       (event): event is Extract<VerifiedReviewGateEvent, ReviewGateEvent> =>
         !("schemaVersion" in event),
     );
-  if (projectReviewGateState(records).status !== "completed")
-    throw new WitnessBlocked("scope_predecessor_unfinished");
+    if (projectReviewGateState(legacyRecords).status !== "completed")
+      throw new WitnessBlocked("scope_predecessor_unfinished");
+  }
   const targets = await context.store.read("target", targetRegistrySchema);
   if (
     Object.values(targets.data.targets).some(

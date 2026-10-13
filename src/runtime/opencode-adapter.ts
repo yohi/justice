@@ -399,7 +399,7 @@ export class OpenCodeAdapter {
       // Task 12: one shared Review Gate runtime service graph per workspace.
       // Storing/reusing the same services for Task 13 history and Task 14
       // approval lookup is mandatory; no parallel stores are created.
-      const reviewGateRuntimeGraph = buildSharedReviewGateRuntimeGraph(
+      const reviewGateRuntimeGraph = await buildSharedReviewGateRuntimeGraph(
         root,
         {
           readWorkspaceFile: async (path) =>
@@ -1735,12 +1735,12 @@ function responseModifiedArgs(
  * the coordinator runs in mutation-unavailable mode and refuses side effects
  * that would mutate the workspace without falling back to unsafe mutation.
  */
-function buildSharedReviewGateRuntimeGraph(
+async function buildSharedReviewGateRuntimeGraph(
   workspaceRoot: string,
   workspaceReader: ReviewGateWorkspaceReader,
   warn: (message: string, ...extra: unknown[]) => void,
   writerId: string,
-): SharedReviewGateRuntimeGraph | null {
+): Promise<SharedReviewGateRuntimeGraph | null> {
   try {
     const overrideRaw = process.env.JUSTICE_REVIEW_GATE_ROOT;
     const overrideApplied =
@@ -1774,19 +1774,23 @@ function buildSharedReviewGateRuntimeGraph(
     // or unprovisioned witness directory degrades to the legacy bridge.
     let witness: ReviewGateScopeWitness | null = null;
     if (provider !== null) {
+      let candidate: ReviewGateScopeWitness | null = null;
       try {
         const witnessDirectoryEnv = process.env["JUSTICE_REVIEW_GATE_WITNESS_DIR"];
         const witnessDirectory =
           witnessDirectoryEnv === undefined || witnessDirectoryEnv.trim().length === 0
             ? path.resolve(root, ".justice/review-gates/witness")
             : witnessDirectoryEnv.trim();
-        witness = createReviewGateScopeWitness({
+        candidate = createReviewGateScopeWitness({
           workspaceRoot: root,
           workspaceIdentity: computeWorkspaceIdentity(root),
           witnessDirectory,
           lockManager,
         });
+        await candidate.readInstallation();
+        witness = candidate;
       } catch (err) {
+        candidate?.close();
         witness = null;
         warn("[Justice] Review Gate witness unavailable; legacy event store retained", err);
       }

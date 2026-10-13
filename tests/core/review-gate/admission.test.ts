@@ -683,6 +683,22 @@ function protocolCandidate(
 }
 
 describe("NC1 suspended gate admission", () => {
+  it("keeps non-execution suspensions suspended after an exact context match", () => {
+    const tip = suspendedTip("gate-reopen", SCOPE_A, "reopen_required");
+    const decision = planReviewGateAdmission(snapshot({
+      currentTips: [tip],
+      precedence: emptyPrecedence(tip.gateId, tip.generationId),
+    }));
+
+    expect(decision).toEqual({
+      kind: "STAY_SUSPENDED",
+      gateId: tip.gateId,
+      generationId: tip.generationId,
+      nc1StopEventId: null,
+      witnessFrontierHash: FRONTIER,
+    });
+  });
+
   it("requests NC1 inspection when no observation has been attempted", () => {
     const stop = nc1Stop();
     const tip = suspendedTip(

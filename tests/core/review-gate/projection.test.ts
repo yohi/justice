@@ -120,6 +120,7 @@ describe("projectVerifiedGateTip", () => {
     eventId: string,
     parentEventId: string,
     payload: object,
+    generationId = "generation-1",
   ): object {
     return {
       schemaVersion: 2,
@@ -128,29 +129,36 @@ describe("projectVerifiedGateTip", () => {
       emittedAt: "2026-10-11T00:00:00.000Z",
       gateId: "gate-1",
       epochId: "epoch-1",
-      generationId: "generation-1",
+      generationId,
       writerId: "writer-1",
       eventType,
       payload,
     };
   }
 
-  function v2Dispatch(phase: "design" | "plan", eventId: string, parentEventId: string): object {
+  function v2Dispatch(
+    phase: "design" | "plan",
+    eventId: string,
+    parentEventId: string,
+    role = "reviewer",
+    generationId = "generation-1",
+    operationId = `operation-${eventId}`,
+  ): object {
     return v2Event("EXTERNAL_OPERATION_DISPATCHED", eventId, parentEventId, {
       eventType: "EXTERNAL_OPERATION_DISPATCHED",
       gateId: "gate-1",
-      generationId: "generation-1",
+      generationId,
       epochId: "epoch-1",
-      operationId: `operation-${eventId}`,
+      operationId,
       dispatchAttemptId: `attempt-${eventId}`,
       phase,
-      role: "reviewer",
+      role,
       candidateOrTargetSetDigest: digest,
       inputBindingDigest: digest,
       protocolFingerprint: digest,
       expectedWitnessFrontier: digest,
-      protectedLeaseProofDigest: null,
-    });
+      protectedLeaseProofDigest: role === "remediator" ? digest : null,
+    }, generationId);
   }
 
   function frontier(): object {
@@ -212,9 +220,9 @@ describe("projectVerifiedGateTip", () => {
 
   it("counts external operation rounds per phase", () => {
     const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
-    const d1 = validateReviewGateEventRecord(v2Dispatch("design", "event-d1", "event-genesis"));
-    const d2 = validateReviewGateEventRecord(v2Dispatch("design", "event-d2", "event-d1"));
-    const p1 = validateReviewGateEventRecord(v2Dispatch("plan", "event-p1", "event-d2"));
+    const d1 = validateReviewGateEventRecord(v2Dispatch("design", "event-d1", "event-genesis", "remediator"));
+    const d2 = validateReviewGateEventRecord(v2Dispatch("design", "event-d2", "event-d1", "remediator"));
+    const p1 = validateReviewGateEventRecord(v2Dispatch("plan", "event-p1", "event-d2", "remediator"));
 
     const tip = projectVerifiedGateTip({
       gateId: "gate-1",
@@ -225,6 +233,72 @@ describe("projectVerifiedGateTip", () => {
 
     expect(tip.rounds).toEqual({ design: 2, plan: 1 });
     expect(tip.status).toBe("active");
+  });
+
+  it("counts only unique remediator operation IDs", () => {
+    const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+    const remediator = (eventId: string, parentEventId: string, role: string) =>
+      validateReviewGateEventRecord(v2Dispatch(
+        "design", eventId, parentEventId, role, "generation-1", "operation-shared",
+      ));
+    const tip = projectVerifiedGateTip({
+      gateId: "gate-1",
+      scopeId: "scope-1",
+      events: [genesis, remediator("event-remediator-1", "event-genesis", "remediator"),
+        remediator("event-remediator-2", "event-remediator-1", "remediator"),
+        remediator("event-reviewer", "event-remediator-2", "reviewer")],
+      frontier: frontier() as VerifiedScopeFrontier,
+    });
+
+    expect(tip.rounds).toEqual({ design: 1, plan: 0 });
+  });
+
+  it("clears suspension layers after an orchestration resume event", () => {
+    const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+    const suspended = validateReviewGateEventRecord({
+      eventType: "EXECUTION_SUSPENDED",
+      gateId: "gate-1",
+      writerId: "writer-1",
+      epochId: "epoch-1",
+      emittedAt: "2026-10-11T00:00:01.000Z",
+      payload: { reason: "execution failed" },
+    });
+    const resumed = validateReviewGateEventRecord({
+      eventType: "ORCHESTRATION_RESUMED",
+      gateId: "gate-1",
+      writerId: "writer-1",
+      epochId: "epoch-1",
+      emittedAt: "2026-10-11T00:00:02.000Z",
+      payload: { resumedAt: "2026-10-11T00:00:02.000Z" },
+    });
+    const tip = projectVerifiedGateTip({
+      gateId: "gate-1",
+      scopeId: "scope-1",
+      events: [genesis, suspended, resumed],
+      frontier: frontier() as VerifiedScopeFrontier,
+    });
+
+    expect(tip).toMatchObject({ status: "active", suspensionReason: null, nc1Stop: null });
+  });
+
+  it("rejects V2 histories whose gate or generation identity differs from genesis", () => {
+    const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+    const mismatchedGate = validateReviewGateEventRecord({
+      ...v2GateCreatedRecord(),
+      gateId: "gate-other",
+    });
+    expect(() => projectVerifiedGateTip({
+      gateId: "gate-1", scopeId: "scope-1", events: [mismatchedGate],
+      frontier: frontier() as VerifiedScopeFrontier,
+    })).toThrow("review_gate_tip_gate_id_mismatch");
+
+    const mismatchedGeneration = validateReviewGateEventRecord(
+      v2Dispatch("design", "event-generation-mismatch", "event-genesis", "reviewer", "generation-other"),
+    );
+    expect(() => projectVerifiedGateTip({
+      gateId: "gate-1", scopeId: "scope-1", events: [genesis, mismatchedGeneration],
+      frontier: frontier() as VerifiedScopeFrontier,
+    })).toThrow("review_gate_tip_event_identity_mismatch");
   });
 
   it("projects a DESIGN_CLEAR into ownDesignClear", () => {

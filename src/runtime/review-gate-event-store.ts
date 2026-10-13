@@ -58,12 +58,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
+  existsSync,
   fsyncSync,
   mkdirSync,
   openSync,
   readFileSync,
   readdirSync,
   renameSync,
+  rmdirSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -96,6 +98,7 @@ import type {
 const REVIEW_GATES_DIR = ".justice/review-gates";
 const EVENTS_DIR = `${REVIEW_GATES_DIR}/events`;
 const SCOPE_INDEX_FILE = `${REVIEW_GATES_DIR}/locks/scope-index.json`;
+const DISPATCH_JOURNALS_DIR = ".justice/review-gate-dispatches";
 
 /** Temp-file naming used by the atomic rename writes (`<ledger>.<uuid>.tmp`). */
 const JOURNAL_TEMP_PATTERN =
@@ -106,8 +109,8 @@ const SHA256_OF_EMPTY = createHash("sha256").update("").digest("hex");
 /** Witness convention for a writer shard that does not exist yet. */
 const EMPTY_SHARD_HASH = "0".repeat(64);
 
-/** Hard bound of one protected publication tail (Task 4c persistence policy). */
-const MAX_PUBLICATION_BYTES = 65536;
+const MAX_PUBLICATION_TAIL_BYTES = 64 * 1024;
+const MAX_WRITER_SHARD_BYTES = 8 * 1024 * 1024;
 
 /** One durably recorded dispatch intent; completion may occur later. */
 export type ReviewGateDispatchRecordV1 = Readonly<{
@@ -329,6 +332,8 @@ function writeAtomicUtf8File(file: string, content: string): void {
 function createLocalDispatchJournal(rootDir: string) {
   const dispatchesByGate = new Map<string, readonly ReviewGateDispatchRecordV1[]>();
   const dispatchesFile = (gateId: string): string =>
+    join(rootDir, DISPATCH_JOURNALS_DIR, `${gateId}.jsonl`);
+  const legacyDispatchesFile = (gateId: string): string =>
     join(rootDir, REVIEW_GATES_DIR, gateId, "dispatches.jsonl");
 
   const readJsonlLines = (file: string): readonly string[] => {
@@ -345,13 +350,54 @@ function createLocalDispatchJournal(rootDir: string) {
   const load = (gateId: string): readonly ReviewGateDispatchRecordV1[] => {
     const cached = dispatchesByGate.get(gateId);
     if (cached !== undefined) return cached;
-    const dispatches: ReviewGateDispatchRecordV1[] = readJsonlLines(dispatchesFile(gateId)).map(
-      (line) => assertDispatchShape(JSON.parse(line)),
-    );
+    const currentFile = dispatchesFile(gateId);
+    const legacyFile = legacyDispatchesFile(gateId);
+    const dispatchesByOperation = new Map<string, ReviewGateDispatchRecordV1>();
+    for (const line of [
+      ...readJsonlLines(legacyFile),
+      ...readJsonlLines(currentFile),
+    ]) {
+      const dispatch = assertDispatchShape(JSON.parse(line));
+      const prior = dispatchesByOperation.get(dispatch.operationId);
+      if (prior !== undefined && !dispatchContentEquals(prior, dispatch))
+        throw new Error("review_gate_dispatch_conflict");
+      dispatchesByOperation.set(dispatch.operationId, dispatch);
+    }
+    const dispatches = [...dispatchesByOperation.values()];
+    if (existsSync(legacyFile)) {
+      writeAtomicUtf8File(currentFile, toJsonl(dispatches));
+      unlinkSync(legacyFile);
+      const legacyDirectory = dirname(legacyFile);
+      fsyncDirectorySync(legacyDirectory);
+      try {
+        rmdirSync(legacyDirectory);
+        fsyncDirectorySync(dirname(legacyDirectory));
+      } catch (error: unknown) {
+        if (
+          !(error instanceof Error && "code" in error &&
+            (error.code === "ENOTEMPTY" || error.code === "ENOENT"))
+        )
+          throw error;
+      }
+    }
     const frozen = Object.freeze(dispatches);
     dispatchesByGate.set(gateId, frozen);
     return frozen;
   };
+
+  try {
+    const namespaceRoot = join(rootDir, REVIEW_GATES_DIR);
+    for (const entry of readdirSync(namespaceRoot, { withFileTypes: true })) {
+      if (
+        entry.isDirectory() &&
+        validateStorageGateId(entry.name) &&
+        existsSync(legacyDispatchesFile(entry.name))
+      )
+        load(entry.name);
+    }
+  } catch (error: unknown) {
+    if (!isEnoent(error)) throw error;
+  }
 
   return {
     record(gateId: string, dispatch: ReviewGateDispatchRecordV1): void {
@@ -1095,14 +1141,16 @@ export function createReviewGateEventStore(
     }
 
     const tailLines = input.canonicalEvents.map(encodeReviewGateEventRecord).join("\n");
-    const bytes = Buffer.concat([
-      priorBytes ?? Buffer.alloc(0),
-      Buffer.from(`${tailLines}\n`),
-    ]);
-    if (bytes.length > MAX_PUBLICATION_BYTES) {
+    const tailBytes = Buffer.from(`${tailLines}\n`);
+    const bytes = Buffer.concat([priorBytes ?? Buffer.alloc(0), tailBytes]);
+    if (tailBytes.length > MAX_PUBLICATION_TAIL_BYTES) {
       throw new Error("review_gate_publication_bytes_exceeded");
     }
-    const newTailDigest = computeArtifactDigest(bytes);
+    if (bytes.length > MAX_WRITER_SHARD_BYTES) {
+      throw new Error("review_gate_publication_bytes_exceeded");
+    }
+    const newTailDigest = computeArtifactDigest(tailBytes);
+    const newWriterHash = computeArtifactDigest(bytes);
     const expectedWriterSequence = priorHead?.sequence ?? 0;
     const newWriterSequence = expectedWriterSequence + input.canonicalEvents.length;
     const head: VerifiedWriterHead = Object.freeze({
@@ -1110,7 +1158,7 @@ export function createReviewGateEventStore(
       gateId: input.gateId,
       writerId: input.writerId,
       sequence: newWriterSequence,
-      hash: newTailDigest,
+      hash: newWriterHash,
     });
     const writerHeads = [...observed.writerHeads.filter((entry) => entry !== priorHead), head]
       .sort(
@@ -1149,9 +1197,9 @@ export function createReviewGateEventStore(
       expectedWriterSequence,
       expectedWriterHash: priorHead?.hash ?? EMPTY_SHARD_HASH,
       newWriterSequence,
-      newWriterHash: newTailDigest,
+      newWriterHash,
       canonicalShardPath: `${input.scopeId}/${input.gateId}/${input.writerId}.jsonl`,
-      newTailLength: bytes.length,
+      newTailLength: tailBytes.length,
       newTailDigest,
       newGlobalFrontier: globalFrontierHash,
       firstEnrollmentAuthorizationId:
@@ -1184,6 +1232,20 @@ export function createReviewGateEventStore(
     result: "advanced" | "already_committed" | "blocked",
   ): VerifiedEventPublicationOutcome =>
     result === "advanced" ? "committed" : result === "already_committed" ? result : "blocked";
+
+  const commitOrRecover = async (input: {
+    readonly publicationId: string;
+    readonly expectedGlobalFrontier: string;
+    readonly expectedWriterHash: string;
+  }): Promise<"advanced" | "already_committed"> => {
+    const committed = await witness.commitPreparedPublicationCAS(input);
+    if (committed !== "blocked") return committed;
+    const recovered = await witness.recoverPreparedPublication(input.publicationId);
+    if (recovered === "blocked") {
+      throw new Error(`review_gate_publication_cas_conflict:${input.publicationId}`);
+    }
+    return recovered;
+  };
 
   const store: DurableReviewGateEventStore = {
     appendEvents: (gateId, events) =>
@@ -1218,14 +1280,11 @@ export function createReviewGateEventStore(
           frontier,
         );
         await prepareAndSyncShard(publication, bytes);
-        const result = await witness.commitPreparedPublicationCAS({
+        await commitOrRecover({
           publicationId: publication.publicationId,
           expectedGlobalFrontier: publication.expectedGlobalFrontier,
           expectedWriterHash: publication.expectedWriterHash,
         });
-        if (result === "blocked") {
-          throw new Error("review_gate_publication_cas_conflict");
-        }
         return undefined;
       }),
 
@@ -1296,14 +1355,11 @@ export function createReviewGateEventStore(
           frontier,
         );
         await prepareAndSyncShard(publication, bytes);
-        const result = await witness.commitPreparedPublicationCAS({
+        await commitOrRecover({
           publicationId: publication.publicationId,
           expectedGlobalFrontier: publication.expectedGlobalFrontier,
           expectedWriterHash: publication.expectedWriterHash,
         });
-        if (result === "blocked") {
-          throw new Error("review_gate_publication_cas_conflict");
-        }
         return Object.freeze({
           frontierHash: publication.newWriterHash,
           eventCount: publication.newWriterSequence,
@@ -1487,7 +1543,7 @@ export function createReviewGateEventStore(
         if (shard === null || !shard.equals(record.bytes)) {
           return "blocked" as const;
         }
-        const result = await witness.commitPreparedPublicationCAS({
+        const result = await commitOrRecover({
           publicationId: input.publicationId,
           expectedGlobalFrontier: input.expectedGlobalFrontier,
           expectedWriterHash: input.expectedWriterHash,
@@ -1524,7 +1580,8 @@ export function createReviewGateEventStore(
         if (classification === "committed") {
           // Witness already advanced: idempotent only when the shard holds
           // the exact committed tail; a missing shard stays blocked.
-          return shard !== null && shard.equals(record.bytes)
+          return shard !== null && shard.length >= record.bytes.length &&
+            shard.subarray(0, record.bytes.length).equals(record.bytes)
             ? ("already_committed" as const)
             : ("blocked" as const);
         }

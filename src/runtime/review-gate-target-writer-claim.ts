@@ -48,11 +48,20 @@ export async function claimTargetWriterForGate(
         )
       )
         throw new WitnessBlocked("lease_terminal_close");
+      const owner = input.intent.newOwner;
       if (prepared.status === "CLAIMED" && entry.lease !== null) {
-        if (entry.lease.epochId !== input.epochId) throw new WitnessBlocked("lease_retry_conflict");
+        if (
+          owner === null ||
+          entry.lease.epochId !== input.epochId ||
+          entry.lease.scopeId !== owner.scopeId ||
+          entry.lease.gateId !== owner.gateId ||
+          entry.lease.generationId !== owner.generationId ||
+          entry.lease.operationId !== owner.operationId ||
+          entry.lease.attemptId !== owner.attemptId
+        )
+          throw new WitnessBlocked("lease_retry_conflict");
         return entry.lease;
       }
-      const owner = input.intent.newOwner;
       if (
         prepared.status !== "FENCED" ||
         prepared.nativeProofDigest === null ||

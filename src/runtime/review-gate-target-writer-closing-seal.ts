@@ -1,7 +1,10 @@
 import { createPublicKey } from "node:crypto";
 import { z } from "zod";
 import { computeArtifactDigest, computeCanonicalJsonFingerprint } from "../core/review-gate/identity.js";
-import { validateReviewGateEventRecord } from "../core/review-gate/event-schema.js";
+import {
+  encodeReviewGateEventRecord,
+  validateReviewGateEventRecord,
+} from "../core/review-gate/event-schema.js";
 import type {
   VerifiedClosingSealReceiptPayloadV1,
   VerifiedClosingSealReceiptV1,
@@ -131,7 +134,6 @@ export function createTerminalIntentPublication(context: WitnessContext) {
       if (publication.gateId !== first.gateId) throw new WitnessBlocked("terminal_intent");
       const bytes = Buffer.from(canonicalEventBytes);
       return withGateOwnedWitnessTransaction(context, async (current) => {
-        await preparePublicationUnlocked(context, current, publication, bytes);
         const state = await context.store.read("target", targetRegistrySchema);
         const targets = { ...state.data.targets };
         for (const intent of intents) {
@@ -159,6 +161,7 @@ export function createTerminalIntentPublication(context: WitnessContext) {
             existing.preparedEventDigest !== publication.newTailDigest
           )
             throw new WitnessBlocked("closing_seal_conflict");
+          await preparePublicationUnlocked(context, current, publication, bytes);
           return "already_prepared";
         }
         if (
@@ -198,6 +201,7 @@ export function createTerminalIntentPublication(context: WitnessContext) {
           ),
           sealedReceiptDigest: null,
         };
+        await preparePublicationUnlocked(context, current, publication, bytes);
         await context.store.advance("target", state, {
           ...state.data,
           targets,
@@ -230,14 +234,17 @@ export function createTerminalIntentPublication(context: WitnessContext) {
         const record = await readPreparedPublication(context, current, marker.publicationId);
         if (record.input.gateId !== marker.gateId)
           throw new WitnessBlocked("closing_seal_conflict");
-        if (computeArtifactDigest(record.bytes) !== marker.preparedEventDigest)
-          throw new WitnessBlocked("closing_seal_digest_mismatch");
         if (context.provider === undefined) throw new WitnessBlocked("journal_native_unavailable");
         const events = record.bytes
           .toString("utf8")
           .trimEnd()
           .split("\n")
           .map((line) => validateReviewGateEventRecord(JSON.parse(line)));
+        const preparedTail = Buffer.from(
+          `${events.slice(record.input.expectedWriterSequence).map(encodeReviewGateEventRecord).join("\n")}\n`,
+        );
+        if (computeArtifactDigest(preparedTail) !== marker.preparedEventDigest)
+          throw new WitnessBlocked("closing_seal_digest_mismatch");
         await verifyTerminalPublication(
           context,
           current,

@@ -375,6 +375,14 @@ describe("validateReviewGateEventRecord", () => {
     expect(validateReviewGateEventRecord(legacyRecord("REOPEN_REQUIRED", { phase: "design", lineageIds: Array.from({ length: 128 }, () => "lineage") }))).toBeDefined();
   });
 
+  it("accepts ordinary identifiers and paths containing sk-", () => {
+    const record = legacyRecord("EXECUTION_SUSPENDED", {
+      reason: "task-1.md, tasksk-name, and tasksk-ant-name",
+    });
+
+    expect(validateReviewGateEventRecord(record)).toEqual(record);
+  });
+
   it("enforces the inclusive 64KiB canonical record boundary", () => {
     const record = byteSizedRecord(65536);
     expect(new TextEncoder().encode(encodeReviewGateEventRecord(validateReviewGateEventRecord(record))).length).toBe(65536);

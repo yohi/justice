@@ -1,6 +1,6 @@
 import type { KeyObject } from "node:crypto";
 import { realpathSync } from "node:fs";
-import { relative, isAbsolute } from "node:path";
+import { relative, isAbsolute, resolve, sep } from "node:path";
 import { observeGitWorkspace } from "./review-gate-scope-admission.js";
 import {
   createLinuxReviewGateProvider,
@@ -52,8 +52,13 @@ export function createWitnessContext(options: WitnessOptions): WitnessContext {
   } catch {
     throw new WitnessBlocked("workspace_identity");
   }
-  const child = relative(workspaceRoot, directory);
-  if (child === "" || (child !== ".." && !child.startsWith("../") && !isAbsolute(child)))
+  const canonicalDirectory = resolve(directory);
+  const child = relative(workspaceRoot, canonicalDirectory);
+  const parent = relative(canonicalDirectory, workspaceRoot);
+  const isSameOrDescendant = (candidate: string): boolean =>
+    candidate === "" ||
+    (candidate !== ".." && !candidate.startsWith(`..${sep}`) && !isAbsolute(candidate));
+  if (isSameOrDescendant(child) || isSameOrDescendant(parent))
     throw new WitnessBlocked("protection");
   const provider = createLinuxReviewGateProvider(workspaceRoot);
   if (provider === undefined) throw new WitnessBlocked("native_unavailable");

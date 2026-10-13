@@ -15,6 +15,8 @@ import { samePublicationValue, validatePublication } from "./review-gate-publica
 import { verifyTerminalPublication } from "./review-gate-witness-terminal-publication.js";
 import { withWitnessScopeGateLocks } from "./review-gate-lock-manager.js";
 
+const MAX_COMMITTED_PUBLICATIONS = 1024;
+
 export function publicationLockIds(
   input: PreparedWitnessPublicationV1,
 ): Readonly<{ scopeIds: readonly string[]; gateIds: readonly string[] }> {
@@ -37,10 +39,17 @@ export async function readPreparedPublication(
   if (
     bytes.length !== record.byteLength ||
     computeArtifactDigest(bytes) !== record.stagingDigest ||
-    record.stagingDigest !== record.input.newTailDigest
+    record.stagingDigest !== record.input.newWriterHash
   )
     throw new WitnessBlocked("publication_staging");
-  return { ...record, bytes };
+  const storedFrontier = "nextFrontier" in record.input ? record.input.nextFrontier : undefined;
+  const { nextFrontier: _storedFrontier, ...inputWithoutFrontier } = record.input;
+  void _storedFrontier;
+  const input: PreparedWitnessPublicationV1 = {
+    ...inputWithoutFrontier,
+    nextFrontier: storedFrontier ?? workspaceFrom(current, record.input.workspaceIdentity).frontier,
+  };
+  return { ...record, input, bytes };
 }
 
 /**
@@ -76,14 +85,14 @@ export async function preparePublicationUnlocked(
   )
     throw new WitnessBlocked("publication_busy");
   await validatePublication(context, current, input, bytes);
-  await context.store.writeBytes(`stage-${input.newTailDigest}.bin`, Buffer.from(bytes), true);
+  await context.store.writeBytes(`stage-${input.newWriterHash}.bin`, Buffer.from(bytes), true);
   await context.store.advance("scope", current, {
     ...current.data,
     pending: {
       ...current.data.pending,
       [input.publicationId]: {
         input,
-        stagingDigest: input.newTailDigest,
+        stagingDigest: input.newWriterHash,
         byteLength: bytes.length,
         preparedRevision: current.revision + 1,
       },
@@ -140,7 +149,20 @@ export async function commitPublicationUnlocked(
   const pending = Object.fromEntries(
     Object.entries(current.data.pending).filter(([key]) => key !== input.publicationId),
   );
-  await context.store.writeBytes(`journal-${publication.newTailDigest}.bin`, journal, true);
+  const committedEntries = Object.entries(current.data.committed)
+    .filter(([key]) => key !== input.publicationId);
+  const { nextFrontier: _nextFrontier, ...committedInput } = publication;
+  void _nextFrontier;
+  const committed = Object.fromEntries([
+    ...committedEntries,
+    [input.publicationId, {
+      input: committedInput,
+      stagingDigest: record.stagingDigest,
+      byteLength: record.byteLength,
+      preparedRevision: record.preparedRevision,
+    }],
+  ].slice(-MAX_COMMITTED_PUBLICATIONS));
+  await context.store.writeBytes(`journal-${publication.newWriterHash}.bin`, journal, true);
   await context.store.advance("scope", current, {
     ...current.data,
     pending,
@@ -154,15 +176,7 @@ export async function commitPublicationUnlocked(
           : value,
       ]),
     ),
-    committed: {
-      ...current.data.committed,
-      [input.publicationId]: {
-        input: publication,
-        stagingDigest: record.stagingDigest,
-        byteLength: record.byteLength,
-        preparedRevision: record.preparedRevision,
-      },
-    },
+    committed,
     workspaces: {
       ...current.data.workspaces,
       [publication.workspaceIdentity]: {

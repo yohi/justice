@@ -348,6 +348,15 @@ export function createPrivateRawResponseStore(
     }
   };
 
+  const hasOtherLiveReference = (
+    ledger: PrivateResponseLedger,
+    recordKey: string,
+    digest: string,
+  ): boolean => Object.entries(ledger.records).some(
+    ([key, record]) =>
+      key !== recordKey && record.contentDigest === digest && record.status !== "TOMBSTONED",
+  );
+
   const assertIds = (operationId: string, dispatchAttemptId: string): void => {
     if (
       !scopeInstallationIdSchema.safeParse(operationId).success ||
@@ -540,8 +549,8 @@ export function createPrivateRawResponseStore(
             throw new Error("review_gate_response_evidence_unavailable");
           }
           if (record.status === "TOMBSTONED") {
-            // Crash between tombstone and unlink: replay the unlink only.
-            unlinkBytesAndSync(record.contentDigest);
+            if (!hasOtherLiveReference(snapshot.data, key, record.contentDigest))
+              unlinkBytesAndSync(record.contentDigest);
             return "already_collected" as const;
           }
           // Raw bytes are retained while any unfinished application could
@@ -555,7 +564,8 @@ export function createPrivateRawResponseStore(
               [key]: { ...record, status: "TOMBSTONED" },
             },
           });
-          unlinkBytesAndSync(record.contentDigest);
+          if (!hasOtherLiveReference(snapshot.data, key, record.contentDigest))
+            unlinkBytesAndSync(record.contentDigest);
           return "collected" as const;
         });
       } catch (error: unknown) {
