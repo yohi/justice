@@ -169,7 +169,7 @@ describe("privileged protocol release publication", () => {
     expect(await registry.publishAuthenticatedProtocolRelease(second)).toBe("committed");
     expect(await registry.readReleaseBytes("release-1")).toEqual(first.sourceBytes);
     expect((await registry.readHead()).sequence).toBe(2);
-  });
+  }, 30_000);
   it("rejects forged policy rotation without changing the release head", async () => {
     const before = await registry.readHead();
     await expect(

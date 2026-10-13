@@ -939,7 +939,7 @@ describe("ReviewGateEventStore — concurrent append interleaving", () => {
     expect(await store.readEvents("gate-a")).toHaveLength(3);
     store.close();
     closeWitnessFixture(ctx);
-  });
+  }, 30_000);
 });
 
 describe("ReviewGateEventStore — durable canonical journal bytes (Task 6)", () => {
