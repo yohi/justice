@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { PlanBridge } from "../../src/hooks/plan-bridge";
+import type {
+  ReviewGateApprovedDesignAuthority,
+  ReviewerArtifactReadDecision,
+} from "../../src/hooks/plan-bridge";
+import type {
+  ReviewQueryMatch,
+  VerifiedApprovedDesignReadBindingV1,
+} from "../../src/core/review-gate/capabilities";
 import { wirePlanBridgeAuthorization } from "../helpers/mock-file-system";
 import type { FileReader, HookResponse, PreToolUseEvent } from "../../src/core/types";
 import {
@@ -421,5 +429,208 @@ describe("PlanBridge Review Gate implementation lock (coordinator)", () => {
     await bridge.destroySession("parent");
     expect(bridge.getReviewGateLock("parent")).toBeUndefined();
     expect(bridge.hasAnyReviewGateLock()).toBe(false);
+  });
+});
+
+describe("PlanBridge FDR-014 approved Design read boundary", () => {
+  const APPROVED_DESIGN_BINDING: VerifiedApprovedDesignReadBindingV1 = {
+    schemaVersion: 1,
+    canonicalPath: DESIGN_PATH,
+    designClearEventId: "evt-design-clear-lock",
+    currentAuthorityEventId: "evt-authority-lock",
+    committedTreeOid: "a".repeat(64),
+    blobOid: "b".repeat(64),
+    gitMode: "100644",
+    digest: "c".repeat(64),
+    requirements: {
+      canonicalPath: DESIGN_PATH,
+      gitBlobOid: "d".repeat(64),
+      digest: "e".repeat(64),
+      gitMode: "100644",
+    },
+    phaseProtocolFingerprint: "plan-protocol-lock",
+    witnessFrontierHash: "f".repeat(64),
+  };
+
+  const fakeAuthority = (
+    overrides: Partial<ReviewGateApprovedDesignAuthority> = {},
+  ): ReviewGateApprovedDesignAuthority => ({
+    getApprovedDesignBinding:
+      overrides.getApprovedDesignBinding ??
+      (async (): Promise<VerifiedApprovedDesignReadBindingV1> => APPROVED_DESIGN_BINDING),
+    readApprovedDesignArtifact:
+      overrides.readApprovedDesignArtifact ??
+      (async (): Promise<Buffer> => Buffer.from(DESIGN_CONTENT)),
+    searchApprovedDesignArtifact:
+      overrides.searchApprovedDesignArtifact ??
+      (async (input): Promise<readonly ReviewQueryMatch[]> =>
+        input.pattern.includes("Reviewed")
+          ? [{ line: 2, text: "Reviewed behavior" }]
+          : []),
+  });
+
+  const expectDecision = async (
+    bridge: PlanBridge,
+    sessionId: string,
+    request: Readonly<{ toolName: string; path: string; pattern?: string }>,
+    expected: ReviewerArtifactReadDecision,
+  ): Promise<void> => {
+    expect(await bridge.mediateReviewerArtifactRead(sessionId, request)).toEqual(expected);
+  };
+
+  it("allows the bounded approved Design read and search through the injected authority during the active lock", async () => {
+    const { bridge } = createLockHarness(false);
+    bridge.setReviewGateApprovedDesignAuthority(fakeAuthority());
+    const started = await bridge.handleReviewGateStart("parent", {
+      source: "command",
+      designPath: DESIGN_PATH,
+      planPath: PLAN_PATH,
+    });
+    expect(started.dispatched).toBe(true);
+    await expectDecision(
+      bridge,
+      "parent",
+      { toolName: "read", path: DESIGN_PATH },
+      { kind: "approved_read", bytes: Buffer.from(DESIGN_CONTENT) },
+    );
+    await expectDecision(
+      bridge,
+      "parent",
+      { toolName: "grep", path: DESIGN_PATH, pattern: "Reviewed" },
+      { kind: "approved_search", matches: [{ line: 2, text: "Reviewed behavior" }] },
+    );
+    expect(bridge.getReviewGateLock("parent")?.phase).toBe("reviewing");
+  });
+
+  it("builds the plan reviewer scope through the validated approved design proof", async () => {
+    const { bridge } = createLockHarness(false);
+    bridge.setReviewGateApprovedDesignAuthority(fakeAuthority());
+    await bridge.handleReviewGateStart("parent", {
+      source: "command",
+      designPath: DESIGN_PATH,
+      planPath: PLAN_PATH,
+    });
+    const scope = await bridge.buildPlanReviewerQueryScope("parent");
+    expect(scope?.phase).toBe("plan");
+    expect(scope?.approvedDesign?.canonicalPath).toBe(DESIGN_PATH);
+    expect(scope?.approvedDesign?.blobOid).toBe("b".repeat(64));
+    expect(scope?.approvedDesign?.designClearEventId).toBe("evt-design-clear-lock");
+  });
+
+  it("denies a generic unmediated read of the approved design path without the authority", async () => {
+    const { bridge } = createLockHarness(false);
+    await bridge.handleReviewGateStart("parent", {
+      source: "command",
+      designPath: DESIGN_PATH,
+      planPath: PLAN_PATH,
+    });
+    await expectDecision(
+      bridge,
+      "parent",
+      { toolName: "read", path: DESIGN_PATH },
+      { kind: "denied", reason: "review_operation_not_permitted" },
+    );
+  });
+
+  it("denies the approved design read when no verified binding is available (no worktree fallback)", async () => {
+    const { bridge } = createLockHarness(false);
+    bridge.setReviewGateApprovedDesignAuthority(
+      fakeAuthority({ getApprovedDesignBinding: async () => null }),
+    );
+    await bridge.handleReviewGateStart("parent", {
+      source: "command",
+      designPath: DESIGN_PATH,
+      planPath: PLAN_PATH,
+    });
+    await expectDecision(
+      bridge,
+      "parent",
+      { toolName: "read", path: DESIGN_PATH },
+      { kind: "denied", reason: "review_operation_not_permitted" },
+    );
+    // The content service may still be reachable, but the mediation boundary
+    // never routes approved Design content without a verified binding.
+    bridge.setReviewGateApprovedDesignAuthority(
+      fakeAuthority({
+        getApprovedDesignBinding: async () => null,
+        readApprovedDesignArtifact: async () => Buffer.from(DESIGN_CONTENT),
+      }),
+    );
+    await expectDecision(
+      bridge,
+      "parent",
+      { toolName: "read", path: DESIGN_PATH },
+      { kind: "denied", reason: "review_operation_not_permitted" },
+    );
+  });
+
+  it("denies out-of-scope reads with review_scope_violation", async () => {
+    const { bridge } = createLockHarness(false);
+    bridge.setReviewGateApprovedDesignAuthority(fakeAuthority());
+    await bridge.handleReviewGateStart("parent", {
+      source: "command",
+      designPath: DESIGN_PATH,
+      planPath: PLAN_PATH,
+    });
+    await expectDecision(
+      bridge,
+      "parent",
+      { toolName: "read", path: "docs/other.md" },
+      { kind: "denied", reason: "review_scope_violation" },
+    );
+    await expectDecision(
+      bridge,
+      "parent",
+      { toolName: "read", path: "../escape.md" },
+      { kind: "denied", reason: "review_scope_violation" },
+    );
+  });
+
+  it("denies implementation tools and mutation/scoped-commit attempts with exact codes", async () => {
+    const { bridge } = createLockHarness(false);
+    bridge.setReviewGateApprovedDesignAuthority(fakeAuthority());
+    await bridge.handleReviewGateStart("parent", {
+      source: "command",
+      designPath: DESIGN_PATH,
+      planPath: PLAN_PATH,
+    });
+    for (const toolName of ["bash", "task", "shell"]) {
+      await expectDecision(
+        bridge,
+        "parent",
+        { toolName, path: DESIGN_PATH },
+        { kind: "denied", reason: "implementation_not_authorized" },
+      );
+    }
+    for (const toolName of ["edit", "write", "review_commit"]) {
+      await expectDecision(
+        bridge,
+        "parent",
+        { toolName, path: DESIGN_PATH },
+        { kind: "denied", reason: "review_operation_not_permitted" },
+      );
+    }
+  });
+
+  it("keeps the phase-target read unmediated and reports no mediation without a lock", async () => {
+    const { bridge } = createLockHarness(false);
+    bridge.setReviewGateApprovedDesignAuthority(fakeAuthority());
+    await bridge.handleReviewGateStart("parent", {
+      source: "command",
+      designPath: DESIGN_PATH,
+      planPath: PLAN_PATH,
+    });
+    await expectDecision(
+      bridge,
+      "parent",
+      { toolName: "read", path: PLAN_PATH },
+      { kind: "unmediated_scoped", canonicalPath: PLAN_PATH },
+    );
+    expect(
+      await bridge.mediateReviewerArtifactRead("other-parent", {
+        toolName: "read",
+        path: DESIGN_PATH,
+      }),
+    ).toBeUndefined();
   });
 });

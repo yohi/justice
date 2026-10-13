@@ -5,6 +5,7 @@ import {
   MAX_REVIEW_LOG_LIMIT,
   MAX_REVIEW_QUERY_LINE_CHARS,
   MAX_REVIEW_QUERY_MATCHES,
+  assertValidApprovedDesignReadBindingShape,
   type ReviewGitDiff,
   type ReviewGitLogEntry,
   type ReviewGitStatus,
@@ -12,8 +13,9 @@ import {
   type ReviewQueryMatch,
   type ReviewQueryScope,
   type ReviewRevisionRef,
+  type VerifiedApprovedDesignReadBindingV1,
 } from "../core/review-gate/capabilities";
-import { canonicalizeArtifactPath } from "../core/review-gate/identity";
+import { canonicalizeArtifactPath, computeArtifactDigest } from "../core/review-gate/identity";
 
 /**
  * CAP1 typed, phase-scoped read/search/git-metadata query service.
@@ -21,7 +23,10 @@ import { canonicalizeArtifactPath } from "../core/review-gate/identity";
  * Every artifact-path Git invocation goes through the single `runGitLiteral`
  * seam: `spawn("git", ["--literal-pathspecs", ...args], { shell: false })` in
  * the workspace root. Raw query output is transient/bounded and never durable
- * Review Gate authority.
+ * Review Gate authority. FDR-014: the approved upstream Design in Plan phase
+ * is served only through its proof-pinned immutable Git blob — never through
+ * HEAD, the index, or `workspaceReader.readWorkspaceFile`; the current phase
+ * target keeps its separately verified current worktree/post-image flow.
  */
 
 export type ReviewWorkspaceReader = Readonly<{
@@ -124,6 +129,26 @@ export interface ReviewGateQueryService {
     ref: ReviewRevisionRef,
     path: string,
   ) => Promise<Buffer>;
+  /**
+   * FDR-014: read the approved upstream Design using only its proof-pinned
+   * immutable Git objects. Every Git argv is derived from the validated
+   * binding (never `HEAD`, the index or the mutable worktree). Returns
+   * `null` only when the pinned Git objects are unavailable; any
+   * proof-vs-repository disagreement (path/mode/blob OID/digest) fails
+   * closed with `review_operation_not_permitted`.
+   */
+  readonly readApprovedDesignArtifact: (input: {
+    readonly approvedDesign: VerifiedApprovedDesignReadBindingV1;
+  }) => Promise<Buffer | null>;
+
+  /**
+   * Bounded literal search (no regex interpretation) over the immutable
+   * approved Design bytes served by `readApprovedDesignArtifact`.
+   */
+  readonly searchApprovedDesignArtifact: (input: {
+    readonly approvedDesign: VerifiedApprovedDesignReadBindingV1;
+    readonly pattern: string;
+  }) => Promise<readonly ReviewQueryMatch[]>;
 }
 
 const OID_PATTERN = /^[0-9a-f]{40,64}$/u;
@@ -228,6 +253,13 @@ export function createReviewGateQueryService({
     rawPath: string,
   ): Promise<Buffer> => {
     const canonical = requireScopePath(scope, "artifact", rawPath);
+    const approvedDesign = scope.approvedDesign ?? null;
+    if (approvedDesign !== null && canonical === approvedDesign.canonicalPath) {
+      // FDR-014: an in-scope approved upstream Design read is always served
+      // from its proof-pinned immutable blob, never from mutable worktree
+      // bytes.
+      return await approvedBytesOrNotPermitted(approvedDesign);
+    }
     const bytes = await workspaceReader.readWorkspaceFile(canonical);
     if (bytes === null) throw new Error("review_query_failed: unreadable scoped artifact");
     return bytes;
@@ -248,6 +280,72 @@ export function createReviewGateQueryService({
     if (canonical === null) throw new Error("review_scope_violation");
     return canonical;
   }
+
+  const readApprovedDesignBytes = async (
+    binding: VerifiedApprovedDesignReadBindingV1,
+  ): Promise<Buffer | null> => {
+    try {
+      assertValidApprovedDesignReadBindingShape(binding);
+    } catch {
+      // A malformed proof is never resolvable revision authority.
+      throw new Error("review_operation_not_permitted: invalid approved design read binding");
+    }
+    // The pinned tree is the only lookup context: never HEAD, never the
+    // index, never the mutable worktree.
+    const lsTree = await runGitLiteral(rootDir, [
+      "ls-tree",
+      "-z",
+      binding.committedTreeOid,
+      "--",
+      binding.canonicalPath,
+    ]);
+    if (lsTree.code !== 0) return null;
+    const exact = parseLsTree(lsTree.stdout).filter(
+      (record) => record.path === binding.canonicalPath,
+    );
+    let entry: LsTreeRecord | undefined;
+    if (exact.length === 1) entry = exact[0];
+    if (
+      entry === undefined ||
+      entry.type !== "blob" ||
+      entry.blobSha !== binding.blobOid ||
+      entry.gitMode !== binding.gitMode
+    ) {
+      throw new Error("review_operation_not_permitted: approved design binding mismatch");
+    }
+    const blob = await runGitLiteral(rootDir, ["cat-file", "blob", binding.blobOid]);
+    if (blob.code !== 0) return null;
+    if (computeArtifactDigest(blob.stdout) !== binding.digest) {
+      throw new Error("review_operation_not_permitted: approved design digest mismatch");
+    }
+    return blob.stdout;
+  };
+
+  const approvedBytesOrNotPermitted = async (
+    binding: VerifiedApprovedDesignReadBindingV1,
+  ): Promise<Buffer> => {
+    const bytes = await readApprovedDesignBytes(binding);
+    if (bytes === null) {
+      throw new Error("review_operation_not_permitted: approved design object unavailable");
+    }
+    return bytes;
+  };
+
+  /** Bounded in-process literal scan shared by scoped and approved searches. */
+  const boundedSearch = (bytes: Buffer, pattern: string): readonly ReviewQueryMatch[] => {
+    const lines = bytes.toString("utf8").split("\n");
+    const matches: ReviewQueryMatch[] = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index] ?? "";
+      if (!line.includes(pattern)) continue;
+      matches.push({
+        line: index + 1,
+        text: line.slice(0, MAX_REVIEW_QUERY_LINE_CHARS),
+      });
+      if (matches.length >= MAX_REVIEW_QUERY_MATCHES) break;
+    }
+    return matches;
+  };
 
   const assertGitOk = (result: GitLiteralResult, context: string): Buffer => {
     if (result.code !== 0) {
@@ -287,18 +385,7 @@ export function createReviewGateQueryService({
         throw new Error("review_query_failed: empty search literal");
       }
       const bytes = await readArtifactOrQueryFailed(scope, path);
-      const lines = bytes.toString("utf8").split("\n");
-      const matches: ReviewQueryMatch[] = [];
-      for (let index = 0; index < lines.length; index += 1) {
-        const line = lines[index] ?? "";
-        if (!line.includes(literal)) continue;
-        matches.push({
-          line: index + 1,
-          text: line.slice(0, MAX_REVIEW_QUERY_LINE_CHARS),
-        });
-        if (matches.length >= MAX_REVIEW_QUERY_MATCHES) break;
-      }
-      return matches;
+      return boundedSearch(bytes, literal);
     },
 
     getScopedStatus: async (scope) => {
@@ -392,6 +479,20 @@ export function createReviewGateQueryService({
         await runGitLiteral(rootDir, ["cat-file", "blob", exact[0].blobSha]),
         "cat-file",
       );
+    },
+
+    readApprovedDesignArtifact: async ({ approvedDesign }): Promise<Buffer | null> => {
+      return await readApprovedDesignBytes(approvedDesign);
+    },
+
+    searchApprovedDesignArtifact: async ({
+      approvedDesign,
+      pattern,
+    }): Promise<readonly ReviewQueryMatch[]> => {
+      if (typeof pattern !== "string" || pattern.length === 0) {
+        throw new Error("review_query_failed: empty search pattern");
+      }
+      return boundedSearch(await approvedBytesOrNotPermitted(approvedDesign), pattern);
     },
   };
 }

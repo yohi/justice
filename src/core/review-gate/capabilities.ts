@@ -97,13 +97,137 @@ export type ReviewQueryScope = Readonly<{
   readonly phase: ReviewPhase;
   readonly allowedArtifactPaths: ReadonlySet<string>;
   readonly allowedGitPaths: ReadonlySet<string>;
+  /**
+   * FDR-014 proof-bound immutable content source for the approved upstream
+   * Design (Plan phase only). Absent or `null` marks an unproved scope: the
+   * approved path stays membership-only (diff/status diagnostics) and its
+   * content reads remain denied at the query service boundary.
+   */
+  readonly approvedDesign?: VerifiedApprovedDesignReadBindingV1 | null;
 }>;
 
 export type ReviewScopeAuthority = Readonly<{
   readonly requirementsCanonicalPath: string;
   readonly approvedDesignCanonicalPath: string | null;
   readonly currentPhaseArtifactCanonicalPath: string;
+  /**
+   * FDR-014 trusted proof for the approved upstream Design. Only a verified
+   * producer supplies it; this module can never derive it from a mutable
+   * worktree path.
+   */
+  readonly approvedDesign?: VerifiedApprovedDesignReadBindingV1 | null;
 }>;
+
+/** Effective Requirements identity pinned inside the approved Design proof. */
+export type ApprovedDesignRequirementsBindingV1 = Readonly<{
+  readonly canonicalPath: string;
+  readonly gitBlobOid: string;
+  readonly digest: string;
+  readonly gitMode: ReviewGitRegularMode;
+}>;
+
+/**
+ * FDR-014 versioned proof of the approved upstream Design a Plan-phase
+ * reviewer consumes: the same-generation `DESIGN_CLEAR` event id, the latest
+ * current authority event id, the completed approved Git tree/blob OID with
+ * exact mode and content digest, the effective Requirements/phase protocol
+ * binding, and the witness frontier. The producer verifies real Git and
+ * witness state before dispatching; scope builders only re-validate the
+ * proof shape here.
+ */
+export type VerifiedApprovedDesignReadBindingV1 = Readonly<{
+  readonly schemaVersion: 1;
+  readonly canonicalPath: string;
+  readonly designClearEventId: string;
+  readonly currentAuthorityEventId: string;
+  readonly committedTreeOid: string;
+  readonly blobOid: string;
+  readonly gitMode: ReviewGitRegularMode;
+  readonly digest: string;
+  readonly requirements: ApprovedDesignRequirementsBindingV1;
+  readonly phaseProtocolFingerprint: string;
+  readonly witnessFrontierHash: string;
+}>;
+
+export const APPROVED_DESIGN_READ_BINDING_SCHEMA_VERSION = 1 as const;
+
+const GIT_OBJECT_OID_PATTERN = /^[0-9a-f]{40,64}$/u;
+
+const SHA_256_DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
+
+const invalidApprovedDesignBinding = (): Error =>
+  new Error("review_gate_invalid_approved_design_binding");
+
+const isRegularReviewGitMode = (mode: string): mode is ReviewGitRegularMode =>
+  mode === "100644" || mode === "100755";
+
+const assertPinnedRequirementsMember = (
+  member: ApprovedDesignRequirementsBindingV1,
+): void => {
+  if (canonicalizeArtifactPath(member.canonicalPath) === null) {
+    throw invalidApprovedDesignBinding();
+  }
+  if (!GIT_OBJECT_OID_PATTERN.test(member.gitBlobOid)) throw invalidApprovedDesignBinding();
+  if (!SHA_256_DIGEST_PATTERN.test(member.digest)) throw invalidApprovedDesignBinding();
+  if (!isRegularReviewGitMode(member.gitMode)) throw invalidApprovedDesignBinding();
+};
+
+/**
+ * Validate a trusted approved-Design proof in isolation (no authority
+ * comparison). Runtime readers pair this with their own pinned-argv checks;
+ * scope builders use `assertValidApprovedDesignReadBinding` when the
+ * authority's approved canonical path is known.
+ */
+export function assertValidApprovedDesignReadBindingShape(
+  binding: VerifiedApprovedDesignReadBindingV1,
+): void {
+  if (binding.schemaVersion !== APPROVED_DESIGN_READ_BINDING_SCHEMA_VERSION) {
+    throw invalidApprovedDesignBinding();
+  }
+  if (canonicalizeArtifactPath(binding.canonicalPath) === null) {
+    throw invalidApprovedDesignBinding();
+  }
+  if (typeof binding.designClearEventId !== "string" || binding.designClearEventId.length === 0) {
+    throw invalidApprovedDesignBinding();
+  }
+  if (
+    typeof binding.currentAuthorityEventId !== "string" ||
+    binding.currentAuthorityEventId.length === 0
+  ) {
+    throw invalidApprovedDesignBinding();
+  }
+  if (!GIT_OBJECT_OID_PATTERN.test(binding.committedTreeOid)) throw invalidApprovedDesignBinding();
+  if (!GIT_OBJECT_OID_PATTERN.test(binding.blobOid)) throw invalidApprovedDesignBinding();
+  if (!isRegularReviewGitMode(binding.gitMode)) throw invalidApprovedDesignBinding();
+  if (!SHA_256_DIGEST_PATTERN.test(binding.digest)) throw invalidApprovedDesignBinding();
+  assertPinnedRequirementsMember(binding.requirements);
+  if (
+    typeof binding.phaseProtocolFingerprint !== "string" ||
+    binding.phaseProtocolFingerprint.length === 0
+  ) {
+    throw invalidApprovedDesignBinding();
+  }
+  if (!SHA_256_DIGEST_PATTERN.test(binding.witnessFrontierHash)) {
+    throw invalidApprovedDesignBinding();
+  }
+}
+
+/**
+ * Validate a trusted approved-Design proof against the scope authority's
+ * approved canonical path: an approved Design proof always belongs to that
+ * exact path.
+ */
+export function assertValidApprovedDesignReadBinding(
+  binding: VerifiedApprovedDesignReadBindingV1,
+  approvedDesignCanonicalPath: string | null,
+): void {
+  if (approvedDesignCanonicalPath === null) throw invalidApprovedDesignBinding();
+  assertValidApprovedDesignReadBindingShape(binding);
+  const canonical = canonicalizeArtifactPath(approvedDesignCanonicalPath);
+  if (canonical === null || binding.canonicalPath !== canonical) {
+    throw invalidApprovedDesignBinding();
+  }
+}
 
 const scopeMembersForPhase = (
   phase: ReviewPhase,
@@ -130,14 +254,42 @@ const scopeMembersForPhase = (
   return members;
 };
 
+/** Optional FDR-014 approved-Design proof accepted by `buildReviewQueryScope`. */
+export type ReviewQueryScopeOptions = Readonly<{
+  readonly approvedDesign: VerifiedApprovedDesignReadBindingV1 | null | undefined;
+}>;
+
+const resolveApprovedDesignProof = (
+  phase: ReviewPhase,
+  authority: ReviewScopeAuthority,
+  options: ReviewQueryScopeOptions | undefined,
+): VerifiedApprovedDesignReadBindingV1 | null => {
+  const candidate =
+    options?.approvedDesign !== undefined
+      ? options.approvedDesign
+      : (authority.approvedDesign ?? null);
+  if (candidate === null) return null;
+  if (phase !== "plan") throw invalidApprovedDesignBinding();
+  assertValidApprovedDesignReadBinding(candidate, authority.approvedDesignCanonicalPath);
+  return Object.freeze(candidate);
+};
+
 /**
  * Design scope = bound Requirements + current Design only.
  * Plan scope = effective approved Design + current Plan only.
+ *
+ * FDR-014: when an approvedDesign proof is supplied (explicit option or the
+ * authority itself), it is validated and attached as the scope's only
+ * accepted approved content source. The builder cannot convert a mutable
+ * worktree path into authority: without proof, the approved Design path is
+ * membership-only and its content reads stay denied at the query service.
  */
 export function buildReviewQueryScope(
   phase: ReviewPhase,
   authority: ReviewScopeAuthority,
+  options?: ReviewQueryScopeOptions,
 ): ReviewQueryScope {
+  const approvedDesign = resolveApprovedDesignProof(phase, authority, options);
   const members = scopeMembersForPhase(phase, authority).map((path) => {
     const canonical = canonicalizeArtifactPath(path);
     if (canonical === null) throw new Error("review_gate_invalid_artifact_path");
@@ -147,6 +299,7 @@ export function buildReviewQueryScope(
     phase,
     allowedArtifactPaths: new Set(members),
     allowedGitPaths: new Set(members),
+    approvedDesign,
   };
 }
 

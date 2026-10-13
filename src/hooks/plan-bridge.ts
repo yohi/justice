@@ -34,6 +34,16 @@ import type {
   ScopedReviewToolUse,
 } from "../runtime/review-gate-coordinator";
 import type { ReviewGateApprovalLookup } from "../runtime/review-gate-approval";
+import {
+  buildReviewQueryScope,
+  classifyReviewModelTool,
+} from "../core/review-gate/capabilities";
+import type {
+  ReviewQueryMatch,
+  ReviewQueryScope,
+  VerifiedApprovedDesignReadBindingV1,
+} from "../core/review-gate/capabilities";
+import { canonicalizeArtifactPath } from "../core/review-gate/identity";
 import { PlanBridgeCore } from "../core/plan-bridge-core";
 import { PlanParser } from "../core/plan-parser";
 import { ProgressReporter } from "../core/progress-reporter";
@@ -185,6 +195,46 @@ export interface ReviewGateLockSnapshot {
   readonly planDigest: string | null;
 }
 
+/**
+ * FDR-014 injection seam for the approved upstream Design authority. The
+ * real producer belongs to the Task 18 authority layer; tests may mock it.
+ * The content functions must be the exact verified query-service
+ * implementations — never a generic unmediated reader.
+ */
+export interface ReviewGateApprovedDesignAuthority {
+  readonly getApprovedDesignBinding: (input: {
+    readonly gateId: string;
+    readonly designPath: string;
+  }) => Promise<VerifiedApprovedDesignReadBindingV1 | null>;
+  readonly readApprovedDesignArtifact: (input: {
+    readonly approvedDesign: VerifiedApprovedDesignReadBindingV1;
+  }) => Promise<Buffer | null>;
+  readonly searchApprovedDesignArtifact: (input: {
+    readonly approvedDesign: VerifiedApprovedDesignReadBindingV1;
+    readonly pattern: string;
+  }) => Promise<readonly ReviewQueryMatch[]>;
+}
+
+/** Exact denial codes allowed on the reviewer approved-read boundary. */
+export type ReviewerArtifactReadDenialReason =
+  | "review_scope_violation"
+  | "review_operation_not_permitted"
+  | "implementation_not_authorized";
+
+/** Outcome of `PlanBridge.mediateReviewerArtifactRead` (FDR-014). */
+export type ReviewerArtifactReadDecision =
+  | Readonly<{ readonly kind: "approved_read"; readonly bytes: Buffer }>
+  | Readonly<{
+      readonly kind: "approved_search";
+      readonly matches: readonly ReviewQueryMatch[];
+    }>
+  /** In-scope phase-target read: keeps its separately verified current flow. */
+  | Readonly<{ readonly kind: "unmediated_scoped"; readonly canonicalPath: string }>
+  | Readonly<{
+      readonly kind: "denied";
+      readonly reason: ReviewerArtifactReadDenialReason;
+    }>;
+
 type PendingPlanReviewGate = {
   readonly gateId: string;
   readonly designPath: string;
@@ -227,6 +277,7 @@ export class PlanBridge {
   private readonly pendingPlanReviewGates = new Map<string, PendingPlanReviewGate>();
   private readonly reviewGateLocks = new Map<string, ReviewGateLockSnapshot>();
   private reviewGateCoordinator: ReviewGateCoordinator | null = null;
+  private reviewGateApprovedDesignAuthority: ReviewGateApprovedDesignAuthority | null = null;
   private readonly lastCompletionInputs: Map<
     string,
     Pick<PlanCompletionInput, "prompt" | "category" | "skillName"> & { readonly taskId?: string }
@@ -493,6 +544,15 @@ export class PlanBridge {
     this.reviewGateApprovalLookup = lookup;
   }
 
+  /**
+   * Wire the approved upstream Design authority (FDR-014). The binding is
+   * produced by the Review Gate authority layer and consumed by
+   * `buildPlanReviewerQueryScope` / `mediateReviewerArtifactRead`.
+   */
+  setReviewGateApprovedDesignAuthority(authority: ReviewGateApprovedDesignAuthority): void {
+    this.reviewGateApprovedDesignAuthority = authority;
+  }
+
   getReviewGateLock(sessionId: string): ReviewGateLockSnapshot | undefined {
     const lock = this.reviewGateLocks.get(sessionId);
     return lock === undefined ? undefined : Object.freeze({ ...lock });
@@ -514,6 +574,124 @@ export class PlanBridge {
       queryOnly: use.queryOnly,
       changedPaths: use.changedPaths,
     });
+  }
+
+  /**
+   * FDR-014: build the Plan-phase review query scope through the validated
+   * approved Design proof. Returns `null` when the session lock or the
+   * approved-design authority is unavailable, letting callers keep their own
+   * separately verified flow.
+   */
+  async buildPlanReviewerQueryScope(sessionId: string): Promise<ReviewQueryScope | null> {
+    const lock = this.reviewGateLocks.get(sessionId);
+    if (lock === undefined || lock.designPath === null || lock.planPath === null) return null;
+    const authority = this.reviewGateApprovedDesignAuthority;
+    if (authority === null) return null;
+    const approvedDesign = await authority.getApprovedDesignBinding({
+      gateId: lock.gateId,
+      designPath: lock.designPath,
+    });
+    return buildReviewQueryScope("plan", {
+      // A Plan-phase scope admits only the approved Design and the current
+      // Plan; the effective Requirements identity is validated inside the
+      // proof instead.
+      requirementsCanonicalPath: approvedDesign?.requirements.canonicalPath ?? "",
+      approvedDesignCanonicalPath: lock.designPath,
+      currentPhaseArtifactCanonicalPath: lock.planPath,
+      approvedDesign,
+    });
+  }
+
+  /**
+   * FDR-014 boundary for generic reviewer reads while an active Review Gate
+   * lock owns the session. Implementation tools are denied with
+   * `implementation_not_authorized`; mutation/commit/unknown tools get
+   * `review_operation_not_permitted`; out-of-scope paths get
+   * `review_scope_violation`. Approved Design content flows only through the
+   * verified approved-read service, and an unproved generic read is denied
+   * instead of redirected to the mutable worktree. The current phase target
+   * keeps its separately verified current-target flow (= `unmediated_scoped`).
+   * Returns `undefined` when the session has no lock (normal operation).
+   */
+  async mediateReviewerArtifactRead(
+    sessionId: string,
+    request: Readonly<{
+      readonly toolName: string;
+      readonly path: string;
+      readonly pattern?: string;
+    }>,
+  ): Promise<ReviewerArtifactReadDecision | undefined> {
+    const lock = this.reviewGateLocks.get(sessionId);
+    if (lock === undefined) return undefined;
+    const toolClass = classifyReviewModelTool(request.toolName);
+    if (toolClass === "implementation") {
+      return { kind: "denied", reason: "implementation_not_authorized" };
+    }
+    // `read` is the model-visible query tool; `grep` may serve the bounded
+    // approved-Design search. Everything else (mutations, commits, unknown
+    // tools) cannot pass the reviewer read boundary.
+    const isReadTool = toolClass === "review_query";
+    const isSearchTool =
+      request.toolName === "grep" &&
+      typeof request.pattern === "string" &&
+      request.pattern.length > 0;
+    if (!isReadTool && !isSearchTool) {
+      return { kind: "denied", reason: "review_operation_not_permitted" };
+    }
+    const canonical = canonicalizeArtifactPath(request.path);
+    if (canonical === null) {
+      return { kind: "denied", reason: "review_scope_violation" };
+    }
+
+    const authority = this.reviewGateApprovedDesignAuthority;
+    if (canonical === lock.designPath) {
+      // The approved upstream Design is readable only through its
+      // proof-bound verified read service; a generic unmediated read is
+      // denied and never redirected to mutable worktree bytes.
+      if (authority === null) {
+        return { kind: "denied", reason: "review_operation_not_permitted" };
+      }
+      try {
+        const binding = await authority.getApprovedDesignBinding({
+          gateId: lock.gateId,
+          designPath: lock.designPath,
+        });
+        if (binding === null || lock.planPath === null) {
+          return { kind: "denied", reason: "review_operation_not_permitted" };
+        }
+        // Wire through the validated scope builder: an inconsistent proof
+        // can never become approved content authority.
+        buildReviewQueryScope("plan", {
+          requirementsCanonicalPath: binding.requirements.canonicalPath,
+          approvedDesignCanonicalPath: lock.designPath,
+          currentPhaseArtifactCanonicalPath: lock.planPath,
+          approvedDesign: binding,
+        });
+        const pattern = request.pattern;
+        if (pattern !== undefined) {
+          if (pattern.length === 0) {
+            return { kind: "denied", reason: "review_operation_not_permitted" };
+          }
+          const matches = await authority.searchApprovedDesignArtifact({
+            approvedDesign: binding,
+            pattern,
+          });
+          return { kind: "approved_search", matches };
+        }
+        const bytes = await authority.readApprovedDesignArtifact({ approvedDesign: binding });
+        if (bytes === null) {
+          return { kind: "denied", reason: "review_operation_not_permitted" };
+        }
+        return { kind: "approved_read", bytes };
+      } catch {
+        return { kind: "denied", reason: "review_operation_not_permitted" };
+      }
+    }
+
+    if (canonical === lock.planPath) {
+      return { kind: "unmediated_scoped", canonicalPath: canonical };
+    }
+    return { kind: "denied", reason: "review_scope_violation" };
   }
 
   /**

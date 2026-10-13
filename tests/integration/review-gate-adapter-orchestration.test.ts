@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -8,6 +9,8 @@ import { OpenCodeAdapter } from "../../src/runtime/opencode-adapter";
 import { REVIEW_GATE_AGENT_REVIEWER } from "../../src/core/review-gate/agent-protocol";
 import type { ReviewCandidatesResultV1 } from "../../src/core/review-gate/agent-protocol";
 import { computeArtifactDigest } from "../../src/core/review-gate/identity";
+import { createReviewGateQueryService } from "../../src/runtime/review-gate-query";
+import type { VerifiedApprovedDesignReadBindingV1 } from "../../src/core/review-gate/capabilities";
 import { fakeInit } from "../helpers/fake-opencode-init";
 import { createMockFileSystem } from "../helpers/mock-file-system";
 import { parseNextTaskArgs, parsePacketPayload } from "../helpers/review-gate-coordinator";
@@ -28,6 +31,7 @@ const workspaceRoots = new Set<string>();
 async function createAdapter(): Promise<{
   readonly adapter: OpenCodeAdapter;
   readonly fs: ReturnType<typeof createMockFileSystem>;
+  readonly workspaceRoot: string;
 }> {
   const graphRoot = mkdtempSync(join(tmpdir(), "justice-rg-"));
   const workspaceRoot = mkdtempSync(join(tmpdir(), "justice-rg-workspace-"));
@@ -74,7 +78,7 @@ async function createAdapter(): Promise<{
   });
   const justice = adapter.getJustice();
   if (justice === null) throw new Error("Justice was not initialized");
-  return { adapter, fs };
+  return { adapter, fs, workspaceRoot };
 }
 
 function reviewerResult(
@@ -302,4 +306,138 @@ it("routes remediation and self-review, then blocks safely when the mutation sub
 
   // The failed side effect did not re-dispatch a worker: no next task payload.
   expect(tail.includes("[JUSTICE: REVIEW GATE NEXT TASK]")).toBe(false);
+});
+
+it("permits /justice-review-history and the bounded approved Design read under an active gate lock", async () => {
+  const { adapter, workspaceRoot } = await createAdapter();
+  const justice = adapter.getJustice();
+  if (justice === null) throw new Error("missing justice");
+  const planBridge = justice.getPlanBridge();
+
+  const started = await planBridge.handleReviewGateStart("main", {
+    source: "command",
+    designPath: DESIGN_PATH,
+    planPath: PLAN_PATH,
+  });
+  expect(started.dispatched).toBe(true);
+  if (started.reviewerPrompt === undefined) throw new Error("gate did not dispatch");
+  expect(planBridge.getReviewGateLock("main")?.phase).toBe("reviewing");
+
+  // Mocked approved-Design authority source for this sub-task: the proof pins
+  // the real committed baseline tree/blob of the workspace repository, while
+  // Task 18 will inject the real witness-verified producer.
+  const commitSha = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: workspaceRoot,
+    encoding: "utf8",
+  }).trim();
+  const committedTreeOid = execFileSync("git", ["rev-parse", `${commitSha}^{tree}`], {
+    cwd: workspaceRoot,
+    encoding: "utf8",
+  }).trim();
+  const designBlobOid = execFileSync("git", ["rev-parse", `${commitSha}:${DESIGN_PATH}`], {
+    cwd: workspaceRoot,
+    encoding: "utf8",
+  }).trim();
+  const designDigest = computeArtifactDigest(new TextEncoder().encode(DESIGN_CONTENT));
+  const approvedDesign: VerifiedApprovedDesignReadBindingV1 = {
+    schemaVersion: 1,
+    canonicalPath: DESIGN_PATH,
+    designClearEventId: "evt-design-clear-orchestration",
+    currentAuthorityEventId: "evt-authority-orchestration",
+    committedTreeOid,
+    blobOid: designBlobOid,
+    gitMode: "100644",
+    digest: designDigest,
+    requirements: {
+      canonicalPath: DESIGN_PATH,
+      gitBlobOid: designBlobOid,
+      digest: designDigest,
+      gitMode: "100644",
+    },
+    phaseProtocolFingerprint: "plan-protocol-orchestration",
+    witnessFrontierHash: computeArtifactDigest(
+      new TextEncoder().encode("orchestration-witness-frontier"),
+    ),
+  };
+  const queryService = createReviewGateQueryService({
+    rootDir: workspaceRoot,
+    workspaceReader: {
+      readWorkspaceFile: async (relativePath: string) => {
+        try {
+          return await readFile(join(workspaceRoot, relativePath));
+        } catch {
+          return null;
+        }
+      },
+    },
+  });
+  planBridge.setReviewGateApprovedDesignAuthority({
+    getApprovedDesignBinding: async () => approvedDesign,
+    readApprovedDesignArtifact: (input) => queryService.readApprovedDesignArtifact(input),
+    searchApprovedDesignArtifact: (input) => queryService.searchApprovedDesignArtifact(input),
+  });
+
+  type HistoryCommandOutput = Parameters<OpenCodeAdapter["onCommandExecuteBefore"]>[1];
+  const runHistorySummary = async (): Promise<string> => {
+    const output: HistoryCommandOutput = { parts: [] };
+    await adapter.onCommandExecuteBefore(
+      {
+        command: "justice-review-history",
+        sessionID: "main",
+        arguments: `--design ${DESIGN_PATH} --plan ${PLAN_PATH}`,
+      },
+      output,
+    );
+    const part = output.parts[0];
+    if (part === undefined) throw new Error("history query produced no part");
+    if (!("text" in part) || typeof part.text !== "string") {
+      throw new Error("history query did not render text");
+    }
+    return part.text;
+  };
+  const eventsLineOf = (display: string): string => {
+    const line = display.split("\n").find((entry) => entry.startsWith("events: "));
+    if (line === undefined) throw new Error("history summary carries no events line");
+    return line;
+  };
+
+  const before = await runHistorySummary();
+  expect(before).toContain("[JUSTICE: REVIEW HISTORY]");
+  expect(before).toContain("status: active");
+  expect(before).not.toMatch(/REVIEW HISTORY (?:NOT FOUND|CONFLICT|VERSION NOT SUPPORTED|UNAVAILABLE)/u);
+
+  // The bounded approved Design read goes through the real verified Git blob
+  // reader while the implementation lock is active.
+  expect(
+    await planBridge.mediateReviewerArtifactRead("main", { toolName: "read", path: DESIGN_PATH }),
+  ).toEqual({ kind: "approved_read", bytes: Buffer.from(DESIGN_CONTENT) });
+  expect(
+    await planBridge.mediateReviewerArtifactRead("main", {
+      toolName: "grep",
+      path: DESIGN_PATH,
+      pattern: "Acceptance",
+    }),
+  ).toEqual({
+    kind: "approved_search",
+    matches: [{ line: 2, text: "Acceptance boundary." }],
+  });
+
+  // Implementation tools stay rejected with the exact error code through the
+  // last-mile adapter.
+  expect(
+    await adapter.onToolExecuteBefore(
+      { tool: "bash", sessionID: "main", callID: "impl-bash" },
+      { args: { command: "echo hi" } },
+    ),
+  ).toMatchObject({ action: "skip", reason: "implementation_not_authorized" });
+  expect(
+    await planBridge.mediateReviewerArtifactRead("main", { toolName: "edit", path: DESIGN_PATH }),
+  ).toEqual({ kind: "denied", reason: "review_operation_not_permitted" });
+
+  // Pure queries must not mutate the Gate: same history, same event count,
+  // same lock phase.
+  expect(planBridge.getReviewGateLock("main")?.phase).toBe("reviewing");
+  const after = await runHistorySummary();
+  expect(eventsLineOf(after)).toBe(eventsLineOf(before));
+  expect(after).toContain("status: active");
 });
