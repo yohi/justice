@@ -1842,8 +1842,12 @@ async function buildSharedReviewGateRuntimeGraph(
     const workspaceIdentity = computeWorkspaceIdentity(root);
 
     const protocolRelease: ReturnType<typeof createVerifiedProtocolReleaseProvider> = {
-      readVerifiedPhaseProtocolDelta: async () => "BLOCK",
-    };
+      // Task 5 の trusted protocol release anchor / protected registry が
+      // 運用環境に独立 provision されるまで、意図的に fail-closed な BLOCK
+      // スタブを使用する。これにより NC1 protocol-kind 遷移は現時点では
+      // 承認されず、既存の legacy path で安全に縮退する。
+readVerifiedPhaseProtocolDelta: async () => "BLOCK",
+};
 
     const scopeAdmission = createReviewGateScopeAdmission({
       witness,
