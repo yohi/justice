@@ -534,8 +534,12 @@ function planRestoreRecovery(
   const blocker = verified.upstreamBlocker;
   const phaseArtifact =
     projection.phase === "design" ? context.artifacts.design : context.artifacts.plan;
+  const currentFinding = [...projection.findings.values()].find(
+    (finding) => finding.lineageId === blocker.lineageId,
+  );
   const provenanceInvalid =
     verified.gateId !== projection.gateId ||
+    verified.generationId.length === 0 ||
     verified.currentPhase !== projection.phase ||
     verified.verifiedFrontierHash.length === 0 ||
     blocker.lineageId.length === 0 ||
@@ -544,8 +548,11 @@ function planRestoreRecovery(
     !projection.currentUpstreamBlockers.some((id) => id === blocker.lineageId) ||
     verified.restoreCompletion !== null ||
     verified.downstream === null ||
+    verified.downstream.phase !== projection.phase ||
     verified.downstream.targetPath !== intent.targetPath ||
-    intent.targetPath !== phaseArtifact.canonicalPath;
+    intent.targetPath !== phaseArtifact.canonicalPath ||
+    currentFinding === undefined ||
+    currentFinding.ownerScope !== blocker.currentOwner;
   if (provenanceInvalid) {
     return freezeOperation({
       kind: "suspended",

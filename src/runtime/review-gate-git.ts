@@ -290,10 +290,16 @@ export class ReviewGateGit {
       targetCleanCommittedBinding: destination,
       recoveryDigest: "",
     };
+    const sourceKnownDirtyBinding = {
+      headSha: source.headSha,
+      headEntry: source.headEntry,
+      indexEntry: source.indexEntry,
+      worktree: source.worktree,
+    };
     const recoveryRecord = {
       phase: prepared.phase,
       targetCanonicalPath: prepared.targetCanonicalPath,
-      sourceKnownDirtyBinding: prepared.sourceKnownDirtyBinding,
+      sourceKnownDirtyBinding,
       targetCleanCommittedBinding: prepared.targetCleanCommittedBinding,
       preparedOperationId: prepared.operationId,
     };

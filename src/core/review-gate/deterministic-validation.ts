@@ -957,13 +957,19 @@ export function normalizedSemanticGoverningProjection(
   });
 }
 
+export function computeSemanticGoverningProjectionDigest(
+  inputs: SemanticContextInputsV1,
+): string {
+  return computeCanonicalJsonFingerprint(normalizedSemanticGoverningProjection(inputs));
+}
+
 function governingProjectionIsEqual(
   old: SemanticContextInputsV1,
   current: SemanticContextInputsV1,
 ): boolean {
   return (
-    computeCanonicalJsonFingerprint(normalizedSemanticGoverningProjection(old)) ===
-    computeCanonicalJsonFingerprint(normalizedSemanticGoverningProjection(current))
+    computeSemanticGoverningProjectionDigest(old) ===
+    computeSemanticGoverningProjectionDigest(current)
   );
 }
 
@@ -1006,6 +1012,10 @@ export function evaluateSemanticContextCompatibility(
     input.triggerEventId.length === 0 ||
     input.contextInputs.verifiedFrontierHash.length === 0 ||
     input.contextInputs.triggeringAuthorityEventId !== input.triggerEventId ||
+    input.contextInputs.old.requirements.authorityEventId !== input.oldAuthorityEventId ||
+    input.contextInputs.new.requirements.authorityEventId !== input.newAuthorityEventId ||
+    input.contextInputs.old.requirements.gitBlobOid !== input.old.inventory.sourceGitBlobOid ||
+    input.contextInputs.new.requirements.gitBlobOid !== input.new.inventory.sourceGitBlobOid ||
     input.oldAuthorityEventId === input.newAuthorityEventId
   ) {
     return indeterminateClassification("incomplete_authority_binding");
@@ -1087,7 +1097,7 @@ export function evaluateSemanticContextCompatibility(
 // Typed bounded proof (SemanticContextCompatibilityProofV1)
 // ---------------------------------------------------------------------------
 
-const semanticCompatibilityProofRegistryDigest: string =
+export const SEMANTIC_CONTEXT_COMPATIBILITY_PROOF_REGISTRY_DIGEST: string =
   computeCanonicalJsonFingerprint([
     REVIEW_INPUT_BINDING_INTEGRITY_V1,
     DESIGN_REQUIREMENTS_REFERENCE_CONSISTENCY_V1,
@@ -1124,14 +1134,10 @@ export function buildSemanticContextCompatibilityProof(args: {
     validatorId: "SEMANTIC_CONTEXT_COMPATIBILITY_V1" as const,
     validatorVersion: "SEMANTIC_CONTEXT_COMPATIBILITY_V1",
     executableDigest: args.executableDigest,
-    registryDigest: semanticCompatibilityProofRegistryDigest,
+    registryDigest: SEMANTIC_CONTEXT_COMPATIBILITY_PROOF_REGISTRY_DIGEST,
     compatibilityTableDigest: SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_DIGEST,
-    oldNormalizedInputsDigest: computeCanonicalJsonFingerprint(
-      normalizedSemanticGoverningProjection(contextInputs.old),
-    ),
-    newNormalizedInputsDigest: computeCanonicalJsonFingerprint(
-      normalizedSemanticGoverningProjection(contextInputs.new),
-    ),
+    oldNormalizedInputsDigest: computeSemanticGoverningProjectionDigest(contextInputs.old),
+    newNormalizedInputsDigest: computeSemanticGoverningProjectionDigest(contextInputs.new),
     result: args.classification.result,
     ruleId: args.classification.ruleId,
     ruleVersion: args.classification.ruleVersion,

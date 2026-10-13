@@ -110,6 +110,10 @@ describe("planNonConvergenceReentry — NC1 Two-Key authority (PLAN-012)", () =>
     expect(planNonConvergenceReentry(reentryInput({}))).toBe("REENTER_SAME_GENERATION");
   });
 
+  it.each([0, -1])("stays suspended when verified progress has %i remaining rounds", (remainingRounds) => {
+    expect(planNonConvergenceReentry(reentryInput({ remainingRounds }))).toBe("STAY_SUSPENDED");
+  });
+
   it("reenters for a plan-phase verified artifact change", () => {
     const planChange = artifactChange({
       phase: "plan",

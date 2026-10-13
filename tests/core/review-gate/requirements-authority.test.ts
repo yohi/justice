@@ -81,4 +81,43 @@ describe("planRequirementsAuthorityTransition", () => {
       },
     });
   });
+
+  it.each([
+    ["canonical path", { canonicalPath: "docs/other-requirements.md" }],
+    ["source", { source: "design_declared_reference" as const }],
+  ])("blocks a proposed Requirements %s that differs from effective authority", (_label, requirementChange) => {
+    const proposedCanonicalPath = "canonicalPath" in requirementChange
+      ? requirementChange.canonicalPath
+      : effective.requirements.selectedCanonicalPath;
+    const proposedRequirements = {
+      source: "explicit" as const,
+      canonicalPath: proposedCanonicalPath,
+      digest: digest("requirements-d1"),
+      gitMode: "100644" as const,
+      gitBlobOid: "requirements-blob-d1",
+      ...requirementChange,
+    };
+    const decision = planRequirementsAuthorityTransition({
+      historical,
+      effective,
+      proposed: {
+        requirements: proposedRequirements,
+        design: {
+          ...effective.design,
+          marker: {
+            ...effective.design.marker,
+            declaredCanonicalPath: proposedRequirements.canonicalPath,
+          },
+        },
+        authorityEventId: "requirements-change-d1",
+        operationId: "revalidate-d1",
+      },
+      origin: "external_committed_change",
+    });
+
+    expect(decision).toEqual({
+      kind: "BLOCK",
+      reason: "requirements_authority_proposed_context_invalid",
+    });
+  });
 });

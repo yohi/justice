@@ -928,6 +928,37 @@ describe("planReviewGateNextOperation — crash-window planning", () => {
     });
   });
 
+  it.each([
+    ["empty generation", { generationId: "" }],
+    ["phase mismatch", { currentPhase: "design" as const }],
+    ["downstream phase mismatch", { downstream: { ...planDownstream, phase: "design" as const } }],
+    [
+      "owner mismatch",
+      { upstreamBlocker: { ...upstreamVerification().upstreamBlocker, currentOwner: "requirements" as const } },
+    ],
+  ] as const)("suspends restore recovery with %s provenance", (_label, overrides) => {
+    const projection = projectReviewGate([
+      created,
+      designClear,
+      discover(lineageA, "f-a", "design"),
+    ]);
+
+    expect(
+      planReviewGateNextOperation(
+        projection,
+        planningContext({
+          inFlight: { kind: "restore_prepared", targetPath: "docs/plan.md" },
+          workspaceStates: new Map([["docs/plan.md", "known_dirty" as const]]),
+          verifiedUpstreamReopen: upstreamVerification(overrides),
+        }),
+      ),
+    ).toMatchObject({
+      kind: "suspended",
+      reason: "execution_suspended",
+      detail: "restore_recovery_provenance_missing",
+    });
+  });
+
   it("plans commit recovery from its prepared-without-completed window", () => {
     const projection = projectReviewGate([created]);
 

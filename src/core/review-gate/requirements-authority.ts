@@ -143,6 +143,8 @@ function hasValidProposedAuthority(
 ): boolean {
   return proposed.authorityEventId.length > 0 && proposed.operationId.length > 0 &&
     proposed.requirements.canonicalPath.length > 0 && proposed.requirements.gitBlobOid.length > 0 &&
+    proposed.requirements.canonicalPath === effective.requirements.selectedCanonicalPath &&
+    proposed.requirements.source === effective.requirements.source &&
     proposed.design.marker.validPreamblePosition &&
     proposed.design.marker.declaredCanonicalPath === proposed.requirements.canonicalPath &&
     proposed.design.canonicalPath === effective.design.canonicalPath;

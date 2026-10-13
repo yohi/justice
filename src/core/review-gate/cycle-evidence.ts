@@ -8,6 +8,12 @@
 import {
   computeCanonicalJsonFingerprint,
 } from "./identity.js";
+import {
+  SEMANTIC_CONTEXT_COMPATIBILITY_PROOF_REGISTRY_DIGEST,
+  SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_DIGEST,
+  SEMANTIC_CONTEXT_COMPATIBILITY_V1,
+  computeSemanticGoverningProjectionDigest,
+} from "./deterministic-validation.js";
 import type {
   ReviewGatePhase,
   SemanticContextInputsV1,
@@ -79,6 +85,12 @@ export function buildVerifiedSemanticCycles(
   for (let index = 0; index < rounds.length; index += 1) {
     const round = rounds[index];
     if (round === undefined) continue;
+    if (
+      computeCanonicalJsonFingerprint(round.context) !==
+      computeCanonicalJsonFingerprint(history.context)
+    ) {
+      missingEvidence.push(`round_context:${round.roundOrdinal}`);
+    }
     const expectedLineageIds = new Set(round.postBlockers.map((b) => b.lineageId));
     for (const lineageId of expectedLineageIds) {
       const outcome = round.targetOutcomes.find((o) => o.lineageId === lineageId);
@@ -92,6 +104,14 @@ export function buildVerifiedSemanticCycles(
     const previous = rounds[index - 1];
     const current = rounds[index];
     if (previous === undefined || current === undefined) continue;
+    if (current.roundOrdinal !== previous.roundOrdinal + 1) {
+      missingEvidence.push(
+        `consecutive_round_ordinal:${previous.roundOrdinal}:${current.roundOrdinal}`,
+      );
+    }
+    if (previous.comparisonSegmentId !== current.comparisonSegmentId) {
+      missingEvidence.push(`consecutive_comparison_segment:${current.roundOrdinal}`);
+    }
     if (previous.postRevisionDigest !== current.preRevisionDigest) {
       missingEvidence.push("consecutive_revision_link");
     }
@@ -156,10 +176,14 @@ export function evaluateNonConvergenceCycles(
   const firstCycle = cycles[0];
   const limit = firstCycle === undefined ? undefined : PHASE_ROUND_LIMIT.get(firstCycle.context.phase);
 
+  const committedResolutionEventIds = new Set<string>();
   for (const cycle of cycles) {
+    for (const resolution of cycle.committedResolutions) {
+      committedResolutionEventIds.add(resolution.resolutionEventId);
+    }
     if (cycle.regressions.length > 0) {
-      const hasCommittedResolution = cycle.committedResolutions.some((resolution) =>
-        cycle.regressions.some((regression) => regression.lineageId === resolution.lineageId)
+      const hasCommittedResolution = cycle.regressions.some((regression) =>
+        committedResolutionEventIds.has(regression.priorResolutionEventId)
       );
       if (hasCommittedResolution) {
         reasons.add("RESOLVED_LINEAGE_REGRESSED");
@@ -283,10 +307,13 @@ export function planSemanticContextTransition(
     return Object.freeze({ kind: "BLOCK", reason: "round_counter_changed" });
   }
 
-  const oldDigest = computeSemanticContextInputsDigest(oldInputs);
-  const newDigest = computeSemanticContextInputsDigest(newInputs);
-
-  if (proof.oldNormalizedInputsDigest !== oldDigest || proof.newNormalizedInputsDigest !== newDigest) {
+  if (
+    proof.validatorId !== SEMANTIC_CONTEXT_COMPATIBILITY_V1.validatorId ||
+    proof.compatibilityTableDigest !== SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_DIGEST ||
+    proof.registryDigest !== SEMANTIC_CONTEXT_COMPATIBILITY_PROOF_REGISTRY_DIGEST ||
+    proof.oldNormalizedInputsDigest !== computeSemanticGoverningProjectionDigest(oldInputs) ||
+    proof.newNormalizedInputsDigest !== computeSemanticGoverningProjectionDigest(newInputs)
+  ) {
     return Object.freeze({ kind: "BLOCK", reason: "proof_digest_mismatch" });
   }
 

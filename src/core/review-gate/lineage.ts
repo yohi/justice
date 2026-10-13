@@ -623,6 +623,21 @@ export function planResolvedFindingDisposition(
         reason: "prior_committed_resolution_required",
       });
     }
+    if (
+      input.independentlyVerifiedAbsenceEventId === null ||
+      input.independentlyVerifiedAbsenceEventId.length === 0
+    ) {
+      return Object.freeze({
+        kind: "block",
+        reason: "independently_verified_absence_required",
+      });
+    }
+    if (input.contextDigest !== input.priorCommittedResolution.contextDigest) {
+      return Object.freeze({
+        kind: "block",
+        reason: "resolution_context_mismatch",
+      });
+    }
     return Object.freeze({
       kind: "already_resolved",
       lineageId: input.lineageId,
@@ -635,6 +650,12 @@ export function planResolvedFindingDisposition(
     input.priorCommittedResolution !== undefined &&
     input.independentlyVerifiedPresenceEventId !== null
   ) {
+    if (input.contextDigest !== input.priorCommittedResolution.contextDigest) {
+      return Object.freeze({
+        kind: "block",
+        reason: "resolution_context_mismatch",
+      });
+    }
     return Object.freeze({
       kind: "lineage_regressed",
       regression: Object.freeze({

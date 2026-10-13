@@ -811,12 +811,49 @@ const provider = createFsProvider(currentRoot);
     const recoveryRecord = {
       phase: payload.phase,
       targetCanonicalPath: payload.targetCanonicalPath,
-      sourceKnownDirtyBinding: payload.sourceKnownDirtyBinding,
+      sourceKnownDirtyBinding: {
+        headSha: payload.sourceKnownDirtyBinding.headSha,
+        headEntry: payload.sourceKnownDirtyBinding.headEntry,
+        indexEntry: payload.sourceKnownDirtyBinding.indexEntry,
+        worktree: payload.sourceKnownDirtyBinding.worktree,
+      },
       targetCleanCommittedBinding: payload.targetCleanCommittedBinding,
       preparedOperationId: payload.operationId,
     };
     const expectedDigest = computeCanonicalJsonFingerprint(recoveryRecord);
     expect(payload.recoveryDigest).toBe(expectedDigest);
     expect(stored?.toString("utf8")).toBe(canonicalJsonText(recoveryRecord));
+    const storedRecord: unknown = JSON.parse(stored?.toString("utf8") ?? "null");
+    expect(storedRecord).toEqual(recoveryRecord);
+    const eventRecord = {
+      schemaVersion: 2,
+      eventId: "restore-prepared-event-1",
+      parentEventId: "restore-parent-event-1",
+      emittedAt: "2026-10-13T00:00:00.000Z",
+      gateId: payload.gateId,
+      epochId: "epoch-1",
+      generationId: "generation-1",
+      writerId: "writer-1",
+      eventType: "REVIEW_TARGET_RESTORE_PREPARED",
+      payload: {
+        phase: payload.phase,
+        targetCanonicalPath: payload.targetCanonicalPath,
+        sourceKnownDirtyBinding: recoveryRecord.sourceKnownDirtyBinding,
+        targetCleanCommittedBinding: recoveryRecord.targetCleanCommittedBinding,
+        preparedOperationId: payload.operationId,
+        preparedRecoveryDigest: payload.recoveryDigest,
+      },
+    };
+    const childProcess = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    const schemaValidation = childProcess.spawnSync("bun", [
+      "-e",
+      "import { validateReviewGateEventRecord } from './src/core/review-gate/event-schema.ts'; const record = JSON.parse(await Bun.stdin.text()); validateReviewGateEventRecord(record);",
+    ], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      input: JSON.stringify(eventRecord),
+      shell: false,
+    });
+    expect(schemaValidation.status, schemaValidation.stderr).toBe(0);
   });
 });

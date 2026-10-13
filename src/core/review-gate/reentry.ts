@@ -165,5 +165,8 @@ export function planNonConvergenceReentry(input: VerifiedReentryInput): ReentryD
     // upstream precedence.
     return "STAY_SUSPENDED";
   }
+  if (input.remainingRounds <= 0) {
+    return "STAY_SUSPENDED";
+  }
   return "REENTER_SAME_GENERATION";
 }

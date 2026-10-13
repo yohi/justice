@@ -1143,6 +1143,21 @@ function compatibilityInput(sources: {
   return { oldInventory, newInventory, diff };
 }
 
+function boundCompatibilityContext(
+  context: SemanticContextInputsV1,
+  authorityEventId: string,
+  gitBlobOid: string,
+): SemanticContextInputsV1 {
+  return Object.freeze({
+    ...context,
+    requirements: Object.freeze({
+      ...context.requirements,
+      authorityEventId,
+      gitBlobOid,
+    }),
+  });
+}
+
 function typedCompatibilityInput(args: {
   readonly oldSource: string;
   readonly newSource: string;
@@ -1164,8 +1179,16 @@ function typedCompatibilityInput(args: {
       triggerEventId: "trigger-1",
       registeredPolicyDigest: SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_DIGEST,
       contextInputs: Object.freeze({
-        old: args.oldContext ?? semanticInputs("1"),
-        new: args.newContext ?? semanticInputs("1"),
+        old: boundCompatibilityContext(
+          args.oldContext ?? semanticInputs("1"),
+          "authority-r0",
+          oldInventory.inventory.sourceGitBlobOid,
+        ),
+        new: boundCompatibilityContext(
+          args.newContext ?? semanticInputs("1"),
+          "authority-r1",
+          newInventory.inventory.sourceGitBlobOid,
+        ),
         triggeringAuthorityEventId: "trigger-1",
         verifiedFrontierHash: "f".repeat(64),
       }),
@@ -1197,8 +1220,16 @@ function semanticEncoding(args: {
     registeredPolicyDigest:
       args.registeredPolicyDigest ?? SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_DIGEST,
     verifiedFrontierHash: "f".repeat(64),
-    oldContextInputs: args.oldContext ?? semanticInputs("1"),
-    newContextInputs: args.newContext ?? semanticInputs("1"),
+    oldContextInputs: boundCompatibilityContext(
+      args.oldContext ?? semanticInputs("1"),
+      "authority-r0",
+      oldInventory.inventory.sourceGitBlobOid,
+    ),
+    newContextInputs: boundCompatibilityContext(
+      args.newContext ?? semanticInputs("1"),
+      "authority-r1",
+      newInventory.inventory.sourceGitBlobOid,
+    ),
   });
 }
 
@@ -1339,6 +1370,33 @@ describe("SEMANTIC_CONTEXT_COMPATIBILITY_V1 (Task 13)", () => {
     const classification = evaluateSemanticContextCompatibility(forged);
     expect(classification.result).toBe("INDETERMINATE");
     expect(classification.reason).toBe("unregistered_compatibility_table_digest");
+  });
+
+  it.each([
+    ["old", "authorityEventId"],
+    ["new", "authorityEventId"],
+    ["old", "gitBlobOid"],
+    ["new", "gitBlobOid"],
+  ] as const)("returns INDETERMINATE when the %s requirements %s is unbound", (side, binding) => {
+    const { typed } = typedCompatibilityInput({
+      oldSource: REQUIREMENTS_R0,
+      newSource: REQUIREMENTS_R0,
+    });
+    const originalContext = typed.contextInputs[side];
+    const contextInputs = {
+      ...typed.contextInputs,
+      [side]: {
+        ...originalContext,
+        requirements: {
+          ...originalContext.requirements,
+          [binding]: "unbound-value",
+        },
+      },
+    };
+    const classification = evaluateSemanticContextCompatibility({ ...typed, contextInputs });
+
+    expect(classification.result).toBe("INDETERMINATE");
+    expect(classification.reason).toBe("incomplete_authority_binding");
   });
 
   it("blocks a forged declared document digest pin and a tampered envelope", () => {

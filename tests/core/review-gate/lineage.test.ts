@@ -94,6 +94,25 @@ describe("finding validation dispositions", () => {
     });
   });
 
+  it.each([
+    ["missing absence proof", null, "context-1"],
+    ["empty absence proof", "", "context-1"],
+    ["mismatched context", "absence-event-1", "different-context"],
+  ] as const)("blocks ALREADY_RESOLVED with %s", (_label, absenceEventId, contextDigest) => {
+    expect(
+      planResolvedFindingDisposition({
+        lineageId,
+        decision: "ALREADY_RESOLVED",
+        relation: "EXISTING",
+        validatorEventId: "validation-event-1",
+        contextDigest,
+        priorCommittedResolution: priorResolution,
+        independentlyVerifiedAbsenceEventId: absenceEventId,
+        independentlyVerifiedPresenceEventId: null,
+      }),
+    ).toMatchObject({ kind: "block" });
+  });
+
   it("opens a regression only for independently verified presence after a committed resolution", () => {
     expect(
       planResolvedFindingDisposition({
@@ -115,6 +134,21 @@ describe("finding validation dispositions", () => {
         contextDigest: "context-1",
       },
     });
+  });
+
+  it("blocks a VALID regression when its context differs from the committed resolution", () => {
+    expect(
+      planResolvedFindingDisposition({
+        lineageId,
+        decision: "VALID",
+        relation: "EXISTING",
+        validatorEventId: "validation-event-3",
+        contextDigest: "different-context",
+        priorCommittedResolution: priorResolution,
+        independentlyVerifiedAbsenceEventId: null,
+        independentlyVerifiedPresenceEventId: "observation-event-3",
+      }),
+    ).toMatchObject({ kind: "block" });
   });
 
   it("blocks conflicting or uncommitted resolution evidence rather than skipping it", () => {

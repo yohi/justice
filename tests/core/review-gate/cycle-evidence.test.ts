@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   buildVerifiedSemanticCycles,
-  computeSemanticContextInputsDigest,
   evaluateNonConvergenceCycles,
   planSemanticContextTransition,
   type SemanticBlockerEvidence,
@@ -10,6 +9,12 @@ import {
   type VerifiedSemanticContext,
   type VerifiedSemanticCycle,
 } from "../../../src/core/review-gate/cycle-evidence.js";
+import {
+  SEMANTIC_CONTEXT_COMPATIBILITY_PROOF_REGISTRY_DIGEST,
+  SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_DIGEST,
+  SEMANTIC_CONTEXT_COMPATIBILITY_V1,
+  computeSemanticGoverningProjectionDigest,
+} from "../../../src/core/review-gate/deterministic-validation.js";
 import type { LineageId, VerifiedSemanticContextTransitionInput } from "../../../src/core/review-gate/types.js";
 
 const context: VerifiedSemanticContext = {
@@ -118,13 +123,13 @@ function transitionInput(
     proof: {
       validationEventId: "compatibility-validation-1",
       triggeringAuthorityEventId,
-      validatorId: "SEMANTIC_CONTEXT_COMPATIBILITY_V1",
+      validatorId: SEMANTIC_CONTEXT_COMPATIBILITY_V1.validatorId,
       validatorVersion: "1",
       executableDigest: "validator-executable-v1",
-      registryDigest: "registry-v1",
-      compatibilityTableDigest: "compatibility-table-v1",
-      oldNormalizedInputsDigest: computeSemanticContextInputsDigest(oldInputs),
-      newNormalizedInputsDigest: computeSemanticContextInputsDigest(newInputs),
+      registryDigest: SEMANTIC_CONTEXT_COMPATIBILITY_PROOF_REGISTRY_DIGEST,
+      compatibilityTableDigest: SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_DIGEST,
+      oldNormalizedInputsDigest: computeSemanticGoverningProjectionDigest(oldInputs),
+      newNormalizedInputsDigest: computeSemanticGoverningProjectionDigest(newInputs),
       result: "EQUIVALENT",
       ruleId: "SEMANTIC_CONTEXT_FIELDS_IDENTICAL_V1",
       ruleVersion: "1",
@@ -165,6 +170,46 @@ describe("buildVerifiedSemanticCycles", () => {
     expect(buildVerifiedSemanticCycles(history)).toMatchObject({
       kind: "indeterminate",
       missingEvidence: expect.arrayContaining(["consecutive_revision_link"]),
+    });
+  });
+
+  it("returns indeterminate when a round context differs from the history context", () => {
+    const changedContext = { ...context, protocolFingerprint: "protocol-v2" };
+    const history: VerifiedLineageHistory = {
+      frontierHash: "frontier-1",
+      context,
+      rounds: [{ ...rawCycle(1), context: changedContext }],
+    };
+
+    expect(buildVerifiedSemanticCycles(history)).toMatchObject({
+      kind: "indeterminate",
+      missingEvidence: ["round_context:1"],
+    });
+  });
+
+  it("returns indeterminate when adjacent rounds do not increment by one", () => {
+    const history: VerifiedLineageHistory = {
+      frontierHash: "frontier-1",
+      context,
+      rounds: [rawCycle(1), { ...rawCycle(2), roundOrdinal: 3 }],
+    };
+
+    expect(buildVerifiedSemanticCycles(history)).toMatchObject({
+      kind: "indeterminate",
+      missingEvidence: ["consecutive_round_ordinal:1:3"],
+    });
+  });
+
+  it("returns indeterminate when adjacent rounds change comparison segment", () => {
+    const history: VerifiedLineageHistory = {
+      frontierHash: "frontier-1",
+      context,
+      rounds: [rawCycle(1), { ...rawCycle(2), comparisonSegmentId: "segment-1" }],
+    };
+
+    expect(buildVerifiedSemanticCycles(history)).toMatchObject({
+      kind: "indeterminate",
+      missingEvidence: ["consecutive_comparison_segment:2"],
     });
   });
 });
@@ -232,6 +277,34 @@ describe("evaluateNonConvergenceCycles", () => {
     expect(evaluateNonConvergenceCycles([value])).toEqual({ kind: "convergent" });
   });
 
+  it("matches a regression to a committed resolution in an earlier cycle", () => {
+    const resolved = cycle(1, {
+      committedResolutions: [
+        {
+          lineageId: "old-lineage" as LineageId,
+          resolutionEventId: "resolution-from-earlier-cycle",
+          verifiedCommitOid: "verified-commit",
+          contextDigest: context.contextDigest,
+        },
+      ],
+    });
+    const regressed = cycle(2, {
+      regressions: [
+        {
+          lineageId: "new-lineage" as LineageId,
+          priorResolutionEventId: "resolution-from-earlier-cycle",
+          newObservationEventId: "observation-regressed",
+          contextDigest: context.contextDigest,
+        },
+      ],
+    });
+
+    expect(evaluateNonConvergenceCycles([resolved, regressed])).toMatchObject({
+      kind: "non_convergent",
+      primaryReason: "RESOLVED_LINEAGE_REGRESSED",
+    });
+  });
+
   it("returns indeterminate for an incomplete target outcome", () => {
     const value = cycle(1, { targetOutcomes: [] });
 
@@ -263,7 +336,7 @@ describe("planSemanticContextTransition", () => {
       newInputs,
       proof: {
         ...base.proof,
-        newNormalizedInputsDigest: computeSemanticContextInputsDigest(newInputs),
+        newNormalizedInputsDigest: computeSemanticGoverningProjectionDigest(newInputs),
         result: "INCOMPATIBLE",
         ruleId: "REGISTERED_BREAKING_POLICY_V2",
       },
@@ -280,6 +353,20 @@ describe("planSemanticContextTransition", () => {
     const base = transitionInput();
     const input = transitionInput({
       proof: { ...base.proof, validationEventId: base.triggeringAuthorityEventId },
+    });
+
+    expect(planSemanticContextTransition(input)).toMatchObject({ kind: "BLOCK" });
+  });
+
+  it.each([
+    ["validatorId", "UNREGISTERED_VALIDATOR"],
+    ["compatibilityTableDigest", "forged-table-digest"],
+    ["registryDigest", "forged-registry-digest"],
+    ["oldNormalizedInputsDigest", "forged-projection-digest"],
+  ] as const)("blocks a proof with a mismatched %s", (field, value) => {
+    const base = transitionInput();
+    const input = transitionInput({
+      proof: { ...base.proof, [field]: value },
     });
 
     expect(planSemanticContextTransition(input)).toMatchObject({ kind: "BLOCK" });
