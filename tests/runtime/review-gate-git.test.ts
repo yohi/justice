@@ -902,3 +902,53 @@ const provider = createFsProvider(currentRoot);
     expect(schemaValidation.status, schemaValidation.stderr).toBe(0);
   });
 });
+
+describe("PLAN-030 — canonical target effect guard broker", () => {
+  it("fails closed when no protected target effect broker is installed", async () => {
+    const root = await initFixture();
+    const gate = createReviewGateGit({ rootDir: root, provider: createFsProvider(root) });
+    const seal = Reflect.get(gate, "sealCanonicalTargetsForTerminalIntent");
+
+    expect(seal).toBeTypeOf("function");
+    if (typeof seal !== "function") throw new Error("missing canonical target seal broker");
+
+    await expect(Reflect.apply(seal, gate, [Object.freeze({})])).resolves.toBe("BLOCK");
+  });
+
+  it("delegates ordered guards and terminal seals only to the protected target broker", async () => {
+    const root = await initFixture();
+    const gate = createReviewGateGit({ rootDir: root, provider: createFsProvider(root) });
+    const calls: string[] = [];
+    const input = Object.freeze({ terminalOperationId: "terminal-op" });
+    const expectedSeal = Object.freeze({ closingSealOperationId: "seal-op" });
+    Reflect.defineProperty(gate, "targetEffectBroker", {
+      value: {
+        withCanonicalTargetEffectGuards: async (
+          identities: readonly string[],
+          run: () => Promise<string>,
+        ): Promise<string> => {
+          calls.push(identities.join(","));
+          return run();
+        },
+        sealCanonicalTargetsForTerminalIntent: async (received: unknown): Promise<unknown> => {
+          expect(received).toBe(input);
+          return expectedSeal;
+        },
+      },
+    });
+    const guard = Reflect.get(gate, "withCanonicalTargetEffectGuards");
+    const seal = Reflect.get(gate, "sealCanonicalTargetsForTerminalIntent");
+
+    expect(guard).toBeTypeOf("function");
+    expect(seal).toBeTypeOf("function");
+    if (typeof guard !== "function" || typeof seal !== "function") {
+      throw new Error("missing canonical target effect guard broker");
+    }
+
+    await expect(
+      Reflect.apply(guard, gate, [["target-a", "target-b"], async () => "guarded"]),
+    ).resolves.toBe("guarded");
+    await expect(Reflect.apply(seal, gate, [input])).resolves.toBe(expectedSeal);
+    expect(calls).toEqual(["target-a,target-b"]);
+  });
+});

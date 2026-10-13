@@ -20,12 +20,14 @@ import {
   type VerifiedReviewCommit,
   type WorktreeArtifactBindingV1,
 } from "../core/review-gate/capabilities";
+import type { VerifiedClosingSealReceiptV1, VerifiedTargetWriterHandoffIntentV1 } from "../core/review-gate/types.js";
+import type { PreparedWitnessPublicationV1 } from "./review-gate-witness-contracts.js";
 import { canonicalJsonText, canonicalizeArtifactPath, computeArtifactDigest, computeCanonicalJsonFingerprint } from "../core/review-gate/identity";
 import type { ReviewGateRecoveryStore } from "./review-gate-recovery-store";
 import {
-DIFF_RAW_STATUS_RECORD,
-runGitLiteral,
-type GitLiteralResult,
+  DIFF_RAW_STATUS_RECORD,
+  runGitLiteral,
+  type GitLiteralResult,
 } from "./review-gate-query";
 
 /**
@@ -46,10 +48,45 @@ export type ReviewGateWorkspaceProvider = Readonly<{
   ) => Promise<void>;
 }>;
 
+
+/**
+ * Input to the terminal target closing seal (PLAN-030).
+ * The caller supplies the already-verified terminal handoff intents,
+ * the transition operation id, the prepared witness publication and the
+ * exact canonical event bytes that will seal the target set.
+ */
+export type PreparedTerminalIntentV1 = Readonly<{
+  readonly intents: readonly VerifiedTargetWriterHandoffIntentV1[];
+  readonly terminalTransitionOperationId: string;
+  readonly publication: PreparedWitnessPublicationV1;
+  readonly canonicalEventBytes: Uint8Array;
+}>;
+
+/** The authenticated receipt that proves a complete target closing seal. */
+export type VerifiedCompleteTargetClosingSealV1 = VerifiedClosingSealReceiptV1;
+
+/**
+ * Broker-owned canonical target effect guards (Task 10d PLAN-030).
+ *
+ * `undefined` until the coordinator installs the Task 5 protected
+ * target-wide registry/effect serialization; every related entrypoint
+ * fails closed on an absent broker so no unguarded mutation path exists.
+ */
+export type CanonicalTargetEffectBroker = Readonly<{
+  readonly withCanonicalTargetEffectGuards: <T>(
+    identities: readonly string[],
+    run: () => Promise<T>,
+  ) => Promise<T>;
+  readonly sealCanonicalTargetsForTerminalIntent: (
+    input: PreparedTerminalIntentV1,
+  ) => Promise<VerifiedCompleteTargetClosingSealV1 | "BLOCK">;
+}>;
+
 export type ReviewGateGitOptions = Readonly<{
   readonly rootDir: string;
   readonly provider: ReviewGateWorkspaceProvider;
   readonly recoveryStore?: ReviewGateRecoveryStore;
+  readonly targetEffectBroker?: CanonicalTargetEffectBroker | undefined;
 }>;
 
 const OID_PATTERN = /^[0-9a-f]{40,64}$/u;
@@ -129,10 +166,50 @@ export class ReviewGateGit {
   private readonly provider: ReviewGateWorkspaceProvider;
   private readonly recoveryStore: ReviewGateRecoveryStore | undefined;
 
+  private readonly targetEffectBroker: CanonicalTargetEffectBroker | undefined;
+
   constructor(options: ReviewGateGitOptions) {
     this.rootDir = options.rootDir;
     this.provider = options.provider;
     this.recoveryStore = options.recoveryStore;
+    this.targetEffectBroker = options.targetEffectBroker;
+  }
+
+  /**
+   * Acquire canonical target effect guards for an ordered target set and
+   * run `run` under them (PLAN-030). Fail-closed: without a broker there is
+   * no guarded path.
+   */
+  async withCanonicalTargetEffectGuards<T>(
+    sortedVerifiedTargetIdentities: readonly string[],
+    cb: () => Promise<T>,
+  ): Promise<T> {
+    return this.requireTargetEffectBroker().withCanonicalTargetEffectGuards(
+      sortedVerifiedTargetIdentities,
+      cb,
+    );
+  }
+
+  /**
+   * Complete closing seal for a prepared terminal intent (PLAN-030).
+   * Re-projects any pending prepared native effect and durably seals the
+   * whole verified target set or returns `"BLOCK"` fail-closed. Never
+   * publishes the witness event from inside the guard and never acquires
+   * a workspace/scope/Gate upper guard from beneath a target guard.
+   */
+  async sealCanonicalTargetsForTerminalIntent(
+    input: PreparedTerminalIntentV1,
+  ): Promise<VerifiedCompleteTargetClosingSealV1 | "BLOCK"> {
+    const broker = this.targetEffectBroker;
+    if (broker === undefined) return "BLOCK";
+    const outcome = await broker.sealCanonicalTargetsForTerminalIntent(input);
+    return outcome === "BLOCK" ? "BLOCK" : outcome;
+  }
+
+  private requireTargetEffectBroker(): CanonicalTargetEffectBroker {
+    const broker = this.targetEffectBroker;
+    if (broker === undefined) throw reviewDomainError("review_operation_not_permitted");
+    return broker;
   }
 
   private async git(args: readonly string[], stdin?: Buffer): Promise<GitLiteralResult> {

@@ -31,10 +31,11 @@ export type ReviewGateScopeWitnessOptions = WitnessOptions;
 import {
   createTargetWriterHandoff,
   type NativeRevocationAuthorizer,
-} from "./review-gate-target-writer-handoff.js";
+  } from "./review-gate-target-writer-handoff.js";
 import { createTerminalTargetWriterRevoke } from "./review-gate-target-writer-revoke.js";
 import { createTerminalIntentPublication } from "./review-gate-target-writer-closing-seal.js";
 import { createTargetWriterEffect } from "./review-gate-target-writer-effect.js";
+import { createCanonicalTargetEffectBroker } from "./review-gate-canonical-target-effect-broker.js";
 import { targetRegistrySchema } from "./review-gate-target-writer-schema.js";
 import { assertWitnessAdmissionOrder } from "./review-gate-lock-manager.js";
 import { authorizeAdditionalScope } from "./review-gate-witness-scope-enrollment.js";
@@ -63,6 +64,7 @@ export function createReviewGateScopeWitness(options: ReviewGateScopeWitnessOpti
     ...terminal,
     ...closingSeal,
     ...createTargetWriterEffect(context),
+    ...createCanonicalTargetEffectBroker(context),
     recoverPreparedTargetWriterHandoff: recoverHandoff,
     fenceAndAdvanceReviewWriterLease: recoverHandoff,
     withGateOwnedWitnessTransaction: <T>(run: (current: WitnessTransaction) => Promise<T>) =>

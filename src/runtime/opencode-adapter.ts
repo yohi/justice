@@ -1833,6 +1833,7 @@ async function buildSharedReviewGateRuntimeGraph(
           throw new Error("review_gate_mutation_unavailable");
         },
       },
+      targetEffectBroker: witness ?? undefined,
     });
 
     const coordinator = createReviewGateCoordinator({
