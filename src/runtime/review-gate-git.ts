@@ -305,11 +305,13 @@ export class ReviewGateGit {
     };
     const recoveryDigest = computeCanonicalJsonFingerprint(recoveryRecord);
     const recoveryBytes = Buffer.from(canonicalJsonText(recoveryRecord), "utf8");
-    if (this.recoveryStore !== undefined) {
-      const published = await this.recoveryStore.publish(recoveryDigest, recoveryBytes);
-      if (published === "created" || published === "exists") {
-        // stored; continue
-      }
+    if (this.recoveryStore === undefined) {
+      throw reviewDomainError("review_restore_failed");
+    }
+    try {
+      await this.recoveryStore.publish(recoveryDigest, recoveryBytes);
+    } catch (cause: unknown) {
+      throw reviewDomainError("review_restore_failed", cause);
     }
     return { ...prepared, recoveryDigest };
   }
@@ -471,11 +473,13 @@ export class ReviewGateGit {
     };
     const recoveryDigest = computeCanonicalJsonFingerprint(recoveryRecord);
     const recoveryBytes = Buffer.from(canonicalJsonText(recoveryRecord), "utf8");
-    if (this.recoveryStore !== undefined) {
-      const published = await this.recoveryStore.publish(recoveryDigest, recoveryBytes);
-      if (published === "created" || published === "exists") {
-        // stored; continue
-      }
+    if (this.recoveryStore === undefined) {
+      throw reviewDomainError("review_commit_failed");
+    }
+    try {
+      await this.recoveryStore.publish(recoveryDigest, recoveryBytes);
+    } catch (cause: unknown) {
+      throw reviewDomainError("review_commit_failed", cause);
     }
     return { ...prepared, recoveryDigest };
   }

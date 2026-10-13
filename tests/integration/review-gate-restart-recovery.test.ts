@@ -38,6 +38,7 @@ import {
 } from "../../src/core/review-gate/event-schema";
 import { computeCanonicalJsonFingerprint, computeWorkspaceIdentity } from "../../src/core/review-gate/identity";
 import { createReviewGateGit, computeUnrelatedIndexFingerprint } from "../../src/runtime/review-gate-git";
+import { createReviewGateRecoveryStore } from "../../src/runtime/review-gate-recovery-store";
 import type { ReviewGateWorkspaceProvider } from "../../src/runtime/review-gate-git";
 import { createReviewGateApprovalLookup } from "../../src/runtime/review-gate-approval";
 import { createReviewGateProtocolDescriptor } from "../../src/runtime/review-gate-protocol";
@@ -1769,7 +1770,11 @@ async function initGitFixture(
   await runGitCli(root, ["add", "-A"]);
   await runGitCli(root, ["commit", "-q", "--no-gpg-sign", "-m", "init"]);
   const provider = createFsProvider(root);
-  const git = createReviewGateGit({ rootDir: root, provider });
+  const git = createReviewGateGit({
+    rootDir: root,
+    provider,
+    recoveryStore: createReviewGateRecoveryStore(root),
+  });
   return { root, target, provider, git };
 }
 

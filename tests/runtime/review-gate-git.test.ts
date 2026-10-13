@@ -222,7 +222,7 @@ async function preparedForDirtyTarget(): Promise<{
   await writeFile(`${currentRoot}/docs/b.md`, "b staged\n");
   await runGitCli(currentRoot, ["add", "docs/b.md"]);
   const provider = createFsProvider(currentRoot);
-  const gate = createReviewGateGit({ rootDir: currentRoot, provider });
+  const gate = createReviewGateGit({ rootDir: currentRoot, provider, recoveryStore: createMemoryRecoveryStore() });
   const payload = await gate.prepareCommit(mutationCommitInput());
   return { provider, payload };
 }
@@ -380,7 +380,7 @@ describe("GIT1 — exact-artifact commit", () => {
 
   it("preserves parentTargetEntry.gitMode == newCommitTargetEntry.gitMode for content remediation", async () => {
     const { provider, payload } = await preparedForDirtyTarget();
-    const gate = createReviewGateGit({ rootDir: currentRoot, provider });
+    const gate = createReviewGateGit({ rootDir: currentRoot, provider, recoveryStore: createMemoryRecoveryStore() });
     const verified = await gate.executePreparedCommit(payload);
     expect(payload.parentTargetEntry.gitMode).toBe("100644");
     expect(verified.targetEntry.gitMode).toBe(payload.parentTargetEntry.gitMode);
@@ -416,7 +416,7 @@ describe("GIT1 — exact-artifact commit", () => {
 
   it("maps a real git commit subprocess failure to review_commit_failed and keeps HEAD", async () => {
     const { provider, payload } = await preparedForDirtyTarget();
-    const gate = createReviewGateGit({ rootDir: currentRoot, provider });
+    const gate = createReviewGateGit({ rootDir: currentRoot, provider, recoveryStore: createMemoryRecoveryStore() });
     const before = await headShaOf(currentRoot);
     await writeFile(`${currentRoot}/.git/index.lock`, ""); // deterministic real git failure
     try {
@@ -430,7 +430,7 @@ describe("GIT1 — exact-artifact commit", () => {
 
   it("conflicts when HEAD moved between prepare and execute", async () => {
     const { provider, payload } = await preparedForDirtyTarget();
-    const gate = createReviewGateGit({ rootDir: currentRoot, provider });
+    const gate = createReviewGateGit({ rootDir: currentRoot, provider, recoveryStore: createMemoryRecoveryStore() });
     await runGitCli(currentRoot, ["-c", "core.hooksPath=/dev/null", "commit", "-q", "--no-gpg-sign", "--allow-empty", "-m", "external"]);
     await expect(gate.executePreparedCommit(payload)).rejects.toThrow(
       "review_commit_recovery_conflict",
@@ -493,7 +493,7 @@ describe("GIT1 — prepared commit recovery", () => {
     currentRoot = await initFixture();
     await writeFile(`${currentRoot}/:(glob)*.md`, TARGET_V2); // known dirty post-image bytes
     const provider = createFsProvider(currentRoot, options);
-    const gate = createReviewGateGit({ rootDir: currentRoot, provider });
+    const gate = createReviewGateGit({ rootDir: currentRoot, provider, recoveryStore: createMemoryRecoveryStore() });
     const inspected = await gate.inspectTarget(TARGET);
     const sourceWorktree: WorktreeArtifactBindingV1 = {
       canonicalPath: TARGET,
@@ -575,7 +575,7 @@ describe("GIT1 — prepared commit recovery", () => {
     await runGitCli(currentRoot, ["-c", "core.hooksPath=/dev/null", "commit", "-q", "--no-gpg-sign", "-m", "exec-baseline"]);
     await writeFile(`${currentRoot}/:(glob)*.md`, TARGET_V2); // dirty bytes, office mode unchanged
     const provider = createFsProvider(currentRoot);
-    const gate = createReviewGateGit({ rootDir: currentRoot, provider });
+    const gate = createReviewGateGit({ rootDir: currentRoot, provider, recoveryStore: createMemoryRecoveryStore() });
     const inspected = await gate.inspectTarget(TARGET);
     expect(inspected.headEntry?.gitMode).toBe("100755");
     const result = await gate.executePreparedRestore(
@@ -647,7 +647,7 @@ describe("GIT1 — prepared commit recovery", () => {
     await runGitCli(currentRoot, ["-c", "core.hooksPath=/dev/null", "commit", "-q", "--no-gpg-sign", "-m", "exec-baseline"]);
     await writeFile(`${currentRoot}/:(glob)*.md`, TARGET_V2);
     const provider = createFsProvider(currentRoot);
-    const gate = createReviewGateGit({ rootDir: currentRoot, provider });
+    const gate = createReviewGateGit({ rootDir: currentRoot, provider, recoveryStore: createMemoryRecoveryStore() });
     const inspected = await gate.inspectTarget(TARGET);
     expect(inspected.worktree?.gitMode).toBe("100755");
     const payload = await gate.prepareRestore({
@@ -722,6 +722,22 @@ describe("GIT1 — prepared commit recovery", () => {
     );
     expect(provider.replaceCalls).toHaveLength(1); // execute only; recovery never rewrites
   });
+
+  it("rejects prepareRestore when no recovery store is configured", async (): Promise<void> => {
+    const { provider, input } = await prepareRestoreFixture();
+    const gate = createReviewGateGit({ rootDir: currentRoot, provider });
+    await expect(gate.prepareRestore(input)).rejects.toThrow("review_restore_failed");
+  });
+
+  it("rejects prepareRestore when recovery publication fails", async (): Promise<void> => {
+    const { provider, input } = await prepareRestoreFixture();
+    const gate = createReviewGateGit({
+      rootDir: currentRoot,
+      provider,
+      recoveryStore: createFailingRecoveryStore(),
+    });
+    await expect(gate.prepareRestore(input)).rejects.toThrow("review_restore_failed");
+  });
 });
 
 
@@ -742,8 +758,37 @@ function createMemoryRecoveryStore(): ReviewGateRecoveryStore {
   };
 }
 
+function createFailingRecoveryStore(): ReviewGateRecoveryStore {
+  return {
+    publish: async () => {
+      throw new Error("recovery_store_publish_failed");
+    },
+    read: async () => null,
+    list: async () => [],
+    close: () => {},
+  };
+}
+
 
 describe("GIT1 + recovery store", () => {
+  it("rejects prepareCommit when no recovery store is configured", async (): Promise<void> => {
+    const currentRoot = await initFixture();
+    await writeFile(`${currentRoot}/${TARGET}`, TARGET_V2);
+    const gate = createReviewGateGit({ rootDir: currentRoot, provider: createFsProvider(currentRoot) });
+    await expect(gate.prepareCommit(mutationCommitInput())).rejects.toThrow("review_commit_failed");
+  });
+
+  it("rejects prepareCommit when recovery publication fails", async (): Promise<void> => {
+    const currentRoot = await initFixture();
+    await writeFile(`${currentRoot}/${TARGET}`, TARGET_V2);
+    const gate = createReviewGateGit({
+      rootDir: currentRoot,
+      provider: createFsProvider(currentRoot),
+      recoveryStore: createFailingRecoveryStore(),
+    });
+    await expect(gate.prepareCommit(mutationCommitInput())).rejects.toThrow("review_commit_failed");
+  });
+
   it("prepareCommit persists a canonical recovery record and returns its digest", async () => {
     const currentRoot = await initFixture();
     await writeFile(`${currentRoot}/${TARGET}`, TARGET_V2);
