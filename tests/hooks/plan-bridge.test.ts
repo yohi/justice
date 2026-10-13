@@ -178,7 +178,7 @@ describe("normalizeTaskToolInputWithCategory", () => {
     expect(result.run_in_background).toBe(true);
   });
 
-  it("removes forbidden task fields and preserves prompt", () => {
+  it("removes unsupported routing fields and preserves the caller-owned subagent_type", () => {
     const input = {
       prompt: "do work",
       subagent_type: "deep",
@@ -194,8 +194,74 @@ describe("normalizeTaskToolInputWithCategory", () => {
 
     expect(result).toEqual({
       prompt: "do work",
-      category: "sp-implementation",
+      subagent_type: "deep",
     });
+  });
+
+  it("treats a general subagent_type as caller-owned without a final wire category", () => {
+    const result = normalizeTaskToolInputWithCategory(
+      { prompt: "x", subagent_type: "general", category: "sp-review" },
+      "sp-implementation",
+    );
+
+    expect(result).toEqual({ prompt: "x", subagent_type: "general" });
+  });
+
+  it("keeps Justice-owned routing when the caller omits a string subagent_type", () => {
+    const result = normalizeTaskToolInputWithCategory(
+      { prompt: "x", subagent_type: 42 },
+      "sp-implementation",
+    );
+
+    expect(result).toEqual({ prompt: "x", category: "sp-implementation" });
+    expect(result).not.toHaveProperty("subagent_type");
+  });
+
+  it("forces mandatory review categories to the foreground for caller-owned routing", () => {
+    const result = normalizeTaskToolInputWithCategory(
+      { prompt: "review", subagent_type: "general", run_in_background: true },
+      "sp-review",
+    );
+
+    expect(result.run_in_background).toBe(false);
+    expect(result).not.toHaveProperty("category");
+  });
+
+  it("never places plan-task or synthetic ids on the wire task_id", () => {
+    const result = normalizeTaskToolInputWithCategory(
+      { prompt: "x", task_id: "task-1", taskId: "task-2" },
+      "sp-implementation",
+    );
+
+    expect(result).not.toHaveProperty("task_id");
+    expect(result).not.toHaveProperty("taskId");
+  });
+
+  it("forwards only a genuine ses_ continuation as the wire task_id", () => {
+    const callerOwned = normalizeTaskToolInputWithCategory(
+      { prompt: "x", task_id: "ses_continuation-abc", subagent_type: "general" },
+      "sp-implementation",
+    );
+    expect(callerOwned.task_id).toBe("ses_continuation-abc");
+    expect(callerOwned).not.toHaveProperty("category");
+
+    const justiceOwned = normalizeTaskToolInputWithCategory(
+      { prompt: "x", taskId: "ses_continuation-abc" },
+      "sp-implementation",
+    );
+    expect(justiceOwned.task_id).toBe("ses_continuation-abc");
+    expect(justiceOwned.category).toBe("sp-implementation");
+  });
+
+  it("merges caller skill fields into a deduplicated normalized load_skills", () => {
+    const result = normalizeTaskToolInputWithCategory(
+      { prompt: "x", skills: ["s1", "s1"], loadSkills: ["s2"] },
+      "sp-implementation",
+    );
+
+    expect(result.load_skills).toEqual(["s1", "s2"]);
+    expect(result).not.toHaveProperty("skills");
+    expect(result).not.toHaveProperty("loadSkills");
   });
 
   it("sets the normalized category when the input already has one", () => {
@@ -495,8 +561,10 @@ describe("PlanBridge", () => {
         .toBeLessThan(modifiedArgs?.prompt?.indexOf("**JUSTICE EXECUTION CONSTRAINTS**"));
     });
 
-    it("treats general routing as a Superpowers compatibility placeholder under an approved plan", async () => {
-      const reader = createMockFileReader({ "docs/plans/sample-plan.md": samplePlanContent });
+    it("preserves caller-owned general routing bypassing the Justice category", async () => {
+      const reader = createMockFileReader({
+        "docs/plans/sample-plan.md": samplePlanContent,
+      });
       const bridge = new PlanBridge(reader, createLoopHandler(reader));
       wirePlanBridgeAuthorization(bridge);
       await bridge.handleImplementationArm("s-owned-route", {
@@ -505,20 +573,211 @@ describe("PlanBridge", () => {
         approved: true,
       });
 
+      const toolInput: Record<string, unknown> = {
+        prompt: "caller request",
+        task_id: "task-1",
+        subagent_type: "general",
+        description: "caller chosen worker",
+      };
+      const toolInputSnapshot = { ...toolInput };
+
       const response = await bridge.handlePreToolUse({
         type: "PreToolUse",
         sessionId: "s-owned-route",
+        payload: { toolName: "task", toolInput },
+      });
+
+      expect(response.action).toBe("inject");
+      if (response.action !== "inject") throw new Error("expected inject response");
+      const args = response.modifiedPayload?.args;
+      // Caller-owned routing: the caller's worker identity reaches the wire and
+      // Justice never sets a final category for it.
+      expect(args?.subagent_type).toBe("general");
+      expect(args).not.toHaveProperty("category");
+      // Caller-provided `task-N` ids never leak onto the wire as `task_id`.
+      expect(args).not.toHaveProperty("task_id");
+      // Parent-plan task correlation is preserved.
+      expect(args?.justice_task_id).toBe("task-1");
+      // The caller-owned args shape stays intact: caller fields survive and the
+      // caller's own toolInput object is never mutated in place.
+      expect(args?.description).toBe("caller chosen worker");
+      expect(toolInput).toEqual(toolInputSnapshot);
+      expect(args?.prompt).toContain("**TASK CONTRACT FROM APPROVED PLAN**");
+    });
+
+    it("respects the caller's arbitrary subagent string without a Justice category", async () => {
+      const reader = createMockFileReader({
+        "docs/plans/sample-plan.md": samplePlanContent,
+      });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      wirePlanBridgeAuthorization(bridge);
+      await bridge.handleImplementationArm("s-arbitrary-worker", {
+        source: "command",
+        planPath: "docs/plans/sample-plan.md",
+        approved: true,
+      });
+
+      const response = await bridge.handlePreToolUse({
+        type: "PreToolUse",
+        sessionId: "s-arbitrary-worker",
         payload: {
           toolName: "task",
-          toolInput: { prompt: "caller request", task_id: "task-1", subagent_type: "general" },
+          toolInput: { prompt: "caller request", subagent_type: "my-own-worker" },
         },
       });
 
       expect(response.action).toBe("inject");
       if (response.action !== "inject") throw new Error("expected inject response");
-      expect(response.modifiedPayload?.args.category).toBe("sp-implementation");
-      expect(response.modifiedPayload?.args).not.toHaveProperty("subagent_type");
-      expect(response.modifiedPayload?.args.prompt).toContain("**TASK CONTRACT FROM APPROVED PLAN**");
+      const args = response.modifiedPayload?.args;
+      expect(args?.subagent_type).toBe("my-own-worker");
+      expect(args).not.toHaveProperty("category");
+      expect(args?.justice_task_id).toBe("task-1");
+    });
+
+    it("uses the Justice category when no subagent_type is provided", async () => {
+      const reader = createMockFileReader({
+        "docs/plans/sample-plan.md": samplePlanContent,
+      });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      wirePlanBridgeAuthorization(bridge);
+      await bridge.handleImplementationArm("s-justice-route", {
+        source: "command",
+        planPath: "docs/plans/sample-plan.md",
+        approved: true,
+      });
+
+      const response = await bridge.handlePreToolUse({
+        type: "PreToolUse",
+        sessionId: "s-justice-route",
+        payload: { toolName: "task", toolInput: { prompt: "caller request" } },
+      });
+
+      expect(response.action).toBe("inject");
+      if (response.action !== "inject") throw new Error("expected inject response");
+      const args = response.modifiedPayload?.args;
+      expect(args?.category).toBe("sp-implementation");
+      expect(args).not.toHaveProperty("subagent_type");
+      expect(args?.justice_task_id).toBe("task-1");
+    });
+
+    it("never leaks plan-task ids as wire task_id and passes genuine ses_ continuations", async () => {
+      const reader = createMockFileReader({
+        "docs/plans/sample-plan.md": samplePlanContent,
+      });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      wirePlanBridgeAuthorization(bridge);
+      await bridge.handleImplementationArm("s-wire-ids", {
+        source: "command",
+        planPath: "docs/plans/sample-plan.md",
+        approved: true,
+      });
+
+      const taskResponse = await bridge.handlePreToolUse({
+        type: "PreToolUse",
+        sessionId: "s-wire-ids",
+        payload: {
+          toolName: "task",
+          toolInput: { prompt: "delegate task 1", task_id: "task-1" },
+        },
+      });
+      expect(taskResponse.action).toBe("inject");
+      if (taskResponse.action !== "inject") throw new Error("expected inject response");
+      const taskArgs = taskResponse.modifiedPayload?.args;
+      expect(taskArgs).not.toHaveProperty("task_id");
+      expect(taskArgs?.justice_task_id).toBe("task-1");
+
+      const continuationResponse = await bridge.handlePreToolUse({
+        type: "PreToolUse",
+        sessionId: "s-wire-ids",
+        payload: {
+          toolName: "task",
+          toolInput: {
+            prompt: "continue the previous subagent session",
+            task_id: "ses_worker-continuation",
+          },
+        },
+      });
+      expect(continuationResponse.action).toBe("inject");
+      if (continuationResponse.action !== "inject") throw new Error("expected inject response");
+      const continuationArgs = continuationResponse.modifiedPayload?.args;
+      expect(continuationArgs?.task_id).toBe("ses_worker-continuation");
+      expect(continuationArgs?.category).toBe("sp-implementation");
+      expect(continuationArgs).not.toHaveProperty("subagent_type");
+    });
+
+    it("forces a caller-owned general review task to the foreground without a wire category", async () => {
+      const reader = createMockFileReader({
+        "docs/plans/sample-plan.md": samplePlanContent,
+      });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      wirePlanBridgeAuthorization(bridge);
+      await bridge.handleImplementationArm("s-mandatory-review", {
+        source: "command",
+        planPath: "docs/plans/sample-plan.md",
+        approved: true,
+      });
+
+      const reviewerPrompt =
+        "You are reviewing one task's implementation of task-1 against its checklist.";
+      const response = await bridge.handlePreToolUse({
+        type: "PreToolUse",
+        sessionId: "s-mandatory-review",
+        payload: {
+          toolName: "task",
+          toolInput: {
+            prompt: reviewerPrompt,
+            subagent_type: "general",
+            run_in_background: true,
+          },
+        },
+      });
+
+      expect(response.action).toBe("inject");
+      if (response.action !== "inject") throw new Error("expected inject response");
+      const args = response.modifiedPayload?.args;
+      expect(args?.subagent_type).toBe("general");
+      expect(args?.run_in_background).toBe(false);
+      expect(args).not.toHaveProperty("category");
+      expect(args?.prompt).toBe(reviewerPrompt);
+    });
+
+    it("forwards the exact authorized PlanTask.rawBody inside the worker prompt", async () => {
+      const planContent = [
+        "## Task 1: Setup",
+        "- [ ] Create project",
+        "- [ ] Setup project structure",
+        "",
+        "## Task 2: Ship",
+        "- [ ] Release",
+      ].join("\n");
+      const reader = createMockFileReader({ "docs/plans/exact-plan.md": planContent });
+      const bridge = new PlanBridge(reader, createLoopHandler(reader));
+      wirePlanBridgeAuthorization(bridge);
+      await bridge.handleImplementationArm("s-raw-body", {
+        source: "command",
+        planPath: "docs/plans/exact-plan.md",
+        approved: true,
+      });
+
+      const response = await bridge.handlePreToolUse({
+        type: "PreToolUse",
+        sessionId: "s-raw-body",
+        payload: {
+          toolName: "task",
+          toolInput: { prompt: "delegate task 1", subagent_type: "general" },
+        },
+      });
+
+      expect(response.action).toBe("inject");
+      if (response.action !== "inject") throw new Error("expected inject response");
+      const expectedRawBody =
+        "## Task 1: Setup\n- [ ] Create project\n- [ ] Setup project structure\n";
+      const args = response.modifiedPayload?.args;
+      expect(args?.prompt).toContain(
+        `**TASK CONTRACT FROM APPROVED PLAN**\n\n${expectedRawBody}`,
+      );
+      // Only the authorized task scope reaches the worker contract — not the next task.
+      expect(args?.prompt).not.toContain("## Task 2: Ship");
     });
 
     it("uses category-only worker routing when implementation directive adds test-driven-development", async () => {

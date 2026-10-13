@@ -82,10 +82,25 @@ export function normalizeTaskToolInputWithCategory(
   category: SpCategory | TaskCategory,
 ): Record<string, unknown> {
   const normalized = normalizeTaskToolInput(toolInput);
-  normalized.category = category;
+  // Task 17 caller-owned routing: a caller-provided string `subagent_type`
+  // (including "general") owns worker routing, so no final `category` is set
+  // on the wire; the Justice category only applies without a caller string.
+  const callerSubagentType = toolInput.subagent_type;
+  if (typeof callerSubagentType === "string") {
+    normalized.subagent_type = callerSubagentType;
+    delete normalized.category;
+  } else {
+    normalized.category = category;
+  }
+  // Foreground mandatory review is preserved regardless of routing ownership.
   if (category === "sp-review" || category === "sp-final-review") {
     normalized.run_in_background = false;
   }
+  // Only a genuine OmO `ses_...` continuation may reach the wire `task_id`
+  // (never `task-N` plan-task IDs or any synthetic ID).
+  delete normalized.task_id;
+  const continuationTaskId = resolveOmoContinuationTaskId(toolInput);
+  if (continuationTaskId !== undefined) normalized.task_id = continuationTaskId;
   return normalized;
 }
 
@@ -1444,9 +1459,6 @@ export class PlanBridge {
         event.payload.toolInput,
         semanticReviewCategory,
       );
-      delete normalizedArgs.task_id;
-      const continuationTaskId = resolveOmoContinuationTaskId(event.payload.toolInput);
-      if (continuationTaskId !== undefined) normalizedArgs.task_id = continuationTaskId;
       return {
         action: "inject",
         injectedContext: "",
@@ -1530,17 +1542,7 @@ export class PlanBridge {
       event.payload.toolInput,
       effectiveDelegation.category,
     );
-    const callerSubagentType = event.payload.toolInput.subagent_type;
-    const callerOwnedRouting =
-      typeof callerSubagentType === "string" && callerSubagentType !== "general";
-    if (callerOwnedRouting) {
-      normalizedArgs.subagent_type = event.payload.toolInput.subagent_type;
-      delete normalizedArgs.category;
-    }
     normalizedArgs.prompt = authoritativePrompt;
-    delete normalizedArgs.task_id;
-    const continuationTaskId = resolveOmoContinuationTaskId(event.payload.toolInput);
-    if (continuationTaskId !== undefined) normalizedArgs.task_id = continuationTaskId;
     normalizedArgs.justice_task_id = delegation.taskId;
     delete normalizedArgs.skills;
     delete normalizedArgs.loadSkills;
