@@ -17,6 +17,25 @@ import { withWitnessScopeGateLocks } from "./review-gate-lock-manager.js";
 
 const MAX_COMMITTED_PUBLICATIONS = 1024;
 
+export function retainedJournalFiles(
+  workspaces: Readonly<Record<string, Readonly<{
+    frontier: Readonly<{ writerHeads: readonly Readonly<{ hash: string }>[] }>;
+  }>>>,
+  updatedWorkspaceIdentity: string,
+  updatedWriterHeads: readonly Readonly<{ hash: string }>[],
+): ReadonlySet<string> {
+  const retained = new Set<string>();
+  for (const [workspaceIdentity, workspace] of Object.entries(workspaces)) {
+    const writerHeads = workspaceIdentity === updatedWorkspaceIdentity
+      ? updatedWriterHeads
+      : workspace.frontier.writerHeads;
+    for (const writerHead of writerHeads) {
+      retained.add(`journal-${writerHead.hash}.bin`);
+    }
+  }
+  return retained;
+}
+
 export function publicationLockIds(
   input: PreparedWitnessPublicationV1,
 ): Readonly<{ scopeIds: readonly string[]; gateIds: readonly string[] }> {
@@ -196,9 +215,11 @@ export async function commitPublicationUnlocked(
     }
   }
   retainedPublicationFiles.add(`stage-${record.stagingDigest}.bin`);
-  for (const writerHead of publication.nextFrontier.writerHeads) {
-    retainedPublicationFiles.add(`journal-${writerHead.hash}.bin`);
-  }
+  for (const journalFile of retainedJournalFiles(
+    current.data.workspaces,
+    publication.workspaceIdentity,
+    publication.nextFrontier.writerHeads,
+  )) retainedPublicationFiles.add(journalFile);
   await context.store.removePublicationFiles(retainedPublicationFiles);
   return "advanced";
 }

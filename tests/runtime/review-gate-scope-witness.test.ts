@@ -14,6 +14,7 @@ import {
 } from "./review-gate-witness-fixtures.js";
 import { createReviewGateLockManager } from "../../src/runtime/review-gate-lock-manager.js";
 import { createPrivateRawResponseStore } from "../../src/runtime/review-gate-recovery-store.js";
+import { retainedJournalFiles } from "../../src/runtime/review-gate-publication-record.js";
 
 describe("protected scope witness", () => {
   let f: WitnessFixture;
@@ -23,6 +24,14 @@ describe("protected scope witness", () => {
   afterEach(async () => {
     f.witness.close();
     await rm(f.sandbox, { recursive: true, force: true });
+  });
+  it("retains journals for writer heads in other enrolled workspaces", () => {
+    const workspaces = {
+      workspaceA: { frontier: { writerHeads: [{ hash: "a" }] } },
+      workspaceB: { frontier: { writerHeads: [{ hash: "b" }] } },
+    };
+    const retained = retainedJournalFiles(workspaces, "workspaceA", [{ hash: "a-next" }]);
+    expect([...retained].sort()).toEqual(["journal-a-next.bin", "journal-b.bin"]);
   });
   it("durably consumes a separately authenticated first enrollment exactly once", async () => {
     const auth = await f.enroll();
