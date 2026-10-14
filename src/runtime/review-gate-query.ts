@@ -253,6 +253,13 @@ export function createReviewGateQueryService({
     rawPath: string,
   ): Promise<Buffer> => {
     const canonical = requireScopePath(scope, "artifact", rawPath);
+    if (scope.phase === "plan" && canonical === scope.approvedDesignCanonicalPath) {
+      const approvedDesign = scope.approvedDesign ?? null;
+      if (approvedDesign === null) {
+        throw new Error("review_operation_not_permitted: approved design proof unavailable");
+      }
+      return await approvedBytesOrNotPermitted(approvedDesign);
+    }
     const approvedDesign = scope.approvedDesign ?? null;
     if (approvedDesign !== null && canonical === approvedDesign.canonicalPath) {
       // FDR-014: an in-scope approved upstream Design read is always served

@@ -517,6 +517,20 @@ describe("PlanBridge FDR-014 approved Design read boundary", () => {
     expect(scope?.approvedDesign?.designClearEventId).toBe("evt-design-clear-lock");
   });
 
+  it("returns no plan reviewer scope when approved Design binding is unavailable", async () => {
+    const { bridge } = createLockHarness(false);
+    bridge.setReviewGateApprovedDesignAuthority(
+      fakeAuthority({ getApprovedDesignBinding: async () => null }),
+    );
+    await bridge.handleReviewGateStart("parent", {
+      source: "command",
+      designPath: DESIGN_PATH,
+      planPath: PLAN_PATH,
+    });
+
+    await expect(bridge.buildPlanReviewerQueryScope("parent")).resolves.toBeNull();
+  });
+
   it("returns no reviewer scope when approved Design authority lookup throws", async () => {
     const { bridge } = createLockHarness(false);
     bridge.setReviewGateApprovedDesignAuthority(

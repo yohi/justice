@@ -112,6 +112,7 @@ describe("review query scoping predicates", () => {
     phase: "design",
     allowedArtifactPaths: new Set(["docs/design.md", "requirements.md"]),
     allowedGitPaths: new Set(["docs/design.md"]),
+    approvedDesignCanonicalPath: null,
   };
 
   it("allows exact canonical phase artifact paths", () => {

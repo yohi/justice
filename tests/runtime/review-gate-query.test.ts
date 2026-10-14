@@ -133,6 +133,20 @@ afterAll(async () => {
 });
 
 describe("ReviewGateQueryService CAP1 scope", () => {
+  it("rejects unproved approved Design reads and searches", async () => {
+    const service = createReviewGateQueryService({
+      rootDir,
+      workspaceReader: narrowWorkspaceReader(rootDir),
+    });
+
+    await expect(service.readArtifact(planScope, "docs/design.md")).rejects.toThrow(
+      "review_operation_not_permitted",
+    );
+    await expect(
+      service.searchArtifact(planScope, "docs/design.md", "Design"),
+    ).rejects.toThrow("review_operation_not_permitted");
+  });
+
   it("reads exact in-scope artifact bytes and denies out-of-scope reads", async () => {
     const service = createReviewGateQueryService({
       rootDir,

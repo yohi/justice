@@ -592,6 +592,7 @@ export class PlanBridge {
         gateId: lock.gateId,
         designPath: lock.designPath,
       });
+      if (approvedDesign === null) return null;
       return buildReviewQueryScope("plan", {
         // A Plan-phase scope admits only the approved Design and the current
         // Plan; the effective Requirements identity is validated inside the

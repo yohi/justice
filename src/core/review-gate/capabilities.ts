@@ -97,6 +97,7 @@ export type ReviewQueryScope = Readonly<{
   readonly phase: ReviewPhase;
   readonly allowedArtifactPaths: ReadonlySet<string>;
   readonly allowedGitPaths: ReadonlySet<string>;
+  readonly approvedDesignCanonicalPath: string | null;
   /**
    * FDR-014 proof-bound immutable content source for the approved upstream
    * Design (Plan phase only). Absent or `null` marks an unproved scope: the
@@ -295,10 +296,13 @@ export function buildReviewQueryScope(
     if (canonical === null) throw new Error("review_gate_invalid_artifact_path");
     return canonical;
   });
+  const approvedDesignCanonicalPath =
+    phase === "plan" ? authority.approvedDesignCanonicalPath : null;
   return {
     phase,
     allowedArtifactPaths: new Set(members),
     allowedGitPaths: new Set(members),
+    approvedDesignCanonicalPath,
     approvedDesign,
   };
 }
