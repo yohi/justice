@@ -280,6 +280,46 @@ manifest.releaseDescriptorDigest ===
 - 現在の runtime の semantic contract と異なる場合でも、署名済み証跡が一致すれば正当とする。
 - 現在の runtime での追加検証は、それとは別の工程として実施する。
 
+
+#### D7.1：signed manifest 変更分類と phase-scoped authorization（RG-PHASE-003）
+
+**署名が正当であることと、単一 phase の変更が許可されることは別の判定。** 全 manifest/policy/history の真正性検証の後、old/new の signed semantic fields を次表で分類する。本版では registry 単体 digest から内部構造を復元できず、外部 registry impact proof も導入しないため、影響範囲が証明できない registry digest 変更は **BLOCK** とする。
+
+| Signed manifest field | 分類 | Phase-only NC1 の確定規則 |
+| --- | --- | --- |
+| `phase` | 不変条件 | old/new とも要求 phase に一致必須。他 phase の中間 ancestry は認証を条件に許可 |
+| `installationId` | 不変条件 | independently authenticated installation と全 release で一致 |
+| `publicationOperationId`, `releaseId`, `parentReleaseId`, `expectedProtectedReleaseHead` | 独立認証済み publication/chain metadata | 値は更新可、CAS と chain/head replay、操作の一意性を検証 |
+| `sourceDigest`, `releaseDescriptorDigest` | digest/integrity invariant | 更新可だが exact bytes / signed semantic descriptor とそれぞれ一致必須 |
+| `descriptor.designPhase` / `descriptor.planPhase` | 要求 phase 固有 semantic change | 要求 phase の slice のみ変化可。要求外 slice は不変 |
+| `descriptor.crossPhase`, `descriptor.requirementsResolutionPolicyVersion`, `descriptor.authorityPolicy` | Shared/global semantic change | 値が変化すれば **BLOCK** |
+| `reviewProtocolFingerprint`, `designProtocolFingerprint`, `planProtocolFingerprint` | 派生値の不変条件 | 各 release の signed semantic digest で再計算。要求 phase fingerprint だけ old/new で変化可。global の追随変化は許容 |
+| `promptRegistryDigest` | Phase-only として認証不能な registry metadata | **値が変化した場合 BLOCK**。digest だけでは design/plan 限定を証明不能 |
+| `validatorRegistryDigest` | Shared/global または範囲不明 | **値が変化した場合 BLOCK** |
+| `semanticPolicyRegistryDigest` | Shared/global または範囲不明 | **値が変化した場合 BLOCK**（descriptor 外の共有 policy も含む） |
+| `verifiedSemanticContractDigest` | Shared/global semantic change | **old/new で変化した場合 BLOCK**。歴史的に真正でも phase-only 許可にはならない |
+| `trustPolicyVersion`, `keyRotationReference` | 独立に認証された publisher trust metadata | host-root-authorized contiguous rotation のみ更新可。semantic digest は不変必須。key rotation だけでは NC1 許可を生成しない |
+| `releaseAuthority.schemaVersion` | 不変条件 | current verified schema と完全一致。既存 signed release の暗黙変更禁止 |
+| `releaseAuthority.trustedPublisherPolicyVersion` | 独立認証済み trust metadata | 各 manifest の `trustPolicyVersion` と一致必須。空文字 sentinel 不許可。実行時は live effective policy と照合 |
+
+**Positive path:** old/new の signed descriptor が要求 phase slice **だけ**異なり、非対象 slice・shared fields・3 registry digests・`verifiedSemanticContractDigest` が不変で、D1–D7 の署名、protected history、policy epoch、live freshness、same-phase ancestry および NC1 finalization CAS が通った場合のみ phase-only candidate を許可できる。phase 専用 prompt 変更でも `promptRegistryDigest` が変わるなら、本版では **BLOCK**（将来の phase-impact proof 導入は別途設計審査）。
+
+| テストシナリオ | Publication/history | Phase-only NC1 |
+| --- | --- | --- |
+| Design slice だけ変更（3 registry/semantic digest は不変） | 正当な署名なら受理可能 | すべての証拠一致で成功 |
+| Plan slice だけ変更（上記同様） | 正当な署名なら受理可能 | すべての証拠一致で成功 |
+| Design + shared policy / Plan + shared policy | 独立承認済み publication なら受理可能 | **BLOCK** |
+| Publisher key **だけ**正当に rotation、semantic digest 不変 | rotation は受理可能 | phase fingerprint 差分がないため candidate `null`、承認 event 無し |
+| Verified semantic contract digest が変更、history は正当 | historical release は再検証可能 | **BLOCK** |
+| prompt/validator/semanticPolicy registry digest のみ変更 | 署名済み history の検証とは独立 | **BLOCK** |
+| descriptor に現れない shared registry 変更 | 同上 | **BLOCK** |
+
+Task 2 の semantic contract version 更新テストは **signed publication / historical re-verification** のみの正常系である。Task 8 の phase-only NC1 正常系では **semantic contract digest を固定**し、Task 7 の global/phase fingerprint 分類は provider 判定の**前段**とする。署名が通っただけで phase-only の authorization を推定してはならない。
+
+#### D7.2：非承認 sentinel と signed publication fixture（RG-PHASE-004）
+
+`createReviewGateProtocolDescriptor()` の既定 `releaseAuthority.trustedPublisherPolicyVersion = ""` は **未認証・未承認**を意味する sentinel とし、`releaseManifestSchema` の `id` validation を**変更せず**空値を reject する。`createReviewGateProtocolDescriptor({ trustedPublisherPolicyVersion: "policy-1" })` のように signed publication fixture は **テスト内で独立に provision・検証した実際の publisher policy version** を明示し、`manifest.trustPolicyVersion` と一致させる。placeholder や fallback policy version を自動補完しない。production Task 5 が成立しない場合は sentinel のまま、実 release は発行不可、NC1 adapter は `"BLOCK"`。sentinel reject と valid fixture success は異なるテストで証明する。
+
 ## 追加で解決すべき不整合
 
 ### 1. scope-admission の global/phase fingerprint 判定順序
@@ -353,5 +393,6 @@ publication テストでは `trustPolicyVersion: "policy-1"` を使用するが�
 - `rotatePublisherTrustPolicy()` への phase 引数追加は不要。Publisher 信頼ポリシーは release の承認対象 phase とは別の概念。
 - `commitPreparedProtocolReleaseCAS()` も、署名済み manifest の `phase` を利用できるため、操作引数に重複して指定する必要はない。
 - 既存の署名済み release に phase を自動補完する移行は避ける。V2 schema として再発行するか、明示的な手続きを設ける。
+- RG-PHASE-001〜004 は本書で設計上の修正案を明確化したのみで、**Fresh Independent Review まで OPEN / PENDING RECHECK**。正式承認・実装許可・Task 5 成立を意味しない。
 - 上記の統合契約が検証されるまでは、`opencode-adapter.ts` の fail-closed stub を維持する。
 - Task 5 の信頼境界が成立し、受入条件が実証されるまでは real provider の有効化は行わない。
