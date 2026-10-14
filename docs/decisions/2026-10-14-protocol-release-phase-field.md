@@ -170,6 +170,67 @@ interface TrustedProtocolReleaseAdmissionHost {
 
 無条件に「最新」を選択せず、保護された履歴と承認状態に基づく決定的な選択、または安全な失敗を優先する。
 
+
+#### D4.1：snapshot、policy history、historical signature verifier の契約（RG-PHASE-002）
+
+**採用構成:** privileged registry verifier が host-root-authorized policy history を検証して `VerifiedReleaseSnapshot` を返し、Task 4 の pure source と historical verifier の**両方**を同一 snapshot から生成する。外部の任意の verifier・key resolver には依存しない。`publisherKeyDigest` は信頼できる SPKI DER 公開鍵の SHA-256（lowercase 64 hex）。
+
+```typescript
+type VerifiedPublisherPolicyEpoch = Readonly<{
+  version: string;
+  previousVersion: string | null;    // root epoch は null
+  publisherPublicKeyPem: string;      // host-root-authorized Ed25519 SPKI PEM
+  publisherKeyDigest: string;         // SHA-256(SPKI DER)
+  verifiedSemanticContractDigest: string;
+  rotationReference: string | null;
+  authorizedAtHead: ReleaseHead;      // host-signed expectedProtectedReleaseHead
+}>;
+type VerifiedCommittedRelease = Readonly<{
+  manifest: ReleaseManifest;
+  publisherSignature: string;
+  installerSignature: string;
+  sourceBytesBase64: string;          // exact bytes; mutable Uint8Array を公開しない
+  sequence: number;
+  postCommitHead: ReleaseHead;
+  effectivePolicyVersion: string;
+}>;
+type VerifiedReleaseSnapshot = Readonly<{
+  installationId: string;
+  signedRoot: Readonly<{
+    installationId: string;
+    trustPolicyVersion: string;
+    publisherPublicKeyPem: string;
+    initialFrontierDigest: string;
+  }>;
+  trustedAnchor: TrustedProtocolReleaseAnchorV1;
+  policyHistory: readonly VerifiedPublisherPolicyEpoch[]; // root→current
+  committedReleases: readonly VerifiedCommittedRelease[]; // oldest→newest
+  head: ReleaseHead;
+  registryRevision: number;
+  registryStateHash: string;
+  currentPolicyVersion: string;
+}>;
+interface VerifiedProtocolReleaseSource {
+  readRegistryHead(): Promise<string | null>;   // guarded snapshot head のみ
+  readRelease(id: string): Promise<ProtocolReleaseRecordV1 | null>;
+  readReleaseByPhaseAndDescriptorDigest(
+    phase: VerifiedProtocolReleasePhase,
+    releaseDescriptorDigest: string,
+  ): Promise<ProtocolReleaseRecordV1 | null>;
+}
+```
+
+`ProtocolReleaseRecordV1` は既存の exact bytes SHA-256 `descriptorDigest` を維持し、`releaseDescriptorDigest: string`、`verifiedSemanticContractDigest: string`、`manifest: ReleaseManifest`、`effectivePolicyVersion: string` を追加する。必須 invariant は `descriptorDigest === manifest.sourceDigest`、`releaseDescriptorDigest === manifest.releaseDescriptorDigest`、`effectivePolicyVersion === manifest.trustPolicyVersion`、`registryHead === postCommitHead.frontierHash`。
+
+責務とデータの流れ：
+
+1. **Task 3 / privileged verifier** は host-signed release root と rotation proof を root→current の順に検証し、`previousVersion` と署名時 `authorizedAtHead` の chain continuity、rotationReference、policy version の一意性、PEM の Ed25519 key type・SPKI DER digest、policy epoch ごとの semantic contract digest を確認する。rotation は release frontier を変更しない場合があるが `registryRevision` と `registryStateHash` は更新される。各 release の effective epoch は **その release の commit 時点で有効かつ host-authorized だった** `manifest.trustPolicyVersion` で一意に決まる。未来の policy を古い release に遡及適用禁止。
+2. **Task 4 / pure source** は snapshot 内の authenticated `committedReleases` だけを index する。公開鍵の resolver、guard、registry mutation は持たない。`record.publisherKeyDigest` は verified epoch からのみ導出する。`readRegistryHead()` は snapshot head に過ぎず、live freshness は D3.1 の trusted host が保証する。
+3. **Task 5 / historical verifier** は `createVerifiedHistoricalPublisherSignatureVerifier(snapshot): VerifiedProtocolReleaseSignatureVerifier` を提供し、既存の `(domain, payload, signature, publisherKeyDigest)` 引数形を維持する。`payload` が当該 release の署名済み `manifest` に一致し、その `trustPolicyVersion` → verified epoch → verified PEM によって Ed25519 署名を検証する。caller が渡した `publisherKeyDigest` は verified DER digest と**照合する値**であり trust root ではない。任意の caller-provided PEM、fallback current publisher key、未認証 epoch を使わない。
+4. **Task 6 / provider** は D3.1 の guarded scope 内で**同一 snapshot**由来の source、verifier、trusted anchor を受け取る。anchor の installation、root publisher digest、initial genesis frontier、root policy version、minimum anchored frontier を protected history と比較する。NC1 の `input.trustedPublisherPolicyVersion` は **snapshot.currentPolicyVersion** に一致させる（rotation 後の root version を強制しない）。異なる snapshot 同士の source/verifier 組合せや caller の digest の自己認証を禁止。
+
+追加テスト：root publisher の旧 release、正当 rotation 後の新鍵 release、旧鍵の再検証、未登録鍵、偽造 rotation、skipped policy epoch、公開鍵/digest 不一致、release epoch と署名者の不一致。
+
 ### D5：historicalReleaseProofDigest の検証対象
 
 `historicalReleaseProofDigest` は以下を含む canonical JSON の fingerprint とする。
@@ -231,7 +292,7 @@ publication 側は署名済み `manifest` を認証する。authority 側の `re
 
 ### 3. phase 付き検索 API
 
-`readReleaseByDescriptorDigest` に加え、phase を引数に取る検索 API が必要。
+`readReleaseByDescriptorDigest` を置き換え、phase を引数に取る検索 API が必要。read-only source の live freshness は D3.1 の guard 内に限定する。
 
 ```typescript
 interface VerifiedProtocolReleaseSource {
