@@ -1,11 +1,14 @@
 import { readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VerifiedTargetWriterHandoffIntentV1 } from "../../src/core/review-gate/types.js";
 import {
   computeCanonicalJsonFingerprint,
 } from "../../src/core/review-gate/identity.js";
 import { createReviewGateLockManager } from "../../src/runtime/review-gate-lock-manager.js";
+import { createCanonicalTargetEffectBroker } from "../../src/runtime/review-gate-canonical-target-effect-broker.js";
+import { createWitnessContext } from "../../src/runtime/review-gate-witness-context.js";
+import { observeGitWorkspace } from "../../src/runtime/review-gate-scope-admission.js";
 import { ProtectedWitnessStore } from "../../src/runtime/review-gate-protected-store.js";
 import { targetRegistrySchema } from "../../src/runtime/review-gate-target-writer-schema.js";
 import {
@@ -321,6 +324,87 @@ describe("protected canonical target writer", () => {
           preparedEventDigest: digest,
         }),
       ).rejects.toThrow("closing_seal_unprepared");
+    } finally {
+      owned.witness.close();
+      manager.close();
+      await rm(owned.sandbox, { recursive: true, force: true });
+    }
+  });
+  it("runs canonical target effects after the witness transaction has released its guard", async () => {
+    const { manager, owned, intent } = await createSealedCloseFixture();
+    try {
+      await owned.witness.withCanonicalTargetEffectGuards(
+        [intent.target.targetIdentityDigest],
+        async () => {
+          await owned.witness.readInstallation();
+        },
+      );
+    } finally {
+      owned.witness.close();
+      manager.close();
+      await rm(owned.sandbox, { recursive: true, force: true });
+    }
+  }, 1000);
+  it("releases acquired target locks and propagates the original acquisition error", async () => {
+    const intent = await prepareHandoffFixture(f);
+    await f.witness.prepareTargetWriterHandoff(intent);
+    await f.witness.fencePreviousTargetWriter({
+      intent,
+      authorizeNativeRevocation: f.approve,
+    });
+    await f.witness.claimTargetWriterForGate({ intent, epochId: "epoch-1" });
+    const context = createWitnessContext({
+      workspaceRoot: f.root,
+      ...(await observeGitWorkspace(f.root)),
+      witnessDirectory: f.directory,
+      hostTrustRoot: f.admin.publicKey,
+    });
+    const provider = context.provider;
+    if (provider === undefined) throw new Error("native witness provider unavailable");
+    const originalError = new Error("target lock acquisition failed");
+    let releaseCount = 0;
+    const lock = { release: () => { releaseCount += 1; }, verifyCloexec: () => true };
+    vi.spyOn(provider, "acquireGateLock")
+      .mockResolvedValueOnce(lock)
+      .mockRejectedValueOnce(originalError);
+    const broker = createCanonicalTargetEffectBroker(context);
+
+    await expect(
+      broker.withCanonicalTargetEffectGuards(
+        [intent.target.targetIdentityDigest, intent.target.targetIdentityDigest],
+        async () => "unreachable",
+      ),
+    ).rejects.toBe(originalError);
+    expect(releaseCount).toBe(1);
+  });
+  it("uses the supplied host authorizer for the sealed target receipt", async () => {
+    const { manager, owned, intent, terminal, publication } = await createSealedCloseFixture();
+    try {
+      const gateLock = await manager.acquireGateLock("gate-1");
+      if (gateLock === "occupied") throw new Error("fixture gate lock occupied");
+      const authorizeSealedReceipt = vi.fn(async (payload: unknown): Promise<string> => {
+        expect(payload).toMatchObject({ closingSealOperationId: "seal-close-1" });
+        return await owned.approve(payload);
+      });
+      let receipt: Awaited<ReturnType<typeof owned.witness.sealCanonicalTargetsForTerminalIntent>>;
+      try {
+        receipt = await owned.witness.sealCanonicalTargetsForTerminalIntent(
+          {
+            intents: [terminal],
+            terminalTransitionOperationId: "terminal-1",
+            publication: publication.input,
+            canonicalEventBytes: publication.bytes,
+          },
+          authorizeSealedReceipt,
+        );
+      } finally {
+        gateLock.release();
+      }
+
+      expect(receipt).not.toBe("BLOCK");
+      if (receipt === "BLOCK") throw new Error("expected authenticated closing seal");
+      expect(receipt.payload.targets).toEqual([intent.target]);
+      expect(authorizeSealedReceipt).toHaveBeenCalledTimes(1);
     } finally {
       owned.witness.close();
       manager.close();

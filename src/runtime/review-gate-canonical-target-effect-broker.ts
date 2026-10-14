@@ -1,5 +1,3 @@
-import { createPrivateKey, sign } from "node:crypto";
-import { computeCanonicalJsonFingerprint } from "../core/review-gate/identity.js";
 import { WitnessBlocked } from "./review-gate-protected-store.js";
 import {
   targetRegistrySchema,
@@ -12,26 +10,6 @@ import {
   type WitnessContext,
 } from "./review-gate-witness-context.js";
 import type { ReviewGateLockHandle } from "./linux-review-gate-provider.js";
-
-/**
- * Authorize a sealed receipt using the witness installation's provisioner
- * private key. The signature is verified with `hostProofValid` against the
- * pinned host trust root, matching every other host-attested proof in the
- * witness directory.
- */
-async function authorizeSealedReceipt(
-  context: WitnessContext,
-  payload: unknown,
-): Promise<string> {
-  const privateKeyPem = await context.store.readBytes("provisioner-key.pem");
-  const privateKey = createPrivateKey(privateKeyPem);
-  const signature = sign(
-    null,
-    Buffer.from(computeCanonicalJsonFingerprint(payload)),
-    privateKey,
-  );
-  return signature.toString("base64");
-}
 
 function closingSealActiveForTarget(
   registry: TargetRegistry,
@@ -57,36 +35,49 @@ export function createCanonicalTargetEffectBroker(context: WitnessContext) {
       identities: readonly string[],
       run: () => Promise<T>,
     ): Promise<T> {
-      return withGateOwnedWitnessTransaction(context, async () => {
-        const state = await context.store.read("target", targetRegistrySchema);
-        const sorted = [...identities].sort();
-        for (const id of sorted) {
-          if (state.data.targets[id] === undefined)
-            throw new WitnessBlocked("target_unknown");
-          if (closingSealActiveForTarget(state.data, id))
-            throw new WitnessBlocked("closing_seal");
-        }
-        if (context.provider === undefined) throw new WitnessBlocked("native_unavailable");
-        const held: ReviewGateLockHandle[] = [];
+      const held: ReviewGateLockHandle[] = [];
+      const acquisitionFailure: { value?: Readonly<{ readonly cause: unknown }> } = {};
+      try {
         try {
-          for (const id of sorted) {
-            const lock = await context.provider.acquireGateLock(`target-${id}`);
-            if (lock === "occupied") throw new WitnessBlocked("busy_retryable");
-            if (!lock.verifyCloexec()) {
-              lock.release();
-              throw new WitnessBlocked("native_unavailable");
+          await withGateOwnedWitnessTransaction(context, async () => {
+            const state = await context.store.read("target", targetRegistrySchema);
+            const sorted = [...identities].sort();
+            for (const id of sorted) {
+              if (state.data.targets[id] === undefined)
+                throw new WitnessBlocked("target_unknown");
+              if (closingSealActiveForTarget(state.data, id))
+                throw new WitnessBlocked("closing_seal");
             }
-            held.push(lock);
-          }
-          return await run();
-        } finally {
-          for (const lock of held.reverse()) lock.release();
+            if (context.provider === undefined) throw new WitnessBlocked("native_unavailable");
+            for (const id of sorted) {
+              let lock: ReviewGateLockHandle | "occupied";
+              try {
+                lock = await context.provider.acquireGateLock(`target-${id}`);
+              } catch (cause: unknown) {
+                acquisitionFailure.value = { cause };
+                throw new WitnessBlocked("native_unavailable");
+              }
+              if (lock === "occupied") throw new WitnessBlocked("busy_retryable");
+              if (!lock.verifyCloexec()) {
+                lock.release();
+                throw new WitnessBlocked("native_unavailable");
+              }
+              held.push(lock);
+            }
+          });
+        } catch (error: unknown) {
+          if (acquisitionFailure.value !== undefined) throw acquisitionFailure.value.cause;
+          throw error;
         }
-      });
+        return await run();
+      } finally {
+        for (const lock of held.reverse()) lock.release();
+      }
     },
 
     async sealCanonicalTargetsForTerminalIntent(
       input: PreparedTerminalIntentV1,
+      authorizeSealedReceipt: (payload: unknown) => Promise<string>,
     ): Promise<VerifiedCompleteTargetClosingSealV1 | "BLOCK"> {
       const first = input.intents[0];
       if (first === undefined) return "BLOCK";
@@ -99,7 +90,7 @@ export function createCanonicalTargetEffectBroker(context: WitnessContext) {
         );
         return await terminal.publishSealedTerminalIntent({
           closingSealOperationId,
-          authorizeSealedReceipt: (payload) => authorizeSealedReceipt(context, payload),
+          authorizeSealedReceipt,
         });
       } catch (error: unknown) {
         if (error instanceof WitnessBlocked) return "BLOCK";

@@ -79,6 +79,7 @@ export type CanonicalTargetEffectBroker = Readonly<{
   ) => Promise<T>;
   readonly sealCanonicalTargetsForTerminalIntent: (
     input: PreparedTerminalIntentV1,
+    authorizeSealedReceipt: (payload: unknown) => Promise<string>,
   ) => Promise<VerifiedCompleteTargetClosingSealV1 | "BLOCK">;
 }>;
 
@@ -202,10 +203,14 @@ export class ReviewGateGit {
    */
   async sealCanonicalTargetsForTerminalIntent(
     input: PreparedTerminalIntentV1,
+    authorizeSealedReceipt: (payload: unknown) => Promise<string>,
   ): Promise<VerifiedCompleteTargetClosingSealV1 | "BLOCK"> {
     const broker = this.targetEffectBroker;
     if (broker === undefined) return "BLOCK";
-    const outcome = await broker.sealCanonicalTargetsForTerminalIntent(input);
+    const outcome = await broker.sealCanonicalTargetsForTerminalIntent(
+      input,
+      authorizeSealedReceipt,
+    );
     return outcome === "BLOCK" ? "BLOCK" : outcome;
   }
 
@@ -448,15 +453,15 @@ export class ReviewGateGit {
   async executePreparedRestore(
     payload: ReviewTargetRestorePreparedPayload,
   ): Promise<ReviewRestoreResult> {
-    const state = await this.classifyPreparedRestoreState(payload);
-    if (state === "conflict") throw reviewDomainError("review_restore_recovery_conflict");
-    if (state === "destination") return { status: "recovered" };
-    const destination = payload.targetCleanCommittedBinding;
-    const source = payload.sourceKnownDirtyBinding;
-    const replacementBytes = await this.catFileBlob(destination.headEntry.blobSha);
     return this.withCanonicalTargetEffectGuardForPath(
       payload.targetCanonicalPath,
       async () => {
+        const state = await this.classifyPreparedRestoreState(payload);
+        if (state === "conflict") throw reviewDomainError("review_restore_recovery_conflict");
+        if (state === "destination") return { status: "recovered" };
+        const destination = payload.targetCleanCommittedBinding;
+        const source = payload.sourceKnownDirtyBinding;
+        const replacementBytes = await this.catFileBlob(destination.headEntry.blobSha);
         try {
           await this.provider.replaceWorkspaceFileExact(
             payload.targetCanonicalPath,
@@ -607,49 +612,49 @@ export class ReviewGateGit {
     return "precommit";
   }
 
-async executePreparedCommit(payload: ReviewCommitPreparedPayload): Promise<VerifiedReviewCommit> {
-const state = await this.assertPreparedCommitState(payload);
-if (state === "conflict") {
-// Workspace/HEAD drift after prepare is an unprovable intent state: the
-// coordinator must recover (classify) rather than silently overwrite.
-throw reviewDomainError("review_commit_recovery_conflict");
-    }
+  async executePreparedCommit(payload: ReviewCommitPreparedPayload): Promise<VerifiedReviewCommit> {
     return this.withCanonicalTargetEffectGuardForPath(
       payload.targetCanonicalPath,
       async () => {
-const messageDir = await mkdtemp(path.join(os.tmpdir(), "justice-commit-"));
-const messageFile = path.join(messageDir, "message.txt");
-try {
-await writeFile(messageFile, payload.commitMessage, { mode: 0o600 });
-const commitResult = await this.git(
-[
-"-c",
-"core.hooksPath=/dev/null",
-"commit",
-"--only",
-"--no-gpg-sign",
-"--no-status",
-"--cleanup=verbatim",
-"--pathspec-from-file=-",
-"--pathspec-file-nul",
-"-F",
-messageFile,
-],
-Buffer.from(`${payload.targetCanonicalPath}\0`, "utf8"),
-);
-if (commitResult.code !== 0) {
-throw reviewDomainError(
-"review_commit_failed",
-new Error(`git commit exited ${commitResult.code}: ${commitResult.stderr.slice(0, 400)}`),
-);
-}
-} finally {
-await rm(messageDir, { recursive: true, force: true });
-}
-const commitId = await this.resolveHeadSha();
-if (commitId === null) throw reviewDomainError("review_commit_recovery_conflict");
-return await this.verifyPreparedCommit(payload, commitId);
-  },
+        const state = await this.assertPreparedCommitState(payload);
+        if (state === "conflict") {
+          // Workspace/HEAD drift after prepare is an unprovable intent state: the
+          // coordinator must recover (classify) rather than silently overwrite.
+          throw reviewDomainError("review_commit_recovery_conflict");
+        }
+        const messageDir = await mkdtemp(path.join(os.tmpdir(), "justice-commit-"));
+        const messageFile = path.join(messageDir, "message.txt");
+        try {
+          await writeFile(messageFile, payload.commitMessage, { mode: 0o600 });
+          const commitResult = await this.git(
+            [
+              "-c",
+              "core.hooksPath=/dev/null",
+              "commit",
+              "--only",
+              "--no-gpg-sign",
+              "--no-status",
+              "--cleanup=verbatim",
+              "--pathspec-from-file=-",
+              "--pathspec-file-nul",
+              "-F",
+              messageFile,
+            ],
+            Buffer.from(`${payload.targetCanonicalPath}\0`, "utf8"),
+          );
+          if (commitResult.code !== 0) {
+            throw reviewDomainError(
+              "review_commit_failed",
+              new Error(`git commit exited ${commitResult.code}: ${commitResult.stderr.slice(0, 400)}`),
+            );
+          }
+        } finally {
+          await rm(messageDir, { recursive: true, force: true });
+        }
+        const commitId = await this.resolveHeadSha();
+        if (commitId === null) throw reviewDomainError("review_commit_recovery_conflict");
+        return await this.verifyPreparedCommit(payload, commitId);
+      },
     );
   }
 
