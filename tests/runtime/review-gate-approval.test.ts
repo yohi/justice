@@ -1,16 +1,20 @@
 import { execFileSync } from "node:child_process";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { appendFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   GateCreatedV1,
   ReviewApprovalBindingV1,
   ReviewGateEvent,
 } from "../../src/core/review-gate-types";
-import { encodeReviewGateEventRecord, validateReviewGateEventRecord } from "../../src/core/review-gate/event-schema";
+import {
+  encodeReviewGateEventRecord,
+  validateReviewGateEventRecord,
+  type VerifiedReviewGateEvent,
+} from "../../src/core/review-gate/event-schema";
 import {
   computeArtifactDigest,
   computeCanonicalJsonFingerprint,
@@ -33,6 +37,21 @@ import {
   type ReviewGateScopeWitness,
   type TrustedFirstEnrollmentV1,
 } from "../../src/runtime/review-gate-scope-witness";
+
+/**
+ * Spy seam for the Core admission planner: Task 16 rewires the durable
+ * approval lookup through `planReviewGateAdmission`, and these tests prove
+ * the planner actually decides the outcome. The mock delegates to the real
+ * implementation so every other test keeps exercising true behavior.
+ */
+const { admissionPlanner } = vi.hoisted(() => ({ admissionPlanner: vi.fn() }));
+vi.mock("../../src/core/review-gate/admission", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("../../src/core/review-gate/admission")
+  >();
+  admissionPlanner.mockImplementation(actual.planReviewGateAdmission);
+  return { ...actual, planReviewGateAdmission: admissionPlanner };
+});
 
 const REQUIREMENTS_PATH = "requirements.md";
 const DESIGN_PATH = "docs/design.md";
@@ -443,6 +462,7 @@ function createLookup(
     eventStore: store,
     workspaceReader: fsWorkspaceReader(root),
     protocol: PROTOCOL,
+    workspaceRoot: root,
   });
 }
 
@@ -642,6 +662,200 @@ describe("ReviewGateApprovalLookup — candidate enumeration", () => {
     await seedActiveGate(ctx, store);
     const lookup = createLookup(root, store);
     expect(await lookup.listCompletedApprovalCandidates(PLAN_PATH)).toEqual([]);
+    store.close();
+    closeWitnessFixture(ctx);
+  });
+});
+/**
+ * V2 workspace: the Design must DECLARE the Requirements with the reserved
+ * marker so `resolveRequirementsForAdmission` can observe the declared
+ * source without an explicit CLI path.
+ */
+const DESIGN_REQUIREMENTS_DECLARATION =
+  '<!-- justice-review-gate:requirements="requirements.md" -->';
+
+type V2Workspace = Readonly<{
+  readonly root: string;
+  readonly files: Map<string, string>;
+  readonly store: ReturnType<typeof createReviewGateEventStore>;
+  readonly ctx: StoreContext;
+}>;
+
+async function createV2Workspace(): Promise<V2Workspace> {
+  const ctx = await createFreshContext();
+  const files = new Map<string, string>([
+    [REQUIREMENTS_PATH, "# Requirements\nScope of the change\n"],
+    [DESIGN_PATH, `# Design\n${DESIGN_REQUIREMENTS_DECLARATION}\nReviewed behavior\n`],
+    [PLAN_PATH, "## Task 1: Build\n- [ ] Build it\n"],
+  ]);
+  writeWorkspaceFiles(ctx.root, files);
+  execFileSync("git", ["-C", ctx.root, "add", "."]);
+  execFileSync("git", [
+    "-C",
+    ctx.root,
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "commit",
+    "-qm",
+    "workspace",
+  ]);
+  const store = createReviewGateEventStore(ctx.root, {
+    workspaceIdentity: computeWorkspaceIdentity(ctx.root),
+    writerId: ctx.writerId,
+    witness: ctx.witness,
+  });
+  return { root: ctx.root, files, store, ctx };
+}
+
+/**
+ * Seed one V2 completed Gate as the witnessed genesis of a fresh workspace.
+ * The history carries the exact V2 lifecycle events consumed by the Task 7
+ * tip projection: V2 `GATE_CREATED` plus V2 `COMPLETED_APPROVAL_BINDING`.
+ */
+async function seedV2CompletedGate(
+  ctx: StoreContext,
+  store: ReturnType<typeof createReviewGateEventStore>,
+  files: ReadonlyMap<string, string>,
+): Promise<ReviewApprovalBindingV1> {
+  gateSerial += 1;
+  const gateId = `gate-approve-v2-${gateSerial}`;
+  const headOid = execFileSync("git", ["-C", ctx.root, "rev-parse", "HEAD"], {
+    encoding: "utf8",
+  }).trim();
+  const requirementsBlobOid = execFileSync(
+    "git",
+    ["-C", ctx.root, "rev-parse", `HEAD:${REQUIREMENTS_PATH}`],
+    { encoding: "utf8" },
+  ).trim();
+  const workspaceIdentity = computeWorkspaceIdentity(ctx.root);
+  const requirementsDigest = digestOf(files.get(REQUIREMENTS_PATH) ?? "");
+
+  const gateCreated: VerifiedReviewGateEvent = {
+    schemaVersion: 2,
+    eventId: nextSeedId("created"),
+    parentEventId: "0".repeat(64),
+    emittedAt: "2026-10-08T00:00:00.000Z",
+    gateId,
+    epochId: "epoch-1",
+    generationId: "generation-1",
+    writerId: ctx.writerId,
+    eventType: "GATE_CREATED",
+    payload: {
+      reviewScopeId: SCOPE_ID,
+      supersedesGateId: null,
+      requirementsResolution: {
+        schemaVersion: 2,
+        source: "design_declared_reference",
+        canonicalPath: REQUIREMENTS_PATH,
+        digest: requirementsDigest,
+        gitMode: "100644",
+        requirementsGitBlobOid: requirementsBlobOid,
+        committedBaselineOid: headOid,
+        workspaceIdentity,
+        selectionEvidence: {},
+      },
+      designArtifact: {
+        canonicalPath: DESIGN_PATH,
+        digest: digestOf(files.get(DESIGN_PATH) ?? ""),
+        gitMode: "100644",
+      },
+      planArtifact: {
+        canonicalPath: PLAN_PATH,
+        digest: digestOf(files.get(PLAN_PATH) ?? ""),
+        gitMode: "100644",
+      },
+      reviewProtocolFingerprint: PROTOCOL.reviewProtocolFingerprint,
+      designProtocolFingerprint: PROTOCOL.designProtocolFingerprint,
+      planProtocolFingerprint: PROTOCOL.planProtocolFingerprint,
+    },
+  };
+
+  const binding: ReviewApprovalBindingV1 = {
+    reviewScopeId: SCOPE_ID,
+    gateId,
+    designArtifact: gateCreated.payload.designArtifact,
+    planArtifact: gateCreated.payload.planArtifact,
+    requirementsResolution: {
+      source: "auto_design_reference",
+      canonicalPath: REQUIREMENTS_PATH,
+      digest: requirementsDigest,
+    },
+    reviewProtocolFingerprint: PROTOCOL.reviewProtocolFingerprint,
+    designProtocolFingerprint: PROTOCOL.designProtocolFingerprint,
+    planProtocolFingerprint: PROTOCOL.planProtocolFingerprint,
+    approvedAt: "2026-10-08T00:10:00.000Z",
+  };
+
+  const completion: VerifiedReviewGateEvent = {
+    schemaVersion: 2,
+    eventId: nextSeedId("completed"),
+    parentEventId: gateCreated.eventId,
+    emittedAt: "2026-10-08T00:10:01.000Z",
+    gateId,
+    epochId: "epoch-2",
+    generationId: "generation-1",
+    writerId: ctx.writerId,
+    eventType: "COMPLETED_APPROVAL_BINDING",
+    payload: {
+      approvalBinding: binding,
+      designClearEventId: nextSeedId("design-clear"),
+      planClearEventId: nextSeedId("plan-clear"),
+      currentRequirementsAuthorityEventId: gateCreated.eventId,
+      currentRequirements: {
+        source: "design_declared_reference",
+        workspaceIdentity,
+        canonicalPath: REQUIREMENTS_PATH,
+        digest: requirementsDigest,
+        gitMode: "100644",
+        gitBlobOid: requirementsBlobOid,
+        selectedByEventId: gateCreated.eventId,
+      },
+    },
+  };
+
+  await seedGate(ctx, store, gateId, [
+    gateCreated as unknown as ReviewGateEvent,
+    completion as unknown as ReviewGateEvent,
+  ]);
+  return binding;
+}
+
+describe("ReviewGateApprovalLookup — verified admission path", () => {
+  beforeEach(() => {
+    admissionPlanner.mockClear();
+  });
+
+  it("plans admission through the Core planner (Task 16)", async () => {
+    const { root, files, store, ctx } = await createV2Workspace();
+    const binding = await seedV2CompletedGate(ctx, store, files);
+
+    const lookup = createLookup(root, store);
+    const outcome = await lookup.findCurrentCompletedApproval(PLAN_PATH);
+
+    expect(admissionPlanner).toHaveBeenCalledTimes(1);
+    expect(outcome).toEqual({ kind: "approved", gateId: binding.gateId, binding });
+    store.close();
+    closeWitnessFixture(ctx);
+  });
+
+  it("fails closed via the Core planner on plan git-mode-only drift", async () => {
+    const { root, files, store, ctx } = await createV2Workspace();
+    await seedV2CompletedGate(ctx, store, files);
+
+    // Worktree bytes are identical; only the owner execute bit changes. The
+    // legacy digest comparison approved this drift; the Core planner must not.
+    chmodSync(path.join(root, PLAN_PATH), 0o755);
+
+    const lookup = createLookup(root, store);
+    const outcome = await lookup.findCurrentCompletedApproval(PLAN_PATH);
+
+    expect(admissionPlanner).toHaveBeenCalledTimes(1);
+    expect(outcome).not.toMatchObject({ kind: "approved" });
+    // Core reports CREATE_SUCCESSOR for drifted completed tips; the lookup
+    // mapping resolves it to identity_conflict (no unique approval remains).
+    expect(outcome.kind).toBe("identity_conflict");
     store.close();
     closeWitnessFixture(ctx);
   });

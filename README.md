@@ -438,6 +438,21 @@ OpenCode の file-reference 記法も利用できます。
   --plan @docs/plans/feature-plan.md
 ```
 
+初回の scope は `/justice-review-gate` が自動登録しません。未登録の scope
+で実行すると `scope_not_enrolled` で BLOCK します。運用担当者は次の順に
+verified enrollment を行ってください。
+
+1. verified workspace identity と first-enrollment authority を確認します。
+2. host authorizer callback を使って `authorizeFirstWorkspaceEnrollment` を
+   実行し、返された証跡を `witness.verifyFirstWorkspaceEnrollment(...)` で
+   検証・消費します。
+3. Design / Plan の canonical path を含む scope を
+   `authorizeScopeEnrollment` で登録します。
+4. `/justice-review-gate --design <designPath> --plan <planPath>` を実行します。
+
+first enrollment または scope enrollment を確認できない場合は gate を開始せず、
+authority を確認してください。
+
 - `--design` と `--plan` はともに必須。
 - Gate は **イベントソーシング** で駆動します。開始時に durable な `GATE_CREATED` イベントへ Design/Plan の正規化済みパス・SHA-256 digest・Git mode・Requirements 解決結果・review protocol fingerprint が固定され、以降のすべての状態は `.justice/review-gates/` 配下の追記型イベント履歴から再構成されます。プロセス内のリトライ状態やチェックポイントファイルは正本ではありません。
 - Requirements は RR1 自動解決 (auto design reference) で Design 成果物そのものに解決され、`GATE_CREATED` に永続化されます。既存 generation の再開時に `--requirements` を明示しても永続 binding は置き換わりません (コマンド表面には `--requirements` フラグ自体が存在しません)。

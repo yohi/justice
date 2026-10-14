@@ -15,7 +15,12 @@ type AdmissionBlockCode =
   | "workspace_dirty"
   | "protected_frontier"
   | "prior_enrollment"
-  | "proof";
+  | "proof"
+  | "scope_lease_occupied"
+  | "admission_scope_index_corrupt"
+  | "admission_artifact_unreadable"
+  | "admission_snapshot_unavailable"
+  | "witness_unavailable";
 export class ScopeAdmissionBlocked extends Error {
   constructor(readonly code: AdmissionBlockCode) {
     super(`review_gate_scope_admission_${code}`);

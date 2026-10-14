@@ -2,10 +2,26 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { beforeEach, afterAll, describe, expect, it, vi } from "vitest";
-import { buildReviewQueryScope } from "../../src/core/review-gate/capabilities";
-import type { ReviewQueryScope } from "../../src/core/review-gate/capabilities";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import {
+  buildReviewQueryScope,
+  MAX_REVIEW_QUERY_MATCHES,
+} from "../../src/core/review-gate/capabilities";
 import type {
+  ReviewQueryScope,
+  VerifiedApprovedDesignReadBindingV1,
+} from "../../src/core/review-gate/capabilities";
+import { computeArtifactDigest } from "../../src/core/review-gate/identity";
+import type {
+  ReviewGateQueryService,
   ReviewWorkspaceReader,
   StoredGitSpawnCall,
 } from "../../src/runtime/review-gate-query";
@@ -117,6 +133,20 @@ afterAll(async () => {
 });
 
 describe("ReviewGateQueryService CAP1 scope", () => {
+  it("rejects unproved approved Design reads and searches", async () => {
+    const service = createReviewGateQueryService({
+      rootDir,
+      workspaceReader: narrowWorkspaceReader(rootDir),
+    });
+
+    await expect(service.readArtifact(planScope, "docs/design.md")).rejects.toThrow(
+      "review_operation_not_permitted",
+    );
+    await expect(
+      service.searchArtifact(planScope, "docs/design.md", "Design"),
+    ).rejects.toThrow("review_operation_not_permitted");
+  });
+
   it("reads exact in-scope artifact bytes and denies out-of-scope reads", async () => {
     const service = createReviewGateQueryService({
       rootDir,
@@ -362,5 +392,178 @@ describe("ReviewGateQueryService never mutates worktree or index", () => {
     await service.showPathAtRevision(designScope, { kind: "head", depth: 0 }, ":(glob)*.md");
     const after = await runGitCli(rootDir, "status", "--porcelain");
     expect(after).toBe(before);
+  });
+});
+
+
+describe("ReviewGateQueryService approved Design binding (FDR-014)", () => {
+  const APPROVED_CONTENT = [
+    "approved design bytes",
+    "anchor line",
+    ...Array.from({ length: 250 }, (_, index) => `match line ${index}`),
+    "",
+  ].join("\n");
+
+  let approvedBinding: VerifiedApprovedDesignReadBindingV1 | null = null;
+  let headTreeOid = "";
+
+  const asBinding = (): VerifiedApprovedDesignReadBindingV1 => {
+    if (approvedBinding === null) throw new Error("approved fixture is not ready");
+    return approvedBinding;
+  };
+
+  const approvedScope = (
+    binding: VerifiedApprovedDesignReadBindingV1 | null,
+  ): ReviewQueryScope =>
+    buildReviewQueryScope(
+      "plan",
+      {
+        // A Plan-phase scope admits only the approved Design and the current
+        // Plan; the effective Requirements identity is validated in the proof.
+        requirementsCanonicalPath: "",
+        approvedDesignCanonicalPath: "docs/design.md",
+        currentPhaseArtifactCanonicalPath: "docs/plans/plan.md",
+      },
+      { approvedDesign: binding },
+    );
+
+  const newService = (): ReviewGateQueryService =>
+    createReviewGateQueryService({
+      rootDir,
+      workspaceReader: narrowWorkspaceReader(rootDir),
+    });
+
+  beforeAll(async () => {
+    await writeFile(`${rootDir}/docs/design.md`, APPROVED_CONTENT);
+    await runGitCli(rootDir, "add", "docs/design.md");
+    await runGitCli(rootDir, "commit", "-q", "--no-gpg-sign", "-m", "approve design");
+    const commitSha = (await runGitCli(rootDir, "rev-parse", "HEAD")).trim();
+    const treeOid = (await runGitCli(rootDir, "rev-parse", `${commitSha}^{tree}`)).trim();
+    const blobOid = (await runGitCli(rootDir, "rev-parse", `${commitSha}:docs/design.md`)).trim();
+    const requirementsOid = (
+      await runGitCli(rootDir, "rev-parse", `${commitSha}:requirements.md`)
+    ).trim();
+    const requirementsBytes = Buffer.from("requirements v1\n- req safety\n", "utf8");
+    approvedBinding = {
+      schemaVersion: 1,
+      canonicalPath: "docs/design.md",
+      designClearEventId: "evt-design-clear-1",
+      currentAuthorityEventId: "evt-authority-1",
+      committedTreeOid: treeOid,
+      blobOid,
+      gitMode: "100644",
+      digest: computeArtifactDigest(Buffer.from(APPROVED_CONTENT, "utf8")),
+      requirements: {
+        canonicalPath: "requirements.md",
+        gitBlobOid: requirementsOid,
+        digest: computeArtifactDigest(requirementsBytes),
+        gitMode: "100644",
+      },
+      phaseProtocolFingerprint: "plan-protocol-fingerprint-1",
+      witnessFrontierHash: computeArtifactDigest(Buffer.from("witness-frontier-1", "utf8")),
+    };
+    // Diverge HEAD (a later commit) and then the dirty worktree from the
+    // approved proof, so the assertions below hold against the frozen blob
+    // only.
+    await writeFile(`${rootDir}/docs/design.md`, "dirty design v1\nunapproved only\n");
+    await runGitCli(rootDir, "add", "docs/design.md");
+    await runGitCli(rootDir, "commit", "-q", "--no-gpg-sign", "-m", "tainted head");
+    headTreeOid = (await runGitCli(rootDir, "rev-parse", "HEAD^{tree}")).trim();
+    await writeFile(`${rootDir}/docs/design.md`, "dirty design v2\nunapproved only\n");
+  });
+
+  it("reads the exact proof-pinned blob bytes (never HEAD, index or dirty worktree)", async () => {
+    const service = newService();
+    await expect(
+      service.readApprovedDesignArtifact({ approvedDesign: asBinding() }),
+    ).resolves.toEqual(Buffer.from(APPROVED_CONTENT, "utf8"));
+  });
+
+  it("mediates the in-scope plan-scope read of the approved design path", async () => {
+    const service = newService();
+    await expect(
+      service.readArtifact(approvedScope(asBinding()), "docs/design.md"),
+    ).resolves.toEqual(Buffer.from(APPROVED_CONTENT, "utf8"));
+  });
+
+  it("serves bounded literal searches from approved bytes and never leaks dirty matches", async () => {
+    const service = newService();
+    await expect(
+      service.searchApprovedDesignArtifact({ approvedDesign: asBinding(), pattern: "anchor" }),
+    ).resolves.toEqual([{ line: 2, text: "anchor line" }]);
+    // A dirty-worktree grep would match "unapproved only"; the approved
+    // search must never leak it.
+    await expect(
+      service.searchApprovedDesignArtifact({
+        approvedDesign: asBinding(),
+        pattern: "unapproved only",
+      }),
+    ).resolves.toEqual([]);
+    const bounded = await service.searchApprovedDesignArtifact({
+      approvedDesign: asBinding(),
+      pattern: "match line",
+    });
+    expect(bounded.length).toBe(MAX_REVIEW_QUERY_MATCHES);
+    await expect(
+      service.searchApprovedDesignArtifact({ approvedDesign: asBinding(), pattern: "" }),
+    ).rejects.toThrow("review_query_failed");
+  });
+
+  it("rejects a digest mismatch and a malformed proof", async () => {
+    const service = newService();
+    await expect(
+      service.readApprovedDesignArtifact({
+        approvedDesign: { ...asBinding(), digest: "0".repeat(64) },
+      }),
+    ).rejects.toThrow("review_operation_not_permitted");
+    await expect(
+      service.readApprovedDesignArtifact({
+        approvedDesign: { ...asBinding(), blobOid: "HEAD" },
+      }),
+    ).rejects.toThrow("review_operation_not_permitted");
+  });
+
+  it("rejects blob-OID and git-mode disagreements with the pinned tree", async () => {
+    const service = newService();
+    await expect(
+      service.readApprovedDesignArtifact({
+        approvedDesign: { ...asBinding(), blobOid: "1".repeat(64) },
+      }),
+    ).rejects.toThrow("review_operation_not_permitted: approved design binding mismatch");
+    await expect(
+      service.readApprovedDesignArtifact({
+        approvedDesign: { ...asBinding(), gitMode: "100755" },
+      }),
+    ).rejects.toThrow("review_operation_not_permitted: approved design binding mismatch");
+  });
+
+  it("rejects a HEAD-derived snapshot and never resolves revision authority from HEAD", async () => {
+    const service = newService();
+    await expect(
+      service.readApprovedDesignArtifact({
+        approvedDesign: { ...asBinding(), committedTreeOid: headTreeOid },
+      }),
+    ).rejects.toThrow("review_operation_not_permitted: approved design binding mismatch");
+    const seam = seamCalls();
+    expect(seam.length).toBeGreaterThan(0);
+    for (const call of seam) {
+      for (const arg of call.args) {
+        expect(arg.startsWith("HEAD")).toBe(false);
+      }
+    }
+  });
+
+  it("treats missing pinned Git objects as unavailable instead of head/worktree fallback", async () => {
+    const service = newService();
+    await expect(
+      service.readApprovedDesignArtifact({
+        approvedDesign: { ...asBinding(), committedTreeOid: "2".repeat(64) },
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      service.readApprovedDesignArtifact({
+        approvedDesign: { ...asBinding(), blobOid: "2".repeat(64) },
+      }),
+    ).rejects.toThrow("review_operation_not_permitted: approved design binding mismatch");
   });
 });

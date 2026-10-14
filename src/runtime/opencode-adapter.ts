@@ -60,6 +60,9 @@ import {
 import { createReviewGateLockManager } from "./review-gate-lock-manager";
 import { createReviewGateRecoveryStore } from "./review-gate-recovery-store";
 import { createReviewGateProtocolDescriptor } from "./review-gate-protocol";
+import { createReviewGateScopeAdmission } from "./review-gate-scope-admission";
+import { resolveRequirementsForAdmission } from "./review-gate-requirements";
+import { createVerifiedProtocolReleaseProvider } from "./review-gate-protocol-release-authority";
 import {
   createReviewGateCoordinator,
   type ReviewGateCoordinator,
@@ -1833,6 +1836,26 @@ async function buildSharedReviewGateRuntimeGraph(
           throw new Error("review_gate_mutation_unavailable");
         },
       },
+      targetEffectBroker: witness ?? undefined,
+      workspaceIdentity: computeWorkspaceIdentity(root),
+    });
+    const workspaceIdentity = computeWorkspaceIdentity(root);
+
+    const protocolRelease: ReturnType<typeof createVerifiedProtocolReleaseProvider> = {
+      // Task 5 の trusted protocol release anchor / protected registry が
+      // 運用環境に独立 provision されるまで、意図的に fail-closed な BLOCK
+      // スタブを使用する。これにより NC1 protocol-kind 遷移は現時点では
+      // 承認されず、既存の legacy path で安全に縮退する。
+readVerifiedPhaseProtocolDelta: async () => "BLOCK",
+};
+
+    const scopeAdmission = createReviewGateScopeAdmission({
+      witness,
+      eventStore,
+      lockManager,
+      workspaceReader,
+      requirementsResolver: resolveRequirementsForAdmission,
+      protocolRelease,
     });
 
     const coordinator = createReviewGateCoordinator({
@@ -1840,7 +1863,10 @@ async function buildSharedReviewGateRuntimeGraph(
       lockManager,
       protocol,
       workspaceReader,
+      workspaceRoot: root,
+      workspaceIdentity,
       mutationSubstrate,
+      scopeAdmission,
       inspectTargets: async (paths) =>
         new Map(
           await Promise.all(
@@ -1857,7 +1883,7 @@ async function buildSharedReviewGateRuntimeGraph(
         ),
     });
     const history = createReviewGateHistoryService({ rootDir: root, eventStore });
-    const approval = createReviewGateApprovalLookup({ eventStore, workspaceReader, protocol });
+    const approval = createReviewGateApprovalLookup({ eventStore, workspaceReader, protocol, workspaceRoot: root });
     return Object.freeze({ root, eventStore, witness, coordinator, history, approval });
   } catch (err) {
     warn("[Justice] Review Gate runtime graph construction failed; coordinator not configured", err);

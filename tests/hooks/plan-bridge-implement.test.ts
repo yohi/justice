@@ -205,7 +205,7 @@ describe("PlanBridge.handleImplementationArm", () => {
     expect(bridge.isImplementationArmed("session-1")).toBe(true);
   });
 
-  it("treats Superpowers general routing as a compatibility placeholder for an authorized task", async () => {
+  it("preserves caller-owned general routing for an authorized task", async () => {
     const simplePlan = ["## Task 1: Implement behavior", "- [ ] Add handler logic"].join("\n");
     const bridge = createBridge({ "plan.md": simplePlan });
     await bridge.handleImplementationArm("session-general", {
@@ -227,14 +227,14 @@ describe("PlanBridge.handleImplementationArm", () => {
     expect(response.action).toBe("inject");
     if (response.action !== "inject") throw new Error("expected inject response");
     expect(response.modifiedPayload).toMatchObject({
-      args: { category: "sp-implementation" },
+      args: { subagent_type: "general" },
     });
     expect(response.modifiedPayload).not.toMatchObject({
-      args: { subagent_type: expect.anything() },
+      args: { category: expect.anything() },
     });
   });
 
-  it("preserves an explicit sp-review category without review wording", async () => {
+  it("forces foreground for a caller-owned general review-category task without a wire category", async () => {
     const simplePlan = ["## Task 1: Implement behavior", "- [ ] Add handler logic"].join("\n");
     const bridge = createBridge({ "plan.md": simplePlan });
     await bridge.handleImplementationArm("session-explicit-review", {
@@ -261,12 +261,15 @@ describe("PlanBridge.handleImplementationArm", () => {
     expect(response.action).toBe("inject");
     if (response.action !== "inject") throw new Error("expected inject response");
     expect(response.modifiedPayload).toMatchObject({
-      args: { category: "sp-review", run_in_background: false },
+      args: { subagent_type: "general", run_in_background: false },
+    });
+    expect(response.modifiedPayload).not.toMatchObject({
+      args: { category: expect.anything() },
     });
     expect(response.injectedContext).not.toContain("[JUSTICE: IMPLEMENTATION]");
   });
 
-  it("routes a Superpowers task reviewer through sp-review without implementation semantics", async () => {
+  it("routes a Superpowers task reviewer through the caller-owned general worker without implementation semantics", async () => {
     const simplePlan = ["## Task 1: Implement behavior", "- [ ] Add handler logic"].join("\n");
     const bridge = createBridge({ "plan.md": simplePlan });
     await bridge.handleImplementationArm("session-review", {
@@ -296,13 +299,13 @@ describe("PlanBridge.handleImplementationArm", () => {
     if (response.action !== "inject") throw new Error("expected inject response");
     expect(response.modifiedPayload).toMatchObject({
       args: {
-        category: "sp-review",
         prompt: reviewerPrompt,
         run_in_background: false,
+        subagent_type: "general",
       },
     });
     expect(response.modifiedPayload).not.toMatchObject({
-      args: { subagent_type: expect.anything() },
+      args: { category: expect.anything() },
     });
     expect(response.modifiedPayload?.args.load_skills ?? []).not.toContain(
       "test-driven-development",
@@ -316,7 +319,7 @@ describe("PlanBridge.handleImplementationArm", () => {
     expect(response.injectedContext).not.toContain("[JUSTICE: IMPLEMENTATION]");
   });
 
-  it("routes a Superpowers task re-review through sp-review without implementation semantics", async () => {
+  it("routes a Superpowers task re-review through the caller-owned general worker without implementation semantics", async () => {
     const simplePlan = ["## Task 1: Implement behavior", "- [ ] Add handler logic"].join("\n");
     const bridge = createBridge({ "plan.md": simplePlan });
     await bridge.handleImplementationArm("session-re-review", {
@@ -344,10 +347,13 @@ describe("PlanBridge.handleImplementationArm", () => {
     if (response.action !== "inject") throw new Error("expected inject response");
     expect(response.modifiedPayload).toMatchObject({
       args: {
-        category: "sp-review",
         prompt: reviewerPrompt,
         run_in_background: false,
+        subagent_type: "general",
       },
+    });
+    expect(response.modifiedPayload).not.toMatchObject({
+      args: { category: expect.anything() },
     });
     expect(response.modifiedPayload?.args.load_skills ?? []).not.toContain(
       "test-driven-development",
@@ -358,7 +364,7 @@ describe("PlanBridge.handleImplementationArm", () => {
     expect(response.injectedContext).not.toContain("[JUSTICE: IMPLEMENTATION]");
   });
 
-  it("routes the Superpowers whole-branch code reviewer through sp-final-review", async () => {
+  it("routes the Superpowers whole-branch code reviewer through the caller-owned foreground channel", async () => {
     const simplePlan = ["## Task 1: Implement behavior", "- [x] Add handler logic"].join("\n");
     const bridge = createBridge({ "plan.md": simplePlan });
     await bridge.handleImplementationArm("session-final-review", {
@@ -386,13 +392,11 @@ describe("PlanBridge.handleImplementationArm", () => {
       },
     });
 
-    expect(response.action).toBe("inject");
-    if (response.action !== "inject") throw new Error("expected inject response");
     expect(response.modifiedPayload).toMatchObject({
-      args: { category: "sp-final-review", run_in_background: false },
+      args: { run_in_background: false, subagent_type: "general" },
     });
     expect(response.modifiedPayload).not.toMatchObject({
-      args: { subagent_type: expect.anything() },
+      args: { category: expect.anything() },
     });
     expect(response.modifiedPayload?.args.prompt).toContain(
       "You are a Senior Code Reviewer with expertise in software architecture.",

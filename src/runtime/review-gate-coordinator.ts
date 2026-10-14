@@ -101,6 +101,7 @@ import {
   type ReviewGateLockManager,
 } from "./review-gate-lock-manager";
 import type { ReviewGateProtocolDescriptor } from "./review-gate-protocol";
+import { ScopeAdmissionBlocked, type ReviewGateScopeAdmission } from "./review-gate-scope-admission";
 
 export type ReviewGateCoordinatorLockPhase =
   | "reviewing"
@@ -162,6 +163,10 @@ export interface ReviewGateCoordinatorOptions {
   readonly lockManager: ReviewGateLockManager;
   readonly protocol: ReviewGateProtocolDescriptor;
   readonly workspaceReader: ReviewGateWorkspaceReader;
+  /** Root directory of the workspace; used by scope admission for git inspection. */
+  readonly workspaceRoot?: string | null;
+  /** Stable identity of the workspace; forwarded to scope admission. */
+  readonly workspaceIdentity?: string | null;
   readonly mutationSubstrate?: ReviewGateMutationSubstrate | null;
   readonly inspectTargets: (
     paths: readonly string[],
@@ -169,6 +174,7 @@ export interface ReviewGateCoordinatorOptions {
   readonly now?: () => string;
   readonly newId?: () => string;
   readonly newWriterId?: () => string;
+  readonly scopeAdmission?: ReviewGateScopeAdmission | null;
 }
 
 export interface ReviewGateCoordinator {
@@ -252,6 +258,9 @@ export function createReviewGateCoordinator(
   const lockManager = options.lockManager;
   const protocol = options.protocol;
   const reader = options.workspaceReader;
+  const workspaceRoot = options.workspaceRoot ?? null;
+  const workspaceIdentity = options.workspaceIdentity ?? null;
+  const scopeAdmission = options.scopeAdmission ?? null;
   const mutation = options.mutationSubstrate ?? null;
   const inspectTargets = options.inspectTargets;
   const now = options.now ?? ((): string => new Date().toISOString());
@@ -1207,83 +1216,150 @@ export function createReviewGateCoordinator(
     const planDigest = computeArtifactDigest(planBytes);
     const reviewScopeId: ReviewScopeId = computeReviewScopeId(designPath, planPath);
 
-    const existingGateIdRaw = await eventStore.readScopeIndex(reviewScopeId);
-    if (existingGateIdRaw !== null) {
-      const existingGateId = existingGateIdRaw as GateId;
-      const projection = await loadProjection(existingGateId);
-      const gateCreated = requireGateCreated(existingGateId);
-      const latestBindingEvent = (await eventStore.readEvents(existingGateId))
-        .filter((event) => event.eventType === "ARTIFACT_BINDINGS_UPDATED")
-        .at(-1);
-      const latestDesignArtifact =
-        latestBindingEvent?.eventType === "ARTIFACT_BINDINGS_UPDATED"
-          ? latestBindingEvent.payload.designArtifact
-          : gateCreated.payload.designArtifact;
-      const latestPlanArtifact =
-        latestBindingEvent?.eventType === "ARTIFACT_BINDINGS_UPDATED"
-          ? latestBindingEvent.payload.planArtifact
-          : gateCreated.payload.planArtifact;
-      const expectedDesignArtifact =
-        projection.status === "completed"
-          ? projection.approvalBinding?.designArtifact
-          : latestDesignArtifact;
-      const expectedPlanArtifact =
-        projection.status === "completed"
-          ? projection.approvalBinding?.planArtifact
-          : latestPlanArtifact;
-      const bindingsMatch =
-        expectedDesignArtifact !== undefined &&
-        expectedPlanArtifact !== undefined &&
-        expectedDesignArtifact.digest === designDigest &&
-        expectedPlanArtifact.digest === planDigest &&
-        expectedDesignArtifact.canonicalPath === designPath &&
-        expectedPlanArtifact.canonicalPath === planPath;
+    const runStartOrResume = async (): Promise<ReviewGateCommandResult> => {
+      const existingGateIdRaw = await eventStore.readScopeIndex(reviewScopeId);
+      if (existingGateIdRaw !== null) {
+        const existingGateId = existingGateIdRaw as GateId;
+        const projection = await loadProjection(existingGateId);
+        const gateCreated = requireGateCreated(existingGateId);
+        const latestBindingEvent = (await eventStore.readEvents(existingGateId))
+          .filter((event) => event.eventType === "ARTIFACT_BINDINGS_UPDATED")
+          .at(-1);
+        const latestDesignArtifact =
+          latestBindingEvent?.eventType === "ARTIFACT_BINDINGS_UPDATED"
+            ? latestBindingEvent.payload.designArtifact
+            : gateCreated.payload.designArtifact;
+        const latestPlanArtifact =
+          latestBindingEvent?.eventType === "ARTIFACT_BINDINGS_UPDATED"
+            ? latestBindingEvent.payload.planArtifact
+            : gateCreated.payload.planArtifact;
+        const expectedDesignArtifact =
+          projection.status === "completed"
+            ? projection.approvalBinding?.designArtifact
+            : latestDesignArtifact;
+        const expectedPlanArtifact =
+          projection.status === "completed"
+            ? projection.approvalBinding?.planArtifact
+            : latestPlanArtifact;
+        const bindingsMatch =
+          expectedDesignArtifact !== undefined &&
+          expectedPlanArtifact !== undefined &&
+          expectedDesignArtifact.digest === designDigest &&
+          expectedPlanArtifact.digest === planDigest &&
+          expectedDesignArtifact.canonicalPath === designPath &&
+          expectedPlanArtifact.canonicalPath === planPath;
 
-      if (projection.status === "completed" && bindingsMatch) {
-        // Exact completed binding: read-only reuse — no lock acquisition, no
-        // writer allocation, no append.
-        const previous = dropSession(sessionId);
-        if (previous !== undefined) releaseHandles(previous);
-        return Object.freeze({
-          dispatched: false,
-          gateId: existingGateId,
-          guidance: [
-            "---",
-            "[JUSTICE: REVIEW GATE CLEAR]",
-            "",
-            "An exactly matching completed Review Gate was reused read-only. Implementation authorization still requires the explicit user command:",
-            `/justice-implement --plan ${planPath} --approved`,
-            "---",
-          ].join("\n"),
-          designPath,
-          planPath,
-          designDigest,
-          planDigest,
-          lockPhase: "awaiting_implementation_authorization",
-          completedReuse: true,
-        });
+        if (projection.status === "completed" && bindingsMatch) {
+          // Exact completed binding: read-only reuse — no lock acquisition, no
+          // writer allocation, no append.
+          const previous = dropSession(sessionId);
+          if (previous !== undefined) releaseHandles(previous);
+          return Object.freeze({
+            dispatched: false,
+            gateId: existingGateId,
+            guidance: [
+              "---",
+              "[JUSTICE: REVIEW GATE CLEAR]",
+              "",
+              "An exactly matching completed Review Gate was reused read-only. Implementation authorization still requires the explicit user command:",
+              `/justice-implement --plan ${planPath} --approved`,
+              "---",
+            ].join("\n"),
+            designPath,
+            planPath,
+            designDigest,
+            planDigest,
+            lockPhase: "awaiting_implementation_authorization",
+            completedReuse: true,
+          });
+        }
+        if (projection.status !== "completed" && bindingsMatch) {
+          return resumeExistingGate(
+            sessionId,
+            existingGateId,
+            reviewScopeId,
+            designPath,
+            planPath,
+            designDigest,
+            planDigest,
+          );
+        }
       }
-      if (projection.status !== "completed" && bindingsMatch) {
-        return resumeExistingGate(
-          sessionId,
-          existingGateId,
-          reviewScopeId,
-          designPath,
-          planPath,
-          designDigest,
-          planDigest,
-        );
-      }
+
+      return createNewGate(
+        sessionId,
+        reviewScopeId,
+        designPath,
+        planPath,
+        designDigest,
+        planDigest,
+      );
+    };
+
+    if (scopeAdmission === null || workspaceRoot === null || workspaceIdentity === null) {
+      return runStartOrResume();
     }
 
-    return createNewGate(
-      sessionId,
-      reviewScopeId,
-      designPath,
-      planPath,
-      designDigest,
-      planDigest,
-    );
+    try {
+      return await scopeAdmission.withAdmissionLease(
+        {
+          workspaceRoot,
+          workspaceIdentity,
+          designPath,
+          planPath,
+          explicitRequirementsPath: request.requirementsPath,
+          protocol,
+        },
+        async (decision) => {
+          if (decision.kind === "BLOCK") {
+            return blockedResult(
+              request.designPath,
+              planPath,
+              `[JUSTICE: REVIEW GATE BLOCKED] Scope admission blocked: ${decision.detail}`,
+            );
+          }
+          if (decision.kind === "REUSE_COMPLETED") {
+            // Scope admission already verified the completed binding against the
+            // current workspace; reuse read-only without re-acquiring locks.
+            const previous = dropSession(sessionId);
+            if (previous !== undefined) releaseHandles(previous);
+            return Object.freeze({
+              dispatched: false,
+              gateId: decision.gateId as GateId,
+              guidance: [
+                "---",
+                "[JUSTICE: REVIEW GATE CLEAR]",
+                "",
+                "An exactly matching completed Review Gate was reused read-only (verified by scope admission). Implementation authorization still requires the explicit user command:",
+                `/justice-implement --plan ${planPath} --approved`,
+                "---",
+              ].join("\n"),
+              designPath,
+              planPath,
+              designDigest,
+              planDigest,
+              lockPhase: "awaiting_implementation_authorization",
+              completedReuse: true,
+            });
+          }
+          return runStartOrResume();
+        },
+      );
+    } catch (err) {
+      if (err instanceof ScopeAdmissionBlocked) {
+        if (err.code !== "scope_lease_occupied") {
+          return blockedResult(
+            designPath,
+            planPath,
+            `[JUSTICE: REVIEW GATE BLOCKED] Scope admission failed closed (${err.code}); resolve the admission issue before retrying.`,
+          );
+        }
+        // The scope lock is already held by an active gate managed by this
+        // coordinator; skip the admission lease and use the legacy path.
+        return runStartOrResume();
+      }
+      throw err;
+    }
   };
 
   const resumeExistingGate = async (

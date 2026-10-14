@@ -1,12 +1,16 @@
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   computeUnrelatedIndexFingerprint,
   createReviewGateGit,
 } from "../../src/runtime/review-gate-git";
-import type { ReviewGateWorkspaceProvider } from "../../src/runtime/review-gate-git";
+import type {
+  CanonicalTargetEffectBroker,
+  ReviewGateWorkspaceProvider,
+} from "../../src/runtime/review-gate-git";
 import { buildReviewCommitMessage } from "../../src/core/review-gate/capabilities";
 import { computeArtifactDigest } from "../../src/core/review-gate/identity.js";
 import type {
@@ -35,9 +39,7 @@ afterAll(async () => {
 });
 
 async function runGitCli(root: string, args: readonly string[], input?: string): Promise<string> {
-  // importActual bypasses any test-module mocks; the fixture helper stays real.
-  const cp = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  const result = cp.spawnSync("git", [...args], {
+  const result = spawnSync("git", [...args], {
     cwd: root,
     shell: false,
     encoding: "buffer",
@@ -386,6 +388,41 @@ describe("GIT1 — exact-artifact commit", () => {
     expect(verified.targetEntry.gitMode).toBe(payload.parentTargetEntry.gitMode);
   });
 
+  it("asserts prepared commit state inside the canonical target guard", async () => {
+    const { provider, payload } = await preparedForDirtyTarget();
+    let guarded = false;
+    const originalRead = provider.readWorkspaceFile;
+    const readWorkspaceFile = vi.spyOn(provider, "readWorkspaceFile").mockImplementation(
+      async (path) => {
+        if (!guarded) throw new Error("commit state read outside target guard");
+        return await originalRead(path);
+      },
+    );
+    const targetEffectBroker: CanonicalTargetEffectBroker = {
+      withCanonicalTargetEffectGuards: async (_identities, run) => {
+        guarded = true;
+        try {
+          return await run();
+        } finally {
+          guarded = false;
+        }
+      },
+      sealCanonicalTargetsForTerminalIntent: async () => "BLOCK",
+    };
+    const gate = createReviewGateGit({
+      rootDir: currentRoot,
+      provider,
+      recoveryStore: createMemoryRecoveryStore(),
+      targetEffectBroker,
+      workspaceIdentity: "test-workspace",
+    });
+
+    await expect(gate.executePreparedCommit(payload)).resolves.toMatchObject({
+      changedPaths: [TARGET],
+    });
+    expect(readWorkspaceFile).toHaveBeenCalled();
+  });
+
   it("rejects a commit scoped to a non-phase target (Requirements)", async () => {
     currentRoot = await initFixture();
     const gate = createReviewGateGit({ rootDir: currentRoot, provider: createFsProvider(currentRoot) });
@@ -555,6 +592,42 @@ describe("GIT1 — prepared commit recovery", () => {
     const after = await gate.inspectTarget(TARGET);
     expect(after.headEntry).toEqual(input.targetCleanCommittedBinding.headEntry);
     expect(gate.classifyTargetClean(after)).toBe("clean");
+  });
+
+  it("classifies prepared restore state inside the canonical target guard", async () => {
+    const { provider, gate, input } = await prepareRestoreFixture();
+    const payload = await gate.prepareRestore(input);
+    let guarded = false;
+    const originalRead = provider.readWorkspaceFile;
+    const readWorkspaceFile = vi.spyOn(provider, "readWorkspaceFile").mockImplementation(
+      async (path) => {
+        if (!guarded) throw new Error("restore state read outside target guard");
+        return await originalRead(path);
+      },
+    );
+    const targetEffectBroker: CanonicalTargetEffectBroker = {
+      withCanonicalTargetEffectGuards: async (_identities, run) => {
+        guarded = true;
+        try {
+          return await run();
+        } finally {
+          guarded = false;
+        }
+      },
+      sealCanonicalTargetsForTerminalIntent: async () => "BLOCK",
+    };
+    const guardedGate = createReviewGateGit({
+      rootDir: currentRoot,
+      provider,
+      recoveryStore: createMemoryRecoveryStore(),
+      targetEffectBroker,
+      workspaceIdentity: "test-workspace",
+    });
+
+    await expect(guardedGate.executePreparedRestore(payload)).resolves.toMatchObject({
+      status: "restored",
+    });
+    expect(readWorkspaceFile).toHaveBeenCalled();
   });
 
   it("preserves existing POSIX permission bits of a 100644 target (no temp-file default)", async () => {
@@ -889,8 +962,7 @@ const provider = createFsProvider(currentRoot);
         preparedRecoveryDigest: payload.recoveryDigest,
       },
     };
-    const childProcess = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-    const schemaValidation = childProcess.spawnSync("bun", [
+    const schemaValidation = spawnSync("bun", [
       "-e",
       "import { validateReviewGateEventRecord } from './src/core/review-gate/event-schema.ts'; const record = JSON.parse(await Bun.stdin.text()); validateReviewGateEventRecord(record);",
     ], {
@@ -900,5 +972,62 @@ const provider = createFsProvider(currentRoot);
       shell: false,
     });
     expect(schemaValidation.status, schemaValidation.stderr).toBe(0);
+  });
+});
+
+describe("PLAN-030 — canonical target effect guard broker", () => {
+  it("fails closed when no protected target effect broker is installed", async () => {
+    const root = await initFixture();
+    const gate = createReviewGateGit({ rootDir: root, provider: createFsProvider(root) });
+    const seal = Reflect.get(gate, "sealCanonicalTargetsForTerminalIntent");
+
+    expect(seal).toBeTypeOf("function");
+    if (typeof seal !== "function") throw new Error("missing canonical target seal broker");
+
+    await expect(Reflect.apply(seal, gate, [Object.freeze({})])).resolves.toBe("BLOCK");
+  });
+
+  it("delegates ordered guards and terminal seals only to the protected target broker", async () => {
+    const root = await initFixture();
+    const gate = createReviewGateGit({ rootDir: root, provider: createFsProvider(root) });
+    const calls: string[] = [];
+    const input = Object.freeze({ terminalOperationId: "terminal-op" });
+    const authorizeSealedReceipt = async (): Promise<string> => "host-signature";
+    const expectedSeal = Object.freeze({ closingSealOperationId: "seal-op" });
+    Reflect.defineProperty(gate, "targetEffectBroker", {
+      value: {
+        withCanonicalTargetEffectGuards: async (
+          identities: readonly string[],
+          run: () => Promise<string>,
+        ): Promise<string> => {
+          calls.push(identities.join(","));
+          return run();
+        },
+        sealCanonicalTargetsForTerminalIntent: async (
+          received: unknown,
+          authorize: (payload: unknown) => Promise<string>,
+        ): Promise<unknown> => {
+          expect(received).toBe(input);
+          expect(authorize).toBe(authorizeSealedReceipt);
+          return expectedSeal;
+        },
+      },
+    });
+    const guard = Reflect.get(gate, "withCanonicalTargetEffectGuards");
+    const seal = Reflect.get(gate, "sealCanonicalTargetsForTerminalIntent");
+
+    expect(guard).toBeTypeOf("function");
+    expect(seal).toBeTypeOf("function");
+    if (typeof guard !== "function" || typeof seal !== "function") {
+      throw new Error("missing canonical target effect guard broker");
+    }
+
+    await expect(
+      Reflect.apply(guard, gate, [["target-a", "target-b"], async () => "guarded"]),
+    ).resolves.toBe("guarded");
+    await expect(Reflect.apply(seal, gate, [input, authorizeSealedReceipt])).resolves.toBe(
+      expectedSeal,
+    );
+    expect(calls).toEqual(["target-a,target-b"]);
   });
 });

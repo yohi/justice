@@ -20,12 +20,14 @@ import {
   type VerifiedReviewCommit,
   type WorktreeArtifactBindingV1,
 } from "../core/review-gate/capabilities";
+import type { VerifiedClosingSealReceiptV1, VerifiedTargetWriterHandoffIntentV1 } from "../core/review-gate/types.js";
+import type { PreparedWitnessPublicationV1 } from "./review-gate-witness-contracts.js";
 import { canonicalJsonText, canonicalizeArtifactPath, computeArtifactDigest, computeCanonicalJsonFingerprint } from "../core/review-gate/identity";
 import type { ReviewGateRecoveryStore } from "./review-gate-recovery-store";
 import {
-DIFF_RAW_STATUS_RECORD,
-runGitLiteral,
-type GitLiteralResult,
+  DIFF_RAW_STATUS_RECORD,
+  runGitLiteral,
+  type GitLiteralResult,
 } from "./review-gate-query";
 
 /**
@@ -46,10 +48,47 @@ export type ReviewGateWorkspaceProvider = Readonly<{
   ) => Promise<void>;
 }>;
 
+
+/**
+ * Input to the terminal target closing seal (PLAN-030).
+ * The caller supplies the already-verified terminal handoff intents,
+ * the transition operation id, the prepared witness publication and the
+ * exact canonical event bytes that will seal the target set.
+ */
+export type PreparedTerminalIntentV1 = Readonly<{
+  readonly intents: readonly VerifiedTargetWriterHandoffIntentV1[];
+  readonly terminalTransitionOperationId: string;
+  readonly publication: PreparedWitnessPublicationV1;
+  readonly canonicalEventBytes: Uint8Array;
+}>;
+
+/** The authenticated receipt that proves a complete target closing seal. */
+export type VerifiedCompleteTargetClosingSealV1 = VerifiedClosingSealReceiptV1;
+
+/**
+ * Broker-owned canonical target effect guards (Task 10d PLAN-030).
+ *
+ * `undefined` until the coordinator installs the Task 5 protected
+ * target-wide registry/effect serialization; every related entrypoint
+ * fails closed on an absent broker so no unguarded mutation path exists.
+ */
+export type CanonicalTargetEffectBroker = Readonly<{
+  readonly withCanonicalTargetEffectGuards: <T>(
+    identities: readonly string[],
+    run: () => Promise<T>,
+  ) => Promise<T>;
+  readonly sealCanonicalTargetsForTerminalIntent: (
+    input: PreparedTerminalIntentV1,
+    authorizeSealedReceipt: (payload: unknown) => Promise<string>,
+  ) => Promise<VerifiedCompleteTargetClosingSealV1 | "BLOCK">;
+}>;
+
 export type ReviewGateGitOptions = Readonly<{
-  readonly rootDir: string;
-  readonly provider: ReviewGateWorkspaceProvider;
-  readonly recoveryStore?: ReviewGateRecoveryStore;
+readonly rootDir: string;
+readonly provider: ReviewGateWorkspaceProvider;
+readonly recoveryStore?: ReviewGateRecoveryStore;
+  readonly targetEffectBroker?: CanonicalTargetEffectBroker | undefined;
+  readonly workspaceIdentity?: string;
 }>;
 
 const OID_PATTERN = /^[0-9a-f]{40,64}$/u;
@@ -129,10 +168,75 @@ export class ReviewGateGit {
   private readonly provider: ReviewGateWorkspaceProvider;
   private readonly recoveryStore: ReviewGateRecoveryStore | undefined;
 
+  private readonly targetEffectBroker: CanonicalTargetEffectBroker | undefined;
+  private readonly workspaceIdentity: string | undefined;
+
   constructor(options: ReviewGateGitOptions) {
     this.rootDir = options.rootDir;
     this.provider = options.provider;
     this.recoveryStore = options.recoveryStore;
+    this.targetEffectBroker = options.targetEffectBroker;
+    this.workspaceIdentity = options.workspaceIdentity;
+  }
+
+  /**
+   * Acquire canonical target effect guards for an ordered target set and
+   * run `run` under them (PLAN-030). Fail-closed: without a broker there is
+   * no guarded path.
+   */
+  async withCanonicalTargetEffectGuards<T>(
+    sortedVerifiedTargetIdentities: readonly string[],
+    cb: () => Promise<T>,
+  ): Promise<T> {
+    return this.requireTargetEffectBroker().withCanonicalTargetEffectGuards(
+      sortedVerifiedTargetIdentities,
+      cb,
+    );
+  }
+
+  /**
+   * Complete closing seal for a prepared terminal intent (PLAN-030).
+   * Re-projects any pending prepared native effect and durably seals the
+   * whole verified target set or returns `"BLOCK"` fail-closed. Never
+   * publishes the witness event from inside the guard and never acquires
+   * a workspace/scope/Gate upper guard from beneath a target guard.
+   */
+  async sealCanonicalTargetsForTerminalIntent(
+    input: PreparedTerminalIntentV1,
+    authorizeSealedReceipt: (payload: unknown) => Promise<string>,
+  ): Promise<VerifiedCompleteTargetClosingSealV1 | "BLOCK"> {
+    const broker = this.targetEffectBroker;
+    if (broker === undefined) return "BLOCK";
+    const outcome = await broker.sealCanonicalTargetsForTerminalIntent(
+      input,
+      authorizeSealedReceipt,
+    );
+    return outcome === "BLOCK" ? "BLOCK" : outcome;
+  }
+
+  private requireTargetEffectBroker(): CanonicalTargetEffectBroker {
+    const broker = this.targetEffectBroker;
+    if (broker === undefined) throw reviewDomainError("review_operation_not_permitted");
+    return broker;
+  }
+
+  /**
+   * Run a canonical target mutation under the protected target effect guard
+   * when a broker and workspace identity are installed. Without either, the
+   * legacy unguarded path remains available for tests and the legacy bridge.
+   */
+  private withCanonicalTargetEffectGuardForPath<T>(
+    canonicalPath: string,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    const broker = this.targetEffectBroker;
+    const workspaceIdentity = this.workspaceIdentity;
+    if (broker === undefined || workspaceIdentity === undefined) return run();
+    const identity = computeCanonicalJsonFingerprint({
+      workspaceIdentity,
+      path: canonicalPath,
+    });
+    return broker.withCanonicalTargetEffectGuards([identity], run);
   }
 
   private async git(args: readonly string[], stdin?: Buffer): Promise<GitLiteralResult> {
@@ -349,40 +453,45 @@ export class ReviewGateGit {
   async executePreparedRestore(
     payload: ReviewTargetRestorePreparedPayload,
   ): Promise<ReviewRestoreResult> {
-    const state = await this.classifyPreparedRestoreState(payload);
-    if (state === "conflict") throw reviewDomainError("review_restore_recovery_conflict");
-    if (state === "destination") return { status: "recovered" };
-    const destination = payload.targetCleanCommittedBinding;
-    const source = payload.sourceKnownDirtyBinding;
-    const replacementBytes = await this.catFileBlob(destination.headEntry.blobSha);
-    try {
-      await this.provider.replaceWorkspaceFileExact(
-        payload.targetCanonicalPath,
-        { digest: source.worktree.digest, gitMode: source.worktree.gitMode },
-        { bytes: replacementBytes, gitMode: destination.headEntry.gitMode },
-      );
-    } catch (cause: unknown) {
-      throw reviewDomainError("review_restore_failed", cause);
-    }
-    const verified = await this.inspectTarget(payload.targetCanonicalPath);
-    if (
-      verified.worktree === null ||
-      verified.worktree.digest !== destination.worktree.digest ||
-      verified.worktree.gitMode !== destination.worktree.gitMode ||
-      verified.headSha !== destination.headSha ||
-      verified.headEntry === null ||
-      verified.headEntry.blobSha !== destination.headEntry.blobSha ||
-      verified.headEntry.gitMode !== destination.headEntry.gitMode ||
-      verified.indexEntry === null ||
-      verified.indexEntry.blobSha !== destination.indexEntry.blobSha ||
-      verified.indexEntry.gitMode !== destination.indexEntry.gitMode
-    ) {
-      throw reviewDomainError("review_restore_failed");
-    }
-    return {
-      status: "restored",
-      verified: { digest: destination.worktree.digest, gitMode: destination.worktree.gitMode },
-    };
+    return this.withCanonicalTargetEffectGuardForPath(
+      payload.targetCanonicalPath,
+      async () => {
+        const state = await this.classifyPreparedRestoreState(payload);
+        if (state === "conflict") throw reviewDomainError("review_restore_recovery_conflict");
+        if (state === "destination") return { status: "recovered" };
+        const destination = payload.targetCleanCommittedBinding;
+        const source = payload.sourceKnownDirtyBinding;
+        const replacementBytes = await this.catFileBlob(destination.headEntry.blobSha);
+        try {
+          await this.provider.replaceWorkspaceFileExact(
+            payload.targetCanonicalPath,
+            { digest: source.worktree.digest, gitMode: source.worktree.gitMode },
+            { bytes: replacementBytes, gitMode: destination.headEntry.gitMode },
+          );
+        } catch (cause: unknown) {
+          throw reviewDomainError("review_restore_failed", cause);
+        }
+        const verified = await this.inspectTarget(payload.targetCanonicalPath);
+        if (
+          verified.worktree === null ||
+          verified.worktree.digest !== destination.worktree.digest ||
+          verified.worktree.gitMode !== destination.worktree.gitMode ||
+          verified.headSha !== destination.headSha ||
+          verified.headEntry === null ||
+          verified.headEntry.blobSha !== destination.headEntry.blobSha ||
+          verified.headEntry.gitMode !== destination.headEntry.gitMode ||
+          verified.indexEntry === null ||
+          verified.indexEntry.blobSha !== destination.indexEntry.blobSha ||
+          verified.indexEntry.gitMode !== destination.indexEntry.gitMode
+        ) {
+          throw reviewDomainError("review_restore_failed");
+        }
+        return {
+          status: "restored",
+          verified: { digest: destination.worktree.digest, gitMode: destination.worktree.gitMode },
+        };
+      },
+    );
   }
 
   /** CP1 recovery classification; never mutates the workspace. */
@@ -504,44 +613,49 @@ export class ReviewGateGit {
   }
 
   async executePreparedCommit(payload: ReviewCommitPreparedPayload): Promise<VerifiedReviewCommit> {
-    const state = await this.assertPreparedCommitState(payload);
-    if (state === "conflict") {
-      // Workspace/HEAD drift after prepare is an unprovable intent state: the
-      // coordinator must recover (classify) rather than silently overwrite.
-      throw reviewDomainError("review_commit_recovery_conflict");
-    }
-    const messageDir = await mkdtemp(path.join(os.tmpdir(), "justice-commit-"));
-    const messageFile = path.join(messageDir, "message.txt");
-    try {
-      await writeFile(messageFile, payload.commitMessage, { mode: 0o600 });
-      const commitResult = await this.git(
-        [
-          "-c",
-          "core.hooksPath=/dev/null",
-          "commit",
-          "--only",
-          "--no-gpg-sign",
-          "--no-status",
-          "--cleanup=verbatim",
-          "--pathspec-from-file=-",
-          "--pathspec-file-nul",
-          "-F",
-          messageFile,
-        ],
-        Buffer.from(`${payload.targetCanonicalPath}\0`, "utf8"),
-      );
-      if (commitResult.code !== 0) {
-        throw reviewDomainError(
-          "review_commit_failed",
-          new Error(`git commit exited ${commitResult.code}: ${commitResult.stderr.slice(0, 400)}`),
-        );
-      }
-    } finally {
-      await rm(messageDir, { recursive: true, force: true });
-    }
-    const commitId = await this.resolveHeadSha();
-    if (commitId === null) throw reviewDomainError("review_commit_recovery_conflict");
-    return await this.verifyPreparedCommit(payload, commitId);
+    return this.withCanonicalTargetEffectGuardForPath(
+      payload.targetCanonicalPath,
+      async () => {
+        const state = await this.assertPreparedCommitState(payload);
+        if (state === "conflict") {
+          // Workspace/HEAD drift after prepare is an unprovable intent state: the
+          // coordinator must recover (classify) rather than silently overwrite.
+          throw reviewDomainError("review_commit_recovery_conflict");
+        }
+        const messageDir = await mkdtemp(path.join(os.tmpdir(), "justice-commit-"));
+        const messageFile = path.join(messageDir, "message.txt");
+        try {
+          await writeFile(messageFile, payload.commitMessage, { mode: 0o600 });
+          const commitResult = await this.git(
+            [
+              "-c",
+              "core.hooksPath=/dev/null",
+              "commit",
+              "--only",
+              "--no-gpg-sign",
+              "--no-status",
+              "--cleanup=verbatim",
+              "--pathspec-from-file=-",
+              "--pathspec-file-nul",
+              "-F",
+              messageFile,
+            ],
+            Buffer.from(`${payload.targetCanonicalPath}\0`, "utf8"),
+          );
+          if (commitResult.code !== 0) {
+            throw reviewDomainError(
+              "review_commit_failed",
+              new Error(`git commit exited ${commitResult.code}: ${commitResult.stderr.slice(0, 400)}`),
+            );
+          }
+        } finally {
+          await rm(messageDir, { recursive: true, force: true });
+        }
+        const commitId = await this.resolveHeadSha();
+        if (commitId === null) throw reviewDomainError("review_commit_recovery_conflict");
+        return await this.verifyPreparedCommit(payload, commitId);
+      },
+    );
   }
 
   /**
