@@ -378,7 +378,6 @@ export type ReviewRestorePrepareInput = Readonly<{
   readonly sourceKnownDirtyBinding: ReviewRestoreSourceBinding;
   readonly targetCleanCommittedBinding: ReviewRestoreDestinationBinding;
 }>;
-
 export type ReviewTargetRestorePreparedPayload = Readonly<{
   readonly preparedId: string;
   readonly preparedAt: string;
@@ -388,6 +387,7 @@ export type ReviewTargetRestorePreparedPayload = Readonly<{
   readonly targetCanonicalPath: string;
   readonly sourceKnownDirtyBinding: ReviewRestoreSourceBinding;
   readonly targetCleanCommittedBinding: ReviewRestoreDestinationBinding;
+  readonly recoveryDigest: string;
 }>;
 
 export type ReviewRestoreResult =
@@ -419,7 +419,6 @@ export type ReviewCommitPrepareInput = Readonly<{
   readonly expectedArtifactDigest: string;
   readonly expectedGitMode: ReviewGitRegularMode;
 }>;
-
 export type ReviewCommitPreparedPayload = Readonly<{
   readonly preparedId: string;
   readonly preparedAt: string;
@@ -437,6 +436,7 @@ export type ReviewCommitPreparedPayload = Readonly<{
   readonly commitMessage: string;
   readonly messageDigest: string;
   readonly unrelatedIndexFingerprint: string;
+  readonly recoveryDigest: string;
 }>;
 
 export type VerifiedReviewCommit = Readonly<{
@@ -450,7 +450,6 @@ export type ReviewCommitRecoveryResult =
   | Readonly<{ readonly status: "safe_to_reexecute" }>
   | Readonly<{ readonly status: "recovered"; readonly commit: VerifiedReviewCommit }>;
 
-/** GIT1 §30.2 commit message base format (lineage IDs sorted, comma-separated). */
 export function buildReviewCommitMessage(
   phase: ReviewPhase,
   remediationRound: number,
@@ -458,7 +457,7 @@ export function buildReviewCommitMessage(
 ): string {
   const sorted = [...lineageIds].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
   return [
-    `docs: address ${phase} review round ${remediationRound}`,
+    `[Justice] remediation round ${remediationRound}`,
     "",
     `Review-Gate: ${phase}`,
     `Review-Round: ${remediationRound}`,

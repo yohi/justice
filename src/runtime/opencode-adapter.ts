@@ -1824,9 +1824,9 @@ async function buildSharedReviewGateRuntimeGraph(
     const protocol = createReviewGateProtocolDescriptor();
 
     const mutationSubstrate: ReviewGateMutationSubstrate | null = null;
-    void recoveryStore;
     const reviewGateGit = createReviewGateGit({
       rootDir: workspaceRoot,
+      recoveryStore,
       provider: {
         readWorkspaceFile: workspaceReader.readWorkspaceFile,
         replaceWorkspaceFileExact: async () => {

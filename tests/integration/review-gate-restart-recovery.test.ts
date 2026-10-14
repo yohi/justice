@@ -38,6 +38,7 @@ import {
 } from "../../src/core/review-gate/event-schema";
 import { computeCanonicalJsonFingerprint, computeWorkspaceIdentity } from "../../src/core/review-gate/identity";
 import { createReviewGateGit, computeUnrelatedIndexFingerprint } from "../../src/runtime/review-gate-git";
+import { createReviewGateRecoveryStore } from "../../src/runtime/review-gate-recovery-store";
 import type { ReviewGateWorkspaceProvider } from "../../src/runtime/review-gate-git";
 import { createReviewGateApprovalLookup } from "../../src/runtime/review-gate-approval";
 import { createReviewGateProtocolDescriptor } from "../../src/runtime/review-gate-protocol";
@@ -1362,8 +1363,8 @@ describe("restart recovery — reopen, invalidation, and protocol change", () =>
     coordinator.releaseSession("main");
 
     // The Design target turns dirty across the restart: the resumed session
-    // re-probes the workspace, so the upstream reopen routes through the
-    // exact restore before the reopen is appended.
+    // re-probes the workspace, but without the Task 18-owned verified upstream
+    // reopen context Core fails closed instead of planning the restore.
     designDirty = true;
     const restartCoordinator = harness.buildCoordinator("reopen-restart", {
       inspectTargets: async (paths) => {
@@ -1405,20 +1406,28 @@ describe("restart recovery — reopen, invalidation, and protocol change", () =>
     });
     expect(final.injectedContext).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
 
+    // Task 14 fail-closed: without the Task 18-owned verified upstream reopen
+    // context, Core cannot manufacture the reopen and must suspend instead of
+    // guessing a restore target.
     const reopen = harness
       .events()
       .find((event): event is Extract<ReviewGateEvent, { eventType: "REOPEN_REQUIRED" }> =>
         event.eventType === "REOPEN_REQUIRED",
       );
-    expect(reopen).toBeDefined();
-    expect(reopen?.payload.phase).toBe("design");
-    expect(reopen?.payload.lineageIds.length).toBeGreaterThan(0);
-    expect(harness.substrate.restoreCalls()).toBe(1);
+    expect(reopen).toBeUndefined();
+    const executionSuspended = harness
+      .events()
+      .find(
+        (event): event is Extract<ReviewGateEvent, { eventType: "EXECUTION_SUSPENDED" }> =>
+          event.eventType === "EXECUTION_SUSPENDED",
+      );
+    expect(executionSuspended?.payload.reason).toBe("upstream_reopen_context_missing");
+    expect(harness.substrate.restoreCalls()).toBe(0);
     expect(harness.substrate.commitCalls()).toBe(0);
     const projected = projectReviewGate(
       await harness.eventStore.readEvents(await firstGateId(harness)),
     );
-    expect(projected.suspensionReason).toBe("reopen_required");
+    expect(projected.suspensionReason).toBe("execution_suspended");
   });
 
   it("reopens through OSC1 when a Design finding is Requirements-owned", async () => {
@@ -1463,16 +1472,26 @@ describe("restart recovery — reopen, invalidation, and protocol change", () =>
       );
     }
 
+    // Task 14 fail-closed: without the Task 18-owned verified upstream reopen
+    // context, the requirements-owned upstream blocker suspends the gate
+    // instead of manufacturing the design reopen.
     const reopen = harness
       .events()
       .find((event): event is Extract<ReviewGateEvent, { eventType: "REOPEN_REQUIRED" }> =>
         event.eventType === "REOPEN_REQUIRED",
       );
-    expect(reopen?.payload.phase).toBe("design");
+    expect(reopen).toBeUndefined();
+    const executionSuspended = harness
+      .events()
+      .find(
+        (event): event is Extract<ReviewGateEvent, { eventType: "EXECUTION_SUSPENDED" }> =>
+          event.eventType === "EXECUTION_SUSPENDED",
+      );
+    expect(executionSuspended?.payload.reason).toBe("upstream_reopen_context_missing");
     expect(harness.substrate.restoreCalls()).toBe(0);
     expect(harness.substrate.commitCalls()).toBe(0);
     const projected = projectReviewGate(await harness.eventStore.readEvents(await firstGateId(harness)));
-    expect(projected.suspensionReason).toBe("reopen_required");
+    expect(projected.suspensionReason).toBe("execution_suspended");
     const requirementsFinding = [...projected.findings.values()].find(
       (finding) => finding.ownerScope === "requirements",
     );
@@ -1751,7 +1770,11 @@ async function initGitFixture(
   await runGitCli(root, ["add", "-A"]);
   await runGitCli(root, ["commit", "-q", "--no-gpg-sign", "-m", "init"]);
   const provider = createFsProvider(root);
-  const git = createReviewGateGit({ rootDir: root, provider });
+  const git = createReviewGateGit({
+    rootDir: root,
+    provider,
+    recoveryStore: createReviewGateRecoveryStore(root),
+  });
   return { root, target, provider, git };
 }
 

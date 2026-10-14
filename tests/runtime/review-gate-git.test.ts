@@ -10,13 +10,15 @@ import type { ReviewGateWorkspaceProvider } from "../../src/runtime/review-gate-
 import { buildReviewCommitMessage } from "../../src/core/review-gate/capabilities";
 import { computeArtifactDigest } from "../../src/core/review-gate/identity.js";
 import type {
-  GitIndexEntryBindingV1,
-  GitTreeEntryBindingV1,
-  ReviewCommitPrepareInput,
-  ReviewRestorePrepareInput,
-  ReviewTargetGitBinding,
-  WorktreeArtifactBindingV1,
+GitIndexEntryBindingV1,
+GitTreeEntryBindingV1,
+ReviewCommitPrepareInput,
+ReviewRestorePrepareInput,
+ReviewTargetGitBinding,
+WorktreeArtifactBindingV1,
 } from "../../src/core/review-gate/capabilities";
+import type { ReviewGateRecoveryStore } from "../../src/runtime/review-gate-recovery-store";
+import { canonicalJsonText, computeCanonicalJsonFingerprint } from "../../src/core/review-gate/identity";
 
 const TARGET = ":(glob)*.md";
 const TARGET_V1 = "design target v1\nbe clean\n";
@@ -220,7 +222,7 @@ async function preparedForDirtyTarget(): Promise<{
   await writeFile(`${currentRoot}/docs/b.md`, "b staged\n");
   await runGitCli(currentRoot, ["add", "docs/b.md"]);
   const provider = createFsProvider(currentRoot);
-  const gate = createReviewGateGit({ rootDir: currentRoot, provider });
+  const gate = createReviewGateGit({ rootDir: currentRoot, provider, recoveryStore: createMemoryRecoveryStore() });
   const payload = await gate.prepareCommit(mutationCommitInput());
   return { provider, payload };
 }
@@ -331,7 +333,7 @@ describe("GIT1 — exact-artifact commit", () => {
       expect(payload.messageDigest).toBe(computeArtifactDigest(Buffer.from(expectedMessage, "utf8")));
       expect(expectedMessage).toBe(
         [
-          "docs: address design review round 2",
+          "[Justice] remediation round 2",
           "",
           "Review-Gate: design",
           "Review-Round: 2",
@@ -378,7 +380,7 @@ describe("GIT1 — exact-artifact commit", () => {
 
   it("preserves parentTargetEntry.gitMode == newCommitTargetEntry.gitMode for content remediation", async () => {
     const { provider, payload } = await preparedForDirtyTarget();
-    const gate = createReviewGateGit({ rootDir: currentRoot, provider });
+    const gate = createReviewGateGit({ rootDir: currentRoot, provider, recoveryStore: createMemoryRecoveryStore() });
     const verified = await gate.executePreparedCommit(payload);
     expect(payload.parentTargetEntry.gitMode).toBe("100644");
     expect(verified.targetEntry.gitMode).toBe(payload.parentTargetEntry.gitMode);
@@ -414,7 +416,7 @@ describe("GIT1 — exact-artifact commit", () => {
 
   it("maps a real git commit subprocess failure to review_commit_failed and keeps HEAD", async () => {
     const { provider, payload } = await preparedForDirtyTarget();
-    const gate = createReviewGateGit({ rootDir: currentRoot, provider });
+    const gate = createReviewGateGit({ rootDir: currentRoot, provider, recoveryStore: createMemoryRecoveryStore() });
     const before = await headShaOf(currentRoot);
     await writeFile(`${currentRoot}/.git/index.lock`, ""); // deterministic real git failure
     try {
@@ -428,7 +430,7 @@ describe("GIT1 — exact-artifact commit", () => {
 
   it("conflicts when HEAD moved between prepare and execute", async () => {
     const { provider, payload } = await preparedForDirtyTarget();
-    const gate = createReviewGateGit({ rootDir: currentRoot, provider });
+    const gate = createReviewGateGit({ rootDir: currentRoot, provider, recoveryStore: createMemoryRecoveryStore() });
     await runGitCli(currentRoot, ["-c", "core.hooksPath=/dev/null", "commit", "-q", "--no-gpg-sign", "--allow-empty", "-m", "external"]);
     await expect(gate.executePreparedCommit(payload)).rejects.toThrow(
       "review_commit_recovery_conflict",
@@ -491,7 +493,7 @@ describe("GIT1 — prepared commit recovery", () => {
     currentRoot = await initFixture();
     await writeFile(`${currentRoot}/:(glob)*.md`, TARGET_V2); // known dirty post-image bytes
     const provider = createFsProvider(currentRoot, options);
-    const gate = createReviewGateGit({ rootDir: currentRoot, provider });
+    const gate = createReviewGateGit({ rootDir: currentRoot, provider, recoveryStore: createMemoryRecoveryStore() });
     const inspected = await gate.inspectTarget(TARGET);
     const sourceWorktree: WorktreeArtifactBindingV1 = {
       canonicalPath: TARGET,
@@ -573,7 +575,7 @@ describe("GIT1 — prepared commit recovery", () => {
     await runGitCli(currentRoot, ["-c", "core.hooksPath=/dev/null", "commit", "-q", "--no-gpg-sign", "-m", "exec-baseline"]);
     await writeFile(`${currentRoot}/:(glob)*.md`, TARGET_V2); // dirty bytes, office mode unchanged
     const provider = createFsProvider(currentRoot);
-    const gate = createReviewGateGit({ rootDir: currentRoot, provider });
+    const gate = createReviewGateGit({ rootDir: currentRoot, provider, recoveryStore: createMemoryRecoveryStore() });
     const inspected = await gate.inspectTarget(TARGET);
     expect(inspected.headEntry?.gitMode).toBe("100755");
     const result = await gate.executePreparedRestore(
@@ -645,7 +647,7 @@ describe("GIT1 — prepared commit recovery", () => {
     await runGitCli(currentRoot, ["-c", "core.hooksPath=/dev/null", "commit", "-q", "--no-gpg-sign", "-m", "exec-baseline"]);
     await writeFile(`${currentRoot}/:(glob)*.md`, TARGET_V2);
     const provider = createFsProvider(currentRoot);
-    const gate = createReviewGateGit({ rootDir: currentRoot, provider });
+    const gate = createReviewGateGit({ rootDir: currentRoot, provider, recoveryStore: createMemoryRecoveryStore() });
     const inspected = await gate.inspectTarget(TARGET);
     expect(inspected.worktree?.gitMode).toBe("100755");
     const payload = await gate.prepareRestore({
@@ -719,5 +721,184 @@ describe("GIT1 — prepared commit recovery", () => {
       "review_restore_recovery_conflict",
     );
     expect(provider.replaceCalls).toHaveLength(1); // execute only; recovery never rewrites
+  });
+
+  it("rejects prepareRestore when no recovery store is configured", async (): Promise<void> => {
+    const { provider, input } = await prepareRestoreFixture();
+    const gate = createReviewGateGit({ rootDir: currentRoot, provider });
+    await expect(gate.prepareRestore(input)).rejects.toThrow("review_restore_failed");
+  });
+
+  it("rejects prepareRestore when recovery publication fails", async (): Promise<void> => {
+    const { provider, input } = await prepareRestoreFixture();
+    const gate = createReviewGateGit({
+      rootDir: currentRoot,
+      provider,
+      recoveryStore: createFailingRecoveryStore(),
+    });
+    await expect(gate.prepareRestore(input)).rejects.toThrow("review_restore_failed");
+  });
+});
+
+
+function createMemoryRecoveryStore(): ReviewGateRecoveryStore {
+  const entries = new Map<string, Buffer>();
+  return {
+    publish: async (digest, bytes) => {
+      if (entries.has(digest)) {
+        const existing = entries.get(digest);
+        return existing !== undefined && existing.equals(bytes) ? "exists" : Promise.reject(new Error("collision"));
+      }
+      entries.set(digest, bytes);
+      return "created";
+    },
+    read: async (digest) => entries.get(digest) ?? null,
+    list: async () => [...entries.keys()],
+    close: () => { /* no-op */ },
+  };
+}
+
+function createFailingRecoveryStore(): ReviewGateRecoveryStore {
+  return {
+    publish: async () => {
+      throw new Error("recovery_store_publish_failed");
+    },
+    read: async () => null,
+    list: async () => [],
+    close: () => {},
+  };
+}
+
+
+describe("GIT1 + recovery store", () => {
+  it("rejects prepareCommit when no recovery store is configured", async (): Promise<void> => {
+    const currentRoot = await initFixture();
+    await writeFile(`${currentRoot}/${TARGET}`, TARGET_V2);
+    const gate = createReviewGateGit({ rootDir: currentRoot, provider: createFsProvider(currentRoot) });
+    await expect(gate.prepareCommit(mutationCommitInput())).rejects.toThrow("review_commit_failed");
+  });
+
+  it("rejects prepareCommit when recovery publication fails", async (): Promise<void> => {
+    const currentRoot = await initFixture();
+    await writeFile(`${currentRoot}/${TARGET}`, TARGET_V2);
+    const gate = createReviewGateGit({
+      rootDir: currentRoot,
+      provider: createFsProvider(currentRoot),
+      recoveryStore: createFailingRecoveryStore(),
+    });
+    await expect(gate.prepareCommit(mutationCommitInput())).rejects.toThrow("review_commit_failed");
+  });
+
+  it("prepareCommit persists a canonical recovery record and returns its digest", async () => {
+    const currentRoot = await initFixture();
+    await writeFile(`${currentRoot}/${TARGET}`, TARGET_V2);
+const provider = createFsProvider(currentRoot);
+    const recoveryStore = createMemoryRecoveryStore();
+    const gate = createReviewGateGit({ rootDir: currentRoot, provider, recoveryStore });
+    const input = mutationCommitInput();
+    const payload = await gate.prepareCommit(input);
+    expect(payload.recoveryDigest).toMatch(/^[a-f0-9]{64}$/u);
+    const stored = await recoveryStore.read(payload.recoveryDigest);
+    expect(stored).not.toBeNull();
+    const recoveryRecord = {
+      phase: payload.phase,
+      roundOrdinal: payload.remediationRound,
+      targetCanonicalPath: payload.targetCanonicalPath,
+      parentHeadSha: payload.parentHeadSha,
+      expectedTargetEntry: payload.expectedTargetEntry,
+      commitMessageDigest: payload.messageDigest,
+      lineageIds: payload.lineageIds,
+      unrelatedIndexFingerprint: payload.unrelatedIndexFingerprint,
+      preparedOperationId: payload.operationId,
+    };
+    const expectedDigest = computeCanonicalJsonFingerprint(recoveryRecord);
+    expect(payload.recoveryDigest).toBe(expectedDigest);
+    expect(stored?.toString("utf8")).toBe(canonicalJsonText(recoveryRecord));
+  });
+
+  it("prepareRestore persists a canonical recovery record and returns its digest", async () => {
+    const currentRoot = await initFixture();
+    await writeFile(`${currentRoot}/${TARGET}`, TARGET_V2);
+    const provider = createFsProvider(currentRoot);
+    const gate = createReviewGateGit({ rootDir: currentRoot, provider });
+    const inspected = await gate.inspectTarget(TARGET);
+    const sourceWorktree: WorktreeArtifactBindingV1 = {
+      canonicalPath: TARGET,
+      digest: computeArtifactDigest(Buffer.from(TARGET_V2, "utf8")),
+      gitMode: "100644",
+    };
+    const input: ReviewRestorePrepareInput = {
+      gateId: "gate-task9",
+      operationId: "op-restore",
+      phase: "design",
+      targetCanonicalPath: TARGET,
+      allowedRestoreTargetPath: TARGET,
+      sourceKnownDirtyBinding: {
+        headSha: inspected.headSha!,
+        headEntry: inspected.headEntry!,
+        indexEntry: inspected.indexEntry!,
+        worktree: sourceWorktree,
+        sourceEventId: "evt-remediation-completed",
+      },
+      targetCleanCommittedBinding: {
+        headSha: inspected.headSha!,
+        headEntry: inspected.headEntry!,
+        indexEntry: inspected.indexEntry!,
+        worktree: { canonicalPath: TARGET, digest: computeArtifactDigest(Buffer.from(TARGET_V1, "utf8")), gitMode: "100644" },
+      },
+    };
+    const recoveryStore = createMemoryRecoveryStore();
+    const gateWithStore = createReviewGateGit({ rootDir: currentRoot, provider, recoveryStore });
+    const payload = await gateWithStore.prepareRestore(input);
+    expect(payload.recoveryDigest).toMatch(/^[a-f0-9]{64}$/u);
+    const stored = await recoveryStore.read(payload.recoveryDigest);
+    expect(stored).not.toBeNull();
+    const recoveryRecord = {
+      phase: payload.phase,
+      targetCanonicalPath: payload.targetCanonicalPath,
+      sourceKnownDirtyBinding: {
+        headSha: payload.sourceKnownDirtyBinding.headSha,
+        headEntry: payload.sourceKnownDirtyBinding.headEntry,
+        indexEntry: payload.sourceKnownDirtyBinding.indexEntry,
+        worktree: payload.sourceKnownDirtyBinding.worktree,
+      },
+      targetCleanCommittedBinding: payload.targetCleanCommittedBinding,
+      preparedOperationId: payload.operationId,
+    };
+    const expectedDigest = computeCanonicalJsonFingerprint(recoveryRecord);
+    expect(payload.recoveryDigest).toBe(expectedDigest);
+    expect(stored?.toString("utf8")).toBe(canonicalJsonText(recoveryRecord));
+    const storedRecord: unknown = JSON.parse(stored?.toString("utf8") ?? "null");
+    expect(storedRecord).toEqual(recoveryRecord);
+    const eventRecord = {
+      schemaVersion: 2,
+      eventId: "restore-prepared-event-1",
+      parentEventId: "restore-parent-event-1",
+      emittedAt: "2026-10-13T00:00:00.000Z",
+      gateId: payload.gateId,
+      epochId: "epoch-1",
+      generationId: "generation-1",
+      writerId: "writer-1",
+      eventType: "REVIEW_TARGET_RESTORE_PREPARED",
+      payload: {
+        phase: payload.phase,
+        targetCanonicalPath: payload.targetCanonicalPath,
+        sourceKnownDirtyBinding: recoveryRecord.sourceKnownDirtyBinding,
+        targetCleanCommittedBinding: recoveryRecord.targetCleanCommittedBinding,
+        preparedOperationId: payload.operationId,
+        preparedRecoveryDigest: payload.recoveryDigest,
+      },
+    };
+    const childProcess = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    const schemaValidation = childProcess.spawnSync("bun", [
+      "-e",
+      "import { validateReviewGateEventRecord } from './src/core/review-gate/event-schema.ts'; const record = JSON.parse(await Bun.stdin.text()); validateReviewGateEventRecord(record);",
+    ], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      input: JSON.stringify(eventRecord),
+      shell: false,
+    });
+    expect(schemaValidation.status, schemaValidation.stderr).toBe(0);
   });
 });

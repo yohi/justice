@@ -20,11 +20,12 @@ import {
   type VerifiedReviewCommit,
   type WorktreeArtifactBindingV1,
 } from "../core/review-gate/capabilities";
-import { canonicalizeArtifactPath, computeArtifactDigest } from "../core/review-gate/identity";
+import { canonicalJsonText, canonicalizeArtifactPath, computeArtifactDigest, computeCanonicalJsonFingerprint } from "../core/review-gate/identity";
+import type { ReviewGateRecoveryStore } from "./review-gate-recovery-store";
 import {
-  DIFF_RAW_STATUS_RECORD,
-  runGitLiteral,
-  type GitLiteralResult,
+DIFF_RAW_STATUS_RECORD,
+runGitLiteral,
+type GitLiteralResult,
 } from "./review-gate-query";
 
 /**
@@ -45,10 +46,11 @@ export type ReviewGateWorkspaceProvider = Readonly<{
   ) => Promise<void>;
 }>;
 
-interface ReviewGateGitOptions {
+export type ReviewGateGitOptions = Readonly<{
   readonly rootDir: string;
   readonly provider: ReviewGateWorkspaceProvider;
-}
+  readonly recoveryStore?: ReviewGateRecoveryStore;
+}>;
 
 const OID_PATTERN = /^[0-9a-f]{40,64}$/u;
 
@@ -125,10 +127,12 @@ type PreparedCommitState = "precommit" | "conflict";
 export class ReviewGateGit {
   private readonly rootDir: string;
   private readonly provider: ReviewGateWorkspaceProvider;
+  private readonly recoveryStore: ReviewGateRecoveryStore | undefined;
 
   constructor(options: ReviewGateGitOptions) {
     this.rootDir = options.rootDir;
     this.provider = options.provider;
+    this.recoveryStore = options.recoveryStore;
   }
 
   private async git(args: readonly string[], stdin?: Buffer): Promise<GitLiteralResult> {
@@ -275,7 +279,7 @@ export class ReviewGateGit {
     ) {
       throw scopeViolation();
     }
-    return {
+    const prepared: ReviewTargetRestorePreparedPayload = {
       preparedId: `${input.operationId}-${Date.now().toString(36)}`,
       preparedAt: new Date().toISOString(),
       gateId: input.gateId,
@@ -284,7 +288,32 @@ export class ReviewGateGit {
       targetCanonicalPath: canonical,
       sourceKnownDirtyBinding: source,
       targetCleanCommittedBinding: destination,
+      recoveryDigest: "",
     };
+    const sourceKnownDirtyBinding = {
+      headSha: source.headSha,
+      headEntry: source.headEntry,
+      indexEntry: source.indexEntry,
+      worktree: source.worktree,
+    };
+    const recoveryRecord = {
+      phase: prepared.phase,
+      targetCanonicalPath: prepared.targetCanonicalPath,
+      sourceKnownDirtyBinding,
+      targetCleanCommittedBinding: prepared.targetCleanCommittedBinding,
+      preparedOperationId: prepared.operationId,
+    };
+    const recoveryDigest = computeCanonicalJsonFingerprint(recoveryRecord);
+    const recoveryBytes = Buffer.from(canonicalJsonText(recoveryRecord), "utf8");
+    if (this.recoveryStore === undefined) {
+      throw reviewDomainError("review_restore_failed");
+    }
+    try {
+      await this.recoveryStore.publish(recoveryDigest, recoveryBytes);
+    } catch (cause: unknown) {
+      throw reviewDomainError("review_restore_failed", cause);
+    }
+    return { ...prepared, recoveryDigest };
   }
 
   private async classifyPreparedRestoreState(
@@ -408,7 +437,7 @@ export class ReviewGateGit {
       input.remediationRound,
       [...input.lineageIds].sort(),
     );
-    return {
+    const prepared: ReviewCommitPreparedPayload = {
       preparedId: `${input.operationId}-${Date.now().toString(36)}`,
       preparedAt: new Date().toISOString(),
       gateId: input.gateId,
@@ -429,7 +458,30 @@ export class ReviewGateGit {
       commitMessage,
       messageDigest: computeArtifactDigest(Buffer.from(commitMessage, "utf8")),
       unrelatedIndexFingerprint: await computeUnrelatedIndexFingerprint(this.rootDir, canonical),
+      recoveryDigest: "",
     };
+    const recoveryRecord = {
+      phase: prepared.phase,
+      roundOrdinal: prepared.remediationRound,
+      targetCanonicalPath: prepared.targetCanonicalPath,
+      parentHeadSha: prepared.parentHeadSha,
+      expectedTargetEntry: prepared.expectedTargetEntry,
+      commitMessageDigest: prepared.messageDigest,
+      lineageIds: prepared.lineageIds,
+      unrelatedIndexFingerprint: prepared.unrelatedIndexFingerprint,
+      preparedOperationId: prepared.operationId,
+    };
+    const recoveryDigest = computeCanonicalJsonFingerprint(recoveryRecord);
+    const recoveryBytes = Buffer.from(canonicalJsonText(recoveryRecord), "utf8");
+    if (this.recoveryStore === undefined) {
+      throw reviewDomainError("review_commit_failed");
+    }
+    try {
+      await this.recoveryStore.publish(recoveryDigest, recoveryBytes);
+    } catch (cause: unknown) {
+      throw reviewDomainError("review_commit_failed", cause);
+    }
+    return { ...prepared, recoveryDigest };
   }
 
   private async assertPreparedCommitState(
@@ -518,11 +570,13 @@ export class ReviewGateGit {
       if (parentCommitId === undefined || parentCommitId !== payload.parentHeadSha) {
         throw verificationFailed("commit parent is not the prepared parent");
       }
+      const expectedMessage = buildReviewCommitMessage(payload.phase, payload.remediationRound, payload.lineageIds);
       if (
         computeArtifactDigest(Buffer.from(message, "utf8")) !== payload.messageDigest ||
-        message !== payload.commitMessage
+        message !== payload.commitMessage ||
+        message !== expectedMessage
       ) {
-        throw verificationFailed("commit message does not match the prepared digest");
+        throw verificationFailed("commit message does not match the prepared canonical format");
       }
       // Full parent→commit changed-entry set; deliberately NOT path-scoped so
       // any accidental extra committed path is detected.

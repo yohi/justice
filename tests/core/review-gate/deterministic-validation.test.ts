@@ -16,14 +16,27 @@ import {
   DeterministicValidatorRegistry,
   DESIGN_REQUIREMENTS_REFERENCE_CONSISTENCY_V1,
   REVIEW_INPUT_BINDING_INTEGRITY_V1,
+  SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_DIGEST,
+  SEMANTIC_CONTEXT_COMPATIBILITY_V1,
   bridgeDeterministicFindings,
+  buildSemanticContextCompatibilityProof,
   commitValidationEvidence,
   computeValidationCacheKey,
   createDefaultDeterministicValidatorRegistry,
+  deterministicValidationCompleted,
+  deterministicValidationReused,
   emptyDeterministicValidationState,
+  encodeSemanticCompatibilityValidatorInput,
+  evaluateSemanticContextCompatibility,
   executeValidationDispatch,
   scheduleMandatoryValidations,
 } from "../../../src/core/review-gate/deterministic-validation.js";
+import type { SemanticContextInputsV1 } from "../../../src/core/review-gate/types.js";
+import {
+  REQUIREMENTS_HEADING_ANCHOR_VERSION,
+  buildRequirementsSectionInventory,
+  diffRequirementsSectionInventories,
+} from "../../../src/core/review-gate/requirements-section-inventory.js";
 
 const E1: ExecutionEnvironmentBinding = Object.freeze({
   runtimeId: "bun",
@@ -246,7 +259,7 @@ describe("DeterministicValidatorRegistry", () => {
 });
 
 describe("default v4 validators", () => {
-  it("registers exactly the two v4 in-process validators", () => {
+  it("registers exactly the three v4 in-process validators", () => {
     const registry = createDefaultDeterministicValidatorRegistry();
     expect(
       registry.resolve("review-input-binding-integrity-v1")?.descriptor,
@@ -255,10 +268,45 @@ describe("default v4 validators", () => {
       registry.resolve("design-requirements-reference-consistency-v1")
         ?.descriptor,
     ).toEqual(DESIGN_REQUIREMENTS_REFERENCE_CONSISTENCY_V1);
+    expect(
+      registry.resolve("SEMANTIC_CONTEXT_COMPATIBILITY_V1")?.descriptor,
+    ).toEqual(SEMANTIC_CONTEXT_COMPATIBILITY_V1);
     expect(registry.resolve("review-input-binding-integrity-v1")?.runner).not.toBeNull();
     expect(
       registry.resolve("design-requirements-reference-consistency-v1")?.runner,
     ).not.toBeNull();
+    expect(
+      registry.resolve("SEMANTIC_CONTEXT_COMPATIBILITY_V1")?.runner,
+    ).not.toBeNull();
+  });
+
+  it("anchors the semantic compatibility validator to every existing stage", () => {
+    expect(SEMANTIC_CONTEXT_COMPATIBILITY_V1.validatorId).toBe(
+      "SEMANTIC_CONTEXT_COMPATIBILITY_V1",
+    );
+    expect(SEMANTIC_CONTEXT_COMPATIBILITY_V1.mandatoryStages).toEqual([
+      "BASELINE_ADMISSION",
+      "POST_REMEDIATION_SELF_REVIEW",
+      "PRE_CLEAR",
+    ]);
+    expect(SEMANTIC_CONTEXT_COMPATIBILITY_V1.stageFailurePolicy).toEqual({
+      BASELINE_ADMISSION: "PRECONDITION",
+      POST_REMEDIATION_SELF_REVIEW: "PRECONDITION",
+      PRE_CLEAR: "PRECONDITION",
+    });
+    expect(SEMANTIC_CONTEXT_COMPATIBILITY_V1.applicablePhases).toEqual([
+      "design",
+      "plan",
+    ]);
+    expect(SEMANTIC_CONTEXT_COMPATIBILITY_V1.declaredInputs).toEqual([
+      "SEMANTIC_COMPATIBILITY_INPUTS",
+    ]);
+    expect(SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_DIGEST).toMatch(
+      /^[0-9a-f]{64}$/,
+    );
+    expect(SEMANTIC_CONTEXT_COMPATIBILITY_V1.rules.map((rule) => rule.ruleId)).toEqual([
+      "semantic-context-compatibility",
+    ]);
   });
 
   it("requires integrity validation at baseline admission and pre-clear", () => {
@@ -1025,5 +1073,564 @@ describe("bridgeDeterministicFindings", () => {
       registry,
     });
     expect(payload.findings).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 13: SEMANTIC_CONTEXT_COMPATIBILITY_V1
+// ---------------------------------------------------------------------------
+
+const sha256Hex = (text: string): string =>
+  createHash("sha256").update(text).digest("hex");
+
+function buildInventory(source: string) {
+  return buildRequirementsSectionInventory(
+    new TextEncoder().encode(source),
+    sha256Hex(source),
+    REQUIREMENTS_HEADING_ANCHOR_VERSION,
+  );
+}
+
+function semanticInputs(policyVersion: string): SemanticContextInputsV1 {
+  return Object.freeze({
+    workspaceIdentity: "ws",
+    gateId: "gate-1",
+    generationId: "gen-1",
+    phase: "design" as const,
+    phaseBaselineId: "baseline-1",
+    comparisonSegmentId: "segment-1",
+    requirements: Object.freeze({
+      source: "explicit" as const,
+      canonicalPath: "docs/requirements.md",
+      gitBlobOid: "blob-1",
+      gitMode: "100644" as const,
+      authorityEventId: "authority-1",
+      governingReferenceManifestDigest: "m".repeat(64),
+    }),
+    upstreamApproved: null,
+    policy: Object.freeze({
+      contractId: "review-gate-phase-semantic-policy",
+      version: policyVersion,
+      semanticFingerprint: "sf".repeat(32),
+      lineageFingerprint: "lf".repeat(32),
+      nc1Fingerprint: "nc".repeat(32),
+      validatorRegistryDigest: "vr".repeat(32),
+    }),
+  });
+}
+
+const REQUIREMENTS_R0 = [
+  "# Requirements",
+  "",
+  "Preamble for the operating requirements.",
+  "",
+  "## Authentication {#authentication}",
+  "",
+  "Administrators may perform operation A.",
+  "",
+  "## Audit Logging {#audit}",
+  "",
+  "Every operation A is logged.",
+].join("\n");
+
+function compatibilityInput(sources: {
+  readonly oldSource: string;
+  readonly newSource: string;
+}) {
+  const oldInventory = buildInventory(sources.oldSource);
+  const newInventory = buildInventory(sources.newSource);
+  const diff = diffRequirementsSectionInventories(oldInventory, newInventory);
+  return { oldInventory, newInventory, diff };
+}
+
+function boundCompatibilityContext(
+  context: SemanticContextInputsV1,
+  authorityEventId: string,
+  gitBlobOid: string,
+): SemanticContextInputsV1 {
+  return Object.freeze({
+    ...context,
+    requirements: Object.freeze({
+      ...context.requirements,
+      authorityEventId,
+      gitBlobOid,
+    }),
+  });
+}
+
+function typedCompatibilityInput(args: {
+  readonly oldSource: string;
+  readonly newSource: string;
+  readonly oldContext?: SemanticContextInputsV1;
+  readonly newContext?: SemanticContextInputsV1;
+}) {
+  const { oldInventory, newInventory, diff } = compatibilityInput(args);
+  return {
+    oldInventory,
+    newInventory,
+    diff,
+    typed: {
+      old: oldInventory,
+      new: newInventory,
+      diff,
+      governingReferenceSectionKeys: Object.freeze(["/#authentication"]),
+      oldAuthorityEventId: "authority-r0",
+      newAuthorityEventId: "authority-r1",
+      triggerEventId: "trigger-1",
+      registeredPolicyDigest: SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_DIGEST,
+      contextInputs: Object.freeze({
+        old: boundCompatibilityContext(
+          args.oldContext ?? semanticInputs("1"),
+          "authority-r0",
+          oldInventory.inventory.sourceGitBlobOid,
+        ),
+        new: boundCompatibilityContext(
+          args.newContext ?? semanticInputs("1"),
+          "authority-r1",
+          newInventory.inventory.sourceGitBlobOid,
+        ),
+        triggeringAuthorityEventId: "trigger-1",
+        verifiedFrontierHash: "f".repeat(64),
+      }),
+    },
+  };
+}
+
+function semanticEncoding(args: {
+  readonly oldSource: string;
+  readonly newSource: string;
+  readonly oldContext?: SemanticContextInputsV1;
+  readonly newContext?: SemanticContextInputsV1;
+  readonly registeredPolicyDigest?: string;
+  readonly forgedOldDocumentDigest?: string;
+}) {
+  const { oldInventory, newInventory } = compatibilityInput(args);
+  return encodeSemanticCompatibilityValidatorInput({
+    oldSourceText: args.oldSource,
+    newSourceText: args.newSource,
+    oldGitBlobOid: oldInventory.inventory.sourceGitBlobOid,
+    newGitBlobOid: newInventory.inventory.sourceGitBlobOid,
+    oldFullDocumentDigest:
+      args.forgedOldDocumentDigest ?? oldInventory.inventory.normalizedDocumentDigest,
+    newFullDocumentDigest: newInventory.inventory.normalizedDocumentDigest,
+    governingReferenceSectionKeys: ["/#authentication"],
+    oldAuthorityEventId: "authority-r0",
+    newAuthorityEventId: "authority-r1",
+    triggerEventId: "trigger-1",
+    registeredPolicyDigest:
+      args.registeredPolicyDigest ?? SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_DIGEST,
+    verifiedFrontierHash: "f".repeat(64),
+    oldContextInputs: boundCompatibilityContext(
+      args.oldContext ?? semanticInputs("1"),
+      "authority-r0",
+      oldInventory.inventory.sourceGitBlobOid,
+    ),
+    newContextInputs: boundCompatibilityContext(
+      args.newContext ?? semanticInputs("1"),
+      "authority-r1",
+      newInventory.inventory.sourceGitBlobOid,
+    ),
+  });
+}
+
+function semanticBinding(
+  stage: ValidationStage,
+  value: ValidationInputValue,
+): ValidationInputBinding {
+  return Object.freeze({
+    validatorId: SEMANTIC_CONTEXT_COMPATIBILITY_V1.validatorId,
+    validatorContractVersion: 1,
+    resultSchemaVersion: 1,
+    stage,
+    declaredInputs: Object.freeze({
+      SEMANTIC_COMPATIBILITY_INPUTS: value,
+    }),
+    executionEnvironment: E1,
+  });
+}
+
+describe("SEMANTIC_CONTEXT_COMPATIBILITY_V1 (Task 13)", () => {
+  it("classifies identical normalized documents as EQUIVALENT through the registered unchanged rule", () => {
+    const oldSource = REQUIREMENTS_R0;
+    const newSource = oldSource.replaceAll("\n", "\r\n"); // CRLF-only delta
+    const { typed } = typedCompatibilityInput({ oldSource, newSource });
+    const classification = evaluateSemanticContextCompatibility(typed);
+    expect(classification.result).toBe("EQUIVALENT");
+    expect(classification.ruleId).toBe("REQUIREMENTS_GOVERNING_UNCHANGED_V1");
+    expect(classification.ruleVersion).toBe("V1");
+  });
+
+  it("runs on demand at every existing stage and passes through the runner", () => {
+    const oldSource = REQUIREMENTS_R0;
+    const newSource = oldSource.replaceAll("\r\n", "\n");
+    const value = semanticEncoding({ oldSource, newSource });
+    const registry = createDefaultDeterministicValidatorRegistry();
+    for (const stage of [
+      "BASELINE_ADMISSION",
+      "POST_REMEDIATION_SELF_REVIEW",
+      "PRE_CLEAR",
+    ] as const) {
+      const evidence = executeValidationDispatch(
+        registry,
+        makeDispatch(
+          SEMANTIC_CONTEXT_COMPATIBILITY_V1.validatorId,
+          stage,
+          "design",
+          `op-semantic-${stage}`,
+          semanticBinding(stage, value),
+        ),
+        "2026-10-07T00:00:00.000Z",
+      );
+      expect(evidence.kind).toBe("semantic");
+      expect(evidence.result).toBe("PASS");
+    }
+  });
+
+  it("never treats a newly added sibling section as EQUIVALENT even with equal old governing digests", () => {
+    const oldSource = REQUIREMENTS_R0;
+    const newSource = [
+      ...REQUIREMENTS_R0.split("\n"),
+      "",
+      "## Security Restrictions {#security}",
+      "",
+      "Unaudited administrators must not perform operation A.",
+    ].join("\n");
+    const { typed } = typedCompatibilityInput({ oldSource, newSource });
+    const classification = evaluateSemanticContextCompatibility(typed);
+    expect(classification.result).toBe("INDETERMINATE");
+    expect(classification.reason).toBe("unclassified_semantic_delta");
+  });
+
+  it("emits INCOMPATIBLE with the exact table rule for a registered breaking policy pair", () => {
+    const oldSource = REQUIREMENTS_R0;
+    const newSource = REQUIREMENTS_R0.replace(
+      "Administrators may perform operation A.",
+      "Administrators may perform operation A after re-attestation.",
+    );
+    const { typed } = typedCompatibilityInput({
+      oldSource,
+      newSource,
+      oldContext: semanticInputs("1"),
+      newContext: semanticInputs("2"),
+    });
+    const classification = evaluateSemanticContextCompatibility(typed);
+    expect(classification.result).toBe("INCOMPATIBLE");
+    expect(classification.ruleId).toBe("REQUIREMENTS_GOVERNING_CHANGED_V1");
+    expect(classification.ruleVersion).toBe("V1");
+
+    const evidence = executeValidationDispatch(
+      createDefaultDeterministicValidatorRegistry(),
+      makeDispatch(
+        SEMANTIC_CONTEXT_COMPATIBILITY_V1.validatorId,
+        "PRE_CLEAR",
+        "design",
+        "op-semantic-breaking",
+        semanticBinding(
+          "PRE_CLEAR",
+          semanticEncoding({
+            oldSource,
+            newSource,
+            oldContext: semanticInputs("1"),
+            newContext: semanticInputs("2"),
+          }),
+        ),
+      ),
+      "2026-10-07T00:00:00.000Z",
+    );
+    expect(evidence.kind).toBe("semantic");
+    expect(evidence.result).toBe("FAIL");
+    expect(evidence.ruleOutcomes[0]?.relation).toBe("NEW");
+  });
+
+  it("stays INDETERMINATE for a governing-only delta without a registered policy pair", () => {
+    const oldSource = REQUIREMENTS_R0;
+    const newSource = REQUIREMENTS_R0.replace(
+      "Administrators may perform operation A.",
+      "Administrators may perform operation A after re-attestation.",
+    );
+    const { typed } = typedCompatibilityInput({
+      oldSource,
+      newSource,
+      oldContext: semanticInputs("1"),
+      newContext: semanticInputs("3"),
+    });
+    const classification = evaluateSemanticContextCompatibility(typed);
+    expect(classification.result).toBe("INDETERMINATE");
+    expect(classification.reason).toBe(
+      "semantic_governing_delta_without_registered_rule",
+    );
+  });
+
+  it("blocks an unregistered compatibility table digest", () => {
+    const { typed } = typedCompatibilityInput({ oldSource: REQUIREMENTS_R0, newSource: REQUIREMENTS_R0 });
+    const forged: typeof typed = {
+      ...typed,
+      registeredPolicyDigest: "0".repeat(64),
+    };
+    const classification = evaluateSemanticContextCompatibility(forged);
+    expect(classification.result).toBe("INDETERMINATE");
+    expect(classification.reason).toBe("unregistered_compatibility_table_digest");
+  });
+
+  it.each([
+    ["old", "authorityEventId"],
+    ["new", "authorityEventId"],
+    ["old", "gitBlobOid"],
+    ["new", "gitBlobOid"],
+  ] as const)("returns INDETERMINATE when the %s requirements %s is unbound", (side, binding) => {
+    const { typed } = typedCompatibilityInput({
+      oldSource: REQUIREMENTS_R0,
+      newSource: REQUIREMENTS_R0,
+    });
+    const originalContext = typed.contextInputs[side];
+    const contextInputs = {
+      ...typed.contextInputs,
+      [side]: {
+        ...originalContext,
+        requirements: {
+          ...originalContext.requirements,
+          [binding]: "unbound-value",
+        },
+      },
+    };
+    const classification = evaluateSemanticContextCompatibility({ ...typed, contextInputs });
+
+    expect(classification.result).toBe("INDETERMINATE");
+    expect(classification.reason).toBe("incomplete_authority_binding");
+  });
+
+  it("blocks a forged declared document digest pin and a tampered envelope", () => {
+    // Forged pin: the rebuilt document digest cannot match the declared one.
+    const forgedPin = semanticEncoding({
+      oldSource: REQUIREMENTS_R0,
+      newSource: REQUIREMENTS_R0,
+      forgedOldDocumentDigest: "1".repeat(64),
+    });
+    const registry = createDefaultDeterministicValidatorRegistry();
+    const forgedEvidence = executeValidationDispatch(
+      registry,
+      makeDispatch(
+        SEMANTIC_CONTEXT_COMPATIBILITY_V1.validatorId,
+        "BASELINE_ADMISSION",
+        "design",
+        "op-semantic-forged-pin",
+        semanticBinding("BASELINE_ADMISSION", forgedPin),
+      ),
+      "2026-10-07T00:00:00.000Z",
+    );
+    expect(forgedEvidence.kind).toBe("semantic");
+    expect(forgedEvidence.result).toBe("INDETERMINATE");
+
+    // Tampered envelope: bound value digest must cover the exact entries.
+    const encoding = semanticEncoding({ oldSource: REQUIREMENTS_R0, newSource: REQUIREMENTS_R0 });
+    const tampered: ValidationInputValue = Object.freeze({
+      digest: "2".repeat(64),
+      entries: encoding.entries,
+    });
+    const tamperedEvidence = executeValidationDispatch(
+      registry,
+      makeDispatch(
+        SEMANTIC_CONTEXT_COMPATIBILITY_V1.validatorId,
+        "BASELINE_ADMISSION",
+        "design",
+        "op-semantic-tampered",
+        semanticBinding("BASELINE_ADMISSION", tampered),
+      ),
+      "2026-10-07T00:00:00.000Z",
+    );
+    expect(tamperedEvidence.kind).toBe("semantic");
+    expect(tamperedEvidence.result).toBe("INDETERMINATE");
+  });
+
+  it("yields a bounded typed proof bound to the trigger event and pinned digests", () => {
+    const oldSource = REQUIREMENTS_R0;
+    const newSource = REQUIREMENTS_R0.replaceAll("\n", "\r\n");
+    const { typed } = typedCompatibilityInput({ oldSource, newSource });
+    const classification = evaluateSemanticContextCompatibility(typed);
+    const proof = buildSemanticContextCompatibilityProof({
+      input: typed,
+      classification,
+      validationEventId: "ve-semantic-1",
+      executableDigest: "e".repeat(64),
+    });
+    expect(proof.validatorId).toBe("SEMANTIC_CONTEXT_COMPATIBILITY_V1");
+    expect(proof.validationEventId).toBe("ve-semantic-1");
+    expect(proof.triggeringAuthorityEventId).toBe("trigger-1");
+    expect(proof.compatibilityTableDigest).toBe(SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_DIGEST);
+    expect(proof.result).toBe("EQUIVALENT");
+    expect(proof.ruleId).toBe("REQUIREMENTS_GOVERNING_UNCHANGED_V1");
+    expect(proof.executableDigest).toBe("e".repeat(64));
+    expect(proof.requirementsDelta).toBeNull();
+    expect(Object.isFrozen(proof)).toBe(true);
+
+    // EQUIVALENT requires the normalized governing projections to be exactly
+    // equal, so both bound digests coincide here.
+    expect(proof.oldNormalizedInputsDigest).toBe(
+      proof.newNormalizedInputsDigest,
+    );
+  });
+
+  it("refuses a forged classification that disagrees with a fresh evaluation", () => {
+    const { typed } = typedCompatibilityInput({
+      oldSource: REQUIREMENTS_R0,
+      newSource: [
+        ...REQUIREMENTS_R0.split("\n"),
+        "",
+        "## Security Restrictions {#security}",
+      ].join("\n"),
+    });
+    const classification = evaluateSemanticContextCompatibility(typed);
+    expect(classification.result).toBe("INDETERMINATE");
+    expect(() =>
+      buildSemanticContextCompatibilityProof({
+        input: typed,
+        classification: { ...classification, result: "EQUIVALENT" as const },
+        validationEventId: "ve-semantic-2",
+        executableDigest: "e".repeat(64),
+      }),
+    ).toThrow("semantic_compatibility_classification_forged");
+  });
+
+  it("reuses semantic FAIL evidence verbatim and never converts it to PASS", () => {
+    const oldSource = REQUIREMENTS_R0;
+    const newSource = REQUIREMENTS_R0.replace(
+      "Administrators may perform operation A.",
+      "Administrators may perform operation A after re-attestation.",
+    );
+    const encoding = semanticEncoding({
+      oldSource,
+      newSource,
+      oldContext: semanticInputs("1"),
+      newContext: semanticInputs("2"),
+    });
+    const registry = createDefaultDeterministicValidatorRegistry();
+    const first = makeDispatch(
+      SEMANTIC_CONTEXT_COMPATIBILITY_V1.validatorId,
+      "PRE_CLEAR",
+      "design",
+      "op-semantic-reuse-1",
+      semanticBinding("PRE_CLEAR", encoding),
+    );
+    const schedule = scheduleMandatoryValidations(
+      registry,
+      [first],
+      emptyDeterministicValidationState,
+    );
+    expect(schedule.requirements[0]?.disposition).toBe("dispatch");
+    const evidence = executeValidationDispatch(
+      registry,
+      first,
+      "2026-10-07T00:00:00.000Z",
+    );
+    expect(evidence.result).toBe("FAIL");
+    const committed = commitValidationEvidence(
+      emptyDeterministicValidationState,
+      evidence,
+    );
+    const reschedule = scheduleMandatoryValidations(
+      registry,
+      [
+        makeDispatch(
+          SEMANTIC_CONTEXT_COMPATIBILITY_V1.validatorId,
+          "PRE_CLEAR",
+          "design",
+          "op-semantic-reuse-2",
+          semanticBinding("PRE_CLEAR", encoding),
+        ),
+      ],
+      committed,
+    );
+    expect(reschedule.requirements[0]?.disposition).toBe("reuse_evidence");
+    expect(reschedule.requirements[0]?.evidence?.result).toBe("FAIL");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 13: durable validation event references
+// ---------------------------------------------------------------------------
+
+describe("durable validation event references", () => {
+  const completedEvidence = executeValidationDispatch(
+    createDefaultDeterministicValidatorRegistry(),
+    makeDispatch(
+      REVIEW_INPUT_BINDING_INTEGRITY_V1.validatorId,
+      "BASELINE_ADMISSION",
+      "design",
+      "op-durable-1",
+      integrityBinding(E1),
+    ),
+    "2026-10-07T00:00:00.000Z",
+  );
+
+  it("binds a COMPLETED reference to the original checked evidence", () => {
+    const reference = deterministicValidationCompleted(
+      "ve-durable-1",
+      completedEvidence,
+    );
+    expect(reference.kind).toBe("DETERMINISTIC_VALIDATION_COMPLETED");
+    expect(reference.validationEventId).toBe("ve-durable-1");
+    expect(reference.validatorId).toBe(REVIEW_INPUT_BINDING_INTEGRITY_V1.validatorId);
+    expect(reference.stage).toBe("BASELINE_ADMISSION");
+    expect(reference.cacheKey).toBe(completedEvidence.cacheKey);
+    expect(reference.ruleIds).toEqual(["review-input-binding-reconstruction"]);
+    expect(reference.sourceValidationEventId).toBeNull();
+    expect(Object.isFrozen(reference)).toBe(true);
+  });
+
+  it("only produces REUSED references from semantic evidence with a distinct source event", () => {
+    const semanticEvidence = executeValidationDispatch(
+      createDefaultDeterministicValidatorRegistry(),
+      makeDispatch(
+        REVIEW_INPUT_BINDING_INTEGRITY_V1.validatorId,
+        "PRE_CLEAR",
+        "design",
+        "op-durable-2",
+        integrityBinding(E1),
+      ),
+      "2026-10-07T00:00:00.000Z",
+    );
+    const reference = deterministicValidationReused(
+      "ve-durable-2",
+      semanticEvidence,
+      "ve-original-1",
+    );
+    expect(reference.kind).toBe("DETERMINISTIC_VALIDATION_REUSED");
+    expect(reference.sourceValidationEventId).toBe("ve-original-1");
+    expect(reference.cacheKey).toBe(semanticEvidence.cacheKey);
+
+    expect(() =>
+      deterministicValidationReused("ve-durable-3", semanticEvidence, "ve-durable-3"),
+    ).toThrow("durable_validation_reference_reuse_source_missing");
+    expect(() => deterministicValidationReused("ve-durable-4", semanticEvidence, "")).toThrow(
+      "durable_validation_reference_reuse_source_missing",
+    );
+  });
+
+  it("refuses a COMPLETED reference with a source event and an empty event id", () => {
+    const badSource = completedEvidence;
+    expect(() =>
+      deterministicValidationCompleted("ve-durable-5", completedEvidence, "ve-original-2"),
+    ).toThrow("durable_validation_reference_completed_has_no_source");
+    expect(() => deterministicValidationCompleted("", badSource)).toThrow(
+      "durable_validation_reference_event_id_missing",
+    );
+  });
+
+  it("shares its cache key with scheduling so reuse binds to the same evidence", () => {
+    const binding = integrityBinding(E1);
+    const registry = createDefaultDeterministicValidatorRegistry();
+    const dispatch = makeDispatch(
+      REVIEW_INPUT_BINDING_INTEGRITY_V1.validatorId,
+      "BASELINE_ADMISSION",
+      "design",
+      "op-durable-3",
+      binding,
+    );
+    const schedule = scheduleMandatoryValidations(
+      registry,
+      [dispatch],
+      emptyDeterministicValidationState,
+    );
+    expect(schedule.requirements[0]?.cacheKey).toBe(completedEvidence.cacheKey);
   });
 });
