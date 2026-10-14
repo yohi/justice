@@ -124,6 +124,40 @@ export const releaseManifestSchema = z.strictObject({
 
 `createTrustedProtocolReleaseRegistry.commit()` で計算される `nextHead.frontierHash` を、当該 release の `registryHead` に対応させる。過去 release の `registryHead` は protected history から再構築・検証する。
 
+
+#### D3.1：live head freshness と NC1 最終確定境界（RG-PHASE-001）
+
+**採用方式：scope lock → protected release-registry guard → NC1 durable event publication。** `readVerifiedReleaseSnapshot()` は単なる取得時点の証跡であり、単独では live authority ではない。Task 4 の `createRegistryBackedVerifiedProtocolReleaseSource(snapshot)` は固定 snapshot の pure index として維持し、最新性は別の trusted read boundary に担保させる。
+
+```typescript
+type ReleaseHead = z.infer<typeof releaseHeadSchema>;
+type VerifiedRegistryCheckpoint = Readonly<{
+  head: ReleaseHead;
+  registryRevision: number;
+  registryStateHash: string;
+  currentPolicyVersion: string;
+}>;
+type GuardedProtocolReleaseRead = Readonly<{
+  snapshot: VerifiedReleaseSnapshot;
+  source: VerifiedProtocolReleaseSource;
+  checkpoint: VerifiedRegistryCheckpoint;
+}>;
+interface TrustedProtocolReleaseAdmissionHost {
+  withVerifiedReleaseAdmissionLease<T>(
+    run: (read: GuardedProtocolReleaseRead) => Promise<T>,
+  ): Promise<T>;
+}
+```
+
+1. `withVerifiedReleaseAdmissionLease` は `ProtectedWitnessStore.withGuard("protocol-release", ...)` と同じ namespace guard を取得する。release commit と publisher rotation は同じ guard を使う。取得不可なら `BLOCK`、無保護 read は禁止。
+2. **各 provider 呼び出しごと**に guard 取得後 `current()` から root、全 signed release/policy history、current head、`currentPolicy` を再認証して snapshot と pure source を作る。snapshot は callback 内のみ使用し、cache・別の呼び出しへの再利用禁止。callback 内で `head` の全成分と `registryRevision`, `registryStateHash`, `currentPolicyVersion` を live protected state と照合する。rotation では release frontier が不変でも registry revision/hash が進む。
+3. `TrustedProtocolReleaseAnchorV1.protectedRegistryHead` は独立認証された **minimum acceptable frontier** とし、signed genesis または完全に replay された release post-commit frontier に存在し、現在 head がその descendant であることを要求する。`anchor.initialFrontierDigest` は signed root の genesis と一致必須。installation id、初期 publisher key digest、root trust policy version は signed root と一致すること。欠損・別 chain・anchor より古い live head は `BLOCK`。root policy version と rotation 後の effective current policy version は一致を要求しない。
+4. NC1 成功候補の最終確定では、coordinator が **scope lock を取得 → registry guard を取得**する。provider 検証、checkpoint 全項目の照合、event-store の事前条件確認および **NC1 transition durable append/CAS** をすべて guard 内で完結する。現行 `withAdmissionLease()` は `run(decision)` の前に scope lock を解放しているため、**NC1 protocol 成功経路に限り**専用 finalization callback を scope admission/coordinator 間に追加し、成功候補を外に持ち出さない。後続の gate lock/dispatch は両 guard の解放後のみ実行する。固定 lock order は **scope → registry**（gate lock を同時に保持しない）。
+5. 他者の commit/rotation が guard に先行した場合、検証は新しい snapshot から再開始する。過去に取得した checkpoint/candidate を受け取った場合、現行の全 tuple と比較して不一致なら `BLOCK`。検証中／append 直前に release 変更が要求されても、同一 guard により append 完了後まで進めない。guard が解放された後の head 進行は、**既に durable append された時点**の authority を遡及否定しない。append 結果不明・CAS 不成立時は成功とせず fail-closed、再送は event-store operation ID で idempotent に処理する。
+6. registry namespace を同じ guard を通さず更新する writer は禁止する。単なる optimistic head reread では read/event append 間の競合を防止できない。scope→registry→gate のロック逆転が生じる経路も禁止し、guard/lock ordering が証明できなければ production は `BLOCK` のまま。
+
+必須レーステスト：snapshot 取得後に release が増加、snapshot 取得後に key rotation、provider 検証中の head 進行要求、NC1 durable append 直前の head 更新要求、古い snapshot の再利用。いずれも stale authority による SUCCESS event を作れないこと。
+
 ### D4：同一 phase・同一 descriptor digest に複数 release が存在する場合の検索規則
 
 `readReleaseByPhaseAndDescriptorDigest()` は以下の規則で一意の結果を決定する。
