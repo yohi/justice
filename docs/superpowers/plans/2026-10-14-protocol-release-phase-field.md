@@ -201,21 +201,23 @@ These are high-risk inputs the spec implies; each is pinned to an owning task's 
 **Files:**
 - Create: `tests/runtime/review-gate-protocol-release-integration.test.ts`
 - Modify: `tests/runtime/opencode-adapter-v2.test.ts`
+- Modify: `tests/runtime/review-gate-scope-admission-nc1.test.ts` (guarded finalization race)
 - Modify: `src/runtime/opencode-adapter.ts` **only if necessary to preserve, not remove, the Task 5 stub**
 - Test: `tests/runtime/review-gate-protocol-release-publication.test.ts`
 - Test: `tests/runtime/review-gate-protocol-release-authority.test.ts`
 
 **Interfaces:**
-- Exercise `provisionReviewGateWitnessInstallation` → `provisionProtocolReleaseRegistry` → `createTrustedProtocolReleaseRegistry.publishAuthenticatedProtocolRelease` → `readVerifiedReleaseSnapshot` → `createRegistryBackedVerifiedProtocolReleaseSource` → `createVerifiedProtocolReleaseProvider`.
+- Exercise `provisionReviewGateWitnessInstallation` → host-root authorized `provisionProtocolReleaseRegistry` → `createTrustedProtocolReleaseRegistry.publishAuthenticatedProtocolRelease` → `TrustedProtocolReleaseAdmissionHost.withVerifiedReleaseAdmissionLease` (fresh snapshot, matching checkpoint, same-snapshot pure source + historical verifier) → `createVerifiedProtocolReleaseProvider` → scope admission `REENTRY_CANDIDATE` → coordinator NC1-only guarded durable event append/CAS.
+- Assert `createRegistryBackedVerifiedProtocolReleaseSource(snapshot)` may serve read-only historical lookup but **never** establishes live authority by itself. Verify freshness against all checkpoint fields, including revision/hash changed by key rotation with no release frontier change.
 - Test-only trusted anchor comes from separately authenticated test provisioning; it **does not** constitute Task 5 production approval.
 
-- [ ] **Step 1: Write failing integration tests.** Build a protected temporary directory with independently generated host/publisher Ed25519 keys. Publish signed R1(design), R2(plan), R3(design) with distinct required manifest fields and authorized key/digest changes; assert positive phase delta and its old/new source digests, proof and frontier. Then independently assert `"BLOCK"` on mismatched phase, signer, historical proof, shared policy, duplicate index ambiguity, missing bytes, history rollback, unauthorized rotation, and stale head. Assert pending-only releases never appear as approved.
-- [ ] **Step 2: Write fail-closed adapter regression.** Without a production Task 5 authority, invoking the adapter-wired provider in a protocol-kind NC1 attempt must return `"BLOCK"` and must not publish a success/approval event. The presence of a valid *test-only* registry does not enable production wiring.
-- [ ] **Step 3: Run RED.** `bunx vitest run tests/runtime/review-gate-protocol-release-integration.test.ts tests/runtime/opencode-adapter-v2.test.ts`; expected: integration gap is exposed until Tasks 1–7 are wired in the test path.
-- [ ] **Step 4: Connect only the test composition.** Wire read-only verified snapshots and mock independently trusted anchors in the integration fixture. Leave production `buildSharedReviewGateRuntimeGraph()` provider as `readVerifiedPhaseProtocolDelta: async () => "BLOCK"`. Do not install a real provider or fabricate Task 5 readiness.
-- [ ] **Step 5: Run GREEN.** `bunx vitest run tests/runtime/review-gate-protocol-release-integration.test.ts tests/runtime/review-gate-protocol-release-publication.test.ts tests/runtime/review-gate-protocol-release-authority.test.ts tests/runtime/review-gate-scope-admission.test.ts tests/runtime/opencode-adapter-v2.test.ts`; expected: PASS. Recheck each AC-01–AC-12 against its test assertion and record any gap before a review gate.
+- [ ] **Step 1: Write failing integration tests.** Build protected temp directory with independently generated host/publisher Ed25519 keys and **explicit host-provisioned** `createReviewGateProtocolDescriptor({ trustedPublisherPolicyVersion: verifiedPolicyVersion })` fixtures (never default `""`). Publish R1(design), R2(plan), R3(design) with a **valid publisher key rotation but unchanged `verifiedSemanticContractDigest`**, same registry digests and only the requested phase descriptor slice changing; assert a valid NC1 phase delta, old/new **source-byte** digests, authenticated old/new keys, same-phase ancestry, fresh checkpoint, and **durable transition event committed inside guards**. Separate positive publication/history test updates the historical semantic contract digest under signed policy authorization but asserts phase-only NC1 `"BLOCK"`. Also test design-only, plan-only, design+shared policy, plan+shared policy, key-only rotation (candidate `null`, no approval), semantic digest change, each registry-only digest change, and shared registry change invisible in descriptor: outcomes per spec D7.1. Assert wrong signer, old proof, skipped epoch, unregistered key, forged rotation, mismatched SPKI digest, bad epoch signer, duplicate index ambiguity, rollback or missing bytes never yields approval. Pending-only release is not committed.
+- [ ] **Step 2: Write race + fail-closed adapter regressions.** Validate snapshot→release commit, snapshot→policy rotation with unchanged `head.frontierHash`, provider read→head update attempt, final append→head update attempt, and replay of a stale snapshot/checkpoint. Acquire locks in `scope → registry` order: competing changes either commit first and invalidate old candidate, or are blocked until durable append completes; old authority never creates a success event. Without a production Task 5 authority, adapter-wired NC1 always returns `"BLOCK"` and publishes no approval; a valid test-only registry cannot enable production.
+- [ ] **Step 3: Run RED.** `bunx vitest run tests/runtime/review-gate-protocol-release-integration.test.ts tests/runtime/review-gate-scope-admission-nc1.test.ts tests/runtime/opencode-adapter-v2.test.ts`; expected: new guarded-finalization/authorization tests fail before implementation (RED), without running them during this documentation-only review.
+- [ ] **Step 4: Connect only the test composition.** Wire authenticated test-only roots, signed policy histories, guarded fresh snapshot+checkpoint, and scope/coordinator finalization with the actual protected namespace guard. Do not substitute an unguarded/mock live head read for this race test. Leave production `buildSharedReviewGateRuntimeGraph()` provider as `readVerifiedPhaseProtocolDelta: async () => "BLOCK"`. Do not install a real provider or fabricate Task 5 readiness.
+- [ ] **Step 5: Run GREEN.** `bunx vitest run tests/runtime/review-gate-protocol-release-integration.test.ts tests/runtime/review-gate-protocol-release-publication.test.ts tests/runtime/review-gate-protocol-release-authority.test.ts tests/runtime/review-gate-scope-admission.test.ts tests/runtime/review-gate-scope-admission-nc1.test.ts tests/runtime/opencode-adapter-v2.test.ts`; expected: PASS. Recheck each AC-01–AC-12 against its test assertion and record any gap before a review gate.
 - [ ] **Step 6: Run mandatory full checks inside devcontainer.** `bun run test`, `bun run typecheck`, `bun run lint`, `bun run build`; all must exit 0. Separately report skipped tests, host-only limitations and warnings; these commands are planned checks, **not yet executed**.
-- [ ] **Step 7: Commit.** `git add tests/runtime/review-gate-protocol-release-integration.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/runtime/review-gate-protocol-release-publication.test.ts tests/runtime/review-gate-protocol-release-authority.test.ts && git commit -m "test(review-gate): prove protocol release contract end to end"`
+- [ ] **Step 7: Commit.** `git add tests/runtime/review-gate-protocol-release-integration.test.ts tests/runtime/opencode-adapter-v2.test.ts tests/runtime/review-gate-scope-admission-nc1.test.ts tests/runtime/review-gate-protocol-release-publication.test.ts tests/runtime/review-gate-protocol-release-authority.test.ts && git commit -m "test(review-gate): prove guarded protocol release contract end to end"`
 
 ## Acceptance / Review Matrix
 
@@ -225,17 +227,55 @@ These are high-risk inputs the spec implies; each is pinned to an owning task's 
 | AC-02 design/plan same digest separation | 4, 8 |
 | AC-03 source vs semantic digest | 1, 2, 6, 8 |
 | AC-04 common manifest signatures | 2, 5, 8 |
-| AC-05 head rollback/history/old head | 3, 6, 8 |
-| AC-06 authorized publisher rotation | 2, 6, 8 |
+| AC-05 head rollback/history/old head **and admission-time protected checkpoint** | 3, 4, 6, 7, 8 |
+| AC-06 authorized publisher rotation / historical public key | 2, 3, 5, 6, 8 |
 | AC-07 phase change not false global BLOCK | 7, 8 |
-| AC-08 shared policy not single-phase approved | 6, 7, 8 |
+| AC-08 shared policy and signed registry metadata not single-phase approved | 6, 7, 8 |
 | AC-09 historical runtime semantic contract | 2, 6, 8 |
 | AC-10 cross-phase same-phase lineage | 4, 6, 8 |
 | AC-11 signed semantic digest recoverability | 1, 2, 8 |
-| AC-12 Task 5 absent → BLOCK | 8 |
+| AC-12 Task 5 absent → BLOCK | 7, 8 |
+
+
+## Finding Disposition Matrix — documentation-only correction (2026-10-14 JST)
+
+**Review Gate is still BLOCKED.** The status below means a documented corrective design/plan change, **not** independently verified finding closure, implementation readiness, owner approval, or a test result.
+
+| Finding | Severity | Changed design sections | Changed plan tasks | Planned RED/GREEN verification | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| RG-PHASE-001 | Blocker | D3.1, D4.1 | 3, 4, 6, 7, 8 | `review-gate-protocol-release-publication.test.ts` (history/checkpoint), `review-gate-protocol-release-integration.test.ts` + `review-gate-scope-admission-nc1.test.ts` (snapshot stale, rotation revision, provider/final-append races); RED before implementation, GREEN after | **ADDRESSED IN DOCUMENTS / PENDING FRESH INDEPENDENT RECHECK** |
+| RG-PHASE-002 | Major | D3.1, D4.1, D5, D6 | 3, 4, 5, 6, 8 | authority + publication tests: authorized root/rotation, old-key verification, missing epoch, forged proof, bad PEM digest, epoch-signer mismatch | **ADDRESSED IN DOCUMENTS / PENDING FRESH INDEPENDENT RECHECK** |
+| RG-PHASE-003 | Major | D2, D7.1 | 2, 6, 7, 8 | publication historic semantic success **separate** from integration phase-only design/plan positive (unchanged registries/semantic digest), shared policy and registry-only negative | **ADDRESSED IN DOCUMENTS / PENDING FRESH INDEPENDENT RECHECK** |
+| RG-PHASE-004 | Minor | D7.2 | 1, 2, 8 | protocol + publication tests: default sentinel rejects signed publication; explicitly provisioned policy-1 matches signed manifest and publishes | **ADDRESSED IN DOCUMENTS / PENDING FRESH INDEPENDENT RECHECK** |
+
+All `RED`/`GREEN` are **future implementation steps**, not executed checks.
+
+## D1–D7 / AC-01–AC-12 / Task 1–8 Traceability
+
+| Design | Acceptance criteria | Implementing tasks | Primary assertion / review target |
+| --- | --- | --- | --- |
+| D1 top-level phase | AC-01, AC-02 | 1, 4, 5, 8 | signed phase parses, wrong phase BLOCK, same digest across phases resolves only requested phase |
+| D2 source vs semantic identity | AC-03 | 1, 2, 4, 6, 8 | exact source SHA-256 distinct from canonical semantic digest; tamper blocks |
+| D3 post-commit head and D3.1 freshness | AC-05, AC-12 | 3, 4, 6, 7, 8 | linked frontiers, independent anchor, per-call live head/state tuple and guarded final durable append, production BLOCK without Task 5 |
+| D4 deterministic lookup and D4.1 policy history | AC-02, AC-04, AC-05, AC-06 | 3, 4, 5, 6, 8 | phase-indexed lookup, verified current state, release-specific policy epoch and PEM digest |
+| D5 historic proof and signature | AC-01, AC-04 | 5, 6, 8 | publication/authority sign same manifest; D5 digest binds old phase/source/semantic/head |
+| D6 full cross-phase ancestry | AC-05, AC-06, AC-10 | 3, 4, 6, 8 | root→rotated key, design→plan→design nearest same-phase old release |
+| D7 historical semantic digest and D7.1 classification | AC-03, AC-07, AC-08, AC-09, AC-11 | 1, 2, 6, 7, 8 | archived digest re-verifies; shared/registry/semantic digest changes block phase-only; aggregate global diff alone not rejection |
+| D7.2 policy sentinel | AC-11, AC-12 | 1, 2, 8 | untrusted empty sentinel rejects signed publication, valid host-verified version required |
+| Cross-cutting integration | AC-01–AC-12 | 8 (depends on Tasks 1–7) | protected snapshot→provider→NC1 final append, both positive and adversarial cases |
+
+## Planned Verification Commands (not run in documentation review)
+
+- Task 1 RED/GREEN: `bunx vitest run tests/runtime/review-gate-protocol.test.ts tests/runtime/review-gate-protocol-release-publication.test.ts`.
+- Task 2/3 RED/GREEN: `bunx vitest run tests/runtime/review-gate-protocol-release-publication.test.ts`.
+- Task 4/5/6 RED/GREEN: `bunx vitest run tests/runtime/review-gate-protocol-release-authority.test.ts tests/runtime/review-gate-protocol-release-publication.test.ts`.
+- Task 7 RED/GREEN: `bunx vitest run tests/runtime/review-gate-scope-admission.test.ts tests/runtime/review-gate-scope-admission-nc1.test.ts`.
+- Task 8 RED/GREEN: `bunx vitest run tests/runtime/review-gate-protocol-release-integration.test.ts tests/runtime/review-gate-protocol-release-publication.test.ts tests/runtime/review-gate-protocol-release-authority.test.ts tests/runtime/review-gate-scope-admission.test.ts tests/runtime/review-gate-scope-admission-nc1.test.ts tests/runtime/opencode-adapter-v2.test.ts`.
+- After implementation and independent authorization only: `bun run test`, `bun run typecheck`, `bun run lint`, `bun run build`. Expected: exit 0; report actual failures/skips separately. No test was executed for this document change.
 
 ## Non-Goals and Execution Gate
 
+- **Current Review Gate: BLOCKED.** Next action is **Fresh Independent Review of these revised documents**; writing this plan does not convert findings to CLOSED or READY.
 - This plan does **not** authorize a normative Requirements/Architecture change, production Task 5 provisioning, schema auto-migration, or enabling a real provider.
 - Treat signature/root-policy schema expansion as a proposal requiring review of the versioned trust-bootstrap/migration contract. Do not claim a production-upgrade path for legacy signed releases without separate explicit approval.
 - After implementing the testable release subsystem, obtain a fresh independent architecture/security review and separate Task 5 trust-boundary proof before proposing production adapter wiring.
