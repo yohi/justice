@@ -197,13 +197,58 @@ type ProtocolNc1FinalizeRequest = Readonly<{
   admissionRequest: ScopeAdmissionRequest; // descriptor/path/workspace を持つ; finalizer が再認証
   expectedEventStoreFrontier: ExpectedNc1WitnessFrontier;
 }>;
+type ProtocolNc1CompatibilityResult = "COMPATIBLE" | "INCOMPATIBLE" | "INDETERMINATE";
+type ProtocolNc1CompatibilityValidationInputV1 = Readonly<{
+  domain: "justice-protocol-nc1-compatibility-v1";
+  scopeId: string; gateId: string; generationId: string;
+  nc1StopEventId: string; phase: "design" | "plan";
+  oldRequirementsAuthorityEventId: string;
+  newRequirementsAuthorityEventId: string;
+  oldRequirementsBindingDigest: string; newRequirementsBindingDigest: string;
+  oldContextDigest: string; newContextDigest: string;
+  oldGlobalProtocolFingerprint: string; newGlobalProtocolFingerprint: string;
+  oldDesignProtocolFingerprint: string; newDesignProtocolFingerprint: string;
+  oldPlanProtocolFingerprint: string; newPlanProtocolFingerprint: string;
+  observedEventId: string;
+  candidate: VerifiedProtocolNc1Candidate; // full signed-release-derived evidence
+  checkpoint: VerifiedRegistryCheckpoint;
+  expectedWitnessFrontier: ExpectedNc1WitnessFrontier;
+  authorizedPolicyDigest: string; // approved registry descriptor/policy identity
+}>;
+type ProtocolNc1CompatibilityValidationProofV1 = Readonly<{
+  validatorId: "PROTOCOL_NC1_COMPATIBILITY_V1";
+  validatorVersion: "1"; ruleId: "PHASE_ONLY_SIGNED_RELEASE_V1";
+  result: ProtocolNc1CompatibilityResult;
+  inputDigest: string; validatorExecutableDigest: string;
+  validatorRegistryDigest: string; authorizedPolicyDigest: string;
+  observedEventId: string; validationEventId: string;
+  witnessFrontierHash: string; checkpointDigest: string;
+}>;
+type VerifiedProtocolNc1ContextTransitionV1 = Readonly<{
+  oldInputs: SemanticContextInputsV1; newInputs: SemanticContextInputsV1;
+  observedEventId: string;
+  validationEventId: string;
+  validationProof: ProtocolNc1CompatibilityValidationProofV1;
+  nc1StopEventId: string; generationId: string; phase: "design" | "plan";
+  operationId: string;
+  verifiedHistoryFrontier: string;
+  roundCountersBefore: Readonly<{ design: number; plan: number }>;
+  roundCountersAfter: Readonly<{ design: number; plan: number }>;
+}>;
+interface RegisteredProtocolNc1CompatibilityProducer {
+  validateWithinGuard(
+    input: ProtocolNc1CompatibilityValidationInputV1,
+  ): Promise<ProtocolNc1CompatibilityValidationProofV1 | "BLOCK">;
+}
 interface VerifiedProtocolNc1TransitionComposer {
   composeWithinGuard(input: Readonly<{
     verifiedScope: VerifiedScopeRead;
     candidate: VerifiedProtocolNc1Candidate;
     verifiedStop: VerifiedNC1StopV1;
     observedProofEventId: string;
-  }>): Promise<VerifiedSemanticContextTransitionInput | "BLOCK">;
+    validationEventId: string;
+    validationProof: ProtocolNc1CompatibilityValidationProofV1;
+  }>): Promise<VerifiedProtocolNc1ContextTransitionV1 | "BLOCK">;
 }
 type VerifiedProtocolNc1FinalizationEvidence = Readonly<{
   decision: Extract<AdmissionDecision, { readonly kind: "REENTRY_CANDIDATE" }>;
@@ -212,7 +257,9 @@ type VerifiedProtocolNc1FinalizationEvidence = Readonly<{
   verifiedStop: VerifiedNC1StopV1;
   publicationOperationId: string;
   expectedEventStoreFrontier: ExpectedNc1WitnessFrontier;
-  transition: VerifiedSemanticContextTransitionInput;
+  compatibilityInput: ProtocolNc1CompatibilityValidationInputV1;
+  validationProof: ProtocolNc1CompatibilityValidationProofV1;
+  transition: VerifiedProtocolNc1ContextTransitionV1;
 }>;
 interface ProtocolNc1FinalizationOwner {
   finalizeVerifiedProtocolNc1(
