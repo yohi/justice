@@ -274,7 +274,7 @@ These are high-risk inputs the spec implies; each is pinned to an owning task's 
 
 | Finding | Severity | Changed design sections | Changed plan tasks | Planned RED/GREEN verification | Disposition |
 | --- | --- | --- | --- | --- | --- |
-| RG-PHASE-001 | Blocker | **D3.2 FIX-001**; D3.1/D4.1 maintained | **7, 8** | Registered `PROTOCOL_NC1_COMPATIBILITY_V1`, actual signed-release/witness producer, independent recomputation, OBSERVED → VALIDATED → PROTOCOL_NC1_CONTEXT_TRANSITION in one FDR-011 CAS, 10 FIX-001 scenarios and 9 R2 race/lock tests | **R2 PARTIALLY RESOLVED → LIMITED DOCUMENT CORRECTION / PENDING FRESH INDEPENDENT LIMITED RECHECK** |
+| RG-PHASE-001 | Major (gate blocking) | **D3.2 FIX-001-A only**; preceding validator/3-event/lock/FDR-011 contracts retained | **7, 8** | Host-signed registration payload/proof, existing protected `release` registry CAS/index, release-time authority pin, actual allowlisted sealed runner, resolver 7-step checks, **9 FIX-001-A security cases** + already defined FIX-001 and race cases | **LATEST LIMITED RECHECK: PARTIALLY RESOLVED → DOCUMENT CORRECTION PROPOSED; PENDING FIX-001-A FRESH INDEPENDENT RECHECK** |
 | RG-PHASE-002 | Major | D3.1, D4.1, D5, D6 | 3, 4, 5, 6, 8 | authority + publication tests: authorized root/rotation, old-key verification, missing epoch, forged proof, bad PEM digest, epoch-signer mismatch | **R1 RESOLVED (static documentation); NOT REOPENED** |
 | RG-PHASE-003 | Major | D2, D7.1 | 2, 6, 7, 8 | publication historic semantic success **separate** from integration phase-only design/plan positive (unchanged registries/semantic digest), shared policy and registry-only negative | **R1 RESOLVED (static documentation); NOT REOPENED** |
 | RG-PHASE-004 | Minor | D7.2 | 1, 2, 8 | protocol + publication tests: default sentinel rejects signed publication; explicitly provisioned policy-1 matches signed manifest and publishes | **R1 RESOLVED (static documentation); NOT REOPENED** |
@@ -287,26 +287,26 @@ All `RED`/`GREEN` are **future implementation steps**, not executed checks.
 | --- | --- | --- | --- |
 | D1 top-level phase | AC-01, AC-02 | 1, 4, 5, 8 | signed phase parses, wrong phase BLOCK, same digest across phases resolves only requested phase |
 | D2 source vs semantic identity | AC-03 | 1, 2, 4, 6, 8 | exact source SHA-256 distinct from canonical semantic digest; tamper blocks |
-| D3 post-commit head, D3.1/D3.2 witness-owned publication and protocol-only compatibility | AC-05, AC-07, AC-08, AC-12 | 3, 4, 6, 7, 8 | anchored live head, installation→scope→gate→release, dedicated registered validator, OBSERVED/VALIDATED/PROTOCOL_NC1_CONTEXT_TRANSITION V2 triple, FDR-011 CAS, recovery & Task 5 BLOCK |
+| D3 post-commit head, D3.1/D3.2 witness-owned publication, protocol-only compatibility and FIX-001-A host registration | AC-05, AC-07, AC-08, AC-12 | 3, 4, 6, 7, 8 | anchored live head, existing installation→scope→gate→release graph, host-signed registration/activation/revocation with no retroactive old release, runtime module attestation, V2 triple, FDR-011 CAS & Task 5 BLOCK |
 | D4 deterministic lookup and D4.1 policy history | AC-02, AC-04, AC-05, AC-06 | 3, 4, 5, 6, 8 | phase-indexed lookup, verified current state, release-specific policy epoch and PEM digest |
 | D5 historic proof and signature | AC-01, AC-04 | 5, 6, 8 | publication/authority sign same manifest; D5 digest binds old phase/source/semantic/head |
 | D6 full cross-phase ancestry | AC-05, AC-06, AC-10 | 3, 4, 6, 8 | root→rotated key, design→plan→design nearest same-phase old release |
 | D7 historical semantic digest and D7.1 classification | AC-03, AC-07, AC-08, AC-09, AC-11 | 1, 2, 6, 7, 8 | archived digest re-verifies; shared/registry/semantic digest changes block phase-only; aggregate global diff alone not rejection |
 | D7.2 policy sentinel | AC-11, AC-12 | 1, 2, 8 | untrusted empty sentinel rejects signed publication, valid host-verified version required |
-| Cross-cutting integration | AC-01–AC-12 | 8 (depends on Tasks 1–7) | actual witness-protected V2 triple with registered validator, 10 FIX-001 cases plus 9 R2 lock/race cases; no mock-only success |
+| Cross-cutting integration | AC-01–AC-12 | 8 (depends on Tasks 1–7) | actual protected signed registration and runner proof, 9 FIX-001-A cases, prior FIX-001 10 cases and R2 lock/race 9 cases; no mock-only success |
 
 ## Planned Verification Commands (not run in documentation review)
 
 - Task 1 RED/GREEN: `bunx vitest run tests/runtime/review-gate-protocol.test.ts tests/runtime/review-gate-protocol-release-publication.test.ts`.
 - Task 2/3 RED/GREEN: `bunx vitest run tests/runtime/review-gate-protocol-release-publication.test.ts`.
 - Task 4/5/6 RED/GREEN: `bunx vitest run tests/runtime/review-gate-protocol-release-authority.test.ts tests/runtime/review-gate-protocol-release-publication.test.ts`.
-- Task 7 RED/GREEN: `bunx vitest run tests/core/review-gate/deterministic-validation.test.ts tests/core/review-gate/event-schema.test.ts tests/core/review-gate/projection.test.ts tests/runtime/review-gate-scope-admission.test.ts tests/runtime/review-gate-scope-admission-nc1.test.ts tests/runtime/review-gate-protocol-release-integration.test.ts`.
+- Task 7 RED/GREEN: `bunx vitest run tests/core/review-gate/deterministic-validation.test.ts tests/core/review-gate/event-schema.test.ts tests/core/review-gate/projection.test.ts tests/runtime/review-gate-protocol-release-publication.test.ts tests/runtime/review-gate-protocol-release-authority.test.ts tests/runtime/review-gate-scope-admission.test.ts tests/runtime/review-gate-scope-admission-nc1.test.ts tests/runtime/review-gate-protocol-release-integration.test.ts`.
 - Task 8 RED/GREEN: `bunx vitest run tests/core/review-gate/deterministic-validation.test.ts tests/core/review-gate/event-schema.test.ts tests/core/review-gate/projection.test.ts tests/runtime/review-gate-protocol-release-integration.test.ts tests/runtime/review-gate-protocol-release-publication.test.ts tests/runtime/review-gate-protocol-release-authority.test.ts tests/runtime/review-gate-scope-admission.test.ts tests/runtime/review-gate-scope-admission-nc1.test.ts tests/runtime/opencode-adapter-v2.test.ts`.
 - After implementation and independent authorization only: `bun run test`, `bun run typecheck`, `bun run lint`, `bun run build`. Expected: exit 0; report actual failures/skips separately. No test was executed for this document change.
 
 ## Non-Goals and Execution Gate
 
-- **Current Review Gate: BLOCKED.** Next action is **Fresh Independent Limited Recheck of R2 FIX-001 against these revised documents**; writing this plan does not convert findings to CLOSED or READY.
+- **Current Review Gate: BLOCKED.** Next action is **FIX-001-A Fresh Independent Recheck of the signed validator registration trust boundary against these two revised documents**; writing this plan does not convert findings to CLOSED or READY.
 - This plan does **not** authorize a normative Requirements/Architecture change, production Task 5 provisioning, schema auto-migration, or enabling a real provider.
 - Treat signature/root-policy schema expansion as a proposal requiring review of the versioned trust-bootstrap/migration contract. Do not claim a production-upgrade path for legacy signed releases without separate explicit approval.
 - After implementing the testable release subsystem, obtain a fresh independent architecture/security review and separate Task 5 trust-boundary proof before proposing production adapter wiring.
