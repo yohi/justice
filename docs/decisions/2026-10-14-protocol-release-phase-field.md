@@ -125,9 +125,11 @@ export const releaseManifestSchema = z.strictObject({
 `createTrustedProtocolReleaseRegistry.commit()` で計算される `nextHead.frontierHash` を、当該 release の `registryHead` に対応させる。過去 release の `registryHead` は protected history から再構築・検証する。
 
 
-#### D3.1：live head freshness と NC1 最終確定境界（RG-PHASE-001）
+#### D3.1：NC1 専用 protected witness publication と lock graph（RG-PHASE-001 / R1限定修正）
 
-**採用方式：scope lock → protected release-registry guard → NC1 durable event publication。** `readVerifiedReleaseSnapshot()` は単なる取得時点の証跡であり、単独では live authority ではない。Task 4 の `createRegistryBackedVerifiedProtocolReleaseSource(snapshot)` は固定 snapshot の pure index として維持し、最新性は別の trusted read boundary に担保させる。
+**採用方式を一つに固定:** 通常の `eventStore.appendEvents()` / `prepareVerifiedEventPublication()` → `publishPreparedEvent()` を scope lock 保持中に呼ぶ方式は採用しない。NC1 protocol-kind の成功経路だけに **`DurableReviewGateEventStore.finalizeVerifiedProtocolNc1()`**（内部 trusted owner API）を設け、`ReviewGateScopeWitness.withProtocolNc1PublicationTransaction()` によって **installation guard → scope lock → gate lock → protocol-release guard** の順序で所有する。通常の FDR-011 protected staging → exact native shard durable replace + fsync → witness CAS をそのまま共有し、再入しない `preparePublicationUnlocked()` / 新規 `publishPreparedJournalUnlocked()` / `commitPublicationUnlocked()` を使う。`withWitnessTransaction(context, ..., {scopeIds:[scopeId], gateIds:[gateId]})` をこの専用 entrypoint の**外側一回だけ**実行し、同一 scope/gate lock を内部で再取得しない。
+
+現行 `withGateOwnedWitnessTransaction()` は installation guard の再取得を避ける既存補助として存在するが、**scope/gate lock を先に取得した後で installation guard を取得するため、本経路の outer transaction には利用しない。** 既存の通常 witness API は installation → scope → gate を採用しており、逆順の二経路を混在させない。
 
 ```typescript
 type ReleaseHead = z.infer<typeof releaseHeadSchema>;
@@ -143,20 +145,84 @@ type GuardedProtocolReleaseRead = Readonly<{
   checkpoint: VerifiedRegistryCheckpoint;
 }>;
 interface TrustedProtocolReleaseAdmissionHost {
+  // Caller already owns installation guard + exactly one scope/gate lock pair.
   withVerifiedReleaseAdmissionLease<T>(
     run: (read: GuardedProtocolReleaseRead) => Promise<T>,
   ): Promise<T>;
 }
 ```
 
-1. `withVerifiedReleaseAdmissionLease` は `ProtectedWitnessStore.withGuard("protocol-release", ...)` と同じ namespace guard を取得する。release commit と publisher rotation は同じ guard を使う。取得不可なら `BLOCK`、無保護 read は禁止。
-2. **各 provider 呼び出しごと**に guard 取得後 `current()` から root、全 signed release/policy history、current head、`currentPolicy` を再認証して snapshot と pure source を作る。snapshot は callback 内のみ使用し、cache・別の呼び出しへの再利用禁止。callback 内で `head` の全成分と `registryRevision`, `registryStateHash`, `currentPolicyVersion` を live protected state と照合する。rotation では release frontier が不変でも registry revision/hash が進む。
-3. `TrustedProtocolReleaseAnchorV1.protectedRegistryHead` は独立認証された **minimum acceptable frontier** とし、signed genesis または完全に replay された release post-commit frontier に存在し、現在 head がその descendant であることを要求する。`anchor.initialFrontierDigest` は signed root の genesis と一致必須。installation id、初期 publisher key digest、root trust policy version は signed root と一致すること。欠損・別 chain・anchor より古い live head は `BLOCK`。root policy version と rotation 後の effective current policy version は一致を要求しない。
-4. NC1 成功候補の最終確定では、coordinator が **scope lock を取得 → registry guard を取得**する。provider 検証、checkpoint 全項目の照合、event-store の事前条件確認および **NC1 transition durable append/CAS** をすべて guard 内で完結する。現行 `withAdmissionLease()` は `run(decision)` の前に scope lock を解放しているため、**NC1 protocol 成功経路に限り**専用 finalization callback を scope admission/coordinator 間に追加し、成功候補を外に持ち出さない。後続の gate lock/dispatch は両 guard の解放後のみ実行する。固定 lock order は **scope → registry**（gate lock を同時に保持しない）。
-5. 他者の commit/rotation が guard に先行した場合、検証は新しい snapshot から再開始する。過去に取得した checkpoint/candidate を受け取った場合、現行の全 tuple と比較して不一致なら `BLOCK`。検証中／append 直前に release 変更が要求されても、同一 guard により append 完了後まで進めない。guard が解放された後の head 進行は、**既に durable append された時点**の authority を遡及否定しない。append 結果不明・CAS 不成立時は成功とせず fail-closed、再送は event-store operation ID で idempotent に処理する。
-6. registry namespace を同じ guard を通さず更新する writer は禁止する。単なる optimistic head reread では read/event append 間の競合を防止できない。scope→registry→gate のロック逆転が生じる経路も禁止し、guard/lock ordering が証明できなければ production は `BLOCK` のまま。
+**Lock graph（actor、順序、release、再入）**
 
-必須レーステスト：snapshot 取得後に release が増加、snapshot 取得後に key rotation、provider 検証中の head 進行要求、NC1 durable append 直前の head 更新要求、古い snapshot の再利用。いずれも stale authority による SUCCESS event を作れないこと。
+| Operation / actor | 必須取得順序 | 解放順序 | 再入・競合 |
+| --- | --- | --- | --- |
+| 通常 durable witness publication / witness owner | installation → scope → gate（`withWitnessTransaction`） | gate → scope → installation | 非再入。失敗/occupied は既存 fail-closed |
+| NC1 protocol finalization / durable event-store owner | installation → scope → gate（専用 `withWitnessTransaction`）→ protocol-release（`withGuard("protocol-release")`） | protocol-release → gate → scope → installation | 各 lock 取得は一度。occupied、timeout、OS guard 不可なら `BLOCK` |
+| Release commit / privileged publisher | protocol-release | protocol-release | installation/scope/gate を**保持・要求しない**。後続 witness append を同じ callback で開始禁止 |
+| Publisher policy rotation / privileged trust owner | protocol-release | protocol-release | 同上。head.frontierHash が同じでも revision/hash が変わる |
+| NC1 preflight / scope admission | installation → scope（既存 protected read 方式で一回取得する場合） | scope → installation | 最終決裁権なし。preflight snapshot と candidate は最終成功証拠として再利用禁止 |
+| Gate-owned coordinator normal actions | 既存 Gate-owned lock lease、既存 publication 契約に従う | 対応する逆順 | NC1 専用 API と同じ gate/scope を同時に取得できない。逆順 acquisition の actor は同時に installation/protocol-release を要求してはならない |
+
+すべての同一 namespace の lock は共通の OS-backed lock manager / `ProtectedWitnessStore` に属する。**どの path でも同一 scope/gate lock・installation guard を再入取得しない。** `scope → protocol-release → installation` や `protocol-release → installation` は禁止。独立 release writer が installation/scope/gate を取得しないという制約をコードレビューと race テストで確認し、違反があれば `BLOCK`。通常 gate-held coordinator の既存動作全体をこの改訂で変更しないが、NC1 finalization への entry 時に既存 gate/scope lease があれば拒否する。
+
+**最新性と pinning**
+
+- `readVerifiedReleaseSnapshot()` は過去時点の資料であり authority ではない。NC1 の `withVerifiedReleaseAdmissionLease()` 内で **毎回** current root/history/currentPolicy と protected registry head/revision/hash を独立認証し、snapshot/source/verifier を同時生成する。callback の外へ snapshot/source/candidate を持ち出して許可しない。
+- `snapshot.head` と live protected head（`releaseId`, `sequence`, `frontierHash`）、`registryRevision`、`registryStateHash`、`currentPolicyVersion` の全項目を照合する。`TrustedProtocolReleaseAnchorV1.protectedRegistryHead` を署名済み genesis または ancestor post-commit frontier に結び付け、現在 head がその descendant であることを検証する。anchor installation/root key/root policy/genesis も一致必須。
+- `finalizeVerifiedProtocolNc1` は、事前の `REENTRY_CANDIDATE` を信用せず、**上記四 lock/guard 内で** protected witness の verified scope/gate/generation/stop/writer frontier を再読・検証し、verified release provider と Core admission を再実行して **完全な protocol candidate** を得る。guard 下の witness 読み取りには **in-transaction** helper を使用し、`readVerifiedScope()`・`witness.readWorkspaceScopeFrontier()` など通常のロック再取得 API は呼ばない。
+- Registry guard を保持したまま FDR-011 staging → fsynced journal → witness CAS を完了する。native preimage、protected expectedGlobalFrontier、expectedWriterHash/sequence、`current` revision に不一致があれば `BLOCK`。`preparePublicationUnlocked` による pending advance 後は**同じ installation guard 内で** fresh `scope` revision を再読してから `commitPublicationUnlocked` に渡す（古い `current` は再利用禁止）。`"advanced"` または**同一正規 bytes/op**の `"already_committed"` が保護 witness で確証されるまで成功と呼ばない。
+- Guard/locks は **witness CAS が確定した後**だけ解放する（逆順）。通常 Gate dispatch / mutating actions は解放後に別途行う。release commit/rotation が先行したら古い snapshot を利用せず再認証する。NC1 の guarded read/append 中に競合 writer が変更することは同じ protocol-release guard により排除される。
+- Pending→journal 書込みの中断または結果不明時は **成功ではない**。専用 recovery は同一 installation→scope→gate→protocol-release 順序で protected pending/committed record、exact stage bytes、writer shard、policy-history/checkpoint、stable operation ID を再検証し、**同一 bytes のみ** CAS 回復（`"already_committed"` 可）する。head/rotation/checkpoint が準備時から変わった場合は `BLOCK` し、古い authority を承認しない。未知の tail を truncate、re-sign、re-ID、再構築してはならない。
+
+#### D3.2：NC1 finalizer の実体・型・durable evidence binding
+
+Owner は `DurableReviewGateEventStore` の新規 **internal** `finalizeVerifiedProtocolNc1` であり、coordinator は通常 `appendEvents` の代わりに**未ロック状態**からこの API を一回呼ぶ。Scope admission は protected callback 内の候補検査を担当し、durable journal/CAS の owner にならない。正常な reentry の動作継続は finalizer 成功応答の後だけ。
+
+```typescript
+type VerifiedProtocolNc1Candidate =
+  Extract<VerifiedNC1EligibleChangeV1, { readonly kind: "protocol" }>;
+type ExpectedNc1WitnessFrontier = Readonly<{
+  globalFrontierHash: string;
+  writerHash: string;
+  writerSequence: number;
+  scopeRegistryRevision: number;
+  scopeRegistryStateHash: string;
+}>;
+type ProtocolNc1FinalizeRequest = Readonly<{
+  scopeId: string;
+  gateId: string;
+  writerId: string;
+  generationId: string;
+  nc1StopEventId: string;
+  expectedEventStoreFrontier: ExpectedNc1WitnessFrontier;
+}>;
+type VerifiedProtocolNc1FinalizationEvidence = Readonly<{
+  decision: Extract<AdmissionDecision, { readonly kind: "REENTRY_CANDIDATE" }>;
+  candidate: VerifiedProtocolNc1Candidate;
+  checkpoint: VerifiedRegistryCheckpoint;
+  verifiedStop: VerifiedNC1StopV1;
+  publicationOperationId: string;
+  expectedEventStoreFrontier: ExpectedNc1WitnessFrontier;
+  transition: VerifiedSemanticContextTransitionInput;
+}>;
+interface ProtocolNc1FinalizationOwner {
+  finalizeVerifiedProtocolNc1(
+    request: ProtocolNc1FinalizeRequest,
+  ): Promise<"committed" | "already_committed" | "blocked">;
+  recoverVerifiedProtocolNc1(
+    publicationId: string,
+  ): Promise<"committed" | "already_committed" | "blocked">;
+}
+```
+
+- `ExpectedNc1WitnessFrontier` は scope admission preflight が**認証済み witness frontier**と writer head/`scope` protected revision/hash から生成する。値の受け渡しは expected-value pin にすぎない。finalizer は自分の guard 下で再取得し、**全項目一致**しなければ `BLOCK`。Gate/generation/stop は signed/verified stop と membership に再照合する。
+- `VerifiedProtocolNc1FinalizationEvidence` は finalizer 内で**必ず新しく構築**する。`REENTRY_CANDIDATE` は Core 判定であり、完全な `candidate` の代用にしない。両者の gate/generation/stop/`changeObservedEventId`/frontier を相互照合し、`candidate.beforeReleaseId`/`afterReleaseId`、前後 fingerprint/digest、`verifiedPublisherIdentityDigest`、`authenticatedImmutableReleaseProvenanceDigest`、`protectedProtocolRegistryFrontierHash`、`progressInvalidatedEventId` 等を exact byte binding する。
+- `publicationOperationId = computeCanonicalJsonFingerprint({ domain: "justice-protocol-nc1-publication-v1", scopeId, gateId, writerId, generationId, nc1StopEventId, observationOperationId: candidate.observationOperationId })` を採用する。既存 `PreparedWitnessPublicationV1.publicationId` は scope/gate/writer/operationId/newTailDigest に対する**既存の決定式**を使用し、同じ operation ID に異なる bytes/tail が現れたら `BLOCK`。
+- **Durable events:** V2 typed `PROTOCOL_NC1_RELEASE_OBSERVED`（`src/core/review-gate/event-schema.ts` / `types.ts` に追加）を exact `candidate`、`verifiedStop` binding、`checkpoint`、`publicationOperationId` を保持する proof event として先に append する。同じ canonical batch に既存 `SEMANTIC_CONTEXT_TRANSITION` を続ける場合、`transition.triggeringAuthorityEventId` / `proof.triggeringAuthorityEventId` を観測 proof event ID に一致させ、既存の `VerifiedSemanticContextTransitionInput`（old/new inputs、`SEMANTIC_CONTEXT_COMPATIBILITY_V1` validation event、proof、counters）のすべてを**独立検証**する。**validated transition payload が用意できなければ candidate のみを成功扱いせず BLOCK**。イベントの `eventId`、`parentEventId`、`writerId`、`generationId`、`epochId` と shard tail sequence/parent chaining を strict validation する。proof の digest のみを残して release details を落とさない。
+- Publication は `VerifiedEventPublicationInput` と同等の typed canonical batch を FDR-011 record に組み立て、既存の `PreparedWitnessPublicationV1`、`preparePublicationUnlocked`、native `durableReplaceWriterShard`＋directory fsync、`commitPublicationUnlocked` を使う。`publishPreparedJournalUnlocked` は通常 `publishPreparedJournal` の exact stage/signer/terminal verification・native preimage 条件を**共通化して切り出す**。`publicationLockIds` を内部で再実行しない。verification/commit owner のみが in-transaction helper を利用し、公開任意 caller に raw unlocked primitives を渡さない。
+- `blocked`（競合/CAS failure/権威不明）は成功イベントなしと判定。prepared tail が存在する場合は未承認として閉塞し、`recoverVerifiedProtocolNc1` の**同一証拠・同一 batch**の idempotent recovery 以外を禁止する。結果不明でも `committed` と推測しない。verified existing committed publication の一致のみ `already_committed`。provider `"BLOCK"` / Task 5 未成立 / reverse lock order / unavailable native / unknown published tail は必ず `"blocked"`。
+
+**対象の予定コード（現時点で変更しない）:** `src/runtime/review-gate-event-store.ts`、`review-gate-witness-publication.ts`、`review-gate-witness-context.ts`、`review-gate-publication-record.ts`、`review-gate-scope-admission.ts`、`review-gate-coordinator.ts`、`src/core/review-gate/event-schema.ts`、`src/core/review-gate/types.ts`。既存の FDR-011 journal / CAS 以外に未保護の別 journal は作らない。
 
 ### D4：同一 phase・同一 descriptor digest に複数 release が存在する場合の検索規則
 
