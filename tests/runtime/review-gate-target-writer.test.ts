@@ -344,7 +344,7 @@ describe("protected canonical target writer", () => {
       manager.close();
       await rm(owned.sandbox, { recursive: true, force: true });
     }
-  }, 1000);
+  });
   it("releases acquired target locks and propagates the original acquisition error", async () => {
     const intent = await prepareHandoffFixture(f);
     await f.witness.prepareTargetWriterHandoff(intent);
