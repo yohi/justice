@@ -194,8 +194,17 @@ type ProtocolNc1FinalizeRequest = Readonly<{
   writerId: string;
   generationId: string;
   nc1StopEventId: string;
+  admissionRequest: ScopeAdmissionRequest; // descriptor/path/workspace を持つ; finalizer が再認証
   expectedEventStoreFrontier: ExpectedNc1WitnessFrontier;
 }>;
+interface VerifiedProtocolNc1TransitionComposer {
+  composeWithinGuard(input: Readonly<{
+    verifiedScope: VerifiedScopeRead;
+    candidate: VerifiedProtocolNc1Candidate;
+    verifiedStop: VerifiedNC1StopV1;
+    observedProofEventId: string;
+  }>): Promise<VerifiedSemanticContextTransitionInput | "BLOCK">;
+}
 type VerifiedProtocolNc1FinalizationEvidence = Readonly<{
   decision: Extract<AdmissionDecision, { readonly kind: "REENTRY_CANDIDATE" }>;
   candidate: VerifiedProtocolNc1Candidate;
@@ -215,10 +224,10 @@ interface ProtocolNc1FinalizationOwner {
 }
 ```
 
-- `ExpectedNc1WitnessFrontier` は scope admission preflight が**認証済み witness frontier**と writer head/`scope` protected revision/hash から生成する。値の受け渡しは expected-value pin にすぎない。finalizer は自分の guard 下で再取得し、**全項目一致**しなければ `BLOCK`。Gate/generation/stop は signed/verified stop と membership に再照合する。
+- `ExpectedNc1WitnessFrontier` は scope admission preflight が**認証済み witness frontier**と writer head/`scope` protected revision/hash から生成する。値の受け渡しは expected-value pin にすぎない。finalizer は自分の guard 下で再取得し、**全項目一致**しなければ `BLOCK`。Gate/generation/stop は signed/verified stop と membership に再照合する。`admissionRequest` も workspace/scope paths と署名済み release descriptor に照合し、caller が与えた入力だけでは許可しない。
 - `VerifiedProtocolNc1FinalizationEvidence` は finalizer 内で**必ず新しく構築**する。`REENTRY_CANDIDATE` は Core 判定であり、完全な `candidate` の代用にしない。両者の gate/generation/stop/`changeObservedEventId`/frontier を相互照合し、`candidate.beforeReleaseId`/`afterReleaseId`、前後 fingerprint/digest、`verifiedPublisherIdentityDigest`、`authenticatedImmutableReleaseProvenanceDigest`、`protectedProtocolRegistryFrontierHash`、`progressInvalidatedEventId` 等を exact byte binding する。
 - `publicationOperationId = computeCanonicalJsonFingerprint({ domain: "justice-protocol-nc1-publication-v1", scopeId, gateId, writerId, generationId, nc1StopEventId, observationOperationId: candidate.observationOperationId })` を採用する。既存 `PreparedWitnessPublicationV1.publicationId` は scope/gate/writer/operationId/newTailDigest に対する**既存の決定式**を使用し、同じ operation ID に異なる bytes/tail が現れたら `BLOCK`。
-- **Durable events:** V2 typed `PROTOCOL_NC1_RELEASE_OBSERVED`（`src/core/review-gate/event-schema.ts` / `types.ts` に追加）を exact `candidate`、`verifiedStop` binding、`checkpoint`、`publicationOperationId` を保持する proof event として先に append する。同じ canonical batch に既存 `SEMANTIC_CONTEXT_TRANSITION` を続ける場合、`transition.triggeringAuthorityEventId` / `proof.triggeringAuthorityEventId` を観測 proof event ID に一致させ、既存の `VerifiedSemanticContextTransitionInput`（old/new inputs、`SEMANTIC_CONTEXT_COMPATIBILITY_V1` validation event、proof、counters）のすべてを**独立検証**する。**validated transition payload が用意できなければ candidate のみを成功扱いせず BLOCK**。イベントの `eventId`、`parentEventId`、`writerId`、`generationId`、`epochId` と shard tail sequence/parent chaining を strict validation する。proof の digest のみを残して release details を落とさない。
+- **Durable events:** V2 typed `PROTOCOL_NC1_RELEASE_OBSERVED`（`src/core/review-gate/event-schema.ts` / `types.ts` に追加）を exact `candidate`、`verifiedStop` binding、`checkpoint`、`publicationOperationId` を保持する proof event として先に append する。同じ canonical batch に既存 `SEMANTIC_CONTEXT_TRANSITION` を続ける場合、`transition.triggeringAuthorityEventId` / `proof.triggeringAuthorityEventId` を観測 proof event ID に一致させ、既存の `VerifiedSemanticContextTransitionInput`（old/new inputs、`SEMANTIC_CONTEXT_COMPATIBILITY_V1` validation event、proof、counters）のすべてを**独立検証**する。`VerifiedProtocolNc1TransitionComposer.composeWithinGuard()` は **trust-owned implementation** として、同じ guarded verified scope に属する既発行の `SEMANTIC_CONTEXT_COMPATIBILITY_V1` validation event とその結果/proof、old/new inputs、round counters を検証して `VerifiedSemanticContextTransitionInput` を導出する。外部 caller の任意の validation result や agent の宣言を信頼しない。**validated transition payload が用意できなければ candidate のみを成功扱いせず BLOCK**。イベントの `eventId`、`parentEventId`、`writerId`、`generationId`、`epochId` と shard tail sequence/parent chaining を strict validation する。proof の digest のみを残して release details を落とさない。
 - Publication は `VerifiedEventPublicationInput` と同等の typed canonical batch を FDR-011 record に組み立てる。新規 `buildPublicationWithinWitnessTransaction(input: VerifiedEventPublicationInput, current: WitnessTransaction): Promise<PublicationDraft>` は `workspaceFrom(current, workspaceIdentity).frontier`、`current.installation.installationId`、`current.hash`、native `readWriterShard()` から verified writer/global preimage・expected installation frontier を導き、通常の `buildPublication()` が行う `witness.readInstallation()` / `readInstallationFrontierHash()` / `observeFrontier()` を callback 内で再実行しない。**通常と専用の build で digest/sequence/operation→publicationId の検査を共有**する。さらに同一 `(scopeId,gateId,writerId,operationId)` に異なる tail/digest が存在すれば pending/committed をまたいで `BLOCK`（publicationId が異なるため見落とさない）。既存の `PreparedWitnessPublicationV1`、`preparePublicationUnlocked`、native `durableReplaceWriterShard`＋directory fsync、`commitPublicationUnlocked` を使う。`publishPreparedJournalUnlocked` は通常 `publishPreparedJournal` の exact stage/signer/terminal verification・native preimage 条件を**共通化して切り出す**。`publicationLockIds` を内部で再実行しない。verification/commit owner のみが in-transaction helper を利用し、公開任意 caller に raw unlocked primitives を渡さない。
 - `blocked`（競合/CAS failure/権威不明）は成功イベントなしと判定。prepared tail が存在する場合は未承認として閉塞し、`recoverVerifiedProtocolNc1` の**同一証拠・同一 batch**の idempotent recovery 以外を禁止する。結果不明でも `committed` と推測しない。verified existing committed publication の一致のみ `already_committed`。provider `"BLOCK"` / Task 5 未成立 / reverse lock order / unavailable native / unknown published tail は必ず `"blocked"`。
 
