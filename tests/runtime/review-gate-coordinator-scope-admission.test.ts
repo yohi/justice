@@ -122,6 +122,25 @@ describe("coordinator startOrResume routes through scope admission", () => {
     expect(result.guidance).toContain("[JUSTICE: REVIEW GATE OPERATION PAYLOAD]");
   });
 
+  it("blocks non-occupancy scope admission errors without using the legacy path", async () => {
+    const scopeAdmission: ReviewGateScopeAdmission = {
+      withAdmissionLease: async () => {
+        throw new ScopeAdmissionBlocked("witness_unavailable");
+      },
+    };
+    const { coordinator } = createTestCoordinator(scopeAdmission);
+
+    const result = await coordinator.startOrResume("session-1", {
+      source: "command",
+      designPath: DESIGN_PATH,
+      planPath: PLAN_PATH,
+    });
+
+    expect(result.dispatched).toBe(false);
+    expect(result.gateId).toBeNull();
+    expect(result.guidance).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
+  });
+
   it("creates a new gate via legacy path when scope admission returns CREATE_GENESIS", async () => {
     const { coordinator } = createTestCoordinator(
       createMockScopeAdmission({

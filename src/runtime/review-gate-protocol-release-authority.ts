@@ -180,6 +180,7 @@ export function createVerifiedProtocolReleaseProvider(
           input.workspaceIdentity.length === 0 ||
           input.nc1StopEventId.length === 0 ||
           input.beforeReleaseId.length === 0 ||
+          !isHexDigest64(input.historicalReleaseProofDigest) ||
           !isHexDigest64(input.currentDescriptorDigest)
         ) {
           return "BLOCK";
@@ -203,7 +204,6 @@ export function createVerifiedProtocolReleaseProvider(
         if (oldBytesDigest !== oldRelease.descriptorDigest) return "BLOCK";
         if (oldRelease.phaseFingerprint !== input.beforeFingerprint) return "BLOCK";
         if (
-          input.historicalReleaseProofDigest.length > 0 &&
           computeCanonicalJsonFingerprint({
             domain: PROTOCOL_RELEASE_SIGNATURE_DOMAIN,
             schemaVersion: oldRelease.schemaVersion,

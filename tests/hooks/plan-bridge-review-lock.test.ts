@@ -517,6 +517,46 @@ describe("PlanBridge FDR-014 approved Design read boundary", () => {
     expect(scope?.approvedDesign?.designClearEventId).toBe("evt-design-clear-lock");
   });
 
+  it("returns no reviewer scope when approved Design authority lookup throws", async () => {
+    const { bridge } = createLockHarness(false);
+    bridge.setReviewGateApprovedDesignAuthority(
+      fakeAuthority({
+        getApprovedDesignBinding: async () => {
+          throw new Error("authority unavailable");
+        },
+      }),
+    );
+    await bridge.handleReviewGateStart("parent", {
+      source: "command",
+      designPath: DESIGN_PATH,
+      planPath: PLAN_PATH,
+    });
+
+    await expect(bridge.buildPlanReviewerQueryScope("parent")).resolves.toBeNull();
+  });
+
+  it("returns no reviewer scope when approved Design binding cannot form a valid scope", async () => {
+    const { bridge } = createLockHarness(false);
+    bridge.setReviewGateApprovedDesignAuthority(
+      fakeAuthority({
+        getApprovedDesignBinding: async () => ({
+          ...APPROVED_DESIGN_BINDING,
+          requirements: {
+            ...APPROVED_DESIGN_BINDING.requirements,
+            canonicalPath: "../outside.md",
+          },
+        }),
+      }),
+    );
+    await bridge.handleReviewGateStart("parent", {
+      source: "command",
+      designPath: DESIGN_PATH,
+      planPath: PLAN_PATH,
+    });
+
+    await expect(bridge.buildPlanReviewerQueryScope("parent")).resolves.toBeNull();
+  });
+
   it("denies a generic unmediated read of the approved design path without the authority", async () => {
     const { bridge } = createLockHarness(false);
     await bridge.handleReviewGateStart("parent", {

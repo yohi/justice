@@ -328,6 +328,20 @@ function parseBlobTreeEntry(stdout: Buffer, canonicalPath: string): GitTreeEntry
   return null;
 }
 
+export function isNc1ParentArtifactBindingValid(input: Readonly<{
+  artifactKind: "requirements" | "design" | "plan";
+  parentBlobBytes: Uint8Array;
+  parentBlobOid: string;
+  beforeArtifactDigest: string;
+  beforeGitBlobOid: string;
+}>): boolean {
+  return (
+    computeArtifactDigest(input.parentBlobBytes) === input.beforeArtifactDigest &&
+    (input.artifactKind !== "requirements" ||
+      input.parentBlobOid === input.beforeGitBlobOid)
+  );
+}
+
 /**
  * Create the Runtime-only Review Gate scope admission factory.
  *
@@ -547,6 +561,22 @@ export function createReviewGateScopeAdmission(
       dimension === "requirements"
         ? ctx.requirements.gitBlobOid
         : parentEntry.blobSha;
+    const parentBlobBytes = await gitOutput(rootReal, [
+      "cat-file",
+      "blob",
+      parentEntry.blobSha,
+    ]);
+    if (
+      !isNc1ParentArtifactBindingValid({
+        artifactKind: dimension,
+        parentBlobBytes,
+        parentBlobOid: parentEntry.blobSha,
+        beforeArtifactDigest,
+        beforeGitBlobOid,
+      })
+    ) {
+      return { ok: false, error: "The parent artifact does not match the recorded NC1 before-state." };
+    }
     const afterGitBlobOid =
       dimension === "requirements"
         ? snapshot.current.requirements.gitBlobOid

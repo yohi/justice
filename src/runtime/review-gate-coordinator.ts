@@ -1347,6 +1347,13 @@ export function createReviewGateCoordinator(
       );
     } catch (err) {
       if (err instanceof ScopeAdmissionBlocked) {
+        if (err.code !== "scope_lease_occupied") {
+          return blockedResult(
+            designPath,
+            planPath,
+            `[JUSTICE: REVIEW GATE BLOCKED] Scope admission failed closed (${err.code}); resolve the admission issue before retrying.`,
+          );
+        }
         // The scope lock is already held by an active gate managed by this
         // coordinator; skip the admission lease and use the legacy path.
         return runStartOrResume();

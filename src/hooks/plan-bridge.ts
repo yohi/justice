@@ -587,19 +587,23 @@ export class PlanBridge {
     if (lock === undefined || lock.designPath === null || lock.planPath === null) return null;
     const authority = this.reviewGateApprovedDesignAuthority;
     if (authority === null) return null;
-    const approvedDesign = await authority.getApprovedDesignBinding({
-      gateId: lock.gateId,
-      designPath: lock.designPath,
-    });
-    return buildReviewQueryScope("plan", {
-      // A Plan-phase scope admits only the approved Design and the current
-      // Plan; the effective Requirements identity is validated inside the
-      // proof instead.
-      requirementsCanonicalPath: approvedDesign?.requirements.canonicalPath ?? "",
-      approvedDesignCanonicalPath: lock.designPath,
-      currentPhaseArtifactCanonicalPath: lock.planPath,
-      approvedDesign,
-    });
+    try {
+      const approvedDesign = await authority.getApprovedDesignBinding({
+        gateId: lock.gateId,
+        designPath: lock.designPath,
+      });
+      return buildReviewQueryScope("plan", {
+        // A Plan-phase scope admits only the approved Design and the current
+        // Plan; the effective Requirements identity is validated inside the
+        // proof instead.
+        requirementsCanonicalPath: approvedDesign?.requirements.canonicalPath ?? "",
+        approvedDesignCanonicalPath: lock.designPath,
+        currentPhaseArtifactCanonicalPath: lock.planPath,
+        approvedDesign,
+      });
+    } catch {
+      return null;
+    }
   }
 
   /**
