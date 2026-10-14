@@ -224,6 +224,28 @@ type ProtocolNc1CompatibilityValidationProofV1 = Readonly<{
   observedEventId: string; validationEventId: string;
   witnessFrontierHash: string; checkpointDigest: string;
 }>;
+type VerifiedProtocolNc1ReleaseObservedPayloadV2 = Readonly<{
+  candidate: VerifiedProtocolNc1Candidate; verifiedStop: VerifiedNC1StopV1;
+  checkpoint: VerifiedRegistryCheckpoint; publicationOperationId: string;
+  expectedWitnessFrontier: ExpectedNc1WitnessFrontier;
+}>;
+type VerifiedProtocolNc1CompatibilityValidatedPayloadV2 = Readonly<{
+  validationInput: ProtocolNc1CompatibilityValidationInputV1;
+  proof: ProtocolNc1CompatibilityValidationProofV1;
+  observedEventId: string; publicationOperationId: string;
+}>;
+type VerifiedHostApprovedProtocolNc1ValidatorRegistrationV1 = Readonly<{
+  validatorId: "PROTOCOL_NC1_COMPATIBILITY_V1";
+  validatorVersion: "1"; ruleId: "PHASE_ONLY_SIGNED_RELEASE_V1";
+  executableDigest: string; ruleTableDigest: string;
+  validatorRegistryDigest: string; authorizedPolicyDigest: string;
+  hostRootAuthorizationProofDigest: string;
+}>;
+interface VerifiedProtocolNc1ValidatorResolver {
+  resolveWithinGuard(
+    signedValidatorRegistryDigest: string,
+  ): Promise<VerifiedHostApprovedProtocolNc1ValidatorRegistrationV1 | "BLOCK">;
+}
 type VerifiedProtocolNc1ContextTransitionV1 = Readonly<{
   oldInputs: SemanticContextInputsV1; newInputs: SemanticContextInputsV1;
   observedEventId: string;
@@ -275,7 +297,7 @@ interface ProtocolNc1FinalizationOwner {
 - `VerifiedProtocolNc1FinalizationEvidence` は finalizer 内で**必ず新しく構築**する。`REENTRY_CANDIDATE` は Core 判定であり、完全な `candidate` の代用にしない。両者の gate/generation/stop/`changeObservedEventId`/frontier を相互照合し、`candidate.beforeReleaseId`/`afterReleaseId`、前後 fingerprint/digest、`verifiedPublisherIdentityDigest`、`authenticatedImmutableReleaseProvenanceDigest`、`protectedProtocolRegistryFrontierHash`、`progressInvalidatedEventId` 等を exact byte binding する。
 - `publicationOperationId = computeCanonicalJsonFingerprint({ domain: "justice-protocol-nc1-publication-v1", scopeId, gateId, writerId, generationId, nc1StopEventId, observationOperationId: candidate.observationOperationId })` を採用する。既存 `PreparedWitnessPublicationV1.publicationId` は scope/gate/writer/operationId/newTailDigest に対する**既存の決定式**を使用し、同じ operation ID に異なる bytes/tail が現れたら `BLOCK`。
 - **Protocol-only と既存 Requirements validator の境界:** Requirements authority が旧新で同一の正常ケースは、既存 `evaluateSemanticContextCompatibility()` が `incomplete_authority_binding` → `INDETERMINATE` を返す。既存 `SEMANTIC_CONTEXT_COMPATIBILITY_V1` を流用せず、`VerifiedSemanticContextTransitionInput` / `SEMANTIC_CONTEXT_TRANSITION`（`proof.validatorId` が旧 V1 固定）を **protocol-only NC1 では生成しない**。Requirements authority ID の擬似変更も行わない。Requirements-driven semantic transition の旧 schema・イベント・projection は変更しない。
-- **新たに提案する独立の登録済み検証契約:** `PROTOCOL_NC1_COMPATIBILITY_V1` / `PHASE_ONLY_SIGNED_RELEASE_V1` は非 agent の deterministic in-process registered validator。権限者が承認した pinned validator descriptor/version, executable digest, rules digest を、host-root 認証した deterministic validation registry に**事前登録**する。`input.authorizedPolicyDigest` と実際に解決された registry entry の digest/実行ハッシュ/validator ID を検証する。**old/new signed releases の `validatorRegistryDigest` は同じ登録済み digest を保持**しなければならず、過去 release に登録情報を後付けしない。未登録・未承認・digest 違い・旧 V1 に対する勝手な fallback は `INDETERMINATE` → `BLOCK`。本書は提案契約であり、Owner の正式規範採用や本番 Task 5 readiness を意味しない。
+- **新たに提案する独立の登録済み検証契約:** `PROTOCOL_NC1_COMPATIBILITY_V1` / `PHASE_ONLY_SIGNED_RELEASE_V1` は非 agent の deterministic in-process registered validator。権限者が承認した pinned validator descriptor/version, executable digest, rules digest を、host-root 認証した deterministic validation registry に**事前登録**する。`input.authorizedPolicyDigest` と実際に解決された registry entry の digest/実行ハッシュ/validator ID を検証する。**old/new signed releases の `validatorRegistryDigest` は同じ登録済み digest を保持**しなければならず、過去 release に登録情報を後付けしない。未登録・未承認・digest 違い・旧 V1 に対する勝手な fallback は `INDETERMINATE` → `BLOCK`。本書は提案契約であり、Owner の正式規範採用や本番 Task 5 readiness を意味しない。 `VerifiedProtocolNc1ValidatorResolver.resolveWithinGuard(signedValidatorRegistryDigest)` は independently host-root-authorized `VerifiedHostApprovedProtocolNc1ValidatorRegistrationV1` を返す read-only trusted seam とする。registry entry の存在だけでは承認としない。`hostRootAuthorizationProofDigest` と policy/executable/ruleTable digests を host trust anchor に結び付け、old/new manifest の同一 `validatorRegistryDigest` に照合する。
 - **決定規則:** `evaluateProtocolNc1CompatibilityV1(input): ProtocolNc1CompatibilityResult` は trusted pure evaluator。`COMPATIBLE` は全条件を満たす場合 **だけ**：(1) same scope/gate/generation/NC1 stop と release phase; (2) old/new Requirements authority event ID・source/Git binding digest・governing reference が完全同一かつ protected witness に一致; (3) old/new context と signed old/new release の phase/global fingerprints が正確に一致し、要求外 phase fingerprint は不変; (4) 要求 phase fingerprint は**変化**、global はその派生として変化可; (5) D7.1 manifest field-level authorization で要求 phase descriptor slice 以外は不変、`promptRegistryDigest`/`validatorRegistryDigest`/`semanticPolicyRegistryDigest`/`verifiedSemanticContractDigest` は同一; (6) root→policy epoch・publisher keys/歴史的 signature・same-phase ancestry・signed source digest・live `VerifiedRegistryCheckpoint`・anchor・expected witness writer/global frontier の全検証が PASS; (7) 観測イベント ID / proof の入力 digest に tamper が無い。正当に署名されても shared semantic change を含むとき `INCOMPATIBLE`、根拠が不明・missing・untrusted のとき `INDETERMINATE`。**finalizer success に採用できるのは `COMPATIBLE` のみ**。これは「Requirements 文書の意味が equivalent」という主張ではなく、署名・policy・phase 範囲内の release transition を独立に認可する狭い述語。
 - **Validation proof producer:** `RegisteredProtocolNc1CompatibilityProducer.validateWithinGuard` は protected host-owned in-process runner（AI/worker の文字列を使わない）。scope admission の preflight はヒントのみ。`finalizeVerifiedProtocolNc1` が installation→scope→gate→release guard を取得して verified release candidate と `PROTOCOL_NC1_RELEASE_OBSERVED` の canonical event を確定した後、**同じ guard 内、journal への書込み前**にこの runner を起動する。`ProtocolNc1CompatibilityValidationInputV1` は host から認証済みの Requirements binding、verified effective old/new context、signed release source/digests、complete candidate、live checkpoint、trusted validator registry entry、witness frontier だけから生成する。caller-provided verdict / forged validation event は受理しない。
 - **Finalizer の独立検証:** producer は classification + rule/registered executable/policy identity と canonical input digest を計算する。finalizer は別の検証ステップで `evaluateProtocolNc1CompatibilityV1` を**検証済み正規入力から再計算**し、`ProtocolNc1CompatibilityValidationProofV1` の全部（`validatorId`、version、rule、result、inputDigest、executable/registry/policy digests、observedEventId、validationEventId、witness frontier、checkpointDigest）と突合する。`COMPATIBLE` 以外・未登録 policy・不正 proof・再検証不一致は `BLOCK`。`validationEventId` は実際に発行する `PROTOCOL_NC1_COMPATIBILITY_VALIDATED.eventId` と**同一**にし、`observedEventId` は `PROTOCOL_NC1_RELEASE_OBSERVED.eventId` と同一。source of truth は event writer ではなく registered executable と protected witness。
@@ -285,6 +307,8 @@ interface ProtocolNc1FinalizationOwner {
 
 - Publication は `VerifiedEventPublicationInput` と同等の typed canonical batch を FDR-011 record に組み立てる。新規 `buildPublicationWithinWitnessTransaction(input: VerifiedEventPublicationInput, current: WitnessTransaction): Promise<PublicationDraft>` は `workspaceFrom(current, workspaceIdentity).frontier`、`current.installation.installationId`、`current.hash`、native `readWriterShard()` から verified writer/global preimage・expected installation frontier を導き、通常の `buildPublication()` が行う `witness.readInstallation()` / `readInstallationFrontierHash()` / `observeFrontier()` を callback 内で再実行しない。**通常と専用の build で digest/sequence/operation→publicationId の検査を共有**する。さらに同一 `(scopeId,gateId,writerId,operationId)` に異なる tail/digest が存在すれば pending/committed をまたいで `BLOCK`（publicationId が異なるため見落とさない）。既存の `PreparedWitnessPublicationV1`、`preparePublicationUnlocked`、native `durableReplaceWriterShard`＋directory fsync、`commitPublicationUnlocked` を使う。`publishPreparedJournalUnlocked` は通常 `publishPreparedJournal` の exact stage/signer/terminal verification・native preimage 条件を**共通化して切り出す**。`publicationLockIds` を内部で再実行しない。verification/commit owner のみが in-transaction helper を利用し、公開任意 caller に raw unlocked primitives を渡さない。
 - `blocked`（競合/CAS failure/権威不明）は成功イベントなしと判定。prepared tail が存在する場合は未承認として閉塞し、`recoverVerifiedProtocolNc1` の**同一証拠・同一 batch**の idempotent recovery 以外を禁止する。結果不明でも `committed` と推測しない。verified existing committed publication の一致のみ `already_committed`。provider `"BLOCK"` / Task 5 未成立 / reverse lock order / unavailable native / unknown published tail は必ず `"blocked"`。
+
+**FIX-001 で追加した予定ソース/テスト対象（現時点で変更しない）:** `src/core/review-gate/deterministic-validation.ts`（新しい deterministic registered runner）、`src/core/review-gate/event-schema.ts` / `types.ts`（3-event V2 payload）、`src/core/review-gate/projection.ts`（Requirements authority 不変の protocol-only context 適用）、`tests/core/review-gate/deterministic-validation.test.ts`、`tests/core/review-gate/event-schema.test.ts`、`tests/core/review-gate/projection.test.ts`、`tests/runtime/review-gate-protocol-release-integration.test.ts`。既存 `SEMANTIC_CONTEXT_TRANSITION` や Requirements validator の意味は変更しない。
 
 **対象の予定コード（現時点で変更しない）:** `src/runtime/review-gate-event-store.ts`、`review-gate-witness-publication.ts`、`review-gate-witness-context.ts`、`review-gate-publication-record.ts`、`review-gate-scope-admission.ts`、`review-gate-coordinator.ts`、`src/core/review-gate/event-schema.ts`、`src/core/review-gate/types.ts`。既存の FDR-011 journal / CAS 以外に未保護の別 journal は作らない。
 
@@ -523,6 +547,6 @@ publication テストでは `trustPolicyVersion: "policy-1"` を使用するが�
 - `rotatePublisherTrustPolicy()` への phase 引数追加は不要。Publisher 信頼ポリシーは release の承認対象 phase とは別の概念。
 - `commitPreparedProtocolReleaseCAS()` も、署名済み manifest の `phase` を利用できるため、操作引数に重複して指定する必要はない。
 - 既存の署名済み release に phase を自動補完する移行は避ける。V2 schema として再発行するか、明示的な手続きを設ける。
-- R1 Fresh Independent Review の処置: `RG-PHASE-002〜004` は **RESOLVED（静的文書レビューに限定）**、再オープンしない。`RG-PHASE-001` は **PARTIALLY RESOLVED / BLOCKER** であり、D3.1/D3.2 の限定改訂は **Fresh Independent Review 待ち**。正式承認・実装許可・Task 5 成立を意味しない。
+- R2 Fresh Independent Review の処置: `RG-PHASE-002〜004` は **RESOLVED（静的文書レビューに限定）**、再オープンしない。`RG-PHASE-001` は **PARTIALLY RESOLVED / BLOCKER** のままで、既受理の D3.1 lock/FDR-011 契約を変更しない。D3.2 FIX-001 の登録済み protocol validator / durable proof producer だけを限定修正した。**Fresh Independent Limited Recheck が次のゲート**。正式承認・実装許可・Task 5 成立を意味しない。
 - 上記の統合契約が検証されるまでは、`opencode-adapter.ts` の fail-closed stub を維持する。
 - Task 5 の信頼境界が成立し、受入条件が実証されるまでは real provider の有効化は行わない。
