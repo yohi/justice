@@ -251,12 +251,6 @@ export function createVerifiedProtocolReleaseProvider(
         // anchored at the CURRENT head (a stale release head, or a head that
         // regressed below the anchor, is rolled back history).
         if (newRelease.registryHead !== currentHead) return "BLOCK";
-        if (
-          oldRelease.registryHead === anchor.protectedRegistryHead &&
-          newRelease.registryHead === anchor.protectedRegistryHead
-        ) {
-          return "BLOCK";
-        }
 
         return Object.freeze<VerifiedProtocolReleaseDeltaV1>({
           oldReleaseId: oldRelease.releaseId,

@@ -302,7 +302,11 @@ function relationClosureProofDigest(tips: readonly VerifiedGateTip[]): string {
         status: tip.status,
       }),
     )
-    .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+    .sort((left, right) => {
+      if (left < right) return -1;
+      if (left > right) return 1;
+      return 0;
+    });
   return computeCanonicalJsonFingerprint(identities);
 }
 
