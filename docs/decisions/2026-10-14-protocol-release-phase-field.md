@@ -234,16 +234,56 @@ type VerifiedProtocolNc1CompatibilityValidatedPayloadV2 = Readonly<{
   proof: ProtocolNc1CompatibilityValidationProofV1;
   observedEventId: string; publicationOperationId: string;
 }>;
-type VerifiedHostApprovedProtocolNc1ValidatorRegistrationV1 = Readonly<{
+type ProtocolNc1ValidatorRegistrationPayloadV1 = Readonly<{
+  domain: "justice-protocol-nc1-validator-registration-v1";
+  installationId: string; releaseRootDigest: string;
+  registrationId: string; // canonical identity digest, see FIX-001-A below
   validatorId: "PROTOCOL_NC1_COMPATIBILITY_V1";
   validatorVersion: "1"; ruleId: "PHASE_ONLY_SIGNED_RELEASE_V1";
+  validatorDescriptorDigest: string; ruleTableDigest: string;
+  validatorRegistryDigest: string; authorizedPolicyDigest: string;
+  runnerModuleId: "review-gate/protocol-nc1-compatibility-v1";
+  runnerExportName: "evaluateProtocolNc1CompatibilityV1";
+  executableDigest: string; // SHA-256 of sealed deployed module bytes
+  expectedProtectedReleaseHead: ReleaseHead;
+  expectedReleaseRegistryRevision: number;
+  expectedReleaseRegistryStateHash: string;
+  effectiveAfterReleaseSequence: number; // === expectedProtectedReleaseHead.sequence
+}>;
+type SignedProtocolNc1ValidatorRegistrationV1 = Readonly<{
+  payload: ProtocolNc1ValidatorRegistrationPayloadV1;
+  signature: string; // Ed25519 base64, over canonical payload fingerprint
+}>;
+type VerifiedHostApprovedProtocolNc1ValidatorRegistrationV1 = Readonly<{
+  registrationId: string;
+  validatorId: "PROTOCOL_NC1_COMPATIBILITY_V1";
+  validatorVersion: "1"; ruleId: "PHASE_ONLY_SIGNED_RELEASE_V1";
+  validatorDescriptorDigest: string;
   executableDigest: string; ruleTableDigest: string;
   validatorRegistryDigest: string; authorizedPolicyDigest: string;
-  hostRootAuthorizationProofDigest: string;
+  runnerModuleId: "review-gate/protocol-nc1-compatibility-v1";
+  runnerExportName: "evaluateProtocolNc1CompatibilityV1";
+  effectiveAfterReleaseSequence: number;
+  hostRootAuthorizationProofDigest: string; // verified SHA fingerprint of {payload,signature}
+}>;
+type ProtocolNc1ValidatorRevocationPayloadV1 = Readonly<{
+  domain: "justice-protocol-nc1-validator-revocation-v1";
+  installationId: string; registrationId: string;
+  previousRegistrationProofDigest: string; reasonDigest: string;
+  expectedProtectedReleaseHead: ReleaseHead;
+  expectedReleaseRegistryRevision: number;
+  expectedReleaseRegistryStateHash: string;
+}>;
+type SignedProtocolNc1ValidatorRevocationV1 = Readonly<{
+  payload: ProtocolNc1ValidatorRevocationPayloadV1;
+  signature: string; // same pinned host root
 }>;
 interface VerifiedProtocolNc1ValidatorResolver {
+  // Called strictly inside the already-held "protocol-release" guard.
   resolveWithinGuard(
     signedValidatorRegistryDigest: string,
+    oldReleaseId: string,
+    newReleaseId: string,
   ): Promise<VerifiedHostApprovedProtocolNc1ValidatorRegistrationV1 | "BLOCK">;
 }
 type VerifiedProtocolNc1ContextTransitionV1 = Readonly<{
@@ -311,6 +351,28 @@ interface ProtocolNc1FinalizationOwner {
 **FIX-001 で追加した予定ソース/テスト対象（現時点で変更しない）:** `src/core/review-gate/deterministic-validation.ts`（新しい deterministic registered runner）、`src/core/review-gate/event-schema.ts` / `types.ts`（3-event V2 payload）、`src/core/review-gate/projection.ts`（Requirements authority 不変の protocol-only context 適用）、`tests/core/review-gate/deterministic-validation.test.ts`、`tests/core/review-gate/event-schema.test.ts`、`tests/core/review-gate/projection.test.ts`、`tests/runtime/review-gate-protocol-release-integration.test.ts`。既存 `SEMANTIC_CONTEXT_TRANSITION` や Requirements validator の意味は変更しない。
 
 **対象の予定コード（現時点で変更しない）:** `src/runtime/review-gate-event-store.ts`、`review-gate-witness-publication.ts`、`review-gate-witness-context.ts`、`review-gate-publication-record.ts`、`review-gate-scope-admission.ts`、`review-gate-coordinator.ts`、`src/core/review-gate/event-schema.ts`、`src/core/review-gate/types.ts`。既存の FDR-011 journal / CAS 以外に未保護の別 journal は作らない。
+
+
+##### D3.2 FIX-001-A — host-root validator registration authority（限定追補）
+
+**採用方式と owner（他方式は採用しない）:** `createTrustedProtocolReleaseRegistry` が唯一の validator registration/revocation authority となる。現存の `ProtectedWitnessStore(options.witnessDirectory)` の **`release` protected registry state** と同じ `withGuard("protocol-release", …)` を使用する。別の validator store、別の guard、外部 immutable registration injection は導入しない。`src/runtime/review-gate-release-schema.ts` の `releaseRegistrySchema` に `validatorRegistrations`（append-only index）、`validatorRevocations`（append-only index）、`validatorRegistrationHead`（monotonic registration/revocation proof chain）を必須追加する。`validator-registration-<registrationId>.json` / `validator-revocation-<revocationProofDigest>.json` を **既存 protected witness directory** の `writeJson(…, true)` で署名済み sidecar として永続化し、同じ protected `release` record の `advance("release", expectedSnapshot, …)` で index と head を CAS 確定する。sidecar の存在だけでは権威にならない。`current()` は root・publisher policies・release replay に加え、両 index と全 sidecar の署名/digest/chain を毎回独立検証する。`release` revision/state hash は registration と revocation でも前進し、既存 D3.1 `VerifiedRegistryCheckpoint` の同一性判定で検知する。
+
+**Host root / bootstrap:** `ProtocolReleaseRegistryOptions.hostTrustRoot` は既存の **pinned Ed25519 public key**。`readTrustedWitnessInstallation(store, options.hostTrustRoot)` で `installation.json` の `hostTrustRootPem` と signature/installation ID/owner UID/directory identity を検証し、`createReleaseVerification.anchor()` で `release-anchor.json` の同 root signature を `hostProofValid` により再検証する。`payload.releaseRootDigest = computeCanonicalJsonFingerprint(releaseAnchorWithoutAuthorizationSignature)`。登録署名は既存 `hostProofValid(hostTrustRoot, payload, signature)` と同じ **Ed25519（null algorithm）による UTF-8 canonical fingerprint 文字列の署名**とし、`signature` は base64。`hostRootAuthorizationProofDigest = computeCanonicalJsonFingerprint({payload,signature})`。登録実行者は独立管理の `authorize(payload): Promise<string>` から署名を受け取り、**署名者秘密鍵を Broker/runtime/validator registry に渡さない**。プロトコル release の publisher 署名だけでは登録不可。正式 Owner の規範決裁と実際の host root 署名はいずれも別途必要であり、文書記載や test provisioning だけで成立とはしない。
+
+**Payload / registration identity:** `ProtocolNc1ValidatorRegistrationPayloadV1` は上記の strict field schema、追加 field・欠落・schema mismatch は BLOCK。登録 ID は
+`computeCanonicalJsonFingerprint({domain:"justice-protocol-nc1-registration-id-v1",installationId,releaseRootDigest,validatorId,validatorVersion,ruleId,validatorDescriptorDigest,ruleTableDigest,validatorRegistryDigest,authorizedPolicyDigest,runnerModuleId,runnerExportName,executableDigest})`
+とし、payload の `registrationId` と一致を必須とする。`validatorDescriptorDigest = computeCanonicalJsonFingerprint(frozenRegisteredDescriptor)`、`ruleTableDigest = computeCanonicalJsonFingerprint(frozenRuleTable)`、`validatorRegistryDigest` は sorted deterministic validator registry 全エントリの **規定された canonical registration inventory** の digest（entry ごとに ID/version/descriptorDigest/ruleTableDigest/executableDigest、schemaVersion を含む）とし、signed release `manifest.validatorRegistryDigest` に一致させる。`authorizedPolicyDigest` は host approved immutable protocol NC1 registration policy schema/decision record の canonical fingerprint。実行時にこれらの digest をプロセスから独立再計算し、host payload と signed release に一致必須。`expectedProtectedReleaseHead`、`expectedReleaseRegistryRevision`、`expectedReleaseRegistryStateHash` を guard 取得後の `current()` と厳密一致検証する。`effectiveAfterReleaseSequence === expectedProtectedReleaseHead.sequence`。一意の `registrationId` / `validatorRegistryDigest` に conflicting signed payload・二重登録を禁止。`validatorRegistrationHead` は旧 head と登録 proof digest を domain-separated hash に入力して前進し、`current()` が全順序を replay する。
+
+**Activation と historical non-retroactivity:** 新規 `registerProtocolNc1Validator` は **old/new signed release の prepare より前**に host authorization と proof bytes の protected CAS を完成させる。`pending` が1件でも存在する場合は登録を BLOCK。各 release prepare/commit は current registration index と `validatorRegistryDigest` を照合し、登録 ID/proof digest、現在の registration head と state revision、effectiveAfterReleaseSequence を **その時点の protected publication evidence に固定**する（`release` schema の各 pending/committed/receipt record に versioned `validatorAuthorizationAtPublication` metadata を追加する。**signed manifest 自体は変えず**、既存署名を再計算しない）。`current()` replay は、この publication-attested metadata と登録 proof が整合し、その release の sequence が `effectiveAfterReleaseSequence` より厳密に後であることを確認する。登録前の signed/pending/committed release に後から同じ `validatorRegistryDigest` の登録を追加しても、**欠けた at-publication evidence を補完せず BLOCK**。登録された当時の publisher policy が異なっても過去の真正性は D4.1 を用いて独立に検証する。既存 `releaseRegistrySchema` に新 field が無い installation は明示的に `NOT_PROVISIONED/BLOCK`（暗黙 migration・old release の書換え禁止）。登録済み新規 installation でのみテストの正例が成立する。
+
+**Revocation / invalidation:** host root による `ProtocolNc1ValidatorRevocationPayloadV1` の署名と protected CAS でのみ registration を失効可能（`revokeProtocolNc1Validator`）。`registrationId`、元の proof digest、保護 registry head/revision/stateHash、reasonDigest を検証し、append-only revocation として保持する。復活・digest 書換え・同一 ID の再承認は禁止、必要なら将来の別登録・独立設計承認が必要。resolver は失効を現在時点で検出した場合、新規 NC1 admission と recovery の双方で `BLOCK`。過去の valid release/history の signed bytes は変更せず、過去の署名検証と **現在の authorization 有効性**を混同しない。
+
+**Actual runner binding:** `DeterministicValidatorRegistry.register()` はあくまで構造検証用 Map であり承認証明ではない。validator owner はプロセス構成時に **固定 `runnerModuleId` / `runnerExportName` の静的 allowlist** から trusted bundled runner を解決し、`registered.descriptor` の immutable canonical digest と table を承認 payload に照合する。`executableDigest` は**実際に配備・読み込まれる seal 済み JS module bytes の SHA-256**（`computeArtifactDigest(bytes)`）とし、trusted deployment/build manifest が `runnerModuleId`, exported symbol, canonical module path, build digest, immutable module bytes を結合する。`ExecutionEnvironmentBinding.executableDigest` も同値必須。検証時に OS-backed immutable installed artifact の内容・パス・署名済み build binding を再照合し、固定 allowlist で読み込んだその module の runner function であることを確認する。`Function.prototype.toString()` の hash、caller が渡した module path/digest、任意 `register()` 実行成功、同名 runner の動的 import、読み込んだコードと計測 bytes の binding を立証できない実行環境を **認証とは扱わない**。ロード済みコードと検証済み artifact の同一性、または immutable 配備を立証不能なら `BLOCK`。コード更新は新しい host-signed registration と新規 release を必要とし、旧 release に付け替えない。
+
+**Resolver steps（release guard 以外を追加取得しない）:** `VerifiedProtocolNc1ValidatorResolver.resolveWithinGuard(signedValidatorRegistryDigest,oldReleaseId,newReleaseId)` は trusted registry **内部構成のみ**から作る。①guard 内 `current()` で anchor/installation/root と protected registration/revocation history を再検証、②index → strict JSON sidecar と payload/signature を照合し `hostProofValid` / registrationId / proofDigest / registrationHead replay を検証、③signed old/new `manifest.validatorRegistryDigest` と proof `validatorRegistryDigest` を厳密一致、④両 release の `validatorAuthorizationAtPublication` と `effectiveAfterReleaseSequence < oldRelease.sequence <= newRelease.sequence` を検証、⑤revocation 無し / live `registryRevision`, `registryStateHash`, `currentPolicyVersion` と D3.1 snapshot checkpoint 一致、⑥固定 allowlist runner の実行体・descriptor・table・execution environment digests を計測して一致確認、⑦不変の `VerifiedHostApprovedProtocolNc1ValidatorRegistrationV1` のみ返す。失敗は exception/`"BLOCK"` を上位で統一して fail-closed、未署名/不正署名/登録欠落/sidecar欠損/ロールバック/runner 差し替え/guard occupied/validation 時の read-only 能力外 access はすべて成功イベント無し。source/provider への writable release-store 権限の流出禁止。元の lock graph **installation → scope → gate → protocol-release** を維持する。
+
+**FIX-001-A の将来テスト:** host-root signed registration 正例、署名無しで Map 登録だけ成功、payload 改変、validator module bytes digest mismatch、frozen rule-table mismatch、signed old/new manifest digest mismatch、**old release 作成後の registration**、runner 実行体差替え、registry guard occupied の9例を実際の `ProtectedWitnessStore` / root authority / typed signed release / registered runner で RED→GREEN。各否定例は FDR-011 で `PROTOCOL_NC1_COMPATIBILITY_VALIDATED` / `PROTOCOL_NC1_CONTEXT_TRANSITION` 成功を durable commit しないことを確認する。署名済み revocation、state rollback、registration head 改変、ビルド artifact attestation 欠落も BLOCK。これらは**予定テストであり未実行**。本契約は Owner が採用しておらず、Task 5 未成立時には本番 provider は引き続き `"BLOCK"`。
+
 
 ### D4：同一 phase・同一 descriptor digest に複数 release が存在する場合の検索規則
 
