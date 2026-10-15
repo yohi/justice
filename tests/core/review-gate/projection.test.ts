@@ -21,6 +21,7 @@ import {
   projectVerifiedDispatchRecoveryCursors,
   projectVerifiedGateTip,
   projectVerifiedLineageHistory,
+  projectVerifiedTerminalState,
   projectVerifiedTargetWriterAuthority,
 } from "../../../src/core/review-gate/projection.js";
 import { computeSemanticGoverningProjectionDigest } from "../../../src/core/review-gate/deterministic-validation.js";
@@ -83,13 +84,16 @@ describe("projectReviewGate upstream blockers", () => {
   });
 });
 
-function v2Target(canonicalLogicalTargetPath: string): object {
+function v2Target(
+  canonicalLogicalTargetPath: string,
+  targetIdentityDigest = "a".repeat(64),
+): object {
   return {
     installationId: "install-1",
     workspaceIdentity: "workspace-1",
     canonicalWorkspaceRoot: "workspace",
     canonicalLogicalTargetPath,
-    targetIdentityDigest: "a".repeat(64),
+    targetIdentityDigest,
     verifiedAliasSetDigest: "a".repeat(64),
     identityProofFrontier: "frontier-target",
   };
@@ -100,6 +104,7 @@ function v2TerminalHandoffRequested(
   parentEventId: string,
   handoffOperationId: string,
   targets: readonly string[],
+  targetIdentityDigests: readonly string[] = targets.map(() => "a".repeat(64)),
 ): object {
   return v2Event("TARGET_WRITER_HANDOFF_REQUESTED", eventId, parentEventId, {
     purpose: "TERMINAL_REVOKE_ONLY",
@@ -112,8 +117,8 @@ function v2TerminalHandoffRequested(
     phase: "design",
     roundOrdinal: 1,
     protocolFingerprint: "a".repeat(64),
-    target: v2Target(targets[0] ?? "target.md"),
-    targets: targets.map(v2Target),
+    target: v2Target(targets[0] ?? "target.md", targetIdentityDigests[0] ?? "a".repeat(64)),
+    targets: targets.map((target, index) => v2Target(target, targetIdentityDigests[index] ?? "a".repeat(64))),
     closingSealOperationId: null,
     oldOwner: null,
     newOwner: null,
@@ -157,7 +162,6 @@ function v2HandoffRequested(
     pendingNativeEffectReference: null,
   });
 }
-
 
 function v2HandoffResumed(
   eventId: string,
@@ -232,6 +236,8 @@ function v2TerminalRevoked(
   status: "REVOKED" | "NEVER_CLAIMED_OR_ALREADY_REVOKED",
   nativeEffectDisposition: string,
   targets: readonly string[],
+  targetIdentityDigests: readonly string[] = targets.map(() => "a".repeat(64)),
+  globalTargetWriterHighWatermark = 1,
 ): object {
   return v2Event("TARGET_WRITER_TERMINAL_REVOKED", eventId, parentEventId, {
     purpose: "TERMINAL_REVOKE_ONLY",
@@ -242,9 +248,9 @@ function v2TerminalRevoked(
     generationId: "generation-1",
     phase: "design",
     roundOrdinal: 1,
-    targets: targets.map(v2Target),
+    targets: targets.map((target, index) => v2Target(target, targetIdentityDigests[index] ?? "a".repeat(64))),
     priorOwners: [],
-    globalTargetWriterHighWatermark: 1,
+    globalTargetWriterHighWatermark,
     protectedTargetFrontier: "frontier-1",
     protectedRevokeCasProofDigest: "a".repeat(64),
     nativeNonWriteabilityProofDigest: "a".repeat(64),
@@ -928,6 +934,30 @@ describe("projectVerifiedGateTip", () => {
   });
 
   describe("terminal writer-revoke projection", () => {
+    it("returns the state updated by the last terminal event", () => {
+      const firstHandoff = validateReviewGateEventRecord(
+        v2TerminalHandoffRequested("event-handoff-1", "event-genesis", "handoff-1", ["first.md"]),
+      );
+      const secondHandoff = validateReviewGateEventRecord(
+        v2TerminalHandoffRequested("event-handoff-2", "event-genesis", "handoff-2", ["second.md"]),
+      );
+      const firstRevoked = validateReviewGateEventRecord(
+        v2TerminalRevoked("event-revoked-1", "event-handoff-1", "handoff-1", "transition-1", "REVOKED", "NO_EFFECT", ["first.md"]),
+      );
+
+      const terminalState = projectVerifiedTerminalState([
+        firstHandoff,
+        secondHandoff,
+        firstRevoked,
+      ]);
+
+      expect(terminalState).toMatchObject({
+        kind: "REVOKED_AWAITING_TERMINAL_PUBLICATION",
+        handoffOperationId: "handoff-1",
+        terminalTransitionOperationId: "transition-1",
+      });
+    });
+
     it("projects TERMINAL_REVOKE_PENDING from a requested terminal handoff", () => {
       const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
       const handoff = validateReviewGateEventRecord(
@@ -948,50 +978,6 @@ describe("projectVerifiedGateTip", () => {
       });
       expect(tip.terminalState?.targets).toHaveLength(1);
       expect(tip.terminalState?.targets[0]?.canonicalLogicalTargetPath).toBe("target.md");
-    });
-
-    it("returns the terminal state updated by the last event", () => {
-      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
-      const firstHandoff = validateReviewGateEventRecord(
-        v2TerminalHandoffRequested(
-          "event-handoff-1",
-          "event-genesis",
-          "handoff-1",
-          ["first.md"],
-        ),
-      );
-      const secondHandoff = validateReviewGateEventRecord(
-        v2TerminalHandoffRequested(
-          "event-handoff-2",
-          "event-genesis",
-          "handoff-2",
-          ["second.md"],
-        ),
-      );
-      const firstRevoked = validateReviewGateEventRecord(
-        v2TerminalRevoked(
-          "event-revoked-1",
-          "event-handoff-1",
-          "handoff-1",
-          "transition-1",
-          "REVOKED",
-          "NO_EFFECT",
-          ["first.md"],
-        ),
-      );
-
-      const tip = projectVerifiedGateTip({
-        gateId: "gate-1",
-        scopeId: "scope-1",
-        events: [genesis, firstHandoff, secondHandoff, firstRevoked],
-        frontier: frontier() as VerifiedScopeFrontier,
-      });
-
-      expect(tip.terminalState).toMatchObject({
-        kind: "REVOKED_AWAITING_TERMINAL_PUBLICATION",
-        handoffOperationId: "handoff-1",
-        terminalTransitionOperationId: "transition-1",
-      });
     });
 
     it("projects REVOKED_AWAITING_TERMINAL_PUBLICATION when native effect is not yet applied", () => {
@@ -1133,7 +1119,7 @@ describe("projectVerifiedGateTip", () => {
         generationId: "generation-1",
         phase: "design",
         roundOrdinal: 1,
-        targets: (overrides.targets ?? ["target.md"]).map(v2Target),
+        targets: (overrides.targets ?? ["target.md"]).map((target) => v2Target(target)),
         priorOwners: overrides.priorOwners ?? [priorOwner],
         globalTargetWriterHighWatermark: overrides.globalTargetWriterHighWatermark ?? 7,
         protectedTargetFrontier: "frontier-revoke",
@@ -1150,7 +1136,9 @@ describe("projectVerifiedGateTip", () => {
       );
       const revoked = validateReviewGateEventRecord(revokePayload());
 
-      const authority = projectVerifiedTargetWriterAuthority([genesis, intent, revoked]);
+      const authority = projectVerifiedTargetWriterAuthority([genesis, intent, revoked])?.get(
+        "a".repeat(64),
+      );
 
       expect(authority).toMatchObject({
         target: { canonicalLogicalTargetPath: "target.md" },
@@ -1164,6 +1152,79 @@ describe("projectVerifiedGateTip", () => {
       });
     });
 
+    it("retains terminal authority independently for each target identity", () => {
+      const firstTargetIdentity = "a".repeat(64);
+      const secondTargetIdentity = "b".repeat(64);
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+      const firstIntent = validateReviewGateEventRecord(
+        v2TerminalHandoffRequested(
+          "event-handoff-1",
+          "event-genesis",
+          "handoff-1",
+          ["target.md"],
+          [firstTargetIdentity],
+        ),
+      );
+      const secondIntent = validateReviewGateEventRecord(
+        v2TerminalHandoffRequested(
+          "event-handoff-2",
+          "event-handoff-1",
+          "handoff-2",
+          ["target-2.md"],
+          [secondTargetIdentity],
+        ),
+      );
+      const firstRevoke = validateReviewGateEventRecord(
+        v2TerminalRevoked(
+          "event-revoked-1",
+          "event-handoff-2",
+          "handoff-1",
+          "transition-1",
+          "REVOKED",
+          "APPLIED",
+          ["target.md"],
+          [firstTargetIdentity],
+          7,
+        ),
+      );
+      const secondRevoke = validateReviewGateEventRecord(
+        v2TerminalRevoked(
+          "event-revoked-2",
+          "event-revoked-1",
+          "handoff-2",
+          "transition-2",
+          "REVOKED",
+          "APPLIED",
+          ["target-2.md"],
+          [secondTargetIdentity],
+          9,
+        ),
+      );
+
+      const events = [
+        genesis,
+        firstIntent,
+        secondIntent,
+        firstRevoke,
+        secondRevoke,
+      ];
+      const tip = projectVerifiedGateTip({
+        gateId: "gate-1",
+        scopeId: "scope-1",
+        events,
+        frontier: frontier() as VerifiedScopeFrontier,
+      });
+
+      expect(tip.status).toBe("active");
+      if (tip.status !== "active") return;
+      const authorities = tip.targetWriterAuthorities;
+      expect(authorities).toBeInstanceOf(Map);
+      if (!(authorities instanceof Map)) return;
+      expect([...authorities.keys()]).toEqual([firstTargetIdentity, secondTargetIdentity]);
+      expect(authorities.get(firstTargetIdentity)?.globalTargetWriterGeneration).toBe(7);
+      expect(authorities.get(secondTargetIdentity)?.globalTargetWriterGeneration).toBe(9);
+    });
+
     it("binds a no-writer authority when a never-claimed revoke is verified", () => {
       const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
       const intent = validateReviewGateEventRecord(
@@ -1173,7 +1234,9 @@ describe("projectVerifiedGateTip", () => {
         revokePayload({ status: "NEVER_CLAIMED_OR_ALREADY_REVOKED", priorOwners: [] }),
       );
 
-      expect(projectVerifiedTargetWriterAuthority([genesis, intent, revoked])).toMatchObject({
+      expect(
+        projectVerifiedTargetWriterAuthority([genesis, intent, revoked])?.get("a".repeat(64)),
+      ).toMatchObject({
         activeOwner: null,
         priorOwner: null,
         globalTargetWriterGeneration: 7,
@@ -1267,7 +1330,9 @@ describe("projectVerifiedGateTip", () => {
       const revoked = validateReviewGateEventRecord(revokePayload());
       const replayed = validateReviewGateEventRecord(revokePayload());
 
-      expect(projectVerifiedTargetWriterAuthority([genesis, intent, revoked, replayed])).toMatchObject({
+      expect(
+        projectVerifiedTargetWriterAuthority([genesis, intent, revoked, replayed])?.get("a".repeat(64)),
+      ).toMatchObject({
         globalTargetWriterGeneration: 7,
         protectedTargetCasProofDigest: "c".repeat(64),
       });
@@ -1295,60 +1360,56 @@ describe("projectVerifiedGateTip", () => {
 
       expect(withoutRevoke.status).toBe("active");
       if (withoutRevoke.status !== "active") return;
-      expect(withoutRevoke.targetWriterAuthority).toBeNull();
+      expect(withoutRevoke.targetWriterAuthorities).toBeNull();
       expect(withRevoke.status).toBe("active");
       if (withRevoke.status !== "active") return;
-      expect(withRevoke.targetWriterAuthority?.globalTargetWriterGeneration).toBe(7);
-      expect(withRevoke.targetWriterAuthority?.durableTombstoneProofDigest).toBeNull();
+      expect(withRevoke.targetWriterAuthorities?.get("a".repeat(64))?.globalTargetWriterGeneration).toBe(7);
+      expect(withRevoke.targetWriterAuthorities?.get("a".repeat(64))?.durableTombstoneProofDigest).toBeNull();
     });
   });
 
+  it("projects REQUESTED from TARGET_WRITER_HANDOFF_REQUESTED", () => {
+    const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+    const owner = { scopeId: "scope-2", gateId: "gate-2", generationId: "generation-1", operationId: "op-1", attemptId: "attempt-1" };
+    const handoff = validateReviewGateEventRecord(
+      v2HandoffRequested("event-handoff", "event-genesis", "handoff-1", "target.md", owner),
+    );
 
-  describe("target writer handoff replay state projection", () => {
-    it("projects REQUESTED from TARGET_WRITER_HANDOFF_REQUESTED", () => {
-      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
-      const owner = { scopeId: "scope-2", gateId: "gate-2", generationId: "generation-1", operationId: "op-1", attemptId: "attempt-1" };
-      const handoff = validateReviewGateEventRecord(
-        v2HandoffRequested("event-handoff", "event-genesis", "handoff-1", "target.md", owner),
-      );
-
-      const tip = projectVerifiedGateTip({
-        gateId: "gate-1",
-        scopeId: "scope-1",
-        events: [genesis, handoff],
-        frontier: frontier() as VerifiedScopeFrontier,
-      });
-
-      expect(tip.status).toBe("active");
-      if (tip.status !== "active") return;
-      expect(tip.targetWriterHandoffState).not.toBeNull();
-      expect(tip.targetWriterHandoffState?.status).toBe("REQUESTED");
-      expect(tip.targetWriterHandoffState?.handoffOperationId).toBe("handoff-1");
-      expect(tip.targetWriterHandoffState?.newOwner).toEqual(owner);
+    const tip = projectVerifiedGateTip({
+      gateId: "gate-1",
+      scopeId: "scope-1",
+      events: [genesis, handoff],
+      frontier: frontier() as VerifiedScopeFrontier,
     });
 
-    it("projects RESUMED from TARGET_WRITER_HANDOFF_RESUMED", () => {
-      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
-      const owner = { scopeId: "scope-2", gateId: "gate-2", generationId: "generation-1", operationId: "op-1", attemptId: "attempt-1" };
-      const resumed = validateReviewGateEventRecord(
-        v2HandoffResumed("event-resumed", "event-genesis", "handoff-1", "target.md", owner),
-      );
-
-      const tip = projectVerifiedGateTip({
-        gateId: "gate-1",
-        scopeId: "scope-1",
-        events: [genesis, resumed],
-        frontier: frontier() as VerifiedScopeFrontier,
-      });
-
-      expect(tip.status).toBe("active");
-      if (tip.status !== "active") return;
-      expect(tip.targetWriterHandoffState).not.toBeNull();
-      expect(tip.targetWriterHandoffState?.status).toBe("RESUMED");
-      expect(tip.targetWriterHandoffState?.expectedGlobalTargetWriterGeneration).toBe(2);
-    });
+    expect(tip.status).toBe("active");
+    if (tip.status !== "active") return;
+    expect(tip.targetWriterHandoffState).not.toBeNull();
+    expect(tip.targetWriterHandoffState?.status).toBe("REQUESTED");
+    expect(tip.targetWriterHandoffState?.handoffOperationId).toBe("handoff-1");
+    expect(tip.targetWriterHandoffState?.newOwner).toEqual(owner);
   });
 
+  it("projects RESUMED from TARGET_WRITER_HANDOFF_RESUMED", () => {
+    const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+    const owner = { scopeId: "scope-2", gateId: "gate-2", generationId: "generation-1", operationId: "op-1", attemptId: "attempt-1" };
+    const resumed = validateReviewGateEventRecord(
+      v2HandoffResumed("event-resumed", "event-genesis", "handoff-1", "target.md", owner),
+    );
+
+    const tip = projectVerifiedGateTip({
+      gateId: "gate-1",
+      scopeId: "scope-1",
+      events: [genesis, resumed],
+      frontier: frontier() as VerifiedScopeFrontier,
+    });
+
+    expect(tip.status).toBe("active");
+    if (tip.status !== "active") return;
+    expect(tip.targetWriterHandoffState).not.toBeNull();
+    expect(tip.targetWriterHandoffState?.status).toBe("RESUMED");
+    expect(tip.targetWriterHandoffState?.expectedGlobalTargetWriterGeneration).toBe(2);
+  });
 });
 
 describe("projectVerifiedLineageHistory", () => {

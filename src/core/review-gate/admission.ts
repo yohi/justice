@@ -19,7 +19,7 @@ import type {
   VerifiedDispatchRecoveryCursorV1,
   VerifiedFirstEnrollmentAuthorityV1,
   VerifiedRequirementsBinding,
-  VerifiedTargetWriterAuthorityV1,
+  VerifiedTargetWriterAuthoritiesV1,
   VerifiedTargetWriterHandoffStateV1,
   VerifiedTerminalStateV1,
 } from "./types.js";
@@ -165,7 +165,7 @@ export type VerifiedGateTip =
       readonly nc1Stop: VerifiedNC1StopV1 | null;
       readonly dispatchRecoveryCursors: ReadonlyArray<VerifiedDispatchRecoveryCursorV1>;
       readonly terminalState: VerifiedTerminalStateV1 | null;
-      readonly targetWriterAuthority: VerifiedTargetWriterAuthorityV1 | null;
+      readonly targetWriterAuthorities: VerifiedTargetWriterAuthoritiesV1 | null;
       readonly targetWriterHandoffState: VerifiedTargetWriterHandoffStateV1 | null;
     }>
 
