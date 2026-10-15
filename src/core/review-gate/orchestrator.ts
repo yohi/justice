@@ -950,6 +950,17 @@ function planFromCursor(
       });
     case "review":
       return freezeOperation({ kind: "dispatch_reviewer", phase: projection.phase });
+    case "dispatch_recovery":
+      // Recovery routing lands in a later Task 9 slice and no projection
+      // producer populates this cursor yet; fail closed instead of guessing
+      // how to re-dispatch the interrupted external operation.
+      throw new Error("review_gate_orchestrator_dispatch_recovery_unrouted");
+    case "terminal_revoke_pending":
+    case "revoked_awaiting_terminal_publication":
+    case "terminal_finalized":
+      // Terminal writer-revoke routing is owned by Task 18 runtime coordinator;
+      // the pure Core orchestrator does not plan native terminal effects.
+      throw new Error("review_gate_orchestrator_terminal_state_unrouted");
   }
 }
 
