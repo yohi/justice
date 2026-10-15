@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { ArtifactDigest, ReviewScopeId } from "../../../src/core/review-gate-types";
+import type {
+  ArtifactDigest,
+  GateId,
+  ReviewApprovalBindingV1,
+  ReviewScopeId,
+} from "../../../src/core/review-gate-types";
 import {
+  lookupCompletedApproval,
   computeVerifiedContextDigest,
   planReviewGateAdmission,
   type AdmissionDecision,
@@ -139,6 +145,28 @@ function firstEnrollment(): NonNullable<
   };
 }
 
+
+function approvalBinding(
+  gateId: string,
+  scopeId: string,
+): ReviewApprovalBindingV1 {
+  return {
+    reviewScopeId: scopeId as ReviewScopeId,
+    gateId: gateId as GateId,
+    designArtifact: artifactBinding("docs/design.md", "design"),
+    planArtifact: artifactBinding("docs/plan.md", "plan"),
+    requirementsResolution: {
+      source: "explicit",
+      canonicalPath: "docs/requirements.md",
+      digest: DIGEST("requirements"),
+    },
+    reviewProtocolFingerprint: "global-design-plan",
+    designProtocolFingerprint: "design-protocol-design",
+    planProtocolFingerprint: "plan-protocol-plan",
+    approvedAt: "2026-10-12T00:00:00.000Z",
+  };
+}
+
 function completedApproval(
   gateId: string,
   generationId: string,
@@ -146,6 +174,7 @@ function completedApproval(
 ): VerifiedCompletedBindingSnapshot {
   return {
     approvalEventId: `approval-${gateId}`,
+    approvalBinding: approvalBinding(gateId, scopeId),
     gateId,
     generationId,
     historicalRequirementsV2EventId: "req-v2-1",
@@ -452,6 +481,45 @@ describe("successor admission", () => {
     expect(decision.reason).toBe("successor_predecessor_missing");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Read-only completed approval lookup (Task 16)
+// ---------------------------------------------------------------------------
+
+describe("read-only completed approval lookup", () => {
+  it("returns the durable approval binding of a completed gate tip", () => {
+    const tip = completedTip("gate-done", SCOPE_A);
+    const binding = lookupCompletedApproval(tip);
+    expect(binding).not.toBeNull();
+    expect(binding?.gateId).toBe("gate-done");
+    expect(binding?.reviewScopeId).toBe(SCOPE_A);
+    expect(binding?.planArtifact).toEqual(artifactBinding("docs/plan.md", "plan"));
+    expect(binding?.approvedAt).toBe("2026-10-12T00:00:00.000Z");
+  });
+
+  it("returns null for an active tip", () => {
+    expect(lookupCompletedApproval(activeTip("gate-active", SCOPE_A))).toBeNull();
+  });
+
+  it("returns null for a suspended tip", () => {
+    expect(
+      lookupCompletedApproval(suspendedTip("gate-susp", SCOPE_A, "reopen_required")),
+    ).toBeNull();
+  });
+
+  it("fails closed when the durable binding names a different gate", () => {
+    const tip = completedTip("gate-done", SCOPE_A);
+    const corrupt = {
+      ...tip,
+      completedApproval: {
+        ...tip.completedApproval,
+        approvalBinding: approvalBinding("gate-other", SCOPE_A),
+      },
+    };
+    expect(lookupCompletedApproval(corrupt)).toBeNull();
+  });
+});
+
 
 // ---------------------------------------------------------------------------
 // Completed gate admission

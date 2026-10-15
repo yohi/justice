@@ -778,6 +778,7 @@ export function projectVerifiedGateTip(
         completedApproval = Object.freeze({
           approvalEventId: event.eventId,
           gateId: input.gateId,
+          approvalBinding: payload.approvalBinding,
           generationId: gateGenerationId,
           historicalRequirementsV2EventId: gateCreatedEventId,
           historicalRequirements: gateCreated.payload.requirementsResolution,

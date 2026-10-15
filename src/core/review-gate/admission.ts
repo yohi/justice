@@ -10,6 +10,7 @@
 import type {
   ArtifactDigest,
   RequirementsResolutionV2,
+  ReviewApprovalBindingV1,
   ReviewArtifactBinding,
   ReviewGatePhase,
   ReviewScopeId,
@@ -51,6 +52,7 @@ export type VerifiedGateContextBinding = Readonly<{
 
 export type VerifiedCompletedBindingSnapshot = Readonly<{
   readonly approvalEventId: string;
+  readonly approvalBinding: ReviewApprovalBindingV1;
   readonly gateId: string;
   readonly generationId: string;
   readonly historicalRequirementsV2EventId: string;
@@ -840,4 +842,22 @@ export function planReviewGateAdmission(input: VerifiedAdmissionSnapshot): Admis
   }
 
   return evaluateExistingUnfinishedTip(input, ownTip);
+}
+
+/**
+ * Task 16 — Read-only lookup of a completed Gate's durable approval binding.
+ * Active and suspended tips have no completed approval to look up; a binding
+ * naming a different gate than the tip is corrupt and fails closed.
+ */
+export function lookupCompletedApproval(
+  tip: VerifiedGateTip,
+): ReviewApprovalBindingV1 | null {
+  if (tip.status !== "completed") {
+    return null;
+  }
+  const binding = tip.completedApproval.approvalBinding;
+  if (binding.gateId !== tip.gateId) {
+    return null;
+  }
+  return binding;
 }

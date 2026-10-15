@@ -465,6 +465,22 @@ export type VerifiedTargetWriterHandoffStateV1 = Readonly<{
   readonly pendingNativeEffectReference: string | null;
 }>;
 
+/**
+ * Task 16 — Verified relationship between a completed predecessor Gate and the
+ * successor Gate that nominates it via `supersedesGateId`, carrying the
+ * predecessor's durable completed approval binding and the relationship proof
+ * digest derived by `verifyCompletedSuccessor`.
+ */
+export type VerifiedCompletedSuccessorV1 = Readonly<{
+  readonly predecessorGateId: string;
+  readonly predecessorGenerationId: string;
+  readonly successorGateId: string;
+  readonly successorGenerationId: string;
+  readonly completedApprovalEventId: string;
+  readonly completedApprovalBinding: ReviewApprovalBindingV1;
+  readonly relationshipProofDigest: string;
+}>;
+
 
 
 export type TrustedProtocolReleaseAnchorV1 = Readonly<{
