@@ -646,7 +646,7 @@ export function projectVerifiedGateTip(
     nc1Stop,
     dispatchRecoveryCursors: projectVerifiedDispatchRecoveryCursors(input.events),
     terminalState: projectVerifiedTerminalState(input.events),
-    targetWriterAuthority: projectVerifiedTargetWriterAuthority(input.events),
+    targetWriterAuthorities: projectVerifiedTargetWriterAuthority(input.events),
   });
 }
 
@@ -710,7 +710,9 @@ export function projectVerifiedTerminalState(
  * event history. Fail closed: a non-null snapshot is produced only from a
  * `TARGET_WRITER_TERMINAL_REVOKED` record — the sole gate event that carries
  * protected Task 5 revocation evidence — bound to exactly one matching
- * `TERMINAL_REVOKE_ONLY` handoff intent for the identical single target.
+ * `TERMINAL_REVOKE_ONLY` handoff intent for the identical single target. Each
+ * target's latest verified authority is retained independently and keyed by
+ * its target identity digest.
  * Handoff intents and continuation receipts alone never mint authority: gate
  * events carry no protected Task 5 receipt, so the projected generation,
  * frontier and revoke-CAS binding come only from the witnessed revoke record,
@@ -721,7 +723,7 @@ export function projectVerifiedTerminalState(
  */
 export function projectVerifiedTargetWriterAuthority(
   events: readonly VerifiedReviewGateEvent[],
-): VerifiedTargetWriterAuthorityV1 | null {
+): ReadonlyMap<string, VerifiedTargetWriterAuthorityV1> | null {
   type TerminalRevokePayload = Extract<
     VerifiedReviewGateEvent,
     { readonly eventType: "TARGET_WRITER_TERMINAL_REVOKED" }
@@ -733,7 +735,6 @@ export function projectVerifiedTargetWriterAuthority(
 
   const revokes = new Map<string, TerminalRevokePayload>();
   const intents = new Map<string, HandoffIntentPayload>();
-  let latestRevoke: TerminalRevokePayload | null = null;
 
   for (const event of events) {
     if (!isV2Event(event)) continue;
@@ -747,7 +748,6 @@ export function projectVerifiedTargetWriterAuthority(
         continue;
       }
       revokes.set(payload.handoffOperationId, payload);
-      latestRevoke = payload;
       continue;
     }
     if (event.eventType === "TARGET_WRITER_HANDOFF_REQUESTED" && event.payload.purpose === "TERMINAL_REVOKE_ONLY") {
@@ -763,37 +763,45 @@ export function projectVerifiedTargetWriterAuthority(
     }
   }
 
-  if (latestRevoke === null) return null;
-  if (latestRevoke.targets.length !== 1) return null;
-  if (latestRevoke.priorOwners.length > 1) return null;
-  const revokeTarget = latestRevoke.targets[0];
-  if (revokeTarget === undefined) return null;
+  if (revokes.size === 0) return null;
 
-  const intent = intents.get(latestRevoke.handoffOperationId);
-  if (intent === undefined) return null;
-  if (intent.targets.length !== 1) return null;
-  const intentTarget = intent.targets[0];
-  if (intentTarget === undefined) return null;
-  if (
-    computeCanonicalJsonFingerprint(intent.target) !== computeCanonicalJsonFingerprint(intentTarget) ||
-    computeCanonicalJsonFingerprint(intentTarget) !== computeCanonicalJsonFingerprint(revokeTarget)
-  ) {
-    return null;
+  const authorities = new Map<string, VerifiedTargetWriterAuthorityV1>();
+  for (const revoke of revokes.values()) {
+    if (revoke.targets.length !== 1) return null;
+    if (revoke.priorOwners.length > 1) return null;
+    const revokeTarget = revoke.targets[0];
+    if (revokeTarget === undefined) return null;
+
+    const intent = intents.get(revoke.handoffOperationId);
+    if (intent === undefined) return null;
+    if (intent.targets.length !== 1) return null;
+    const intentTarget = intent.targets[0];
+    if (intentTarget === undefined) return null;
+    if (
+      computeCanonicalJsonFingerprint(intent.target) !== computeCanonicalJsonFingerprint(intentTarget) ||
+      computeCanonicalJsonFingerprint(intentTarget) !== computeCanonicalJsonFingerprint(revokeTarget)
+    ) {
+      return null;
+    }
+
+    authorities.set(
+      revokeTarget.targetIdentityDigest,
+      Object.freeze({
+        target: revokeTarget,
+        globalTargetWriterGeneration: revoke.globalTargetWriterHighWatermark,
+        activeOwner: null,
+        priorOwner: revoke.priorOwners[0] ?? null,
+        expectedImage: Object.freeze({
+          digest: intent.expectedPreImageDigest,
+          gitMode: intent.expectedGitMode,
+        }),
+        protectedTargetFrontier: revoke.protectedTargetFrontier,
+        protectedTargetCasProofDigest: revoke.protectedRevokeCasProofDigest,
+        durableTombstoneProofDigest: null,
+      }),
+    );
   }
-
-  return Object.freeze({
-    target: revokeTarget,
-    globalTargetWriterGeneration: latestRevoke.globalTargetWriterHighWatermark,
-    activeOwner: null,
-    priorOwner: latestRevoke.priorOwners[0] ?? null,
-    expectedImage: Object.freeze({
-      digest: intent.expectedPreImageDigest,
-      gitMode: intent.expectedGitMode,
-    }),
-    protectedTargetFrontier: latestRevoke.protectedTargetFrontier,
-    protectedTargetCasProofDigest: latestRevoke.protectedRevokeCasProofDigest,
-    durableTombstoneProofDigest: null,
-  });
+  return authorities;
 }
 
 /**

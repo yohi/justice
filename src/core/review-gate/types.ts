@@ -501,6 +501,11 @@ export type VerifiedTargetWriterAuthorityV1 = Readonly<{
   readonly durableTombstoneProofDigest: string | null;
 }>;
 
+export type VerifiedTargetWriterAuthoritiesV1 = ReadonlyMap<
+  string,
+  VerifiedTargetWriterAuthorityV1
+>;
+
 export type VerifiedTargetWriterHandoffV1 = Readonly<{
   readonly status: "REVOKED_NO_ACTIVE_WRITER" | "CLAIMED_CURRENT_WRITER" | "BLOCKED";
   readonly handoffOperationId: string;
