@@ -659,6 +659,7 @@ export function projectVerifiedTerminalState(
   events: readonly VerifiedReviewGateEvent[],
 ): VerifiedTerminalStateV1 | null {
   const states = new Map<string, VerifiedTerminalStateV1>();
+  let latestHandoffOperationId: string | null = null;
 
   for (const event of events) {
     if (!isV2Event(event)) continue;
@@ -674,6 +675,7 @@ export function projectVerifiedTerminalState(
           targets: payload.targets,
         }),
       );
+      latestHandoffOperationId = payload.handoffOperationId;
       continue;
     }
     if (event.eventType === "TARGET_WRITER_TERMINAL_REVOKED") {
@@ -693,16 +695,13 @@ export function projectVerifiedTerminalState(
           targets: payload.targets,
         }),
       );
+      latestHandoffOperationId = payload.handoffOperationId;
     }
   }
 
-  // Return the latest terminal state by event order. If multiple terminal
-  // handoffs exist, return the last one observed.
-  let latest: VerifiedTerminalStateV1 | null = null;
-  for (const state of states.values()) {
-    latest = state;
-  }
-  return latest;
+  return latestHandoffOperationId === null
+    ? null
+    : (states.get(latestHandoffOperationId) ?? null);
 }
 
 /**

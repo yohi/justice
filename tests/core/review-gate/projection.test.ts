@@ -21,6 +21,7 @@ import {
   projectVerifiedDispatchRecoveryCursors,
   projectVerifiedGateTip,
   projectVerifiedLineageHistory,
+  projectVerifiedTerminalState,
   projectVerifiedTargetWriterAuthority,
 } from "../../../src/core/review-gate/projection.js";
 import { computeSemanticGoverningProjectionDigest } from "../../../src/core/review-gate/deterministic-validation.js";
@@ -901,6 +902,30 @@ describe("projectVerifiedGateTip", () => {
   });
 
   describe("terminal writer-revoke projection", () => {
+    it("returns the state updated by the last terminal event", () => {
+      const firstHandoff = validateReviewGateEventRecord(
+        v2TerminalHandoffRequested("event-handoff-1", "event-genesis", "handoff-1", ["first.md"]),
+      );
+      const secondHandoff = validateReviewGateEventRecord(
+        v2TerminalHandoffRequested("event-handoff-2", "event-genesis", "handoff-2", ["second.md"]),
+      );
+      const firstRevoked = validateReviewGateEventRecord(
+        v2TerminalRevoked("event-revoked-1", "event-handoff-1", "handoff-1", "transition-1", "REVOKED", "NO_EFFECT", ["first.md"]),
+      );
+
+      const terminalState = projectVerifiedTerminalState([
+        firstHandoff,
+        secondHandoff,
+        firstRevoked,
+      ]);
+
+      expect(terminalState).toMatchObject({
+        kind: "REVOKED_AWAITING_TERMINAL_PUBLICATION",
+        handoffOperationId: "handoff-1",
+        terminalTransitionOperationId: "transition-1",
+      });
+    });
+
     it("projects TERMINAL_REVOKE_PENDING from a requested terminal handoff", () => {
       const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
       const handoff = validateReviewGateEventRecord(
