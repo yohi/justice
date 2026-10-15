@@ -17,6 +17,7 @@ import type {
 } from "../../../src/core/review-gate-types.js";
 import {
   projectReviewGate,
+  projectVerifiedDispatchRecoveryCursors,
   projectVerifiedGateTip,
 } from "../../../src/core/review-gate/projection.js";
 import { deriveResumeCursor } from "../../../src/core/review-gate/resume-cursor.js";
@@ -78,6 +79,100 @@ describe("projectReviewGate upstream blockers", () => {
   });
 });
 
+function v2Target(canonicalLogicalTargetPath: string): object {
+  return {
+    installationId: "install-1",
+    workspaceIdentity: "workspace-1",
+    canonicalWorkspaceRoot: "workspace",
+    canonicalLogicalTargetPath,
+    targetIdentityDigest: "a".repeat(64),
+    verifiedAliasSetDigest: "a".repeat(64),
+    identityProofFrontier: "frontier-target",
+  };
+}
+
+function v2TerminalHandoffRequested(
+  eventId: string,
+  parentEventId: string,
+  handoffOperationId: string,
+  targets: readonly string[],
+): object {
+  return v2Event("TARGET_WRITER_HANDOFF_REQUESTED", eventId, parentEventId, {
+    purpose: "TERMINAL_REVOKE_ONLY",
+    status: "REQUESTED",
+    handoffOperationId,
+    originalOperationId: handoffOperationId,
+    scopeId: "scope-1",
+    gateId: "gate-1",
+    generationId: "generation-1",
+    phase: "design",
+    roundOrdinal: 1,
+    protocolFingerprint: "a".repeat(64),
+    target: v2Target(targets[0] ?? "target.md"),
+    targets: targets.map(v2Target),
+    closingSealOperationId: null,
+    oldOwner: null,
+    newOwner: null,
+    expectedTargetWriterFrontier: "frontier-1",
+    expectedGlobalTargetWriterGeneration: 1,
+    expectedGateEventFrontier: "frontier-1",
+    expectedPreImageDigest: "a".repeat(64),
+    expectedGitMode: "100644",
+    pendingNativeEffectReference: null,
+  });
+}
+
+function v2Event(
+  eventType: string,
+  eventId: string,
+  parentEventId: string,
+  payload: object,
+  generationId = "generation-1",
+): object {
+  return {
+    schemaVersion: 2,
+    eventId,
+    parentEventId,
+    emittedAt: "2026-10-11T00:00:00.000Z",
+    gateId: "gate-1",
+    epochId: "epoch-1",
+    generationId,
+    writerId: "writer-1",
+    eventType,
+    payload,
+  };
+}
+
+
+function v2TerminalRevoked(
+  eventId: string,
+  parentEventId: string,
+  handoffOperationId: string,
+  terminalTransitionOperationId: string,
+  status: "REVOKED" | "NEVER_CLAIMED_OR_ALREADY_REVOKED",
+  nativeEffectDisposition: string,
+  targets: readonly string[],
+): object {
+  return v2Event("TARGET_WRITER_TERMINAL_REVOKED", eventId, parentEventId, {
+    purpose: "TERMINAL_REVOKE_ONLY",
+    handoffOperationId,
+    terminalTransitionOperationId,
+    status,
+    gateId: "gate-1",
+    generationId: "generation-1",
+    phase: "design",
+    roundOrdinal: 1,
+    targets: targets.map(v2Target),
+    priorOwners: [],
+    globalTargetWriterHighWatermark: 1,
+    protectedTargetFrontier: "frontier-1",
+    protectedRevokeCasProofDigest: "a".repeat(64),
+    nativeNonWriteabilityProofDigest: "a".repeat(64),
+    nativeEffectDisposition,
+  });
+}
+
+
 describe("projectVerifiedGateTip", () => {
   const digest = "a".repeat(64);
 
@@ -115,26 +210,6 @@ describe("projectVerifiedGateTip", () => {
     };
   }
 
-  function v2Event(
-    eventType: string,
-    eventId: string,
-    parentEventId: string,
-    payload: object,
-    generationId = "generation-1",
-  ): object {
-    return {
-      schemaVersion: 2,
-      eventId,
-      parentEventId,
-      emittedAt: "2026-10-11T00:00:00.000Z",
-      gateId: "gate-1",
-      epochId: "epoch-1",
-      generationId,
-      writerId: "writer-1",
-      eventType,
-      payload,
-    };
-  }
 
   function v2Dispatch(
     phase: "design" | "plan",
@@ -170,6 +245,68 @@ describe("projectVerifiedGateTip", () => {
       globalFrontierHash: "frontier-1",
     };
   }
+
+  function v2ResponseStaged(
+    eventId: string,
+    parentEventId: string,
+    operationId: string,
+    dispatchAttemptId: string,
+  ): object {
+    return v2Event("EXTERNAL_OPERATION_RESPONSE_STAGED", eventId, parentEventId, {
+      eventType: "EXTERNAL_OPERATION_RESPONSE_STAGED",
+      gateId: "gate-1",
+      generationId: "generation-1",
+      epochId: "epoch-1",
+      operationId,
+      dispatchAttemptId,
+      responseEvidence: {
+        operationId,
+        dispatchAttemptId,
+        contentDigest: digest,
+        byteLength: 1024,
+        privateStoreRecordId: `${operationId}:${dispatchAttemptId}`,
+        policyVersion: "1",
+      },
+    });
+  }
+
+  function v2ResultCommitted(
+    eventId: string,
+    parentEventId: string,
+    operationId: string,
+    dispatchAttemptId: string,
+    resultEventId: string,
+    redeliveryEvidenceDigest: string | null = null,
+  ): object {
+    return v2Event("EXTERNAL_OPERATION_RESULT_COMMITTED", eventId, parentEventId, {
+      eventType: "EXTERNAL_OPERATION_RESULT_COMMITTED",
+      gateId: "gate-1",
+      generationId: "generation-1",
+      epochId: "epoch-1",
+      operationId,
+      dispatchAttemptId,
+      resultEventId,
+      redeliveryEvidenceDigest,
+    });
+  }
+
+  function v2OutcomeApplied(
+    eventId: string,
+    parentEventId: string,
+    operationId: string,
+    dispatchAttemptId: string,
+  ): object {
+    return v2Event("EXTERNAL_OPERATION_OUTCOME_APPLIED", eventId, parentEventId, {
+      eventType: "EXTERNAL_OPERATION_OUTCOME_APPLIED",
+      gateId: "gate-1",
+      generationId: "generation-1",
+      epochId: "epoch-1",
+      operationId,
+      dispatchAttemptId,
+      outcomeAppliedEventId: eventId,
+    });
+  }
+
 
   it("projects the immutable V2 genesis context as the initial effective active tip", () => {
     const event = validateReviewGateEventRecord(v2GateCreatedRecord());
@@ -218,6 +355,84 @@ describe("projectVerifiedGateTip", () => {
     });
   });
 
+  it("projects an IN_FLIGHT recovery cursor for a dispatched V2 operation", () => {
+    const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+    const dispatch = validateReviewGateEventRecord(
+      v2Dispatch("design", "event-dispatch", "event-genesis"),
+    );
+
+    const cursors = projectVerifiedDispatchRecoveryCursors([genesis, dispatch]);
+
+    expect(cursors).toEqual([
+      {
+        kind: "IN_FLIGHT",
+        gateId: "gate-1",
+        generationId: "generation-1",
+        epochId: "epoch-1",
+        operationId: "operation-event-dispatch",
+        dispatchAttemptId: "attempt-event-dispatch",
+        role: "reviewer",
+        candidateOrTargetSetDigest: digest,
+        inputBindingDigest: digest,
+        protocolFingerprint: digest,
+        dispatchEventId: "event-dispatch",
+        dispatchFrontierHash: digest,
+        responseEvidence: null,
+        resultEventId: null,
+        outcomeAppliedEventId: null,
+        redeliveryEvidenceDigest: null,
+      },
+    ]);
+  });
+
+  it("projects no recovery cursors when a V2 history has no dispatch", () => {
+    const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+
+    expect(projectVerifiedDispatchRecoveryCursors([genesis])).toEqual([]);
+  });
+
+  it("projects multiple IN_FLIGHT recovery cursors for multiple V2 dispatches", () => {
+    const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+    const designDispatch = validateReviewGateEventRecord(
+      v2Dispatch("design", "event-design-dispatch", "event-genesis"),
+    );
+    const planDispatch = validateReviewGateEventRecord(
+      v2Dispatch("plan", "event-plan-dispatch", "event-design-dispatch"),
+    );
+
+    const cursors = projectVerifiedDispatchRecoveryCursors([
+      genesis,
+      designDispatch,
+      planDispatch,
+    ]);
+
+    expect(cursors.map((cursor) => cursor.operationId)).toEqual([
+      "operation-event-design-dispatch",
+      "operation-event-plan-dispatch",
+    ]);
+    expect(cursors.map((cursor) => cursor.kind)).toEqual(["IN_FLIGHT", "IN_FLIGHT"]);
+  });
+
+  it("freezes recovery cursor arrays and cursor objects on the verified tip", () => {
+    const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+    const dispatch = validateReviewGateEventRecord(
+      v2Dispatch("design", "event-dispatch", "event-genesis"),
+    );
+
+    const tip = projectVerifiedGateTip({
+      gateId: "gate-1",
+      scopeId: "scope-1",
+      events: [genesis, dispatch],
+      frontier: frontier() as VerifiedScopeFrontier,
+    });
+
+    expect(tip.status).toBe("active");
+    if (tip.status === "completed") throw new Error("expected_unfinished_verified_gate_tip");
+    expect(tip.dispatchRecoveryCursors).toHaveLength(1);
+    expect(Object.isFrozen(tip.dispatchRecoveryCursors)).toBe(true);
+    expect(Object.isFrozen(tip.dispatchRecoveryCursors[0])).toBe(true);
+  });
+
   it("counts external operation rounds per phase", () => {
     const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
     const d1 = validateReviewGateEventRecord(v2Dispatch("design", "event-d1", "event-genesis", "remediator"));
@@ -233,6 +448,201 @@ describe("projectVerifiedGateTip", () => {
 
     expect(tip.rounds).toEqual({ design: 2, plan: 1 });
     expect(tip.status).toBe("active");
+  });
+
+  it("projects a RESPONSE_STAGED cursor with response evidence once staged", () => {
+    const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+    const dispatch = validateReviewGateEventRecord(
+      v2Dispatch("design", "event-dispatch", "event-genesis"),
+    );
+    const staged = validateReviewGateEventRecord(
+      v2ResponseStaged(
+        "event-staged",
+        "event-dispatch",
+        "operation-event-dispatch",
+        "attempt-event-dispatch",
+      ),
+    );
+
+    const cursors = projectVerifiedDispatchRecoveryCursors([genesis, dispatch, staged]);
+
+    expect(cursors).toHaveLength(1);
+    const cursor = cursors[0];
+    if (cursor === undefined) throw new Error("expected_dispatch_recovery_cursor");
+    expect(cursor.kind).toBe("RESPONSE_STAGED");
+    expect(cursor.responseEvidence).toEqual({
+      operationId: "operation-event-dispatch",
+      dispatchAttemptId: "attempt-event-dispatch",
+      contentDigest: digest,
+      byteLength: 1024,
+      privateStoreRecordId: "operation-event-dispatch:attempt-event-dispatch",
+      policyVersion: "1",
+    });
+    expect(cursor.resultEventId).toBeNull();
+  });
+
+  it("keeps staged response evidence and records the result id once committed", () => {
+    const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+    const dispatch = validateReviewGateEventRecord(
+      v2Dispatch("design", "event-dispatch", "event-genesis"),
+    );
+    const staged = validateReviewGateEventRecord(
+      v2ResponseStaged(
+        "event-staged",
+        "event-dispatch",
+        "operation-event-dispatch",
+        "attempt-event-dispatch",
+      ),
+    );
+    const committed = validateReviewGateEventRecord(
+      v2ResultCommitted(
+        "event-result-committed",
+        "event-staged",
+        "operation-event-dispatch",
+        "attempt-event-dispatch",
+        "event-authoritative-result",
+      ),
+    );
+
+    const cursors = projectVerifiedDispatchRecoveryCursors([
+      genesis,
+      dispatch,
+      staged,
+      committed,
+    ]);
+
+    expect(cursors).toHaveLength(1);
+    const cursor = cursors[0];
+    if (cursor === undefined) throw new Error("expected_dispatch_recovery_cursor");
+    expect(cursor.kind).toBe("RESULT_COMMITTED_OUTCOME_PENDING");
+    expect(cursor.resultEventId).toBe("event-authoritative-result");
+    expect(cursor.responseEvidence).not.toBeNull();
+    expect(cursor.redeliveryEvidenceDigest).toBeNull();
+  });
+
+  it("drops the cursor once the outcome is applied", () => {
+    const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+    const dispatch = validateReviewGateEventRecord(
+      v2Dispatch("design", "event-dispatch", "event-genesis"),
+    );
+    const staged = validateReviewGateEventRecord(
+      v2ResponseStaged(
+        "event-staged",
+        "event-dispatch",
+        "operation-event-dispatch",
+        "attempt-event-dispatch",
+      ),
+    );
+    const committed = validateReviewGateEventRecord(
+      v2ResultCommitted(
+        "event-result-committed",
+        "event-staged",
+        "operation-event-dispatch",
+        "attempt-event-dispatch",
+        "event-authoritative-result",
+      ),
+    );
+    const applied = validateReviewGateEventRecord(
+      v2OutcomeApplied(
+        "event-applied",
+        "event-result-committed",
+        "operation-event-dispatch",
+        "attempt-event-dispatch",
+      ),
+    );
+
+    expect(
+      projectVerifiedDispatchRecoveryCursors([genesis, dispatch, staged, committed, applied]),
+    ).toEqual([]);
+  });
+
+  it("projects per-operation cursors each at their own lifecycle stage", () => {
+    const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+    const inFlightDispatch = validateReviewGateEventRecord(
+      v2Dispatch("design", "event-a", "event-genesis"),
+    );
+    const stagedDispatch = validateReviewGateEventRecord(
+      v2Dispatch("design", "event-b", "event-a"),
+    );
+    const staged = validateReviewGateEventRecord(
+      v2ResponseStaged("event-b-staged", "event-b", "operation-event-b", "attempt-event-b"),
+    );
+    const committedDispatch = validateReviewGateEventRecord(
+      v2Dispatch("design", "event-c", "event-b-staged"),
+    );
+    const committedStaged = validateReviewGateEventRecord(
+      v2ResponseStaged("event-c-staged", "event-c", "operation-event-c", "attempt-event-c"),
+    );
+    const committed = validateReviewGateEventRecord(
+      v2ResultCommitted(
+        "event-c-committed",
+        "event-c-staged",
+        "operation-event-c",
+        "attempt-event-c",
+        "event-c-result",
+        digest,
+      ),
+    );
+
+    const cursors = projectVerifiedDispatchRecoveryCursors([
+      genesis,
+      inFlightDispatch,
+      stagedDispatch,
+      staged,
+      committedDispatch,
+      committedStaged,
+      committed,
+    ]);
+
+    expect(cursors.map((cursor) => ({ operationId: cursor.operationId, kind: cursor.kind }))).toEqual([
+      { operationId: "operation-event-a", kind: "IN_FLIGHT" },
+      { operationId: "operation-event-b", kind: "RESPONSE_STAGED" },
+      { operationId: "operation-event-c", kind: "RESULT_COMMITTED_OUTCOME_PENDING" },
+    ]);
+    const committedCursor = cursors[2];
+    if (committedCursor === undefined) throw new Error("expected_committed_recovery_cursor");
+    expect(committedCursor.resultEventId).toBe("event-c-result");
+    expect(committedCursor.redeliveryEvidenceDigest).toBe(digest);
+  });
+
+  it("fails closed when two results are committed for the same operation attempt", () => {
+    const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+    const dispatch = validateReviewGateEventRecord(
+      v2Dispatch("design", "event-dispatch", "event-genesis"),
+    );
+    const firstResult = validateReviewGateEventRecord(
+      v2ResultCommitted(
+        "event-result-1",
+        "event-dispatch",
+        "operation-event-dispatch",
+        "attempt-event-dispatch",
+        "event-authoritative-result-1",
+      ),
+    );
+    const secondResult = validateReviewGateEventRecord(
+      v2ResultCommitted(
+        "event-result-2",
+        "event-result-1",
+        "operation-event-dispatch",
+        "attempt-event-dispatch",
+        "event-authoritative-result-2",
+      ),
+    );
+
+    expect(() =>
+      projectVerifiedDispatchRecoveryCursors([genesis, dispatch, firstResult, secondResult]),
+    ).toThrow("review_gate_dispatch_recovery_result_conflict");
+  });
+
+  it("fails closed when a lifecycle event references an unknown dispatch", () => {
+    const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+    const staged = validateReviewGateEventRecord(
+      v2ResponseStaged("event-staged", "event-genesis", "operation-unknown", "attempt-unknown"),
+    );
+
+    expect(() => projectVerifiedDispatchRecoveryCursors([genesis, staged])).toThrow(
+      "review_gate_dispatch_recovery_unknown_dispatch",
+    );
   });
 
   it("counts only unique remediator operation IDs", () => {
@@ -436,4 +846,139 @@ describe("projectVerifiedGateTip", () => {
       frontier: frontier() as VerifiedScopeFrontier,
     })).toThrow("review_gate_tip_missing_v2_gate_created");
   });
+
+  describe("terminal writer-revoke projection", () => {
+    it("projects TERMINAL_REVOKE_PENDING from a requested terminal handoff", () => {
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+      const handoff = validateReviewGateEventRecord(
+        v2TerminalHandoffRequested("event-handoff", "event-genesis", "handoff-1", ["target.md"]),
+      );
+
+      const tip = projectVerifiedGateTip({
+        gateId: "gate-1",
+        scopeId: "scope-1",
+        events: [genesis, handoff],
+        frontier: frontier() as VerifiedScopeFrontier,
+      });
+
+      expect(tip.terminalState).toMatchObject({
+        kind: "TERMINAL_REVOKE_PENDING",
+        handoffOperationId: "handoff-1",
+        terminalTransitionOperationId: "handoff-1",
+      });
+      expect(tip.terminalState?.targets).toHaveLength(1);
+      expect(tip.terminalState?.targets[0]?.canonicalLogicalTargetPath).toBe("target.md");
+    });
+
+    it("projects REVOKED_AWAITING_TERMINAL_PUBLICATION when native effect is not yet applied", () => {
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+      const handoff = validateReviewGateEventRecord(
+        v2TerminalHandoffRequested("event-handoff", "event-genesis", "handoff-1", ["target.md"]),
+      );
+      const revoked = validateReviewGateEventRecord(
+        v2TerminalRevoked("event-revoked", "event-handoff", "handoff-1", "transition-1", "REVOKED", "NO_EFFECT", ["target.md"]),
+      );
+
+      const tip = projectVerifiedGateTip({
+        gateId: "gate-1",
+        scopeId: "scope-1",
+        events: [genesis, handoff, revoked],
+        frontier: frontier() as VerifiedScopeFrontier,
+      });
+
+      expect(tip.terminalState).toMatchObject({
+        kind: "REVOKED_AWAITING_TERMINAL_PUBLICATION",
+        handoffOperationId: "handoff-1",
+        terminalTransitionOperationId: "transition-1",
+      });
+    });
+
+    it("projects TERMINAL_FINALIZED when native effect is APPLIED", () => {
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+      const handoff = validateReviewGateEventRecord(
+        v2TerminalHandoffRequested("event-handoff", "event-genesis", "handoff-1", ["target.md"]),
+      );
+      const revoked = validateReviewGateEventRecord(
+        v2TerminalRevoked("event-revoked", "event-handoff", "handoff-1", "transition-1", "REVOKED", "APPLIED", ["target.md"]),
+      );
+
+      const tip = projectVerifiedGateTip({
+        gateId: "gate-1",
+        scopeId: "scope-1",
+        events: [genesis, handoff, revoked],
+        frontier: frontier() as VerifiedScopeFrontier,
+      });
+
+      expect(tip.terminalState).toMatchObject({
+        kind: "TERMINAL_FINALIZED",
+        handoffOperationId: "handoff-1",
+        terminalTransitionOperationId: "transition-1",
+      });
+    });
+
+    it("projects TERMINAL_FINALIZED when status is NEVER_CLAIMED_OR_ALREADY_REVOKED", () => {
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+      const revoked = validateReviewGateEventRecord(
+        v2TerminalRevoked("event-revoked", "event-genesis", "handoff-1", "transition-1", "NEVER_CLAIMED_OR_ALREADY_REVOKED", "NO_EFFECT", ["target.md"]),
+      );
+
+      const tip = projectVerifiedGateTip({
+        gateId: "gate-1",
+        scopeId: "scope-1",
+        events: [genesis, revoked],
+        frontier: frontier() as VerifiedScopeFrontier,
+      });
+
+      expect(tip.terminalState).toMatchObject({
+        kind: "TERMINAL_FINALIZED",
+        handoffOperationId: "handoff-1",
+        terminalTransitionOperationId: "transition-1",
+      });
+    });
+
+    it("returns null terminalState for non-terminal handoffs", () => {
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+      const handoff = validateReviewGateEventRecord(
+        v2Event("TARGET_WRITER_HANDOFF_REQUESTED", "event-handoff", "event-genesis", {
+          purpose: "HANDOFF",
+          status: "REQUESTED",
+          handoffOperationId: "handoff-1",
+          originalOperationId: "handoff-1",
+          scopeId: "scope-1",
+          gateId: "gate-1",
+          generationId: "generation-1",
+          phase: "design",
+          roundOrdinal: 1,
+          protocolFingerprint: digest,
+          target: v2Target("target.md"),
+          targets: [],
+          closingSealOperationId: null,
+          oldOwner: null,
+          newOwner: {
+            scopeId: "scope-2",
+            gateId: "gate-2",
+            generationId: "generation-1",
+            operationId: "op-1",
+            attemptId: "attempt-1",
+          },
+          expectedTargetWriterFrontier: "frontier-1",
+          expectedGlobalTargetWriterGeneration: 1,
+          expectedGateEventFrontier: "frontier-1",
+          expectedPreImageDigest: digest,
+          expectedGitMode: "100644",
+          pendingNativeEffectReference: null,
+        }),
+      );
+
+      const tip = projectVerifiedGateTip({
+        gateId: "gate-1",
+        scopeId: "scope-1",
+        events: [genesis, handoff],
+        frontier: frontier() as VerifiedScopeFrontier,
+      });
+
+      expect(tip.terminalState).toBeNull();
+    });
+  });
+
 });
