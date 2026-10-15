@@ -126,6 +126,39 @@ function v2TerminalHandoffRequested(
   });
 }
 
+function v2HandoffRequested(
+  eventId: string,
+  parentEventId: string,
+  handoffOperationId: string,
+  targetPath: string,
+  newOwner: object,
+): object {
+  return v2Event("TARGET_WRITER_HANDOFF_REQUESTED", eventId, parentEventId, {
+    purpose: "HANDOFF",
+    status: "REQUESTED",
+    handoffOperationId,
+    originalOperationId: handoffOperationId,
+    scopeId: "scope-1",
+    gateId: "gate-1",
+    generationId: "generation-1",
+    phase: "design",
+    roundOrdinal: 1,
+    protocolFingerprint: "a".repeat(64),
+    target: v2Target(targetPath),
+    targets: [],
+    closingSealOperationId: null,
+    oldOwner: null,
+    newOwner,
+    expectedTargetWriterFrontier: "frontier-1",
+    expectedGlobalTargetWriterGeneration: 1,
+    expectedGateEventFrontier: "frontier-1",
+    expectedPreImageDigest: "a".repeat(64),
+    expectedGitMode: "100644",
+    pendingNativeEffectReference: null,
+  });
+}
+
+
 function v2HandoffResumed(
   eventId: string,
   parentEventId: string,
@@ -1223,6 +1256,52 @@ describe("projectVerifiedGateTip", () => {
       if (withRevoke.status !== "active") return;
       expect(withRevoke.targetWriterAuthority?.globalTargetWriterGeneration).toBe(7);
       expect(withRevoke.targetWriterAuthority?.durableTombstoneProofDigest).toBeNull();
+    });
+  });
+
+
+  describe("target writer handoff replay state projection", () => {
+    it("projects REQUESTED from TARGET_WRITER_HANDOFF_REQUESTED", () => {
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+      const owner = { scopeId: "scope-2", gateId: "gate-2", generationId: "generation-1", operationId: "op-1", attemptId: "attempt-1" };
+      const handoff = validateReviewGateEventRecord(
+        v2HandoffRequested("event-handoff", "event-genesis", "handoff-1", "target.md", owner),
+      );
+
+      const tip = projectVerifiedGateTip({
+        gateId: "gate-1",
+        scopeId: "scope-1",
+        events: [genesis, handoff],
+        frontier: frontier() as VerifiedScopeFrontier,
+      });
+
+      expect(tip.status).toBe("active");
+      if (tip.status !== "active") return;
+      expect(tip.targetWriterHandoffState).not.toBeNull();
+      expect(tip.targetWriterHandoffState?.status).toBe("REQUESTED");
+      expect(tip.targetWriterHandoffState?.handoffOperationId).toBe("handoff-1");
+      expect(tip.targetWriterHandoffState?.newOwner).toEqual(owner);
+    });
+
+    it("projects RESUMED from TARGET_WRITER_HANDOFF_RESUMED", () => {
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+      const owner = { scopeId: "scope-2", gateId: "gate-2", generationId: "generation-1", operationId: "op-1", attemptId: "attempt-1" };
+      const resumed = validateReviewGateEventRecord(
+        v2HandoffResumed("event-resumed", "event-genesis", "handoff-1", "target.md", owner),
+      );
+
+      const tip = projectVerifiedGateTip({
+        gateId: "gate-1",
+        scopeId: "scope-1",
+        events: [genesis, resumed],
+        frontier: frontier() as VerifiedScopeFrontier,
+      });
+
+      expect(tip.status).toBe("active");
+      if (tip.status !== "active") return;
+      expect(tip.targetWriterHandoffState).not.toBeNull();
+      expect(tip.targetWriterHandoffState?.status).toBe("RESUMED");
+      expect(tip.targetWriterHandoffState?.expectedGlobalTargetWriterGeneration).toBe(2);
     });
   });
 
