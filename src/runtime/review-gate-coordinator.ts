@@ -94,8 +94,20 @@ import {
   computeCanonicalJsonFingerprint,
   computeReviewScopeId,
 } from "../core/review-gate/identity";
-import type { ReviewGateDispatchRecordV1, ReviewGateEventStore } from "./review-gate-event-store";
+import type {
+  ReviewGateDispatchRecordV1,
+  ReviewGateEventStore,
+  ReviewGateV2Journal,
+} from "./review-gate-event-store";
 import type { ReviewGateRecoveryStore } from "./review-gate-recovery-store";
+import type {
+  ReviewGateWitnessPublicationSeamV1,
+} from "./review-gate-witness-contracts";
+import {
+  encodeReviewGateEventRecord,
+  validateReviewGateEventRecord,
+  type VerifiedReviewGateEvent,
+} from "../core/review-gate/event-schema";
 import {
   acquireGateLockChain,
   type ReviewGateLockHandle,
@@ -221,6 +233,13 @@ export interface ReviewGateCoordinatorOptions {
    * fail closed while `block`/`await_evidence` decisions still work.
    */
   readonly recoveryStore?: ReviewGateRecoveryStore | null;
+  /**
+   * Task 18 — witness publication seam for durable V2 journal appends. The
+   * coordinator invokes it after every V2 journal append to produce and send
+   * a `PreparedWitnessPublicationV1` to the witness service. `null` (default)
+   * selects durable local journal custody without witness registration.
+   */
+  readonly witnessPublicationSeam?: ReviewGateWitnessPublicationSeamV1 | null;
 }
 
 export interface ReviewGateCoordinator {
@@ -426,7 +445,12 @@ export function createReviewGateCoordinator(
   const newWriterId = options.newWriterId ?? ((): string => `rgw-${randomId()}`);
   /** Task 17 — durable custody for prepared caller-owned operations. */
   const recovery = options.recoveryStore ?? null;
-
+  /**
+   * Task 18 — witness publication seam. After each durable V2 journal append
+   * the seam produces the `PreparedWitnessPublicationV1` and submits it to
+   * the witness service; `null` keeps local-durable custody only.
+   */
+  const witnessSeam = options.witnessPublicationSeam ?? null;
   /** sessionId → transient session state (call/lock handles only). */
   const sessions = new Map<string, MutableSessionState>();
   /** gateId → GATE_CREATED event cache for binding reconstruction. */
@@ -1022,6 +1046,273 @@ export function createReviewGateCoordinator(
   };
 
   // ---------------------------------------------------------------------------
+  // Task 18 — durable V2 journal custody and witness publication
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Deterministic authority pointer for a lineage whose prior committed
+   * resolution exists only in the legacy V1 journal (no V1 event id). Same
+   * identity rule as the projection's SYNTHETIC_V1_REQUIREMENTS_AUTHORITY.
+   */
+  const SYNTHETIC_V1_LINEAGE_RESOLUTION_EVENT_ID = "synthetic-v1-lineage-resolution";
+
+  type V2EventDraft = Readonly<{
+    readonly eventType: string;
+    readonly payload: Record<string, unknown>;
+  }>;
+
+  /** Dispatch role for one packet operation; null = no schema-safe V2 event. */
+  const dispatchRoleForPacket = (
+    operation: string,
+  ): "reviewer" | "finding_validator" | "self_review" | "lineage_revalidation" | "non_convergence_reentry" | null => {
+    switch (operation) {
+      case "review_candidates": return "reviewer";
+      case "finding_validation": return "finding_validator";
+      case "self_review": return "self_review";
+      case "lineage_revalidation": return "lineage_revalidation";
+      case "non_convergence_reentry": return "non_convergence_reentry";
+      default: return null;
+    }
+  };
+
+  /**
+   * Task 18 — intent publication is bounded to the judgment-dispatch kind
+   * preparations: they carry the phase and a schema-representable role.
+   * Remediation preparations are skipped (the payload schema demands a
+   * non-null protected lease proof digest exactly for the remediator role)
+   * and non-dispatch preparations carry no phase.
+   */
+  const prepareIntentRole = (kind: string):
+    "reviewer" | "finding_validator" | "self_review" | "lineage_revalidation" | "non_convergence_reentry" | null => {
+    switch (kind) {
+      case "dispatch_reviewer": return "reviewer";
+      case "dispatch_finding_validator": return "finding_validator";
+      case "dispatch_self_review": return "self_review";
+      case "dispatch_lineage_revalidation": return "lineage_revalidation";
+      case "validate_non_convergence_reentry": return "non_convergence_reentry";
+      default: return null;
+    }
+  };
+
+  const prepareIntentPhase = (operation: ReviewGateNextOperation): ReviewGatePhase | null => {
+    switch (operation.kind) {
+      case "dispatch_reviewer":
+      case "dispatch_finding_validator":
+      case "start_remediation":
+      case "recover_remediation":
+      case "dispatch_self_review":
+      case "append_reopen":
+      case "run_pre_clear_validation":
+      case "validate_non_convergence_reentry":
+        return operation.phase;
+      default:
+        return null;
+    }
+  };
+
+  /**
+   * Append one chained V2 batch to the gate's durable V2 journal and, when a
+   * witness publication seam is configured, hand the exact publication input
+   * to it. The journal is the durable anchor: appends happen first, the seam
+   * call is evidence authority and fails closed with a typed reason while the
+   * appended journal bytes stay durable for recovery.
+   *
+   * `buildDrafts` receives the journal state observed BEFORE the append so
+   * payloads can pin `expectedWitnessFrontier` to the preimage frontier; the
+   * first event's parentEventId anchors to the journal tail (or the gate id
+   * when the journal is empty).
+   */
+  const appendV2JournalEvents = async (
+    session: MutableSessionState,
+    operationId: string,
+    buildDrafts: (journal: ReviewGateV2Journal) => readonly V2EventDraft[],
+  ): Promise<void> => {
+    const journal = await eventStore.readV2Journal(session.gateId);
+    const drafts = buildDrafts(journal);
+    if (drafts.length === 0) return;
+    await appendV2JournalBatch(session, operationId, drafts, journal.frontierHash);
+  };
+
+  const appendV2JournalBatch = async (
+    session: MutableSessionState,
+    operationId: string,
+    drafts: readonly V2EventDraft[],
+    preImageFrontierHash: string,
+  ): Promise<void> => {
+    if (drafts.length === 0) return;
+    const journal = await eventStore.readV2Journal(session.gateId);
+    if (journal.frontierHash !== preImageFrontierHash) {
+      throw new Error("review_gate_v2_journal_frontier_conflict");
+    }
+    const anchorParentEventId = journal.tailEventId ?? session.gateId;
+    const events: VerifiedReviewGateEvent[] = [];
+    let parentEventId = anchorParentEventId;
+    for (const draft of drafts) {
+      const eventId = newId();
+      const record = validateReviewGateEventRecord(
+        structuredClone({
+          schemaVersion: 2,
+          eventId,
+          parentEventId,
+          emittedAt: now(),
+          gateId: session.gateId,
+          epochId: session.epochId,
+          generationId: session.gateId,
+          writerId: session.writerId,
+          eventType: draft.eventType,
+          payload: draft.payload,
+        }),
+      );
+      if (!("schemaVersion" in record) || record.schemaVersion !== 2) {
+        throw new Error("review_gate_event_v2_required");
+      }
+      events.push(record);
+      parentEventId = eventId;
+    }
+    const canonicalBatchBytes = Buffer.from(
+      `${events.map(encodeReviewGateEventRecord).join("\n")}\n`,
+      "utf8",
+    );
+    await eventStore.appendV2Events(session.gateId, events);
+    if (witnessSeam === null) return;
+    const nextJournal = await eventStore.readV2Journal(session.gateId);
+    try {
+      await witnessSeam.prepareAndPublish(Object.freeze({
+        gateId: session.gateId,
+        writerId: session.writerId,
+        operationId,
+        canonicalEventBytes: canonicalBatchBytes,
+        baseFrontierHash: preImageFrontierHash,
+        newFrontierHash: nextJournal.frontierHash,
+        newTailLength: canonicalBatchBytes.length,
+        newTailDigest: computeArtifactDigest(canonicalBatchBytes),
+        appendedEventCount: events.length,
+      }));
+    } catch (error: unknown) {
+      throw new Error(
+        `review_gate_witness_publication_failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        { cause: error },
+      );
+    }
+  };
+
+  /**
+   * One schema-bounded `EXTERNAL_OPERATION_DISPATCHED` record for the
+   * execution of a prepared caller-owned dispatch operation. Remediation
+   * dispatches are skipped: the payload schema requires a non-null protected
+   * lease proof digest exactly for the remediator role, and the coordinator
+   * does not hold a writer lease at dispatch time.
+   */
+  const buildDispatchedDraftForExecution = (
+    session: MutableSessionState,
+    packet: ReviewGateOperationPacketV1,
+    expectedWitnessFrontier: string,
+  ): V2EventDraft | null => {
+    const role = dispatchRoleForPacket(packet.operation);
+    if (role === null) return null;
+    const artifacts = artifactRefsFor(session, packet.phase);
+    const candidateOrTargetSetDigest = computeCanonicalJsonFingerprint({
+      operation: packet.operation,
+      phase: packet.phase,
+      artifacts,
+    });
+    const inputBindingDigest = computeCanonicalJsonFingerprint({
+      operationId: packet.operationId,
+      phase: packet.phase,
+      artifacts,
+      freshContext: packet.freshContext,
+      staticPromptContractKey: packet.staticPromptContractKey,
+      dispatchSerial: packet.dispatchSerial,
+    });
+    return {
+      eventType: "EXTERNAL_OPERATION_DISPATCHED",
+      payload: {
+        eventType: "EXTERNAL_OPERATION_DISPATCHED",
+        gateId: session.gateId,
+        generationId: session.gateId,
+        epochId: session.epochId,
+        operationId: packet.operationId,
+        dispatchAttemptId: newId(),
+        phase: packet.phase,
+        role,
+        candidateOrTargetSetDigest,
+        inputBindingDigest,
+        protocolFingerprint: protocol.reviewProtocolFingerprint,
+        expectedWitnessFrontier,
+        protectedLeaseProofDigest: null,
+      },
+    };
+  };
+
+  /**
+   * V2 resolution drafts for one reconciled finding batch: exactly one
+   * `FINDING_VALIDATION_COMPLETED` per already-resolved claim and one
+   * `LINEAGE_REGRESSED` per regression, both chained from the journal tail.
+   * Findings are deduplicated first-wins like the reconciler; the batch has
+   * already passed `reconcileFindingBatch` when this composes.
+   */
+  const buildResolutionDraftsForBatch = (
+    session: MutableSessionState,
+    projection: ReviewGateProjection,
+    operationId: string,
+    findings: readonly ValidatedFinding[],
+    expectedWitnessFrontier: string,
+  ): readonly V2EventDraft[] => {
+    const deduped: ValidatedFinding[] = [];
+    const seen = new Set<string>();
+    for (const finding of findings) {
+      if (seen.has(finding.candidateId)) continue;
+      seen.add(finding.candidateId);
+      deduped.push(finding);
+    }
+    const pinnedBaselineDigest =
+      projection.phase === "design" ? session.designDigest : session.planDigest;
+    const drafts: V2EventDraft[] = [];
+    for (const finding of deduped) {
+      const lineageId = finding.existingLineageId;
+      if (lineageId === null || !projection.findings.has(lineageId)) continue;
+      if (finding.status === "existing_resolved") {
+        drafts.push({
+          eventType: "FINDING_VALIDATION_COMPLETED",
+          payload: {
+            eventType: "FINDING_VALIDATION_COMPLETED",
+            operationId,
+            validationEventId: newId(),
+            disposition: "ALREADY_RESOLVED",
+            relation: "EXISTING",
+            lineageId,
+            priorCommittedResolutionEventId: SYNTHETIC_V1_LINEAGE_RESOLUTION_EVENT_ID,
+            pinnedBaselineDigest,
+            semanticContextFingerprint: projection.phaseReviewContextIdentity,
+            validatedAbsenceProofDigest: finding.basisDigest,
+            witnessedFrontierHash: expectedWitnessFrontier,
+          },
+        });
+        continue;
+      }
+      if (finding.status === "existing_regressed") {
+        drafts.push({
+          eventType: "LINEAGE_REGRESSED",
+          payload: {
+            eventType: "LINEAGE_REGRESSED",
+            operationId,
+            validationEventId: newId(),
+            lineageId,
+            priorCommittedResolutionEventId: SYNTHETIC_V1_LINEAGE_RESOLUTION_EVENT_ID,
+            pinnedBaselineDigest,
+            semanticContextFingerprint: projection.phaseReviewContextIdentity,
+            validatedPresenceProofDigest: finding.basisDigest,
+            witnessedFrontierHash: expectedWitnessFrontier,
+          },
+        });
+      }
+    }
+    return drafts;
+  };
+
+  // ---------------------------------------------------------------------------
   // The drive loop: plan → side effect → reproject → next
   // ---------------------------------------------------------------------------
 
@@ -1428,6 +1719,44 @@ export function createReviewGateCoordinator(
     const bytes = Buffer.from(JSON.stringify(record), "utf8");
     const digest = computeArtifactDigest(bytes);
     await recovery.publish(digest, bytes);
+    // Task 18 — prepared operation record publication: the bounded V2
+    // dispatch-intent publication carries the content-addressed record digest
+    // as its input binding. REVIEW_OPERATION_PREPARED does not exist in the
+    // schema and event types must not be invented; the EXISTING
+    // EXTERNAL_OPERATION_DISPATCHED intent family is the Task 18 producer of
+    // the durable prepared-intent evidence. Preparations whose kind carries
+    // no phase or no schema-representable role publish no intent event.
+    const intentPhase = prepareIntentPhase(operation);
+    const intentRole = prepareIntentRole(operation.kind);
+    if (intentPhase === null || intentRole === null) {
+      return Object.freeze({ operationId, preparedRecoveryDigest: digest });
+    }
+    await appendV2JournalEvents(session, operationId, (journal) => {
+      const artifacts = artifactRefsFor(session, intentPhase);
+      return [
+        {
+          eventType: "EXTERNAL_OPERATION_DISPATCHED",
+          payload: {
+            eventType: "EXTERNAL_OPERATION_DISPATCHED",
+            gateId: session.gateId,
+            generationId: session.gateId,
+            epochId: session.epochId,
+            operationId,
+            dispatchAttemptId: newId(),
+            phase: intentPhase,
+            role: intentRole,
+            candidateOrTargetSetDigest: computeCanonicalJsonFingerprint({
+              operationKind: operation.kind,
+              artifacts,
+            }),
+            inputBindingDigest: digest,
+            protocolFingerprint: protocol.reviewProtocolFingerprint,
+            expectedWitnessFrontier: journal.frontierHash,
+            protectedLeaseProofDigest: null,
+          },
+        },
+      ];
+    });
     return Object.freeze({ operationId, preparedRecoveryDigest: digest });
   };
 
@@ -1543,6 +1872,27 @@ export function createReviewGateCoordinator(
     const projection = await loadProjection(session.gateId);
     try {
       const step = await executeOperation(session, projection, prepared.operation);
+      // Task 18 — V2 evidence append after a successful execute_operation,
+      // based on the executed operation kind. The legacy outcome above is
+      // already durable; a V2 journal/witness failure after it fails closed
+      // with a typed blocked guidance instead of silently dropping evidence.
+      const executedDispatchPacket =
+        step !== DRIVE_CONTINUE && step !== null && step.action === "inject" && session.pending !== null
+          ? session.pending.packet
+          : null;
+      if (executedDispatchPacket !== null) {
+        const dispatchDraftContext = executedDispatchPacket;
+        await appendV2JournalEvents(session, operationId, (journal) => [
+          buildDispatchedDraftForExecution(session, dispatchDraftContext, journal.frontierHash),
+        ].filter((draft): draft is V2EventDraft => draft !== null));
+      } else if (
+        step === DRIVE_CONTINUE && prepared.operation.kind === "commit_finding_reconciliation"
+      ) {
+        const batch = prepared.operation.batch;
+        await appendV2JournalEvents(session, operationId, (journal) =>
+          buildResolutionDraftsForBatch(session, projection, operationId, batch.findings, journal.frontierHash),
+        );
+      }
       if (step === DRIVE_CONTINUE || step === null) {
         return preparedDecisionOutcome("executed", operationId, null);
       }

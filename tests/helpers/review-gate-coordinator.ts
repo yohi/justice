@@ -5,10 +5,17 @@
  * event-sourced loop is exercised end-to-end without touching the real disk.
  */
 
+import { createHash } from "node:crypto";
 import type {
   ReviewGateDispatchRecordV1,
   ReviewGateEventStore,
+  ReviewGateV2Journal,
 } from "../../src/runtime/review-gate-event-store";
+import {
+  encodeReviewGateEventRecord,
+  validateReviewGateEventRecord,
+  type VerifiedReviewGateEvent,
+} from "../../src/core/review-gate/event-schema";
 import { createReviewGateLockManager } from "../../src/runtime/review-gate-lock-manager";
 import { createReviewGateApprovalLookup } from "../../src/runtime/review-gate-approval";
 import { createReviewGateProtocolDescriptor } from "../../src/runtime/review-gate-protocol";
@@ -21,6 +28,8 @@ import type { ReviewGateEvent } from "../../src/core/review-gate-types";
 
 type InMemoryGateData = {
   readonly events: ReviewGateEvent[];
+  /** Task 18 — durable chained V2 journal records. */
+  readonly v2Events: VerifiedReviewGateEvent[];
   readonly dispatches: ReviewGateDispatchRecordV1[];
 };
 
@@ -35,12 +44,59 @@ export function createInMemoryReviewGateEventStore(): InMemoryReviewGateEventSto
   const store: InMemoryReviewGateEventStore = {
     gates: () => gates,
     appendEvents: async (gateId, events) => {
-      const data = gates.get(gateId) ?? { events: [], dispatches: [] };
+      const data = gates.get(gateId) ?? { events: [], v2Events: [], dispatches: [] };
       gates.set(gateId, { ...data, events: [...data.events, ...events] });
+    },
+    /** Task 18 — chained V2 journal append with the same fail-closed rules. */
+    appendV2Events: async (gateId, batch) => {
+      if (batch.length === 0) throw new Error("review_gate_event_batch_empty");
+      const data = gates.get(gateId) ?? { events: [], v2Events: [], dispatches: [] };
+      const seen = new Set(data.v2Events.map((event) => event.eventId));
+      const next: VerifiedReviewGateEvent[] = [];
+      const tailEventId = data.v2Events.at(-1)?.eventId ?? null;
+      for (const event of batch) {
+        const verified = validateReviewGateEventRecord(structuredClone(event));
+        if (!("schemaVersion" in verified) || verified.schemaVersion !== 2) {
+          throw new Error("review_gate_event_v2_required");
+        }
+        if (verified.gateId !== gateId) {
+          throw new Error("review_gate_event_gate_mismatch");
+        }
+        if (seen.has(verified.eventId)) {
+          throw new Error("review_gate_v2_journal_event_id_conflict");
+        }
+        if (next.length === 0 && tailEventId !== null && verified.parentEventId !== tailEventId) {
+          throw new Error("review_gate_v2_journal_chain_invalid");
+        }
+        if (next.length > 0) {
+          const prior = next.at(-1) as VerifiedReviewGateEvent;
+          if (verified.parentEventId !== prior.eventId) {
+            throw new Error("review_gate_v2_journal_chain_invalid");
+          }
+        }
+        seen.add(verified.eventId);
+        next.push(verified);
+      }
+      gates.set(gateId, { ...data, v2Events: [...data.v2Events, ...next] });
+    },
+    readV2Journal: async (gateId): Promise<ReviewGateV2Journal> => {
+      const data = gates.get(gateId);
+      const events = data?.v2Events ?? Object.freeze([]);
+      const frontierHash = events.length === 0
+        ? createHash("sha256").update("").digest("hex")
+        : createHash("sha256")
+          .update(`${events.map(encodeReviewGateEventRecord).join("\n")}\n`)
+          .digest("hex");
+      return Object.freeze({
+        events,
+        frontierHash,
+        tailEventId: events.at(-1)?.eventId ?? null,
+        eventCount: events.length,
+      });
     },
     readEvents: async (gateId) => gates.get(gateId)?.events ?? [],
     recordDispatch: async (gateId, dispatch) => {
-      const data = gates.get(gateId) ?? { events: [], dispatches: [] };
+      const data = gates.get(gateId) ?? { events: [], v2Events: [], dispatches: [] };
       const existing = data.dispatches.find((record) => record.operationId === dispatch.operationId);
       if (existing !== undefined) {
         if (
