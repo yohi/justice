@@ -19,7 +19,11 @@ import type {
   VerifiedDispatchRecoveryCursorV1,
   PrivateResponseEvidenceV1,
   VerifiedScopeFrontier,
+  VerifiedTargetWriterAuthorityV1,
   VerifiedTerminalStateV1,
+  SemanticContextInputsV1,
+  VerifiedCycleEvidence,
+  VerifiedSemanticContext,
 } from "./types.js";
 import type { RequirementsAuthoritySnapshotV1 } from "../review-gate-types.js";
 import { MAX_DESIGN_REMEDIATION_ROUNDS, MAX_PLAN_REMEDIATION_ROUNDS } from "../review-gate-types.js";
@@ -32,6 +36,7 @@ import type {
   VerifiedUnfinishedBindingSnapshot,
 } from "./admission.js";
 import { computeCanonicalJsonFingerprint } from "./identity.js";
+import { computeSemanticGoverningProjectionDigest } from "./deterministic-validation.js";
 
 export function getInitialReviewGateState(gateCreated: GateCreatedV1): ReviewGateState {
   return {
@@ -641,6 +646,7 @@ export function projectVerifiedGateTip(
     nc1Stop,
     dispatchRecoveryCursors: projectVerifiedDispatchRecoveryCursors(input.events),
     terminalState: projectVerifiedTerminalState(input.events),
+    targetWriterAuthorities: projectVerifiedTargetWriterAuthority(input.events),
   });
 }
 
@@ -652,20 +658,24 @@ export function projectVerifiedGateTip(
 export function projectVerifiedTerminalState(
   events: readonly VerifiedReviewGateEvent[],
 ): VerifiedTerminalStateV1 | null {
-  let latest: VerifiedTerminalStateV1 | null = null;
+  const states = new Map<string, VerifiedTerminalStateV1>();
+  let latestHandoffOperationId: string | null = null;
 
   for (const event of events) {
     if (!isV2Event(event)) continue;
     if (event.eventType === "TARGET_WRITER_HANDOFF_REQUESTED") {
       const payload = event.payload;
       if (payload.purpose !== "TERMINAL_REVOKE_ONLY") continue;
-      const state = Object.freeze({
-        kind: "TERMINAL_REVOKE_PENDING" as const,
-        handoffOperationId: payload.handoffOperationId,
-        terminalTransitionOperationId: payload.handoffOperationId,
-        targets: payload.targets,
-      });
-      latest = state;
+      states.set(
+        payload.handoffOperationId,
+        Object.freeze({
+          kind: "TERMINAL_REVOKE_PENDING",
+          handoffOperationId: payload.handoffOperationId,
+          terminalTransitionOperationId: payload.handoffOperationId,
+          targets: payload.targets,
+        }),
+      );
+      latestHandoffOperationId = payload.handoffOperationId;
       continue;
     }
     if (event.eventType === "TARGET_WRITER_TERMINAL_REVOKED") {
@@ -674,21 +684,246 @@ export function projectVerifiedTerminalState(
         payload.status === "NEVER_CLAIMED_OR_ALREADY_REVOKED" ||
         payload.nativeEffectDisposition === "APPLIED" ||
         payload.nativeEffectDisposition === "COMMITTED";
-      const state = Object.freeze({
-        kind: finalized
-          ? "TERMINAL_FINALIZED" as const
-          : "REVOKED_AWAITING_TERMINAL_PUBLICATION" as const,
-        handoffOperationId: payload.handoffOperationId,
-        terminalTransitionOperationId: payload.terminalTransitionOperationId,
-        targets: payload.targets,
-      });
-      latest = state;
+      states.set(
+        payload.handoffOperationId,
+        Object.freeze({
+          kind: finalized
+            ? "TERMINAL_FINALIZED"
+            : "REVOKED_AWAITING_TERMINAL_PUBLICATION",
+          handoffOperationId: payload.handoffOperationId,
+          terminalTransitionOperationId: payload.terminalTransitionOperationId,
+          targets: payload.targets,
+        }),
+      );
+      latestHandoffOperationId = payload.handoffOperationId;
     }
   }
 
-  return latest;
+  return latestHandoffOperationId === null
+    ? null
+    : (states.get(latestHandoffOperationId) ?? null);
 }
 
+/**
+ * Project the verified cross-Gate target writer authority from a verified V2
+ * event history. Fail closed: a non-null snapshot is produced only from a
+ * `TARGET_WRITER_TERMINAL_REVOKED` record — the sole gate event that carries
+ * protected Task 5 revocation evidence — bound to exactly one matching
+ * `TERMINAL_REVOKE_ONLY` handoff intent for the identical single target. Each
+ * target's latest verified authority is retained independently and keyed by
+ * its target identity digest.
+ * Handoff intents and continuation receipts alone never mint authority: gate
+ * events carry no protected Task 5 receipt, so the projected generation,
+ * frontier and revoke-CAS binding come only from the witnessed revoke record,
+ * the pre-image binding only from the matching intent, and the Task 5
+ * tombstone digest is never fabricated (`durableTombstoneProofDigest` stays
+ * null). Multi-target or multi-prior-owner revokes and divergent duplicate
+ * records fail closed as ambiguous.
+ */
+export function projectVerifiedTargetWriterAuthority(
+  events: readonly VerifiedReviewGateEvent[],
+): ReadonlyMap<string, VerifiedTargetWriterAuthorityV1> | null {
+  type TerminalRevokePayload = Extract<
+    VerifiedReviewGateEvent,
+    { readonly eventType: "TARGET_WRITER_TERMINAL_REVOKED" }
+  >["payload"];
+  type HandoffIntentPayload = Extract<
+    VerifiedReviewGateEvent,
+    { readonly eventType: "TARGET_WRITER_HANDOFF_REQUESTED" }
+  >["payload"];
+
+  const revokes = new Map<string, TerminalRevokePayload>();
+  const intents = new Map<string, HandoffIntentPayload>();
+
+  for (const event of events) {
+    if (!isV2Event(event)) continue;
+    if (event.eventType === "TARGET_WRITER_TERMINAL_REVOKED") {
+      const payload = event.payload;
+      const known = revokes.get(payload.handoffOperationId);
+      if (known !== undefined) {
+        if (computeCanonicalJsonFingerprint(known) !== computeCanonicalJsonFingerprint(payload)) {
+          return null;
+        }
+        continue;
+      }
+      revokes.set(payload.handoffOperationId, payload);
+      continue;
+    }
+    if (event.eventType === "TARGET_WRITER_HANDOFF_REQUESTED" && event.payload.purpose === "TERMINAL_REVOKE_ONLY") {
+      const payload = event.payload;
+      const known = intents.get(payload.handoffOperationId);
+      if (known !== undefined) {
+        if (computeCanonicalJsonFingerprint(known) !== computeCanonicalJsonFingerprint(payload)) {
+          return null;
+        }
+        continue;
+      }
+      intents.set(payload.handoffOperationId, payload);
+    }
+  }
+
+  if (revokes.size === 0) return null;
+
+  const authorities = new Map<string, VerifiedTargetWriterAuthorityV1>();
+  for (const revoke of revokes.values()) {
+    if (revoke.targets.length !== 1) return null;
+    if (revoke.priorOwners.length > 1) return null;
+    const revokeTarget = revoke.targets[0];
+    if (revokeTarget === undefined) return null;
+
+    const intent = intents.get(revoke.handoffOperationId);
+    if (intent === undefined) return null;
+    if (intent.targets.length !== 1) return null;
+    const intentTarget = intent.targets[0];
+    if (intentTarget === undefined) return null;
+    if (
+      computeCanonicalJsonFingerprint(intent.target) !== computeCanonicalJsonFingerprint(intentTarget) ||
+      computeCanonicalJsonFingerprint(intentTarget) !== computeCanonicalJsonFingerprint(revokeTarget)
+    ) {
+      return null;
+    }
+
+    authorities.set(
+      revokeTarget.targetIdentityDigest,
+      Object.freeze({
+        target: revokeTarget,
+        globalTargetWriterGeneration: revoke.globalTargetWriterHighWatermark,
+        activeOwner: null,
+        priorOwner: revoke.priorOwners[0] ?? null,
+        expectedImage: Object.freeze({
+          digest: intent.expectedPreImageDigest,
+          gitMode: intent.expectedGitMode,
+        }),
+        protectedTargetFrontier: revoke.protectedTargetFrontier,
+        protectedTargetCasProofDigest: revoke.protectedRevokeCasProofDigest,
+        durableTombstoneProofDigest: null,
+      }),
+    );
+  }
+  return authorities;
+}
+
+/**
+ * Projected Task 9 semantic cycle history: the verified phase context plus
+ * the complete, causally linked round evidence for Task 12's NC1 builder.
+ */
+export type VerifiedLineageHistory = Readonly<{
+  readonly frontierHash: string;
+  readonly context: VerifiedSemanticContext;
+  readonly rounds: readonly VerifiedCycleEvidence[];
+}>;
+
+/**
+ * Project the durable semantic cycle history (Task 9's evidence feed for
+ * Task 12's `buildVerifiedSemanticCycles`) from a verified V2 event history.
+ * Fail closed: a history is produced only when a verified semantic context is
+ * reconstructible from witness-committed `SEMANTIC_CONTEXT_TRANSITION` inputs
+ * that share one pinned phase/baseline/generation and are exactly causally
+ * linked (each transition's old inputs equal the previous transition's new
+ * inputs). Any lineage-bearing event that cannot yet be represented as
+ * complete cycle evidence — remediation dispatches, `ALREADY_RESOLVED`
+ * validations, regressions, cross-generation reconciliations and commit-bound
+ * resolution records — fails closed to null instead of inferring the missing
+ * Task 11 evidence, so replay cannot silently drop counter evidence.
+ * Duplicate transitions collapse idempotently; divergent duplicates fail
+ * closed.
+ */
+export function projectVerifiedLineageHistory(
+  events: readonly VerifiedReviewGateEvent[],
+): VerifiedLineageHistory | null {
+  type SemanticTransitionPayload = Extract<
+    VerifiedReviewGateEvent,
+    { readonly eventType: "SEMANTIC_CONTEXT_TRANSITION" }
+  >["payload"];
+
+  const gateCreated = getV2GateCreated(events);
+  if (gateCreated === null) return null;
+
+  const transitions: SemanticTransitionPayload[] = [];
+  const seenValidationEventIds = new Map<string, string>();
+
+  for (const event of events) {
+    if (!isV2Event(event)) continue;
+    switch (event.eventType) {
+      case "SEMANTIC_CONTEXT_TRANSITION": {
+        const payload: SemanticTransitionPayload = event.payload;
+        const fingerprint = computeCanonicalJsonFingerprint(payload);
+        const knownFingerprint = seenValidationEventIds.get(payload.proof.validationEventId);
+        if (knownFingerprint !== undefined) {
+          if (knownFingerprint !== fingerprint) return null;
+          continue;
+        }
+        seenValidationEventIds.set(payload.proof.validationEventId, fingerprint);
+        transitions.push(payload);
+        continue;
+      }
+      case "EXTERNAL_OPERATION_DISPATCHED":
+        if (event.payload.role !== "remediator") break;
+        return null;
+      case "FINDING_VALIDATION_COMPLETED":
+      case "LINEAGE_REGRESSED":
+      case "CROSS_GENERATION_RECONCILIATION_COMPLETED":
+      case "REVIEW_COMMIT_PREPARED":
+      case "REMEDIATION_COMMIT_SUCCEEDED":
+        return null;
+      default:
+        break;
+    }
+  }
+
+  if (transitions.length === 0) return null;
+
+  const first = transitions[0];
+  if (first === undefined) return null;
+  const phase = first.newInputs.phase;
+  const phaseBaselineId = first.newInputs.phaseBaselineId;
+  let previousNewInputs: SemanticContextInputsV1 | undefined;
+
+  for (const { oldInputs, newInputs } of transitions) {
+    if (
+      oldInputs.gateId !== gateCreated.gateId ||
+      newInputs.gateId !== gateCreated.gateId ||
+      oldInputs.generationId !== gateCreated.generationId ||
+      newInputs.generationId !== gateCreated.generationId
+    ) {
+      return null;
+    }
+    if (oldInputs.phase !== phase || newInputs.phase !== phase) return null;
+    if (
+      oldInputs.phaseBaselineId !== phaseBaselineId ||
+      newInputs.phaseBaselineId !== phaseBaselineId
+    ) {
+      return null;
+    }
+    if (
+      previousNewInputs !== undefined &&
+      computeCanonicalJsonFingerprint(previousNewInputs) !== computeCanonicalJsonFingerprint(oldInputs)
+    ) {
+      return null;
+    }
+    previousNewInputs = newInputs;
+  }
+
+  const latest = transitions[transitions.length - 1];
+  if (latest === undefined) return null;
+  const protocolFingerprint = latest.newInputs.phase === "design"
+    ? gateCreated.payload.designProtocolFingerprint
+    : gateCreated.payload.planProtocolFingerprint;
+
+  return Object.freeze({
+    frontierHash: latest.verifiedHistoryFrontier,
+    context: Object.freeze({
+      gateId: latest.newInputs.gateId,
+      generationId: latest.newInputs.generationId,
+      phase: latest.newInputs.phase,
+      phaseBaselineId: latest.newInputs.phaseBaselineId,
+      semanticContractFingerprint: latest.newInputs.policy.semanticFingerprint,
+      protocolFingerprint,
+      contextDigest: computeSemanticGoverningProjectionDigest(latest.newInputs),
+    }),
+    rounds: Object.freeze([]),
+  });
+}
 /**
  * Mutable accumulator for one dispatched external operation while folding the
  * verified event history. Mutation is private to this projection fold; every
@@ -721,6 +956,7 @@ type DispatchRecoveryFoldState = {
 /**
  * Project the outstanding external-operation dispatch recovery cursors from a
  * verified V2 event history. Each `EXTERNAL_OPERATION_DISPATCHED` starts as
+ * verified V2 event history. Each `EXTERNAL_OPERATION_DISPATCHED` starts as
  * `IN_FLIGHT`; the private response-custody lifecycle events advance it —
  * `EXTERNAL_OPERATION_RESPONSE_STAGED` → `RESPONSE_STAGED`,
  * `EXTERNAL_OPERATION_RESULT_COMMITTED` → `RESULT_COMMITTED_OUTCOME_PENDING`,
@@ -732,6 +968,10 @@ type DispatchRecoveryFoldState = {
  * when it has a verified intent before dispatch, or when independently
  * verified private evidence is unavailable. The fold type includes them so
  * the same cursor machinery can carry them through `deriveResumeCursor`.
+ * `EXTERNAL_OPERATION_RESPONSE_STAGED` → `RESPONSE_STAGED`,
+ * `EXTERNAL_OPERATION_RESULT_COMMITTED` → `RESULT_COMMITTED_OUTCOME_PENDING`,
+ * and `EXTERNAL_OPERATION_OUTCOME_APPLIED` removes the cursor from the
+ * outstanding set (the authoritative outcome is applied; nothing to recover).
  * Operations are keyed by `operationId` + `dispatchAttemptId`: every lifecycle
  * payload carries both ids, matching the private response record keying, so
  * the attempt is stable across events. Result events may appear before their

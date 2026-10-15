@@ -1,4 +1,5 @@
 import type {
+  SemanticContextInputsV1,
   VerifiedScopeFrontier,
 } from "../../../src/core/review-gate/types.js";
 import { describe, expect, it } from "vitest";
@@ -19,7 +20,11 @@ import {
   projectReviewGate,
   projectVerifiedDispatchRecoveryCursors,
   projectVerifiedGateTip,
+  projectVerifiedLineageHistory,
+  projectVerifiedTerminalState,
+  projectVerifiedTargetWriterAuthority,
 } from "../../../src/core/review-gate/projection.js";
+import { computeSemanticGoverningProjectionDigest } from "../../../src/core/review-gate/deterministic-validation.js";
 import { deriveResumeCursor } from "../../../src/core/review-gate/resume-cursor.js";
 import { validateReviewGateEventRecord } from "../../../src/core/review-gate/event-schema.js";
 
@@ -79,13 +84,16 @@ describe("projectReviewGate upstream blockers", () => {
   });
 });
 
-function v2Target(canonicalLogicalTargetPath: string): object {
+function v2Target(
+  canonicalLogicalTargetPath: string,
+  targetIdentityDigest = "a".repeat(64),
+): object {
   return {
     installationId: "install-1",
     workspaceIdentity: "workspace-1",
     canonicalWorkspaceRoot: "workspace",
     canonicalLogicalTargetPath,
-    targetIdentityDigest: "a".repeat(64),
+    targetIdentityDigest,
     verifiedAliasSetDigest: "a".repeat(64),
     identityProofFrontier: "frontier-target",
   };
@@ -96,6 +104,7 @@ function v2TerminalHandoffRequested(
   parentEventId: string,
   handoffOperationId: string,
   targets: readonly string[],
+  targetIdentityDigests: readonly string[] = targets.map(() => "a".repeat(64)),
 ): object {
   return v2Event("TARGET_WRITER_HANDOFF_REQUESTED", eventId, parentEventId, {
     purpose: "TERMINAL_REVOKE_ONLY",
@@ -108,8 +117,8 @@ function v2TerminalHandoffRequested(
     phase: "design",
     roundOrdinal: 1,
     protocolFingerprint: "a".repeat(64),
-    target: v2Target(targets[0] ?? "target.md"),
-    targets: targets.map(v2Target),
+    target: v2Target(targets[0] ?? "target.md", targetIdentityDigests[0] ?? "a".repeat(64)),
+    targets: targets.map((target, index) => v2Target(target, targetIdentityDigests[index] ?? "a".repeat(64))),
     closingSealOperationId: null,
     oldOwner: null,
     newOwner: null,
@@ -121,6 +130,49 @@ function v2TerminalHandoffRequested(
     pendingNativeEffectReference: null,
   });
 }
+
+function v2HandoffResumed(
+  eventId: string,
+  parentEventId: string,
+  handoffOperationId: string,
+  targetPath: string,
+  newOwner: object,
+): object {
+  return v2Event("TARGET_WRITER_HANDOFF_RESUMED", eventId, parentEventId, {
+    status: "RESUMED",
+    handoffOperationId,
+    originalOperationId: handoffOperationId,
+    intent: {
+      purpose: "HANDOFF",
+      status: "RESUMED",
+      handoffOperationId,
+      originalOperationId: handoffOperationId,
+      scopeId: "scope-1",
+      gateId: "gate-1",
+      generationId: "generation-1",
+      phase: "design",
+      roundOrdinal: 1,
+      protocolFingerprint: "a".repeat(64),
+      target: v2Target(targetPath),
+      targets: [],
+      closingSealOperationId: null,
+      oldOwner: null,
+      newOwner,
+      expectedTargetWriterFrontier: "frontier-1",
+      expectedGlobalTargetWriterGeneration: 2,
+      expectedGateEventFrontier: "frontier-1",
+      expectedPreImageDigest: "a".repeat(64),
+      expectedGitMode: "100644",
+      pendingNativeEffectReference: null,
+    },
+    protectedTargetFrontier: "frontier-1",
+    gateEventFrontier: "frontier-1",
+    globalTargetWriterGeneration: 2,
+    pendingNativeEffectReference: null,
+    continuationProofDigest: "b".repeat(64),
+  });
+}
+
 
 function v2Event(
   eventType: string,
@@ -152,6 +204,8 @@ function v2TerminalRevoked(
   status: "REVOKED" | "NEVER_CLAIMED_OR_ALREADY_REVOKED",
   nativeEffectDisposition: string,
   targets: readonly string[],
+  targetIdentityDigests: readonly string[] = targets.map(() => "a".repeat(64)),
+  globalTargetWriterHighWatermark = 1,
 ): object {
   return v2Event("TARGET_WRITER_TERMINAL_REVOKED", eventId, parentEventId, {
     purpose: "TERMINAL_REVOKE_ONLY",
@@ -162,9 +216,9 @@ function v2TerminalRevoked(
     generationId: "generation-1",
     phase: "design",
     roundOrdinal: 1,
-    targets: targets.map(v2Target),
+    targets: targets.map((target, index) => v2Target(target, targetIdentityDigests[index] ?? "a".repeat(64))),
     priorOwners: [],
-    globalTargetWriterHighWatermark: 1,
+    globalTargetWriterHighWatermark,
     protectedTargetFrontier: "frontier-1",
     protectedRevokeCasProofDigest: "a".repeat(64),
     nativeNonWriteabilityProofDigest: "a".repeat(64),
@@ -848,6 +902,30 @@ describe("projectVerifiedGateTip", () => {
   });
 
   describe("terminal writer-revoke projection", () => {
+    it("returns the state updated by the last terminal event", () => {
+      const firstHandoff = validateReviewGateEventRecord(
+        v2TerminalHandoffRequested("event-handoff-1", "event-genesis", "handoff-1", ["first.md"]),
+      );
+      const secondHandoff = validateReviewGateEventRecord(
+        v2TerminalHandoffRequested("event-handoff-2", "event-genesis", "handoff-2", ["second.md"]),
+      );
+      const firstRevoked = validateReviewGateEventRecord(
+        v2TerminalRevoked("event-revoked-1", "event-handoff-1", "handoff-1", "transition-1", "REVOKED", "NO_EFFECT", ["first.md"]),
+      );
+
+      const terminalState = projectVerifiedTerminalState([
+        firstHandoff,
+        secondHandoff,
+        firstRevoked,
+      ]);
+
+      expect(terminalState).toMatchObject({
+        kind: "REVOKED_AWAITING_TERMINAL_PUBLICATION",
+        handoffOperationId: "handoff-1",
+        terminalTransitionOperationId: "transition-1",
+      });
+    });
+
     it("projects TERMINAL_REVOKE_PENDING from a requested terminal handoff", () => {
       const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
       const handoff = validateReviewGateEventRecord(
@@ -868,50 +946,6 @@ describe("projectVerifiedGateTip", () => {
       });
       expect(tip.terminalState?.targets).toHaveLength(1);
       expect(tip.terminalState?.targets[0]?.canonicalLogicalTargetPath).toBe("target.md");
-    });
-
-    it("returns the terminal state updated by the last event", () => {
-      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
-      const firstHandoff = validateReviewGateEventRecord(
-        v2TerminalHandoffRequested(
-          "event-handoff-1",
-          "event-genesis",
-          "handoff-1",
-          ["first.md"],
-        ),
-      );
-      const secondHandoff = validateReviewGateEventRecord(
-        v2TerminalHandoffRequested(
-          "event-handoff-2",
-          "event-genesis",
-          "handoff-2",
-          ["second.md"],
-        ),
-      );
-      const firstRevoked = validateReviewGateEventRecord(
-        v2TerminalRevoked(
-          "event-revoked-1",
-          "event-handoff-1",
-          "handoff-1",
-          "transition-1",
-          "REVOKED",
-          "NO_EFFECT",
-          ["first.md"],
-        ),
-      );
-
-      const tip = projectVerifiedGateTip({
-        gateId: "gate-1",
-        scopeId: "scope-1",
-        events: [genesis, firstHandoff, secondHandoff, firstRevoked],
-        frontier: frontier() as VerifiedScopeFrontier,
-      });
-
-      expect(tip.terminalState).toMatchObject({
-        kind: "REVOKED_AWAITING_TERMINAL_PUBLICATION",
-        handoffOperationId: "handoff-1",
-        terminalTransitionOperationId: "transition-1",
-      });
     });
 
     it("projects REVOKED_AWAITING_TERMINAL_PUBLICATION when native effect is not yet applied", () => {
@@ -1025,4 +1059,519 @@ describe("projectVerifiedGateTip", () => {
     });
   });
 
+
+  describe("target writer authority projection", () => {
+    const priorOwner = {
+      scopeId: "scope-0",
+      gateId: "gate-0",
+      generationId: "generation-0",
+      operationId: "op-0",
+      attemptId: "attempt-0",
+    };
+
+    function revokePayload(
+      overrides: {
+        eventId?: string;
+        status?: "REVOKED" | "NEVER_CLAIMED_OR_ALREADY_REVOKED";
+        targets?: readonly string[];
+        priorOwners?: readonly object[];
+        globalTargetWriterHighWatermark?: number;
+      } = {},
+    ): object {
+      return v2Event("TARGET_WRITER_TERMINAL_REVOKED", overrides.eventId ?? "event-revoked", "event-handoff", {
+        purpose: "TERMINAL_REVOKE_ONLY",
+        handoffOperationId: "handoff-1",
+        terminalTransitionOperationId: "transition-1",
+        status: overrides.status ?? "REVOKED",
+        gateId: "gate-1",
+        generationId: "generation-1",
+        phase: "design",
+        roundOrdinal: 1,
+        targets: (overrides.targets ?? ["target.md"]).map((target) => v2Target(target)),
+        priorOwners: overrides.priorOwners ?? [priorOwner],
+        globalTargetWriterHighWatermark: overrides.globalTargetWriterHighWatermark ?? 7,
+        protectedTargetFrontier: "frontier-revoke",
+        protectedRevokeCasProofDigest: "c".repeat(64),
+        nativeNonWriteabilityProofDigest: "d".repeat(64),
+        nativeEffectDisposition: "APPLIED",
+      });
+    }
+
+    it("binds terminal authority from a single-target verified revoke with its matching intent", () => {
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+      const intent = validateReviewGateEventRecord(
+        v2TerminalHandoffRequested("event-handoff", "event-genesis", "handoff-1", ["target.md"]),
+      );
+      const revoked = validateReviewGateEventRecord(revokePayload());
+
+      const authority = projectVerifiedTargetWriterAuthority([genesis, intent, revoked])?.get(
+        "a".repeat(64),
+      );
+
+      expect(authority).toMatchObject({
+        target: { canonicalLogicalTargetPath: "target.md" },
+        globalTargetWriterGeneration: 7,
+        activeOwner: null,
+        priorOwner,
+        expectedImage: { digest: "a".repeat(64), gitMode: "100644" },
+        protectedTargetFrontier: "frontier-revoke",
+        protectedTargetCasProofDigest: "c".repeat(64),
+        durableTombstoneProofDigest: null,
+      });
+    });
+
+    it("retains terminal authority independently for each target identity", () => {
+      const firstTargetIdentity = "a".repeat(64);
+      const secondTargetIdentity = "b".repeat(64);
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+      const firstIntent = validateReviewGateEventRecord(
+        v2TerminalHandoffRequested(
+          "event-handoff-1",
+          "event-genesis",
+          "handoff-1",
+          ["target.md"],
+          [firstTargetIdentity],
+        ),
+      );
+      const secondIntent = validateReviewGateEventRecord(
+        v2TerminalHandoffRequested(
+          "event-handoff-2",
+          "event-handoff-1",
+          "handoff-2",
+          ["target-2.md"],
+          [secondTargetIdentity],
+        ),
+      );
+      const firstRevoke = validateReviewGateEventRecord(
+        v2TerminalRevoked(
+          "event-revoked-1",
+          "event-handoff-2",
+          "handoff-1",
+          "transition-1",
+          "REVOKED",
+          "APPLIED",
+          ["target.md"],
+          [firstTargetIdentity],
+          7,
+        ),
+      );
+      const secondRevoke = validateReviewGateEventRecord(
+        v2TerminalRevoked(
+          "event-revoked-2",
+          "event-revoked-1",
+          "handoff-2",
+          "transition-2",
+          "REVOKED",
+          "APPLIED",
+          ["target-2.md"],
+          [secondTargetIdentity],
+          9,
+        ),
+      );
+
+      const events = [
+        genesis,
+        firstIntent,
+        secondIntent,
+        firstRevoke,
+        secondRevoke,
+      ];
+      const tip = projectVerifiedGateTip({
+        gateId: "gate-1",
+        scopeId: "scope-1",
+        events,
+        frontier: frontier() as VerifiedScopeFrontier,
+      });
+
+      expect(tip.status).toBe("active");
+      if (tip.status !== "active") return;
+      const authorities = tip.targetWriterAuthorities;
+      expect(authorities).toBeInstanceOf(Map);
+      if (!(authorities instanceof Map)) return;
+      expect([...authorities.keys()]).toEqual([firstTargetIdentity, secondTargetIdentity]);
+      expect(authorities.get(firstTargetIdentity)?.globalTargetWriterGeneration).toBe(7);
+      expect(authorities.get(secondTargetIdentity)?.globalTargetWriterGeneration).toBe(9);
+    });
+
+    it("binds a no-writer authority when a never-claimed revoke is verified", () => {
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+      const intent = validateReviewGateEventRecord(
+        v2TerminalHandoffRequested("event-handoff", "event-genesis", "handoff-1", ["target.md"]),
+      );
+      const revoked = validateReviewGateEventRecord(
+        revokePayload({ status: "NEVER_CLAIMED_OR_ALREADY_REVOKED", priorOwners: [] }),
+      );
+
+      expect(
+        projectVerifiedTargetWriterAuthority([genesis, intent, revoked])?.get("a".repeat(64)),
+      ).toMatchObject({
+        activeOwner: null,
+        priorOwner: null,
+        globalTargetWriterGeneration: 7,
+        durableTombstoneProofDigest: null,
+      });
+    });
+
+    it("returns null for a requested intent without a verified revoke receipt", () => {
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+      const intent = validateReviewGateEventRecord(
+        v2TerminalHandoffRequested("event-handoff", "event-genesis", "handoff-1", ["target.md"]),
+      );
+
+      expect(projectVerifiedTargetWriterAuthority([genesis, intent])).toBeNull();
+    });
+
+    it("returns null for a protected continuation without a verified revoke receipt", () => {
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+      const owner = { scopeId: "scope-2", gateId: "gate-2", generationId: "generation-1", operationId: "op-1", attemptId: "attempt-1" };
+      const resumed = validateReviewGateEventRecord(
+        v2HandoffResumed("event-resumed", "event-genesis", "handoff-1", "target.md", owner),
+      );
+
+      expect(projectVerifiedTargetWriterAuthority([genesis, resumed])).toBeNull();
+    });
+
+    it("fails closed when the matching terminal intent is missing", () => {
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+      const revoked = validateReviewGateEventRecord(revokePayload());
+
+      expect(projectVerifiedTargetWriterAuthority([genesis, revoked])).toBeNull();
+    });
+
+    it("fails closed when the revoke target diverges from the intent target", () => {
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+      const intent = validateReviewGateEventRecord(
+        v2TerminalHandoffRequested("event-handoff", "event-genesis", "handoff-1", ["other.md"]),
+      );
+      const revoked = validateReviewGateEventRecord(revokePayload());
+
+      expect(projectVerifiedTargetWriterAuthority([genesis, intent, revoked])).toBeNull();
+    });
+
+    it("fails closed on a multi-target terminal revoke", () => {
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+      const intent = validateReviewGateEventRecord(
+        v2TerminalHandoffRequested("event-handoff", "event-genesis", "handoff-1", ["target.md", "target-2.md"]),
+      );
+      const revoked = validateReviewGateEventRecord(
+        revokePayload({ targets: ["target.md", "target-2.md"] }),
+      );
+
+      expect(projectVerifiedTargetWriterAuthority([genesis, intent, revoked])).toBeNull();
+    });
+
+    it("fails closed against multiple prior owners", () => {
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+      const intent = validateReviewGateEventRecord(
+        v2TerminalHandoffRequested("event-handoff", "event-genesis", "handoff-1", ["target.md"]),
+      );
+      const revoked = validateReviewGateEventRecord(
+        revokePayload({
+          priorOwners: [
+            priorOwner,
+            { scopeId: "scope-2", gateId: "gate-2", generationId: "generation-1", operationId: "op-1", attemptId: "attempt-1" },
+          ],
+        }),
+      );
+
+      expect(projectVerifiedTargetWriterAuthority([genesis, intent, revoked])).toBeNull();
+    });
+
+    it("fails closed on divergent duplicate revoke records", () => {
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+      const intent = validateReviewGateEventRecord(
+        v2TerminalHandoffRequested("event-handoff", "event-genesis", "handoff-1", ["target.md"]),
+      );
+      const first = validateReviewGateEventRecord(revokePayload({ eventId: "event-revoked-1" }));
+      const second = validateReviewGateEventRecord(
+        revokePayload({ eventId: "event-revoked-2", globalTargetWriterHighWatermark: 9 }),
+      );
+
+      expect(projectVerifiedTargetWriterAuthority([genesis, intent, first, second])).toBeNull();
+    });
+
+    it("collapses identical replayed revoke records idempotently", () => {
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+      const intent = validateReviewGateEventRecord(
+        v2TerminalHandoffRequested("event-handoff", "event-genesis", "handoff-1", ["target.md"]),
+      );
+      const revoked = validateReviewGateEventRecord(revokePayload());
+      const replayed = validateReviewGateEventRecord(revokePayload());
+
+      expect(
+        projectVerifiedTargetWriterAuthority([genesis, intent, revoked, replayed])?.get("a".repeat(64)),
+      ).toMatchObject({
+        globalTargetWriterGeneration: 7,
+        protectedTargetCasProofDigest: "c".repeat(64),
+      });
+    });
+
+    it("exposes the fail-closed authority on the gate tip", () => {
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+      const intent = validateReviewGateEventRecord(
+        v2TerminalHandoffRequested("event-handoff", "event-genesis", "handoff-1", ["target.md"]),
+      );
+      const revoked = validateReviewGateEventRecord(revokePayload());
+
+      const withoutRevoke = projectVerifiedGateTip({
+        gateId: "gate-1",
+        scopeId: "scope-1",
+        events: [genesis, intent],
+        frontier: frontier() as VerifiedScopeFrontier,
+      });
+      const withRevoke = projectVerifiedGateTip({
+        gateId: "gate-1",
+        scopeId: "scope-1",
+        events: [genesis, intent, revoked],
+        frontier: frontier() as VerifiedScopeFrontier,
+      });
+
+      expect(withoutRevoke.status).toBe("active");
+      if (withoutRevoke.status !== "active") return;
+      expect(withoutRevoke.targetWriterAuthorities).toBeNull();
+      expect(withRevoke.status).toBe("active");
+      if (withRevoke.status !== "active") return;
+      expect(withRevoke.targetWriterAuthorities?.get("a".repeat(64))?.globalTargetWriterGeneration).toBe(7);
+      expect(withRevoke.targetWriterAuthorities?.get("a".repeat(64))?.durableTombstoneProofDigest).toBeNull();
+    });
+  });
+
+});
+
+describe("projectVerifiedLineageHistory", () => {
+  function v2Genesis(): object {
+    const hexDigest = "a".repeat(64);
+    return {
+      schemaVersion: 2,
+      eventId: "event-genesis",
+      parentEventId: "event-before-genesis",
+      emittedAt: "2026-10-11T00:00:00.000Z",
+      gateId: "gate-1",
+      epochId: "epoch-1",
+      generationId: "generation-1",
+      writerId: "writer-1",
+      eventType: "GATE_CREATED",
+      payload: {
+        reviewScopeId: "scope-1",
+        supersedesGateId: null,
+        designArtifact: { canonicalPath: "docs/design.md", digest: hexDigest, gitMode: "100644" },
+        planArtifact: { canonicalPath: "docs/plan.md", digest: hexDigest, gitMode: "100644" },
+        requirementsResolution: {
+          schemaVersion: 2,
+          source: "explicit",
+          canonicalPath: "docs/requirements.md",
+          digest: hexDigest,
+          gitMode: "100644",
+          requirementsGitBlobOid: "requirements-blob-1",
+          committedBaselineOid: "baseline-commit-1",
+          workspaceIdentity: "workspace-1",
+          selectionEvidence: { commandPath: "--requirements docs/requirements.md" },
+        },
+        reviewProtocolFingerprint: "review-protocol-1",
+        designProtocolFingerprint: "design-protocol-1",
+        planProtocolFingerprint: "plan-protocol-1",
+      },
+    };
+  }
+
+  function v2RemediatorDispatch(): object {
+    return v2Event("EXTERNAL_OPERATION_DISPATCHED", "event-dispatch", "event-transition-1", {
+      eventType: "EXTERNAL_OPERATION_DISPATCHED",
+      gateId: "gate-1",
+      generationId: "generation-1",
+      epochId: "epoch-1",
+      operationId: "remediation-operation-1",
+      dispatchAttemptId: "attempt-remediation-1",
+      phase: "design",
+      role: "remediator",
+      candidateOrTargetSetDigest: "a".repeat(64),
+      inputBindingDigest: "a".repeat(64),
+      protocolFingerprint: "a".repeat(64),
+      expectedWitnessFrontier: "frontier-transition-1",
+      protectedLeaseProofDigest: "a".repeat(64),
+    });
+  }
+
+  function semanticInputs(overrides: Partial<SemanticContextInputsV1> = {}): SemanticContextInputsV1 {
+    return {
+      workspaceIdentity: "workspace-1",
+      gateId: "gate-1",
+      generationId: "generation-1",
+      phase: "design",
+      phaseBaselineId: "design-baseline-0",
+      comparisonSegmentId: "segment-0",
+      requirements: {
+        source: "explicit",
+        canonicalPath: "docs/requirements.md",
+        gitBlobOid: "requirements-blob-1",
+        gitMode: "100644",
+        authorityEventId: "requirements-authority-0",
+        governingReferenceManifestDigest: "manifest-0",
+      },
+      upstreamApproved: null,
+      policy: {
+        contractId: "semantic-contract",
+        version: "1",
+        semanticFingerprint: "semantic-v1",
+        lineageFingerprint: "lineage-v1",
+        nc1Fingerprint: "nc1-v1",
+        validatorRegistryDigest: "registry-v1",
+      },
+      ...overrides,
+    };
+  }
+
+  function transitionPayload(
+      overrides: {
+        eventId?: string;
+        parentEventId?: string;
+        oldInputs?: SemanticContextInputsV1;
+        newInputs?: SemanticContextInputsV1;
+        verifiedHistoryFrontier?: string;
+      } = {},
+  ): object {
+    const oldInputs = overrides.oldInputs ?? semanticInputs();
+    const newInputs = overrides.newInputs ?? oldInputs;
+    const triggeringAuthorityEventId = "requirements-rebased-1";
+    return v2Event("SEMANTIC_CONTEXT_TRANSITION", overrides.eventId ?? "event-transition-1", overrides.parentEventId ?? "event-genesis", {
+      oldInputs,
+      newInputs,
+      proof: {
+        validationEventId: `compatibility-validation-${overrides.eventId ?? "event-transition-1"}`,
+        triggeringAuthorityEventId,
+        validatorId: "SEMANTIC_CONTEXT_COMPATIBILITY_V1",
+        validatorVersion: "1",
+        executableDigest: "validator-executable-v1",
+        registryDigest: "registry-v1",
+        compatibilityTableDigest: "table-v1",
+        oldNormalizedInputsDigest: computeSemanticGoverningProjectionDigest(oldInputs),
+        newNormalizedInputsDigest: computeSemanticGoverningProjectionDigest(newInputs),
+        result: "EQUIVALENT",
+        ruleId: "SEMANTIC_CONTEXT_FIELDS_IDENTICAL_V1",
+        ruleVersion: "1",
+        requirementsDelta: null,
+      },
+      triggeringAuthorityEventId,
+      verifiedHistoryFrontier: overrides.verifiedHistoryFrontier ?? "frontier-transition-1",
+      roundCountersBefore: { design: 0, plan: 0 },
+      roundCountersAfter: { design: 0, plan: 0 },
+      operationId: "transition-operation-1",
+    });
+  }
+
+  it("projects a verified context-only history from consecutive transitions", () => {
+    const genesis = validateReviewGateEventRecord(v2Genesis());
+    const first = validateReviewGateEventRecord(transitionPayload({ eventId: "event-transition-1" }));
+    const secondNewInputs = semanticInputs({ comparisonSegmentId: "segment-0:transition-operation-1" });
+    const second = validateReviewGateEventRecord(transitionPayload({
+      eventId: "event-transition-2",
+      parentEventId: "event-transition-1",
+      newInputs: secondNewInputs,
+      verifiedHistoryFrontier: "frontier-transition-2",
+    }));
+
+    expect(projectVerifiedLineageHistory([genesis, first, second])).toEqual({
+      frontierHash: "frontier-transition-2",
+      context: {
+        gateId: "gate-1",
+        generationId: "generation-1",
+        phase: "design",
+        phaseBaselineId: "design-baseline-0",
+        semanticContractFingerprint: "semantic-v1",
+        protocolFingerprint: "design-protocol-1",
+        contextDigest: computeSemanticGoverningProjectionDigest(secondNewInputs),
+      },
+      rounds: [],
+    });
+  });
+
+  it("fails closed without verified semantic transition evidence", () => {
+    const genesis = validateReviewGateEventRecord(v2Genesis());
+
+    expect(projectVerifiedLineageHistory([genesis])).toBeNull();
+  });
+
+  it("fails closed when remediation evidence cannot be bound to complete cycle evidence", () => {
+    const genesis = validateReviewGateEventRecord(v2Genesis());
+    const transition = validateReviewGateEventRecord(transitionPayload());
+    const dispatch = validateReviewGateEventRecord(
+      v2RemediatorDispatch(),
+    );
+
+    expect(projectVerifiedLineageHistory([genesis, transition, dispatch])).toBeNull();
+  });
+
+  it("fails closed when lineage regression evidence cannot be bound to complete cycle evidence", () => {
+    const genesis = validateReviewGateEventRecord(v2Genesis());
+    const transition = validateReviewGateEventRecord(transitionPayload());
+    const regressed = validateReviewGateEventRecord(
+      v2Event("LINEAGE_REGRESSED", "event-regressed", "event-transition-1", {
+        eventType: "LINEAGE_REGRESSED",
+        operationId: "transition-operation-1",
+        validationEventId: "validation-regressed",
+        lineageId: "lineage-design",
+        priorCommittedResolutionEventId: "resolution-0",
+        pinnedBaselineDigest: "baseline-1",
+        semanticContextFingerprint: "semantic-v1",
+        validatedPresenceProofDigest: "presence-1",
+        witnessedFrontierHash: "frontier-transition-1",
+      }),
+    );
+
+    expect(projectVerifiedLineageHistory([genesis, transition, regressed])).toBeNull();
+  });
+
+  it("fails closed when the transition chain is not causally linked", () => {
+    const genesis = validateReviewGateEventRecord(v2Genesis());
+    const first = validateReviewGateEventRecord(transitionPayload({ eventId: "event-transition-1" }));
+    const brokenOld = semanticInputs({ comparisonSegmentId: "segment-9" });
+    const second = validateReviewGateEventRecord(transitionPayload({
+      eventId: "event-transition-2",
+      parentEventId: "event-transition-1",
+      oldInputs: brokenOld,
+      newInputs: semanticInputs({ comparisonSegmentId: "segment-9" }),
+    }));
+
+    expect(projectVerifiedLineageHistory([genesis, first, second])).toBeNull();
+  });
+
+  it("fails closed when transitions span more than one phase", () => {
+    const genesis = validateReviewGateEventRecord(v2Genesis());
+    const first = validateReviewGateEventRecord(transitionPayload({ eventId: "event-transition-1" }));
+    const second = validateReviewGateEventRecord(transitionPayload({
+      eventId: "event-transition-2",
+      parentEventId: "event-transition-1",
+      oldInputs: semanticInputs({ phase: "plan" }),
+      newInputs: semanticInputs({ phase: "plan" }),
+    }));
+
+    expect(projectVerifiedLineageHistory([genesis, first, second])).toBeNull();
+  });
+
+  it("fails closed when transition evidence leaves the admitted generation", () => {
+    const genesis = validateReviewGateEventRecord(v2Genesis());
+    const drifted = transitionPayload({
+      oldInputs: semanticInputs({ generationId: "generation-2" }),
+      newInputs: semanticInputs({ generationId: "generation-2" }),
+    }) as unknown as VerifiedReviewGateEvent;
+
+    expect(projectVerifiedLineageHistory([genesis, drifted])).toBeNull();
+  });
+
+  it("projects deterministically on replay", () => {
+    const genesis = validateReviewGateEventRecord(v2Genesis());
+    const first = validateReviewGateEventRecord(transitionPayload({ eventId: "event-transition-1" }));
+    const second = validateReviewGateEventRecord(transitionPayload({
+      eventId: "event-transition-2",
+      parentEventId: "event-transition-1",
+      newInputs: semanticInputs({ comparisonSegmentId: "segment-0:transition-operation-1" }),
+      verifiedHistoryFrontier: "frontier-transition-2",
+    }));
+
+    const firstReplay = projectVerifiedLineageHistory([genesis, first, second]);
+    const secondReplay = projectVerifiedLineageHistory([genesis, first, second]);
+
+    expect(firstReplay).not.toBeNull();
+    expect(secondReplay).toEqual(firstReplay);
+  });
 });

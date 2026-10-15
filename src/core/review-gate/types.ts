@@ -501,6 +501,11 @@ export type VerifiedTargetWriterAuthorityV1 = Readonly<{
   readonly durableTombstoneProofDigest: string | null;
 }>;
 
+export type VerifiedTargetWriterAuthoritiesV1 = ReadonlyMap<
+  string,
+  VerifiedTargetWriterAuthorityV1
+>;
+
 export type VerifiedTargetWriterHandoffV1 = Readonly<{
   readonly status: "REVOKED_NO_ACTIVE_WRITER" | "CLAIMED_CURRENT_WRITER" | "BLOCKED";
   readonly handoffOperationId: string;
@@ -614,61 +619,72 @@ export type VerifiedClosingSealReceiptV1 = Readonly<{
 // ---------------------------------------------------------------------------
 
 export type VerifiedSemanticContext = Readonly<{
-  readonly workspaceIdentity: string;
   readonly gateId: string;
   readonly generationId: string;
   readonly phase: ReviewGatePhase;
   readonly phaseBaselineId: string;
-  readonly requirements: SemanticContextInputsV1["requirements"];
-  readonly upstreamApproved: SemanticContextInputsV1["upstreamApproved"];
-  readonly policy: SemanticContextInputsV1["policy"];
+  readonly semanticContractFingerprint: string;
+  readonly protocolFingerprint: string;
+  readonly contextDigest: string;
 }>;
 
 export type SemanticBlockerEvidence = Readonly<{
-  readonly lineageId: string;
-  readonly findingEventId: string;
-  readonly owner: "requirements" | "design" | "plan";
-  readonly currentStatusEventId: string;
-  readonly committedAuthorityEventId: string;
+  readonly lineageId: LineageId;
+  readonly basisDigest: string;
+  readonly semanticLocation: string;
+  readonly ownerScope: "requirements" | "design" | "plan";
+  readonly violationType: string;
+  readonly governingReference: string;
+  readonly violatedContract: string;
+  readonly observationEventId: string;
 }>;
 
 export type ValidatedTargetOutcome = Readonly<{
-  readonly targetPath: string;
-  readonly targetIdentityDigest: string;
-  readonly outcome: "accepted" | "rejected" | "staged";
-  readonly outcomeEventId: string;
+  readonly lineageId: LineageId;
+  readonly roundOrdinal: number;
+  readonly result: "STILL_PRESENT" | "RESOLVED" | "INDETERMINATE";
+  readonly validationEventId: string;
+  readonly targetEventId: string;
 }>;
 
 export type VerifiedCommittedResolution = Readonly<{
-  readonly lineageId: string;
+  readonly lineageId: LineageId;
   readonly resolutionEventId: string;
-  readonly remediationRound: number;
-  readonly semanticContextFingerprint: string;
+  readonly verifiedCommitOid: string;
+  readonly contextDigest: string;
 }>;
 
 export type VerifiedRegression = Readonly<{
-  readonly lineageId: string;
-  readonly regressionEventId: string;
-  readonly priorCommittedResolutionEventId: string;
-  readonly semanticContextFingerprint: string;
+  readonly lineageId: LineageId;
+  readonly priorResolutionEventId: string;
+  readonly newObservationEventId: string;
+  readonly contextDigest: string;
 }>;
 
+/**
+ * One recorded semantic round as projected from verified history, before
+ * Task 12's builder validates cross-cycle links and freezes the result.
+ * Landscape fields bind each pre/post blocker landscape to its witness
+ * event, blocking count and semantic fingerprint; revision/segment fields
+ * must link adjacent rounds exactly when consumed by Task 12.
+ */
 export type VerifiedCycleEvidence = Readonly<{
+  readonly context: VerifiedSemanticContext;
   readonly roundOrdinal: number;
   readonly operationId: string;
   readonly roundStartedEventId: string;
-  readonly pre: Readonly<{
-    readonly eventId: string;
-    readonly blockers: readonly SemanticBlockerEvidence[];
-    readonly blockingCount: number;
-    readonly semanticFingerprint: string;
-  }>;
-  readonly post: Readonly<{
-    readonly eventId: string;
-    readonly blockers: readonly SemanticBlockerEvidence[];
-    readonly blockingCount: number;
-    readonly semanticFingerprint: string;
-  }>;
+  readonly preRevisionDigest: string;
+  readonly postRevisionDigest: string;
+  readonly revisionCommitEventId: string | null;
+  readonly comparisonSegmentId: string;
+  readonly preLandscapeEventId: string;
+  readonly postLandscapeEventId: string;
+  readonly preBlockers: readonly SemanticBlockerEvidence[];
+  readonly postBlockers: readonly SemanticBlockerEvidence[];
+  readonly preCount: number;
+  readonly postCount: number;
+  readonly preFingerprint: string;
+  readonly postFingerprint: string;
   readonly targetOutcomes: readonly ValidatedTargetOutcome[];
   readonly committedResolutions: readonly VerifiedCommittedResolution[];
   readonly regressions: readonly VerifiedRegression[];
