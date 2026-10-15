@@ -820,16 +820,23 @@ export function projectVerifiedTargetWriterHandoffState(
     if (event.eventType === "TARGET_WRITER_HANDOFF_REQUESTED") {
       const payload = event.payload;
       if (payload.purpose !== "HANDOFF") continue;
-      const status =
-        payload.status === "REQUESTED"
-          ? "REQUESTED"
-          : payload.status === "FENCED"
-            ? "FENCED_NO_ACTIVE_WRITER"
-            : payload.status === "CLAIMED"
-              ? "CLAIMED_OUTCOME_UNRECORDED"
-              : payload.status === "RESUMED"
-                ? "RESUMED"
-                : "WAITING_FOR_GUARDS";
+      let status: VerifiedTargetWriterHandoffStateV1["status"];
+      switch (payload.status) {
+        case "REQUESTED":
+          status = "REQUESTED";
+          break;
+        case "FENCED":
+          status = "FENCED_NO_ACTIVE_WRITER";
+          break;
+        case "CLAIMED":
+          status = "CLAIMED_OUTCOME_UNRECORDED";
+          break;
+        case "RESUMED":
+          status = "RESUMED";
+          break;
+        default:
+          status = "WAITING_FOR_GUARDS";
+      }
       latest = Object.freeze({
         status,
         handoffOperationId: payload.handoffOperationId,
