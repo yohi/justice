@@ -76,7 +76,9 @@ export type CurrentPhaseDisposition =
 /**
  * Resume cursor for a Review Gate. `resume_execution` carries the identity of
  * the epoch whose execution was suspended so a coordinator can verify the
- * epoch has not changed before resuming.
+ * epoch has not changed before resuming. `dispatch_recovery` carries a
+ * verified recovery cursor for an external operation dispatch whose outcome
+ * is still pending (Task 9 projection seam).
  */
 export type ReviewGateResumeCursor =
   | Readonly<{ readonly kind: "completed" }>
@@ -92,7 +94,29 @@ export type ReviewGateResumeCursor =
   | Readonly<{ readonly kind: "non_convergent"; readonly payload: ReviewNonConvergentPayload }>
   | Readonly<{ readonly kind: "round_limit_exhausted" }>
   | Readonly<{ readonly kind: "remediate"; readonly lineageIds: ReadonlyArray<LineageId> }>
-  | Readonly<{ readonly kind: "review" }>;
+  | Readonly<{ readonly kind: "review" }>
+  | Readonly<{
+      readonly kind: "dispatch_recovery";
+      readonly recovery: VerifiedDispatchRecoveryCursorV1;
+    }>
+  | Readonly<{
+      readonly kind: "terminal_revoke_pending";
+      readonly handoffOperationId: string;
+      readonly terminalTransitionOperationId: string;
+      readonly targets: ReadonlyArray<VerifiedCanonicalMutationTargetV1>;
+    }>
+  | Readonly<{
+      readonly kind: "revoked_awaiting_terminal_publication";
+      readonly handoffOperationId: string;
+      readonly terminalTransitionOperationId: string;
+      readonly targets: ReadonlyArray<VerifiedCanonicalMutationTargetV1>;
+    }>
+  | Readonly<{
+      readonly kind: "terminal_finalized";
+      readonly handoffOperationId: string;
+      readonly terminalTransitionOperationId: string;
+      readonly targets: ReadonlyArray<VerifiedCanonicalMutationTargetV1>;
+    }>;
 
 /**
  * Immutable projection of a Review Gate event history: the base reducer state
@@ -108,6 +132,8 @@ export type ReviewGateProjection = Readonly<
     readonly pendingRevalidationBlockers: ReadonlyArray<LineageId>;
     readonly phaseBaselineRevision: number;
     readonly phaseReviewContextIdentity: string;
+    readonly dispatchRecoveryCursors?: ReadonlyArray<VerifiedDispatchRecoveryCursorV1>;
+    readonly terminalState?: VerifiedTerminalStateV1 | null;
   }
 >;
 
@@ -293,6 +319,37 @@ export type PrivateResponseEvidenceV1 = Readonly<{
   readonly policyVersion: string;
 }>;
 
+export type ExternalOperationResponseStagedV2 = Readonly<{
+  readonly eventType: "EXTERNAL_OPERATION_RESPONSE_STAGED";
+  readonly gateId: string;
+  readonly generationId: string;
+  readonly epochId: string;
+  readonly operationId: string;
+  readonly dispatchAttemptId: string;
+  readonly responseEvidence: PrivateResponseEvidenceV1;
+}>;
+
+export type ExternalOperationResultCommittedV2 = Readonly<{
+  readonly eventType: "EXTERNAL_OPERATION_RESULT_COMMITTED";
+  readonly gateId: string;
+  readonly generationId: string;
+  readonly epochId: string;
+  readonly operationId: string;
+  readonly dispatchAttemptId: string;
+  readonly resultEventId: string;
+  readonly redeliveryEvidenceDigest: string | null;
+}>;
+
+export type ExternalOperationOutcomeAppliedV2 = Readonly<{
+  readonly eventType: "EXTERNAL_OPERATION_OUTCOME_APPLIED";
+  readonly gateId: string;
+  readonly generationId: string;
+  readonly epochId: string;
+  readonly operationId: string;
+  readonly dispatchAttemptId: string;
+  readonly outcomeAppliedEventId: string;
+}>;
+
 export type VerifiedDispatchRecoveryCursorV1 = Readonly<{
   readonly kind:
     | "INTENT_PRE_LAUNCH"
@@ -317,6 +374,17 @@ export type VerifiedDispatchRecoveryCursorV1 = Readonly<{
   readonly outcomeAppliedEventId: string | null;
   readonly redeliveryEvidenceDigest: string | null;
 }>;
+
+export type VerifiedTerminalStateV1 = Readonly<{
+  readonly kind:
+    | "TERMINAL_REVOKE_PENDING"
+    | "REVOKED_AWAITING_TERMINAL_PUBLICATION"
+    | "TERMINAL_FINALIZED";
+  readonly handoffOperationId: string;
+  readonly terminalTransitionOperationId: string;
+  readonly targets: ReadonlyArray<VerifiedCanonicalMutationTargetV1>;
+}>;
+
 
 export type TrustedProtocolReleaseAnchorV1 = Readonly<{
   readonly installationId: string;
