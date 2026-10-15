@@ -20,6 +20,7 @@ import type {
   VerifiedFirstEnrollmentAuthorityV1,
   VerifiedRequirementsBinding,
   VerifiedTargetWriterAuthoritiesV1,
+  VerifiedTargetWriterHandoffStateV1,
   VerifiedTerminalStateV1,
 } from "./types.js";
 import { computeCanonicalJsonFingerprint } from "./identity.js";
@@ -165,6 +166,7 @@ export type VerifiedGateTip =
       readonly dispatchRecoveryCursors: ReadonlyArray<VerifiedDispatchRecoveryCursorV1>;
       readonly terminalState: VerifiedTerminalStateV1 | null;
       readonly targetWriterAuthorities: VerifiedTargetWriterAuthoritiesV1 | null;
+      readonly targetWriterHandoffState: VerifiedTargetWriterHandoffStateV1 | null;
     }>
 
 export type VerifiedWorkspaceContinuityV1 = Readonly<{

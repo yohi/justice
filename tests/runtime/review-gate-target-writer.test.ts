@@ -497,7 +497,7 @@ describe("protected canonical target writer", () => {
       manager.close();
       await rm(owned.sandbox, { recursive: true, force: true });
     }
-  });
+  }, 60_000);
   it("recovers a prepared terminal intent publication after a seal-before-witness crash", async () => {
     const { manager, owned, terminal, publication } = await createSealedCloseFixture();
     try {

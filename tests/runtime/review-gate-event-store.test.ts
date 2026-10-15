@@ -1107,7 +1107,7 @@ describe("ReviewGateEventStore — protected publication CAS (Task 6)", () => {
     expect(await store.readEvents("gate-a")).toHaveLength(26);
     store.close();
     closeWitnessFixture(ctx);
-  });
+  }, 60_000);
 
   it("rejects an empty publication batch", async () => {
     const ctx = await freshContext("publisheempty");

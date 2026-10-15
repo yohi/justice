@@ -20,6 +20,7 @@ import type {
   PrivateResponseEvidenceV1,
   VerifiedScopeFrontier,
   VerifiedTargetWriterAuthorityV1,
+  VerifiedTargetWriterHandoffStateV1,
   VerifiedTerminalStateV1,
   SemanticContextInputsV1,
   VerifiedCycleEvidence,
@@ -647,6 +648,7 @@ export function projectVerifiedGateTip(
     dispatchRecoveryCursors: projectVerifiedDispatchRecoveryCursors(input.events),
     terminalState: projectVerifiedTerminalState(input.events),
     targetWriterAuthorities: projectVerifiedTargetWriterAuthority(input.events),
+    targetWriterHandoffState: projectVerifiedTargetWriterHandoffState(input.events),
   });
 }
 
@@ -804,6 +806,69 @@ export function projectVerifiedTargetWriterAuthority(
 }
 
 /**
+ * Project the yielded handoff replay state (Task 9 PLAN-027) from a verified
+ * V2 event history. Returns the latest handoff state, or null if no handoff
+ * event has been witnessed.
+ */
+export function projectVerifiedTargetWriterHandoffState(
+  events: readonly VerifiedReviewGateEvent[],
+): VerifiedTargetWriterHandoffStateV1 | null {
+  let latest: VerifiedTargetWriterHandoffStateV1 | null = null;
+
+  for (const event of events) {
+    if (!isV2Event(event)) continue;
+    if (event.eventType === "TARGET_WRITER_HANDOFF_REQUESTED") {
+      const payload = event.payload;
+      if (payload.purpose !== "HANDOFF") continue;
+      let status: VerifiedTargetWriterHandoffStateV1["status"];
+      switch (payload.status) {
+        case "REQUESTED":
+          status = "REQUESTED";
+          break;
+        case "FENCED":
+          status = "FENCED_NO_ACTIVE_WRITER";
+          break;
+        case "CLAIMED":
+          status = "CLAIMED_OUTCOME_UNRECORDED";
+          break;
+        case "RESUMED":
+          status = "RESUMED";
+          break;
+        default:
+          status = "WAITING_FOR_GUARDS";
+      }
+      latest = Object.freeze({
+        status,
+        handoffOperationId: payload.handoffOperationId,
+        originalOperationId: payload.originalOperationId,
+        target: payload.targets[0] ?? payload.target,
+        protectedTargetFrontier: payload.expectedTargetWriterFrontier,
+        expectedGlobalTargetWriterGeneration: payload.expectedGlobalTargetWriterGeneration,
+        newOwner: payload.newOwner,
+        pendingNativeEffectReference: payload.pendingNativeEffectReference,
+      });
+      continue;
+    }
+    if (event.eventType === "TARGET_WRITER_HANDOFF_RESUMED") {
+      const payload = event.payload;
+      const intent = payload.intent;
+      latest = Object.freeze({
+        status: "RESUMED",
+        handoffOperationId: intent.handoffOperationId,
+        originalOperationId: intent.originalOperationId,
+        target: intent.targets[0] ?? intent.target,
+        protectedTargetFrontier: payload.protectedTargetFrontier,
+        expectedGlobalTargetWriterGeneration: payload.globalTargetWriterGeneration,
+        newOwner: intent.newOwner,
+        pendingNativeEffectReference: payload.pendingNativeEffectReference,
+      });
+    }
+  }
+
+  return latest;
+}
+
+/**
  * Projected Task 9 semantic cycle history: the verified phase context plus
  * the complete, causally linked round evidence for Task 12's NC1 builder.
  */
@@ -956,7 +1021,6 @@ type DispatchRecoveryFoldState = {
 /**
  * Project the outstanding external-operation dispatch recovery cursors from a
  * verified V2 event history. Each `EXTERNAL_OPERATION_DISPATCHED` starts as
- * verified V2 event history. Each `EXTERNAL_OPERATION_DISPATCHED` starts as
  * `IN_FLIGHT`; the private response-custody lifecycle events advance it —
  * `EXTERNAL_OPERATION_RESPONSE_STAGED` → `RESPONSE_STAGED`,
  * `EXTERNAL_OPERATION_RESULT_COMMITTED` → `RESULT_COMMITTED_OUTCOME_PENDING`,
@@ -968,10 +1032,6 @@ type DispatchRecoveryFoldState = {
  * when it has a verified intent before dispatch, or when independently
  * verified private evidence is unavailable. The fold type includes them so
  * the same cursor machinery can carry them through `deriveResumeCursor`.
- * `EXTERNAL_OPERATION_RESPONSE_STAGED` → `RESPONSE_STAGED`,
- * `EXTERNAL_OPERATION_RESULT_COMMITTED` → `RESULT_COMMITTED_OUTCOME_PENDING`,
- * and `EXTERNAL_OPERATION_OUTCOME_APPLIED` removes the cursor from the
- * outstanding set (the authoritative outcome is applied; nothing to recover).
  * Operations are keyed by `operationId` + `dispatchAttemptId`: every lifecycle
  * payload carries both ids, matching the private response record keying, so
  * the attempt is stable across events. Result events may appear before their
