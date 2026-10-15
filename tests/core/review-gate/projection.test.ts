@@ -20,6 +20,7 @@ import {
   projectReviewGate,
   projectVerifiedDispatchRecoveryCursors,
   projectVerifiedGateTip,
+  projectVerifiedRequirementsAuthority,
   projectVerifiedLineageHistory,
   projectVerifiedTargetWriterAuthority,
 } from "../../../src/core/review-gate/projection.js";
@@ -1302,6 +1303,184 @@ describe("projectVerifiedGateTip", () => {
       expect(tip.targetWriterHandoffState).not.toBeNull();
       expect(tip.targetWriterHandoffState?.status).toBe("RESUMED");
       expect(tip.targetWriterHandoffState?.expectedGlobalTargetWriterGeneration).toBe(2);
+    });
+  });
+
+  describe("projectVerifiedRequirementsAuthority — Task 15", () => {
+    const genesisRequirementsResolution = {
+      schemaVersion: 2,
+      source: "explicit",
+      canonicalPath: "docs/requirements.md",
+      digest,
+      gitMode: "100644",
+      requirementsGitBlobOid: "requirements-blob-1",
+      committedBaselineOid: "baseline-commit-1",
+      workspaceIdentity: "workspace-1",
+      selectionEvidence: { commandPath: "--requirements docs/requirements.md" },
+    };
+
+    function v1ArtifactBindingsUpdated(): object {
+      return {
+        eventType: "ARTIFACT_BINDINGS_UPDATED",
+        gateId: "gate-1",
+        writerId: "writer-1",
+        epochId: "epoch-1",
+        emittedAt: "2026-10-11T00:00:00.700Z",
+        payload: {
+          designArtifact: { canonicalPath: "docs/design.md", digest, gitMode: "100644" },
+          planArtifact: { canonicalPath: "docs/plan.md", digest, gitMode: "100644" },
+        },
+      };
+    }
+
+    function v2CompletedWithCurrentRequirements(
+      currentRequirements: object,
+      currentRequirementsAuthorityEventId: string,
+    ): object {
+      return v2Event("COMPLETED_APPROVAL_BINDING", "event-completed", "event-genesis", {
+        approvalBinding: {
+          reviewScopeId: "scope-1",
+          gateId: "gate-1",
+          designArtifact: { canonicalPath: "docs/design.md", digest, gitMode: "100644" },
+          planArtifact: { canonicalPath: "docs/plan.md", digest, gitMode: "100644" },
+          requirementsResolution: { source: "explicit", canonicalPath: "docs/requirements.md", digest },
+          reviewProtocolFingerprint: "review-protocol-1",
+          designProtocolFingerprint: "design-protocol-1",
+          planProtocolFingerprint: "plan-protocol-1",
+          approvedAt: "2026-10-11T00:00:00.000Z",
+        },
+        designClearEventId: "event-design-clear",
+        planClearEventId: "event-plan-clear",
+        currentRequirementsAuthorityEventId,
+        currentRequirements,
+      });
+    }
+
+    it("returns null fail-closed for a V1-only gate history", () => {
+      expect(
+        projectVerifiedRequirementsAuthority([validateReviewGateEventRecord(created)]),
+      ).toBeNull();
+    });
+
+    it("preserves the immutable V2 historical requirements from GATE_CREATED", () => {
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+
+      const authority = projectVerifiedRequirementsAuthority([genesis]);
+
+      expect(authority).toEqual({
+        historical: genesisRequirementsResolution,
+        historicalEventId: "event-genesis",
+        current: null,
+        currentAuthorityEventId: null,
+      });
+    });
+
+    it("records divergent current requirements from a V2 COMPLETED_APPROVAL_BINDING without merging", () => {
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+      const rebased = validateReviewGateEventRecord(
+        v2CompletedWithCurrentRequirements(
+          {
+            source: "explicit",
+            workspaceIdentity: "workspace-1",
+            canonicalPath: "docs/requirements.md",
+            digest: "b".repeat(64),
+            gitMode: "100644",
+            gitBlobOid: "requirements-blob-2",
+            selectedByEventId: "event-requirements-rebase",
+          },
+          "event-requirements-rebase",
+        ),
+      );
+
+      const authority = projectVerifiedRequirementsAuthority([genesis, rebased]);
+
+      if (authority === null) throw new Error("expected_requirements_authority");
+      expect(authority.historical).toEqual(genesisRequirementsResolution);
+      expect(authority.historicalEventId).toBe("event-genesis");
+      expect(authority.current).toEqual({
+        source: "explicit",
+        workspaceIdentity: "workspace-1",
+        canonicalPath: "docs/requirements.md",
+        digest: "b".repeat(64),
+        gitMode: "100644",
+        gitBlobOid: "requirements-blob-2",
+        selectedByEventId: "event-requirements-rebase",
+      });
+      expect(authority.currentAuthorityEventId).toBe("event-requirements-rebase");
+      expect(authority.historical.digest).not.toBe(authority.current?.digest);
+    });
+
+    it("re-selects the current requirements authority after a legacy ARTIFACT_BINDINGS_UPDATED", () => {
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+      const updated = validateReviewGateEventRecord(v1ArtifactBindingsUpdated());
+
+      const authority = projectVerifiedRequirementsAuthority([genesis, updated]);
+
+      if (authority === null) throw new Error("expected_requirements_authority");
+      expect(authority.historical).toEqual(genesisRequirementsResolution);
+      expect(authority.current).toEqual({
+        source: "explicit",
+        workspaceIdentity: "workspace-1",
+        canonicalPath: "docs/requirements.md",
+        digest,
+        gitMode: "100644",
+        gitBlobOid: "requirements-blob-1",
+        selectedByEventId: "synthetic-v1-requirements-authority",
+      });
+      expect(authority.currentAuthorityEventId).toBe("synthetic-v1-requirements-authority");
+    });
+
+    it("keeps admission and effective requirements authority distinct on the unfinished tip", () => {
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+
+      const tip = projectVerifiedGateTip({
+        gateId: "gate-1",
+        scopeId: "scope-1",
+        events: [genesis],
+        frontier: frontier() as VerifiedScopeFrontier,
+      });
+
+      expect(tip.status).toBe("active");
+      if (tip.status !== "active") return;
+      expect(tip.lastVerifiedBinding.admission.historicalRequirements).toEqual(
+        genesisRequirementsResolution,
+      );
+      expect(tip.lastVerifiedBinding.admission.historicalRequirementsV2EventId).toBe("event-genesis");
+      expect(tip.lastVerifiedBinding.effective.currentRequirementsAuthorityEventId).toBe("event-genesis");
+      expect(tip.lastVerifiedBinding.effective.currentRequirements).toEqual({
+        source: "explicit",
+        workspaceIdentity: "workspace-1",
+        canonicalPath: "docs/requirements.md",
+        digest,
+        gitMode: "100644",
+        gitBlobOid: "requirements-blob-1",
+        selectedByEventId: "event-genesis",
+      });
+    });
+
+    it("advances the unfinished tip current requirements authority after a legacy artifact bindings update while admission stays pinned", () => {
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+      const updated = validateReviewGateEventRecord(v1ArtifactBindingsUpdated());
+
+      const tip = projectVerifiedGateTip({
+        gateId: "gate-1",
+        scopeId: "scope-1",
+        events: [genesis, updated],
+        frontier: frontier() as VerifiedScopeFrontier,
+      });
+
+      expect(tip.status).toBe("active");
+      if (tip.status !== "active") return;
+      expect(tip.lastVerifiedBinding.admission.historicalRequirements).toEqual(
+        genesisRequirementsResolution,
+      );
+      expect(tip.lastVerifiedBinding.effective.currentRequirementsAuthorityEventId).toBe(
+        "synthetic-v1-requirements-authority",
+      );
+      expect(tip.lastVerifiedBinding.effective.currentRequirements).toMatchObject({
+        selectedByEventId: "synthetic-v1-requirements-authority",
+        gitBlobOid: "requirements-blob-1",
+      });
     });
   });
 

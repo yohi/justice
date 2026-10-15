@@ -191,14 +191,28 @@ function completedTip(
 }
 
 function unfinishedBinding(): VerifiedUnfinishedBindingSnapshot {
+  const context = contextBinding();
   return {
     admission: {
       gateCreatedEventId: "created-1",
       historicalRequirementsV2EventId: "req-v2-1",
-      context: contextBinding(),
+      historicalRequirements: {
+        schemaVersion: 2,
+        source: "explicit",
+        canonicalPath: "docs/requirements.md",
+        digest: DIGEST("requirements"),
+        gitMode: "100644",
+        requirementsGitBlobOid: "blob-requirements",
+        committedBaselineOid: "commit-requirements",
+        workspaceIdentity: WORKSPACE,
+        selectionEvidence: {},
+      },
+      context,
     },
     effective: {
-      context: contextBinding(),
+      context,
+      currentRequirementsAuthorityEventId: "auth-requirements",
+      currentRequirements: context.requirements,
       authorityEventId: "effective-1",
       operationId: "op-effective",
       verifiedHistoryFrontier: FRONTIER,
@@ -495,6 +509,38 @@ describe("unfinished gate admission", () => {
         precedence: emptyPrecedence("gate-active", `gen-gate-active`),
       }),
     );
+    expectDecision(decision, "RESUME");
+    if (decision.kind !== "RESUME") return;
+    expect(decision.gateId).toBe("gate-active");
+  });
+
+  it("resumes an active gate when the current requirements authority has left the immutable historical V2 resolution", () => {
+    const binding = unfinishedBinding();
+    const rebased: VerifiedUnfinishedBindingSnapshot = {
+      ...binding,
+      admission: {
+        ...binding.admission,
+        // A completed rebase leaves the immutable V2 resolution behind the
+        // currently validated authority; the split must survive admission.
+        historicalRequirements: {
+          ...binding.admission.historicalRequirements,
+          digest: DIGEST("requirements-genesis"),
+          requirementsGitBlobOid: "blob-requirements-genesis",
+        },
+      },
+    };
+    expect(rebased.admission.historicalRequirements.digest).not.toBe(
+      rebased.effective.currentRequirements.digest,
+    );
+    const tip = { ...activeTip("gate-active", SCOPE_A), lastVerifiedBinding: rebased };
+
+    const decision = planReviewGateAdmission(
+      snapshot({
+        currentTips: [tip],
+        precedence: emptyPrecedence("gate-active", "gen-gate-active"),
+      }),
+    );
+
     expectDecision(decision, "RESUME");
     if (decision.kind !== "RESUME") return;
     expect(decision.gateId).toBe("gate-active");

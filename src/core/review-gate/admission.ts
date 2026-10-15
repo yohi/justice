@@ -69,10 +69,13 @@ export type VerifiedUnfinishedBindingSnapshot = Readonly<{
   readonly admission: Readonly<{
     readonly gateCreatedEventId: string;
     readonly historicalRequirementsV2EventId: string;
+    readonly historicalRequirements: RequirementsResolutionV2;
     readonly context: VerifiedGateContextBinding;
   }>;
   readonly effective: Readonly<{
     readonly context: VerifiedGateContextBinding;
+    readonly currentRequirementsAuthorityEventId: string;
+    readonly currentRequirements: VerifiedRequirementsBinding;
     readonly authorityEventId: string;
     readonly operationId: string;
     readonly verifiedHistoryFrontier: string;
