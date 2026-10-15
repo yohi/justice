@@ -1867,6 +1867,8 @@ readVerifiedPhaseProtocolDelta: async () => "BLOCK",
       workspaceIdentity,
       mutationSubstrate,
       scopeAdmission,
+      // Task 17 — durable custody for caller-owned routing decisions.
+      recoveryStore,
       inspectTargets: async (paths) =>
         new Map(
           await Promise.all(

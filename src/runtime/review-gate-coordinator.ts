@@ -95,6 +95,7 @@ import {
   computeReviewScopeId,
 } from "../core/review-gate/identity";
 import type { ReviewGateDispatchRecordV1, ReviewGateEventStore } from "./review-gate-event-store";
+import type { ReviewGateRecoveryStore } from "./review-gate-recovery-store";
 import {
   acquireGateLockChain,
   type ReviewGateLockHandle,
@@ -139,6 +140,45 @@ export type ReviewGateCommandResult = Readonly<{
   readonly completedReuse: boolean;
 }>;
 
+
+/**
+ * Task 17 — caller-owned routing decision for one Review Gate execution step.
+ * The caller (host adapter / plan bridge) owns the routing decision; the
+ * coordinator never plans one itself and only validates and executes the
+ * caller-provided decision against a durably prepared operation.
+ */
+export type CallerRoutingDecisionV1 = Readonly<{
+  readonly kind: "execute_operation" | "block" | "await_evidence";
+  readonly operationId: string | null;
+  readonly reason: string | null;
+}>;
+
+/** Typed result of one caller-owned routing decision handled by the coordinator. */
+export type CallerRoutingDecisionOutcomeV1 = Readonly<{
+  readonly kind: "executed" | "blocked" | "awaited";
+  readonly operationId: string | null;
+  readonly guidance: string | null;
+}>;
+
+/**
+ * Durable prepared-operation record published to the recovery store by
+ * `prepareCallerOperation` and re-read/validated before every caller-owned
+ * execution. Content-addressed: identical records collapse idempotently.
+ */
+export type PreparedReviewGateOperationRecordV1 = Readonly<{
+  readonly recordKind: "review_gate_prepared_operation";
+  readonly schemaVersion: 1;
+  readonly gateId: string;
+  readonly operationId: string;
+  readonly operation: ReviewGateNextOperation;
+}>;
+
+/** Handle returned by `prepareCallerOperation` for the caller's routing decision. */
+export type PreparedCallerOperationHandleV1 = Readonly<{
+  readonly operationId: string;
+  readonly preparedRecoveryDigest: string;
+}>;
+
 /** Read-only workspace byte access for artifact admission and digests. */
 export interface ReviewGateWorkspaceReader {
   readonly readWorkspaceFile: (path: string) => Promise<Buffer | null>;
@@ -175,6 +215,12 @@ export interface ReviewGateCoordinatorOptions {
   readonly newId?: () => string;
   readonly newWriterId?: () => string;
   readonly scopeAdmission?: ReviewGateScopeAdmission | null;
+  /**
+   * Task 17 — durable custody for prepared caller-owned operations. `null`
+   * selects caller-routing-unavailable mode: `execute_operation` decisions
+   * fail closed while `block`/`await_evidence` decisions still work.
+   */
+  readonly recoveryStore?: ReviewGateRecoveryStore | null;
 }
 
 export interface ReviewGateCoordinator {
@@ -193,6 +239,26 @@ export interface ReviewGateCoordinator {
     use: ScopedReviewToolUse,
   ) => ReviewCapabilityDecision | undefined;
   readonly releaseSession: (sessionId: string) => void;
+  
+  /**
+   * Task 17 — register a caller-provided planned operation as a durable
+   * prepared record in the recovery store, without mutating Review Gate state.
+   */
+  readonly prepareCallerOperation: (
+    sessionId: string,
+    operation: ReviewGateNextOperation,
+  ) => Promise<PreparedCallerOperationHandleV1>;
+  /**
+   * Task 17 — execute the caller-owned routing decision. The coordinator
+   * never plans itself: `execute_operation` is validated against the durable
+   * prepared record, then executed and witnessed; `block` records the
+   * caller's reason as a durable stop event; `await_evidence` returns without
+   * mutating state.
+   */
+  readonly executeNextOperation: (
+    sessionId: string,
+    decision: CallerRoutingDecisionV1,
+  ) => Promise<CallerRoutingDecisionOutcomeV1>;
 }
 
 const REVIEW_ARTIFACT_WRITE_TOOLS: ReadonlySet<string> = new Set([
@@ -217,6 +283,97 @@ const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 const MAX_DRIVE_ITERATIONS = 64;
+
+// ---------------------------------------------------------------------------
+// Task 17 — caller-owned routing constants and prepared-record codec
+// ---------------------------------------------------------------------------
+
+/** Distinguishing record kind claimed by prepared-operation recovery records. */
+const PREPARED_OPERATION_RECORD_KIND = "review_gate_prepared_operation" as const;
+
+/** All operation kinds the gate planner can produce. */
+const REVIEW_GATE_OPERATION_KINDS: ReadonlySet<string> = new Set<string>([
+  "dispatch_reviewer",
+  "dispatch_finding_validator",
+  "commit_finding_reconciliation",
+  "dispatch_lineage_revalidation",
+  "start_remediation",
+  "recover_remediation",
+  "dispatch_self_review",
+  "prepare_restore",
+  "recover_restore",
+  "prepare_commit",
+  "recover_commit",
+  "commit_resolutions",
+  "append_reopen",
+  "run_pre_clear_validation",
+  "append_design_clear",
+  "append_plan_clear",
+  "validate_non_convergence_reentry",
+  "suspended",
+  "completed",
+]);
+
+/**
+ * Terminal routing states, not operations: under caller-owned routing the
+ * caller expresses them with a `block`/`await_evidence` decision instead of
+ * preparing the terminal plan, so the coordinator never executes them.
+ */
+const NON_PREPARABLE_OPERATION_KINDS: ReadonlySet<string> = new Set<string>([
+  "suspended",
+  "completed",
+]);
+
+/** Drive-loop sentinel: the operation executed in place and the loop continues. */
+const DRIVE_CONTINUE: unique symbol = Symbol("review_gate_drive_continue");
+
+const isPlainObjectRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isNonEmptyString = (value: unknown): value is string =>
+  typeof value === "string" && value.length > 0;
+
+/**
+ * Strictly decode one recovery-store object as a prepared-operation record.
+ * `null` marks an unrelated recovery record (Task 10 commit/restore records
+ * share the content-addressed namespace and are skipped); a record that
+ * claims the prepared-operation contract but violates its shape fails closed.
+ */
+function parsePreparedOperationRecord(
+  bytes: Buffer,
+): PreparedReviewGateOperationRecordV1 | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bytes.toString("utf8")) as unknown;
+  } catch (err: unknown) {
+    if (err instanceof SyntaxError) return null;
+    throw err;
+  }
+  if (!isPlainObjectRecord(parsed) || parsed.recordKind !== PREPARED_OPERATION_RECORD_KIND) {
+    return null;
+  }
+  const { schemaVersion, gateId, operationId, operation } = parsed;
+  const operationKind = isPlainObjectRecord(operation) ? operation.kind : undefined;
+  if (
+    schemaVersion !== 1 ||
+    !isNonEmptyString(gateId) ||
+    !isNonEmptyString(operationId) ||
+    !isPlainObjectRecord(operation) ||
+    !isNonEmptyString(operationKind) ||
+    !REVIEW_GATE_OPERATION_KINDS.has(operationKind) ||
+    NON_PREPARABLE_OPERATION_KINDS.has(operationKind)
+  ) {
+    throw new Error("review_gate_prepared_operation_corrupt");
+  }
+  return Object.freeze({
+    recordKind: PREPARED_OPERATION_RECORD_KIND,
+    schemaVersion: 1,
+    gateId,
+    operationId,
+    operation: operation as unknown as ReviewGateNextOperation,
+  });
+}
+
 
 /** Transient per-session orchestration state (call/lock handles only). */
 interface MutableSessionState {
@@ -267,6 +424,8 @@ export function createReviewGateCoordinator(
   const randomId = options.newId ?? ((): string => globalThis.crypto.randomUUID());
   const newId = randomId;
   const newWriterId = options.newWriterId ?? ((): string => `rgw-${randomId()}`);
+  /** Task 17 — durable custody for prepared caller-owned operations. */
+  const recovery = options.recoveryStore ?? null;
 
   /** sessionId → transient session state (call/lock handles only). */
   const sessions = new Map<string, MutableSessionState>();
@@ -866,6 +1025,314 @@ export function createReviewGateCoordinator(
   // The drive loop: plan → side effect → reproject → next
   // ---------------------------------------------------------------------------
 
+  /**
+   * Execute exactly one planned Review Gate operation.
+   *
+   * Shared execute path for both the legacy drive loop and the Task 17
+   * caller-owned routing seam: `DRIVE_CONTINUE` means the operation executed
+   * in place (evidence cleared or a transition appended) and the loop should
+   * reproject and plan again; a `HookResponse` ends the step (a dispatch was
+   * injected, or the gate suspended/completed).
+   */
+  const executeOperation = async (
+    session: MutableSessionState,
+    projection: ReviewGateProjection,
+    op: ReviewGateNextOperation,
+  ): Promise<HookResponse | null | typeof DRIVE_CONTINUE> => {
+    switch (op.kind) {
+      case "dispatch_reviewer":
+      case "dispatch_finding_validator":
+      case "dispatch_self_review":
+      case "dispatch_lineage_revalidation":
+      case "validate_non_convergence_reentry": {
+        // The fresh review dispatch consumes the resolution-commit evidence;
+        // keeping it would re-plan dispatch_reviewer forever.
+        if (op.kind === "dispatch_reviewer" && session.resolutionsCommitted !== null) {
+          session.resolutionsCommitted = null;
+        }
+        const packet = buildPacketForOperation(session, projection, op);
+        // A redispatch continues the already-durable logical dispatch;
+        // re-recording it with fresh envelope fields would conflict instead
+        // of resuming the crashed attempt exactly once.
+      if (op.redispatchedOperationId === undefined) {
+          await recordDispatch(session, packet);
+        }
+        return injectPacket(session, packet);
+      }
+      case "start_remediation":
+      case "recover_remediation": {
+        session.remediationCompleted = null;
+        session.selfReviewPassed = null;
+        session.commitCompleted = null;
+        session.resolutionsCommitted = null;
+        const packet = buildPacketForOperation(session, projection, op);
+        await recordDispatch(session, packet);
+        const response = injectPacket(session, packet);
+        // The round's target lineages come from the planned operation;
+        // default packet-derived intents carry none.
+        session.inFlight = Object.freeze({
+          kind: "remediation_started",
+          phase: op.phase,
+          round: op.round,
+          lineageIds: [...op.lineageIds],
+          worktreeMatchesPreImage: true,
+        });
+        session.lockPhase = "remediation";
+        return response;
+      }
+      case "commit_finding_reconciliation": {
+        let payload: ReturnType<typeof reconcileFindingBatch>;
+        try {
+          payload = reconcileFindingBatch(projection, op.batch);
+        } catch (error: unknown) {
+          const reason = error instanceof Error ? error.message : String(error);
+          return suspendAndBlock(
+            session,
+            reason === "validator_result_conflict" ? "VALIDATOR_RESULT_CONFLICT" : "FINDING_RECONCILIATION_FAILED",
+            "the validated finding batch conflicts with tracked lineage state; the Gate is suspended.",
+          );
+        }
+        await appendEvents(
+          session,
+          payload.events.map((event) => ({
+            eventType: event.eventType,
+            payload: event.payload,
+          })),
+        );
+        session.reviewObserved = null;
+        session.validatedFindings.length = 0;
+        session.preClearObserved = null;
+        return DRIVE_CONTINUE;
+      }
+      case "prepare_commit": {
+        if (mutation === null) {
+          return suspendAndBlock(
+            session,
+            "mutation_unavailable",
+            "the native mutation substrate is unavailable; the reviewed artifact cannot be committed safely. Restore the mutation substrate and rerun /justice-review-gate.",
+          );
+        }
+        try {
+          await mutation.commitArtifact(op.phase, op.artifactPath);
+        } catch (err) {
+          return suspendAndBlock(
+            session,
+            "commit_failed",
+            `the exact-artifact commit failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        await recordCurrentArtifactBindings(session, op.phase, op.artifactPath);
+        session.commitCompleted = Object.freeze({
+          phase: op.phase,
+          artifactPath: op.artifactPath,
+        });
+        session.selfReviewPassed = null;
+        session.workspaceStates = withWorkspaceState(
+          session.workspaceStates,
+          op.artifactPath,
+          "clean_committed",
+        );
+        return DRIVE_CONTINUE;
+      }
+      case "recover_commit": {
+        if (mutation === null) {
+          return suspendAndBlock(
+            session,
+            "mutation_unavailable",
+            "the native mutation substrate is unavailable; commit recovery is not possible.",
+          );
+        }
+        try {
+          await mutation.commitArtifact(op.phase, op.artifactPath);
+        } catch (err) {
+          return suspendAndBlock(
+            session,
+            "commit_failed",
+            `the exact-artifact commit recovery failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        await recordCurrentArtifactBindings(session, op.phase, op.artifactPath);
+        session.commitCompleted = Object.freeze({
+          phase: op.phase,
+          artifactPath: op.artifactPath,
+        });
+        return DRIVE_CONTINUE;
+      }
+      case "commit_resolutions": {
+        session.resolutionsCommitted = Object.freeze({ lineageIds: [...op.lineageIds] });
+        // The commit evidence is consumed by this step; keeping it would
+        // re-plan commit_resolutions forever (drive_iteration_exhausted).
+        session.commitCompleted = null;
+        return DRIVE_CONTINUE;
+      }
+      case "prepare_restore":
+      case "recover_restore": {
+        if (mutation === null) {
+          return suspendAndBlock(
+            session,
+            "mutation_unavailable",
+            "the native mutation substrate is unavailable; the drifted artifact cannot be restored safely.",
+          );
+        }
+        try {
+          await mutation.restoreArtifact(op.targetPath);
+        } catch (err) {
+          return suspendAndBlock(
+            session,
+            "restore_failed",
+            `the exact-artifact restore failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        session.workspaceStates = withWorkspaceState(
+          session.workspaceStates,
+          op.targetPath,
+          "clean_committed",
+        );
+        session.inFlight = null;
+        return DRIVE_CONTINUE;
+      }
+      case "append_reopen": {
+        await appendEvents(session, [
+          {
+            eventType: "REOPEN_REQUIRED",
+            payload: { phase: op.phase, lineageIds: [...op.lineageIds] },
+          },
+        ]);
+        return DRIVE_CONTINUE;
+      }
+      case "run_pre_clear_validation": {
+        const registry = createDefaultDeterministicValidatorRegistry();
+        const evidences: ValidationEvidence[] = [];
+        let validationState: DeterministicValidationState = session.validationState;
+        for (const requirement of op.schedule.requirements) {
+          if (requirement.disposition === "reuse_evidence" && requirement.evidence !== null) {
+            evidences.push(requirement.evidence);
+            continue;
+          }
+          if (requirement.dispatch === null) continue;
+          const evidence = executeValidationDispatch(registry, requirement.dispatch, now());
+          evidences.push(evidence);
+          validationState = {
+            cachedEvidence: new Map([
+              ...validationState.cachedEvidence,
+              [evidence.cacheKey, evidence],
+            ]),
+            attemptEnvironments: validationState.attemptEnvironments,
+          };
+        }
+        session.preClearObserved = Object.freeze({
+          validationEventId: newId(),
+          evidences: Object.freeze(evidences),
+        });
+        session.validationState = validationState;
+        return DRIVE_CONTINUE;
+      }
+      case "append_design_clear": {
+        await appendEvents(session, [
+          {
+            eventType: "DESIGN_CLEAR",
+            payload: { designProtocolFingerprint: op.designProtocolFingerprint },
+          },
+        ]);
+        session.preClearObserved = null;
+        session.reviewObserved = null;
+        session.validatedFindings.length = 0;
+        return DRIVE_CONTINUE;
+      }
+      case "append_plan_clear": {
+        const [designBytes, planBytes] = await Promise.all([
+          reader.readWorkspaceFile(session.designPath),
+          reader.readWorkspaceFile(session.planPath),
+        ]);
+        if (designBytes === null || planBytes === null) {
+          return suspendAndBlock(
+            session,
+            "reviewed_artifact_unreadable",
+            "the reviewed Design or Plan is unreadable; the Review Gate cannot clear safely.",
+          );
+        }
+        if (
+          computeArtifactDigest(designBytes) !== session.designDigest ||
+          computeArtifactDigest(planBytes) !== session.planDigest
+        ) {
+          return suspendAndBlock(
+            session,
+            "reviewed_artifact_digest_mismatch",
+            "the Design or Plan changed after review; rerun /justice-review-gate.",
+          );
+        }
+        // The PLAN_CLEAR milestone plus the terminal completed binding: the
+        // reducer only reaches status "completed" on COMPLETED_APPROVAL_BINDING.
+        await appendEvents(session, [
+          {
+            eventType: "PLAN_CLEAR",
+            payload: { completedApprovalBinding: op.approvalBinding },
+          },
+          {
+            eventType: "COMPLETED_APPROVAL_BINDING",
+            payload: { approvalBinding: op.approvalBinding },
+          },
+        ]);
+        return DRIVE_CONTINUE;
+      }
+      case "suspended": {
+        if (projection.status !== "suspended") {
+          if (op.reason === "review_non_convergent" && op.nonConvergent !== undefined) {
+            await appendEvents(session, [
+              {
+                eventType: "REVIEW_NON_CONVERGENT",
+                payload: {
+                  phase: op.nonConvergent.phase,
+                  lineageIds: [...op.nonConvergent.lineageIds],
+                },
+              },
+            ]);
+          } else if (op.reason === "round_limit_exhausted") {
+            await appendEvents(session, [
+              {
+                eventType: "ROUND_LIMIT_EXHAUSTED",
+                payload: {
+                  phase: projection.phase,
+                  roundLimit:
+                    projection.phase === "design"
+                      ? projection.designRemediationRounds.length
+                      : projection.planRemediationRounds.length,
+                },
+              },
+            ]);
+          } else if (op.reason === "execution_suspended") {
+            await appendEvents(session, [
+              {
+                eventType: "EXECUTION_SUSPENDED",
+                payload: { reason: op.detail ?? "execution_suspended" },
+              },
+            ]);
+          }
+        }
+        session.lockPhase = "remediation";
+        return blockedInjection(
+          `the Review Gate is suspended (${op.reason}); address the blocking condition and rerun /justice-review-gate.`,
+        );
+      }
+      case "completed": {
+        session.lockPhase = "awaiting_implementation_authorization";
+        session.pending = null;
+        session.inFlight = null;
+        return {
+          action: "inject",
+          injectedContext: [
+            "---",
+            "[JUSTICE: REVIEW GATE CLEAR]",
+            "",
+            "The Review Gate completed with an approval binding. Implementation authorization still requires the explicit user command:",
+            `/justice-implement --plan ${session.planPath} --approved`,
+            "---",
+          ].join("\n"),
+        };
+      }
+    }
+  };
+
   const drive = async (session: MutableSessionState): Promise<HookResponse | null> => {
     for (let iteration = 0; iteration < MAX_DRIVE_ITERATIONS; iteration += 1) {
       const projection = await loadProjection(session.gateId);
@@ -878,305 +1345,221 @@ export function createReviewGateCoordinator(
           `the gate planner rejected the current state: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
-
-      switch (op.kind) {
-        case "dispatch_reviewer":
-        case "dispatch_finding_validator":
-        case "dispatch_self_review":
-        case "dispatch_lineage_revalidation":
-        case "validate_non_convergence_reentry": {
-          // The fresh review dispatch consumes the resolution-commit evidence;
-          // keeping it would re-plan dispatch_reviewer forever.
-          if (op.kind === "dispatch_reviewer" && session.resolutionsCommitted !== null) {
-            session.resolutionsCommitted = null;
-          }
-          const packet = buildPacketForOperation(session, projection, op);
-          // A redispatch continues the already-durable logical dispatch;
-          // re-recording it with fresh envelope fields would conflict instead
-          // of resuming the crashed attempt exactly once.
-        if (op.redispatchedOperationId === undefined) {
-            await recordDispatch(session, packet);
-          }
-          return injectPacket(session, packet);
-        }
-        case "start_remediation":
-        case "recover_remediation": {
-          session.remediationCompleted = null;
-          session.selfReviewPassed = null;
-          session.commitCompleted = null;
-          session.resolutionsCommitted = null;
-          const packet = buildPacketForOperation(session, projection, op);
-          await recordDispatch(session, packet);
-          const response = injectPacket(session, packet);
-          // The round's target lineages come from the planned operation;
-          // default packet-derived intents carry none.
-          session.inFlight = Object.freeze({
-            kind: "remediation_started",
-            phase: op.phase,
-            round: op.round,
-            lineageIds: [...op.lineageIds],
-            worktreeMatchesPreImage: true,
-          });
-          session.lockPhase = "remediation";
-          return response;
-        }
-        case "commit_finding_reconciliation": {
-          let payload: ReturnType<typeof reconcileFindingBatch>;
-          try {
-            payload = reconcileFindingBatch(projection, op.batch);
-          } catch (error: unknown) {
-            const reason = error instanceof Error ? error.message : String(error);
-            return suspendAndBlock(
-              session,
-              reason === "validator_result_conflict" ? "VALIDATOR_RESULT_CONFLICT" : "FINDING_RECONCILIATION_FAILED",
-              "the validated finding batch conflicts with tracked lineage state; the Gate is suspended.",
-            );
-          }
-          await appendEvents(
-            session,
-            payload.events.map((event) => ({
-              eventType: event.eventType,
-              payload: event.payload,
-            })),
-          );
-          session.reviewObserved = null;
-          session.validatedFindings.length = 0;
-          session.preClearObserved = null;
-          continue;
-        }
-        case "prepare_commit": {
-          if (mutation === null) {
-            return suspendAndBlock(
-              session,
-              "mutation_unavailable",
-              "the native mutation substrate is unavailable; the reviewed artifact cannot be committed safely. Restore the mutation substrate and rerun /justice-review-gate.",
-            );
-          }
-          try {
-            await mutation.commitArtifact(op.phase, op.artifactPath);
-          } catch (err) {
-            return suspendAndBlock(
-              session,
-              "commit_failed",
-              `the exact-artifact commit failed: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-          await recordCurrentArtifactBindings(session, op.phase, op.artifactPath);
-          session.commitCompleted = Object.freeze({
-            phase: op.phase,
-            artifactPath: op.artifactPath,
-          });
-          session.selfReviewPassed = null;
-          session.workspaceStates = withWorkspaceState(
-            session.workspaceStates,
-            op.artifactPath,
-            "clean_committed",
-          );
-          continue;
-        }
-        case "recover_commit": {
-          if (mutation === null) {
-            return suspendAndBlock(
-              session,
-              "mutation_unavailable",
-              "the native mutation substrate is unavailable; commit recovery is not possible.",
-            );
-          }
-          try {
-            await mutation.commitArtifact(op.phase, op.artifactPath);
-          } catch (err) {
-            return suspendAndBlock(
-              session,
-              "commit_failed",
-              `the exact-artifact commit recovery failed: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-          await recordCurrentArtifactBindings(session, op.phase, op.artifactPath);
-          session.commitCompleted = Object.freeze({
-            phase: op.phase,
-            artifactPath: op.artifactPath,
-          });
-          continue;
-        }
-        case "commit_resolutions": {
-          session.resolutionsCommitted = Object.freeze({ lineageIds: [...op.lineageIds] });
-          // The commit evidence is consumed by this step; keeping it would
-          // re-plan commit_resolutions forever (drive_iteration_exhausted).
-          session.commitCompleted = null;
-          continue;
-        }
-        case "prepare_restore":
-        case "recover_restore": {
-          if (mutation === null) {
-            return suspendAndBlock(
-              session,
-              "mutation_unavailable",
-              "the native mutation substrate is unavailable; the drifted artifact cannot be restored safely.",
-            );
-          }
-          try {
-            await mutation.restoreArtifact(op.targetPath);
-          } catch (err) {
-            return suspendAndBlock(
-              session,
-              "restore_failed",
-              `the exact-artifact restore failed: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-          session.workspaceStates = withWorkspaceState(
-            session.workspaceStates,
-            op.targetPath,
-            "clean_committed",
-          );
-          session.inFlight = null;
-          continue;
-        }
-        case "append_reopen": {
-          await appendEvents(session, [
-            {
-              eventType: "REOPEN_REQUIRED",
-              payload: { phase: op.phase, lineageIds: [...op.lineageIds] },
-            },
-          ]);
-          continue;
-        }
-        case "run_pre_clear_validation": {
-          const registry = createDefaultDeterministicValidatorRegistry();
-          const evidences: ValidationEvidence[] = [];
-          let validationState: DeterministicValidationState = session.validationState;
-          for (const requirement of op.schedule.requirements) {
-            if (requirement.disposition === "reuse_evidence" && requirement.evidence !== null) {
-              evidences.push(requirement.evidence);
-              continue;
-            }
-            if (requirement.dispatch === null) continue;
-            const evidence = executeValidationDispatch(registry, requirement.dispatch, now());
-            evidences.push(evidence);
-            validationState = {
-              cachedEvidence: new Map([
-                ...validationState.cachedEvidence,
-                [evidence.cacheKey, evidence],
-              ]),
-              attemptEnvironments: validationState.attemptEnvironments,
-            };
-          }
-          session.preClearObserved = Object.freeze({
-            validationEventId: newId(),
-            evidences: Object.freeze(evidences),
-          });
-          session.validationState = validationState;
-          continue;
-        }
-        case "append_design_clear": {
-          await appendEvents(session, [
-            {
-              eventType: "DESIGN_CLEAR",
-              payload: { designProtocolFingerprint: op.designProtocolFingerprint },
-            },
-          ]);
-          session.preClearObserved = null;
-          session.reviewObserved = null;
-          session.validatedFindings.length = 0;
-          continue;
-        }
-        case "append_plan_clear": {
-          const [designBytes, planBytes] = await Promise.all([
-            reader.readWorkspaceFile(session.designPath),
-            reader.readWorkspaceFile(session.planPath),
-          ]);
-          if (designBytes === null || planBytes === null) {
-            return suspendAndBlock(
-              session,
-              "reviewed_artifact_unreadable",
-              "the reviewed Design or Plan is unreadable; the Review Gate cannot clear safely.",
-            );
-          }
-          if (
-            computeArtifactDigest(designBytes) !== session.designDigest ||
-            computeArtifactDigest(planBytes) !== session.planDigest
-          ) {
-            return suspendAndBlock(
-              session,
-              "reviewed_artifact_digest_mismatch",
-              "the Design or Plan changed after review; rerun /justice-review-gate.",
-            );
-          }
-          // The PLAN_CLEAR milestone plus the terminal completed binding: the
-          // reducer only reaches status "completed" on COMPLETED_APPROVAL_BINDING.
-          await appendEvents(session, [
-            {
-              eventType: "PLAN_CLEAR",
-              payload: { completedApprovalBinding: op.approvalBinding },
-            },
-            {
-              eventType: "COMPLETED_APPROVAL_BINDING",
-              payload: { approvalBinding: op.approvalBinding },
-            },
-          ]);
-          continue;
-        }
-        case "suspended": {
-          if (projection.status !== "suspended") {
-            if (op.reason === "review_non_convergent" && op.nonConvergent !== undefined) {
-              await appendEvents(session, [
-                {
-                  eventType: "REVIEW_NON_CONVERGENT",
-                  payload: {
-                    phase: op.nonConvergent.phase,
-                    lineageIds: [...op.nonConvergent.lineageIds],
-                  },
-                },
-              ]);
-            } else if (op.reason === "round_limit_exhausted") {
-              await appendEvents(session, [
-                {
-                  eventType: "ROUND_LIMIT_EXHAUSTED",
-                  payload: {
-                    phase: projection.phase,
-                    roundLimit:
-                      projection.phase === "design"
-                        ? projection.designRemediationRounds.length
-                        : projection.planRemediationRounds.length,
-                  },
-                },
-              ]);
-            } else if (op.reason === "execution_suspended") {
-              await appendEvents(session, [
-                {
-                  eventType: "EXECUTION_SUSPENDED",
-                  payload: { reason: op.detail ?? "execution_suspended" },
-                },
-              ]);
-            }
-          }
-          session.lockPhase = "remediation";
-          return blockedInjection(
-            `the Review Gate is suspended (${op.reason}); address the blocking condition and rerun /justice-review-gate.`,
-          );
-        }
-        case "completed": {
-          session.lockPhase = "awaiting_implementation_authorization";
-          session.pending = null;
-          session.inFlight = null;
-          return {
-            action: "inject",
-            injectedContext: [
-              "---",
-              "[JUSTICE: REVIEW GATE CLEAR]",
-              "",
-              "The Review Gate completed with an approval binding. Implementation authorization still requires the explicit user command:",
-              `/justice-implement --plan ${session.planPath} --approved`,
-              "---",
-            ].join("\n"),
-          };
-        }
-      }
+      const step = await executeOperation(session, projection, op);
+      if (step !== DRIVE_CONTINUE) return step;
     }
     return suspendAndBlock(
       session,
       "drive_iteration_exhausted",
       "the Review Gate loop did not converge within the bounded iteration budget.",
     );
+  };
+
+  // ---------------------------------------------------------------------------
+  // Task 17 — caller-owned routing (prepared operations + caller decisions)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Resolve the durable prepared operation for one caller-owned decision from
+   * the recovery store. Records are matched against the session's gate:
+   *
+   * - exactly one record matching `(gateId, operationId)` is returned,
+   * - `"mismatch"` when prepared records exist for the gate but none carries
+   *   the caller's operation id,
+   * - `"missing"` when the gate has no prepared records at all,
+   * - `"ambiguous"` when two records claim the same `(gateId, operationId)`.
+   *
+   * A record that claims the prepared-operation contract but violates its
+   * shape throws (`review_gate_prepared_operation_corrupt`); unrelated
+   * recovery records are skipped.
+   */
+  const readPreparedOperation = async (
+    session: MutableSessionState,
+    operationId: string,
+  ): Promise<
+    PreparedReviewGateOperationRecordV1 | "missing" | "mismatch" | "ambiguous"
+  > => {
+    if (recovery === null) return "missing";
+    const digests = await recovery.list();
+    let sameGateRecords = 0;
+    let found: PreparedReviewGateOperationRecordV1 | null = null;
+    for (const digest of digests) {
+      const bytes = await recovery.read(digest);
+      if (bytes === null) continue;
+      const record = parsePreparedOperationRecord(bytes);
+      if (record === null || record.gateId !== session.gateId) continue;
+      sameGateRecords += 1;
+      if (record.operationId !== operationId) continue;
+      if (found !== null) return "ambiguous";
+      found = record;
+    }
+    if (found !== null) return found;
+    return sameGateRecords > 0 ? "mismatch" : "missing";
+  };
+
+  /**
+   * Task 17 — register a caller-provided planned operation as a durable
+   * prepared record. The coordinator does NOT plan: the caller owns the
+   * routing decision end-to-end and the coordinator only validates the
+   * operation shape, mints the logical operation id and publishes the
+   * content-addressed record without touching Review Gate state.
+   */
+  const prepareCallerOperation = async (
+    sessionId: string,
+    operation: ReviewGateNextOperation,
+  ): Promise<PreparedCallerOperationHandleV1> => {
+    const session = sessions.get(sessionId);
+    if (session === undefined) throw new Error("review_gate_session_not_active");
+    if (recovery === null) throw new Error("review_gate_recovery_store_unavailable");
+    if (
+      !REVIEW_GATE_OPERATION_KINDS.has(operation.kind) ||
+      NON_PREPARABLE_OPERATION_KINDS.has(operation.kind)
+    ) {
+      throw new Error(`review_gate_operation_not_preparable: ${String(operation.kind)}`);
+    }
+    const operationId = newId();
+    const record: PreparedReviewGateOperationRecordV1 = Object.freeze({
+      recordKind: PREPARED_OPERATION_RECORD_KIND,
+      schemaVersion: 1,
+      gateId: session.gateId,
+      operationId,
+      operation,
+    });
+    const bytes = Buffer.from(JSON.stringify(record), "utf8");
+    const digest = computeArtifactDigest(bytes);
+    await recovery.publish(digest, bytes);
+    return Object.freeze({ operationId, preparedRecoveryDigest: digest });
+  };
+
+  const preparedDecisionOutcome = (
+    kind: CallerRoutingDecisionOutcomeV1["kind"],
+    operationId: string | null,
+    guidance: string | null,
+  ): CallerRoutingDecisionOutcomeV1 =>
+    Object.freeze({ kind, operationId, guidance });
+
+  /**
+   * Task 17 — execute the caller-owned routing decision for the session's
+   * active gate. The coordinator never calls the gate planner itself: for
+   * `execute_operation` it fetches the durable prepared operation from the
+   * recovery store, verifies the caller's operation id against it, executes
+   * the one step and witnesses the result; for `block` it records the
+   * caller's reason as a durable stop event; for `await_evidence` it returns
+   * without mutating any state.
+   */
+  const executeNextOperation = async (
+    sessionId: string,
+    decision: CallerRoutingDecisionV1,
+  ): Promise<CallerRoutingDecisionOutcomeV1> => {
+    const session = sessions.get(sessionId);
+    if (session === undefined) {
+      return preparedDecisionOutcome(
+        "blocked",
+        decision.operationId,
+        "review_gate_session_not_active",
+      );
+    }
+    if (decision.kind === "await_evidence") {
+      // The caller waits for durable evidence: return without appending an
+      // event, clearing session state or revalidating anything.
+      return preparedDecisionOutcome(
+        "awaited",
+        decision.operationId,
+        decision.reason ?? null,
+      );
+    }
+    if (decision.kind === "block") {
+      const reason = decision.reason;
+      if (reason === null || reason.trim().length === 0) {
+        return preparedDecisionOutcome(
+          "blocked",
+          decision.operationId,
+          "review_gate_block_reason_required",
+        );
+      }
+      // Fail-closed stop with an EXISTING durable event type. The
+      // coordinator's journal is the legacy Review Gate event stream, which
+      // carries no REVIEW_COMMIT_FAILED event; the caller's reason is
+      // recorded on EXECUTION_SUSPENDED instead of inventing an event type.
+      const response = await suspendAndBlock(
+        session,
+        reason,
+        `the caller blocked the Review Gate (${reason}); the Gate is suspended.`,
+      );
+      return preparedDecisionOutcome(
+        "blocked",
+        decision.operationId,
+        response.action === "inject" ? response.injectedContext : reason,
+      );
+    }
+    // execute_operation
+    const operationId = decision.operationId;
+    if (operationId === null || operationId.trim().length === 0) {
+      return preparedDecisionOutcome(
+        "blocked",
+        operationId,
+        "review_gate_operation_id_required",
+      );
+    }
+    if (recovery === null) {
+      return preparedDecisionOutcome(
+        "blocked",
+        operationId,
+        "review_gate_recovery_store_unavailable",
+      );
+    }
+    let prepared: PreparedReviewGateOperationRecordV1;
+    try {
+      const fetched = await readPreparedOperation(session, operationId);
+      if (fetched === "missing" || fetched === "mismatch" || fetched === "ambiguous") {
+        return preparedDecisionOutcome(
+          "blocked",
+          operationId,
+          fetched === "missing"
+            ? "review_gate_prepared_operation_unavailable"
+            : fetched === "mismatch"
+              ? "review_gate_prepared_operation_mismatch"
+              : "review_gate_prepared_operation_ambiguous",
+        );
+      }
+      prepared = fetched;
+    } catch (err: unknown) {
+      return preparedDecisionOutcome(
+        "blocked",
+        operationId,
+        `review_gate_prepared_operation_unreadable: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+    // The caller's operation id must exactly match the durable prepared record.
+    if (prepared.operationId !== operationId || prepared.gateId !== session.gateId) {
+      return preparedDecisionOutcome(
+        "blocked",
+        operationId,
+        "review_gate_prepared_operation_mismatch",
+      );
+    }
+    const projection = await loadProjection(session.gateId);
+    try {
+      const step = await executeOperation(session, projection, prepared.operation);
+      if (step === DRIVE_CONTINUE || step === null) {
+        return preparedDecisionOutcome("executed", operationId, null);
+      }
+      return preparedDecisionOutcome(
+        "executed",
+        operationId,
+        step.action === "inject" ? step.injectedContext : null,
+      );
+    } catch (err: unknown) {
+      return preparedDecisionOutcome(
+        "blocked",
+        operationId,
+        `review_gate_operation_execution_failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   };
 
   // ---------------------------------------------------------------------------
@@ -2110,5 +2493,7 @@ export function createReviewGateCoordinator(
     postToolUse,
     classifyToolUse,
     releaseSession,
+    prepareCallerOperation,
+    executeNextOperation,
   });
 }
