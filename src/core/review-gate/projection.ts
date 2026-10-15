@@ -652,22 +652,20 @@ export function projectVerifiedGateTip(
 export function projectVerifiedTerminalState(
   events: readonly VerifiedReviewGateEvent[],
 ): VerifiedTerminalStateV1 | null {
-  const states = new Map<string, VerifiedTerminalStateV1>();
+  let latest: VerifiedTerminalStateV1 | null = null;
 
   for (const event of events) {
     if (!isV2Event(event)) continue;
     if (event.eventType === "TARGET_WRITER_HANDOFF_REQUESTED") {
       const payload = event.payload;
       if (payload.purpose !== "TERMINAL_REVOKE_ONLY") continue;
-      states.set(
-        payload.handoffOperationId,
-        Object.freeze({
-          kind: "TERMINAL_REVOKE_PENDING",
-          handoffOperationId: payload.handoffOperationId,
-          terminalTransitionOperationId: payload.handoffOperationId,
-          targets: payload.targets,
-        }),
-      );
+      const state = Object.freeze({
+        kind: "TERMINAL_REVOKE_PENDING" as const,
+        handoffOperationId: payload.handoffOperationId,
+        terminalTransitionOperationId: payload.handoffOperationId,
+        targets: payload.targets,
+      });
+      latest = state;
       continue;
     }
     if (event.eventType === "TARGET_WRITER_TERMINAL_REVOKED") {
@@ -676,26 +674,18 @@ export function projectVerifiedTerminalState(
         payload.status === "NEVER_CLAIMED_OR_ALREADY_REVOKED" ||
         payload.nativeEffectDisposition === "APPLIED" ||
         payload.nativeEffectDisposition === "COMMITTED";
-      states.set(
-        payload.handoffOperationId,
-        Object.freeze({
-          kind: finalized
-            ? "TERMINAL_FINALIZED"
-            : "REVOKED_AWAITING_TERMINAL_PUBLICATION",
-          handoffOperationId: payload.handoffOperationId,
-          terminalTransitionOperationId: payload.terminalTransitionOperationId,
-          targets: payload.targets,
-        }),
-      );
+      const state = Object.freeze({
+        kind: finalized
+          ? "TERMINAL_FINALIZED" as const
+          : "REVOKED_AWAITING_TERMINAL_PUBLICATION" as const,
+        handoffOperationId: payload.handoffOperationId,
+        terminalTransitionOperationId: payload.terminalTransitionOperationId,
+        targets: payload.targets,
+      });
+      latest = state;
     }
   }
 
-  // Return the latest terminal state by event order. If multiple terminal
-  // handoffs exist, return the last one observed.
-  let latest: VerifiedTerminalStateV1 | null = null;
-  for (const state of states.values()) {
-    latest = state;
-  }
   return latest;
 }
 
@@ -731,7 +721,6 @@ type DispatchRecoveryFoldState = {
 /**
  * Project the outstanding external-operation dispatch recovery cursors from a
  * verified V2 event history. Each `EXTERNAL_OPERATION_DISPATCHED` starts as
- * verified V2 event history. Each `EXTERNAL_OPERATION_DISPATCHED` starts as
  * `IN_FLIGHT`; the private response-custody lifecycle events advance it —
  * `EXTERNAL_OPERATION_RESPONSE_STAGED` → `RESPONSE_STAGED`,
  * `EXTERNAL_OPERATION_RESULT_COMMITTED` → `RESULT_COMMITTED_OUTCOME_PENDING`,
@@ -743,10 +732,6 @@ type DispatchRecoveryFoldState = {
  * when it has a verified intent before dispatch, or when independently
  * verified private evidence is unavailable. The fold type includes them so
  * the same cursor machinery can carry them through `deriveResumeCursor`.
- * `EXTERNAL_OPERATION_RESPONSE_STAGED` → `RESPONSE_STAGED`,
- * `EXTERNAL_OPERATION_RESULT_COMMITTED` → `RESULT_COMMITTED_OUTCOME_PENDING`,
- * and `EXTERNAL_OPERATION_OUTCOME_APPLIED` removes the cursor from the
- * outstanding set (the authoritative outcome is applied; nothing to recover).
  * Operations are keyed by `operationId` + `dispatchAttemptId`: every lifecycle
  * payload carries both ids, matching the private response record keying, so
  * the attempt is stable across events. Result events may appear before their

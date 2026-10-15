@@ -870,6 +870,50 @@ describe("projectVerifiedGateTip", () => {
       expect(tip.terminalState?.targets[0]?.canonicalLogicalTargetPath).toBe("target.md");
     });
 
+    it("returns the terminal state updated by the last event", () => {
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+      const firstHandoff = validateReviewGateEventRecord(
+        v2TerminalHandoffRequested(
+          "event-handoff-1",
+          "event-genesis",
+          "handoff-1",
+          ["first.md"],
+        ),
+      );
+      const secondHandoff = validateReviewGateEventRecord(
+        v2TerminalHandoffRequested(
+          "event-handoff-2",
+          "event-genesis",
+          "handoff-2",
+          ["second.md"],
+        ),
+      );
+      const firstRevoked = validateReviewGateEventRecord(
+        v2TerminalRevoked(
+          "event-revoked-1",
+          "event-handoff-1",
+          "handoff-1",
+          "transition-1",
+          "REVOKED",
+          "NO_EFFECT",
+          ["first.md"],
+        ),
+      );
+
+      const tip = projectVerifiedGateTip({
+        gateId: "gate-1",
+        scopeId: "scope-1",
+        events: [genesis, firstHandoff, secondHandoff, firstRevoked],
+        frontier: frontier() as VerifiedScopeFrontier,
+      });
+
+      expect(tip.terminalState).toMatchObject({
+        kind: "REVOKED_AWAITING_TERMINAL_PUBLICATION",
+        handoffOperationId: "handoff-1",
+        terminalTransitionOperationId: "transition-1",
+      });
+    });
+
     it("projects REVOKED_AWAITING_TERMINAL_PUBLICATION when native effect is not yet applied", () => {
       const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
       const handoff = validateReviewGateEventRecord(
