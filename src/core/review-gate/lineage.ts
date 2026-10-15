@@ -296,6 +296,20 @@ function planFindingReconciliation(
   projection: ReviewGateProjection,
   finding: ValidatedFinding,
 ): FindingReconciliationPlan {
+  if (finding.status === "existing_resolved" && finding.existingLineageId !== null) {
+    const tracked = projection.findings.get(finding.existingLineageId);
+    if (tracked !== undefined) {
+      // Stage-aware reconciliation: a resolution claim cannot clear a lineage
+      // whose pending remediation round is stage-bound to another phase, even
+      // when the observation would otherwise be advisory (minor severity).
+      if (
+        tracked.remediationRound !== null &&
+        tracked.remediationRound.phase !== projection.phase
+      ) {
+        throw new Error("validator_result_conflict");
+      }
+    }
+  }
   if (finding.status === "invalid" || finding.severity === "minor") {
     return { kind: "skip" };
   }
@@ -399,17 +413,17 @@ export function commitLineageRevalidation(
 }
 
 /**
- * Commit a lineage resolution. `lineage_resolution_committed` emits
- * `FINDING_REMEDIATED` on the current epoch with the next remediation round;
- * `external_change_revalidation` requires a verified commit binding and emits
- * `FINDING_SELF_REVIEWED`.
+ * Emit the committed resolution event for one `ResolutionCommitInput`. Shared
+ * by the legacy resolution commit and the V2 origin-recording commit so both
+ * surfaces always agree on the event type and the round it closes.
  */
-export function buildLineageResolution(
+function buildLineageResolutionEvent(
   projection: ReviewGateProjection,
   input: ResolutionCommitInput,
-): LineageResolutionCommitPayload {
+): Readonly<{ readonly event: ReviewGateEvent; readonly remediationRound: RemediationRound }> {
   const tracked = requireTrackedFinding(projection, input.lineageId);
   if (input.resolutionKind === "lineage_resolution_committed") {
+    const remediationRound = nextRemediationRound(projection);
     const event: FindingRemediatedV1 = {
       eventType: "FINDING_REMEDIATED",
       gateId: projection.gateId,
@@ -419,15 +433,15 @@ export function buildLineageResolution(
       payload: {
         lineageId: input.lineageId,
         findingId: tracked.findingId,
-        remediationRound: nextRemediationRound(projection),
+        remediationRound,
       },
     };
-    const events: ReviewGateEvent[] = [event];
-    return Object.freeze({ events: Object.freeze(events) });
+    return Object.freeze({ event, remediationRound });
   }
   if (input.verifiedCommitBinding === undefined) {
     throw new Error("external_change_requires_binding");
   }
+  const remediationRound = requireRemediationRound(tracked);
   const event: FindingSelfReviewedV1 = {
     eventType: "FINDING_SELF_REVIEWED",
     gateId: projection.gateId,
@@ -437,11 +451,142 @@ export function buildLineageResolution(
     payload: {
       lineageId: input.lineageId,
       findingId: tracked.findingId,
-      remediationRound: requireRemediationRound(tracked),
+      remediationRound,
     },
   };
-  const events: ReviewGateEvent[] = [event];
-  return Object.freeze({ events: Object.freeze(events) });
+  return Object.freeze({ event, remediationRound });
+}
+
+/**
+ * Commit a lineage resolution. `lineage_resolution_committed` emits
+ * `FINDING_REMEDIATED` on the current epoch with the next remediation round;
+ * `external_change_revalidation` requires a verified commit binding and emits
+ * `FINDING_SELF_REVIEWED`.
+ */
+export function buildLineageResolution(
+  projection: ReviewGateProjection,
+  input: ResolutionCommitInput,
+): LineageResolutionCommitPayload {
+  return Object.freeze({
+    events: Object.freeze([buildLineageResolutionEvent(projection, input).event]),
+  });
+}
+
+/**
+ * Stage-aware origin of a persisted lineage resolution (Task 13). A
+ * Justice-prepared remediation fix references the exact verified Git commit
+ * event and Oid; a resolution admitted because of an externally committed
+ * change references the durable revalidation event
+ * (`LINEAGE_REVALIDATION_COMPLETED` / `LINEAGE_REVALIDATION_COMMITTED`) plus
+ * the verified Git change proof digest. No `REVIEW_COMMIT_PREPARED` event is
+ * fabricated for external origins.
+ */
+export type LineageRevalidationOriginV1 =
+  | Readonly<{
+      readonly kind: "justice_remediation_commit";
+      readonly commitEventId: string;
+      readonly verifiedCommitOid: string;
+    }>
+  | Readonly<{
+      readonly kind: "external_committed_change";
+      readonly revalidationEventId: string;
+      readonly changeObservedProofDigest: string;
+    }>;
+
+/**
+ * Persisted resolution record. Refines the Task 11
+ * `VerifiedCommittedResolution` with the stage-bound remediation round, the
+ * semantic context fingerprint, the pinned baseline digest the evidence was
+ * validated on, and the origin above.
+ */
+export type VerifiedCommittedResolutionV2 = Readonly<{
+  readonly lineageId: LineageId;
+  readonly resolutionEventId: string;
+  readonly remediationRound: RemediationRound;
+  readonly semanticContextFingerprint: string;
+  readonly pinnedBaselineDigest: string;
+  readonly origin: LineageRevalidationOriginV1;
+}>;
+
+export type LineageResolutionCommitInputV2 = Readonly<{
+  readonly lineageId: LineageId;
+  readonly resolutionKind: "lineage_resolution_committed" | "external_change_revalidation";
+  readonly resolutionEventId: string;
+  readonly semanticContextFingerprint: string;
+  readonly pinnedBaselineDigest: string;
+  readonly origin: LineageRevalidationOriginV1;
+  readonly verifiedCommitBinding?: ReviewArtifactBinding;
+}>;
+
+export type LineageResolutionCommitPayloadV2 = Readonly<{
+  readonly events: readonly ReviewGateEvent[];
+  readonly resolutions: readonly VerifiedCommittedResolutionV2[];
+}>;
+
+/**
+ * Commit a lineage resolution and record its persisted origin. The external
+ * committed-change path still requires the verified Git binding and fails
+ * closed on unproven resolution or conflicting evidence; it never mints a
+ * Justice `REVIEW_COMMIT_PREPARED`.
+ */
+export function buildLineageResolutionV2(
+  projection: ReviewGateProjection,
+  input: LineageResolutionCommitInputV2,
+): LineageResolutionCommitPayloadV2 {
+  if (input.resolutionEventId.length === 0) {
+    throw new Error("resolution_event_id_required");
+  }
+  if (input.semanticContextFingerprint.length === 0) {
+    throw new Error("semantic_context_fingerprint_required");
+  }
+  if (input.pinnedBaselineDigest.length === 0) {
+    throw new Error("pinned_baseline_digest_required");
+  }
+  if (input.resolutionKind === "lineage_resolution_committed") {
+    if (input.origin.kind !== "justice_remediation_commit") {
+      throw new Error("resolution_origin_mismatch");
+    }
+    if (input.origin.verifiedCommitOid.length === 0) {
+      throw new Error("verified_commit_oid_required");
+    }
+    if (input.origin.commitEventId.length === 0) {
+      throw new Error("resolution_commit_event_required");
+    }
+  } else {
+    if (input.origin.kind !== "external_committed_change") {
+      throw new Error("resolution_origin_mismatch");
+    }
+    if (input.origin.revalidationEventId.length === 0) {
+      throw new Error("revalidation_event_id_required");
+    }
+    if (input.origin.changeObservedProofDigest.length === 0) {
+      throw new Error("revalidation_change_proof_required");
+    }
+    if (input.verifiedCommitBinding === undefined) {
+      throw new Error("external_change_requires_binding");
+    }
+    if (input.verifiedCommitBinding.digest !== input.pinnedBaselineDigest) {
+      throw new Error("external_revalidation_baseline_mismatch");
+    }
+  }
+
+  const built = buildLineageResolutionEvent(projection, {
+    lineageId: input.lineageId,
+    resolutionKind: input.resolutionKind,
+    verifiedCommitBinding: input.verifiedCommitBinding,
+  });
+  const resolution: VerifiedCommittedResolutionV2 = Object.freeze({
+    lineageId: input.lineageId,
+    resolutionEventId: input.resolutionEventId,
+    remediationRound: built.remediationRound,
+    semanticContextFingerprint: input.semanticContextFingerprint,
+    pinnedBaselineDigest: input.pinnedBaselineDigest,
+    origin: input.origin,
+  });
+  return Object.freeze({
+    events: Object.freeze([built.event]),
+    resolutions: Object.freeze([resolution]),
+  });
 }
 
 /**
@@ -576,6 +721,7 @@ export type ResolvedFindingDisposition =
       readonly lineageId: LineageId;
       readonly validationEventId: string;
       readonly priorResolutionEventId: string;
+      readonly reusedPersistedEvidence?: boolean;
     }>
   | Readonly<{
       readonly kind: "lineage_regressed";
@@ -643,6 +789,99 @@ export function planResolvedFindingDisposition(
   return Object.freeze({
     kind: "block",
     reason: "missing_regression_evidence",
+  });
+}
+
+export type ResolvedFindingDispositionV1 = ResolvedFindingDisposition;
+
+/**
+ * Stage-aware resolved-finding disposition input (Task 13). The prior
+ * committed resolution is the V2 persisted record; the current pinned
+ * baseline and semantic context fingerprint prove persisted-evidence reuse,
+ * and the current phase/round ordinal bind the disposition to one stage.
+ */
+export type ResolvedFindingDispositionInputV2 = Readonly<{
+  readonly lineageId: LineageId;
+  readonly decision: "ALREADY_RESOLVED" | "VALID";
+  readonly relation: "EXISTING";
+  readonly validatorEventId: string;
+  readonly validatorOutcome: "absent" | "present" | "indeterminate";
+  readonly priorCommittedResolution: VerifiedCommittedResolutionV2 | null;
+  readonly currentPinnedBaseline: ReviewArtifactBinding;
+  readonly semanticContextFingerprint: string;
+  readonly validationEventId: string;
+  readonly currentPhase: ReviewPhase;
+  readonly currentRoundOrdinal: number;
+}>;
+
+/**
+ * Task 13 disposition planner for stale-lineage revalidation. Persisted
+ * evidence is stage-bound and context-bound: reuse of an already-resolved
+ * disposition requires the current stage identity (phase + round ordinal),
+ * the exact pinned baseline digest, and an unchanged semantic context
+ * fingerprint. Everything else fails closed without minting a new round.
+ */
+export function planResolvedFindingDispositionV2(
+  input: ResolvedFindingDispositionInputV2,
+): ResolvedFindingDispositionV1 {
+  const prior = input.priorCommittedResolution;
+  if (
+    prior !== null &&
+    (prior.remediationRound.phase !== input.currentPhase ||
+      prior.remediationRound.ordinal !== input.currentRoundOrdinal)
+  ) {
+    throw new Error("stage_mismatch_blocks_revalidation");
+  }
+  if (input.validatorOutcome === "indeterminate") {
+    return Object.freeze({
+      kind: "block",
+      reason: "indeterminate_validation_blocks_reuse",
+    });
+  }
+  if (input.decision === "ALREADY_RESOLVED") {
+    if (input.validatorOutcome !== "absent") {
+      return Object.freeze({ kind: "block", reason: "validator_result_conflict" });
+    }
+    if (prior === null) {
+      return Object.freeze({
+        kind: "block",
+        reason: "prior_committed_resolution_required",
+      });
+    }
+    if (input.currentPinnedBaseline.digest !== prior.pinnedBaselineDigest) {
+      return Object.freeze({ kind: "block", reason: "pinned_baseline_changed" });
+    }
+    if (input.semanticContextFingerprint !== prior.semanticContextFingerprint) {
+      return Object.freeze({ kind: "block", reason: "semantic_context_changed" });
+    }
+    return Object.freeze({
+      kind: "already_resolved",
+      lineageId: input.lineageId,
+      validationEventId: input.validationEventId,
+      priorResolutionEventId: prior.resolutionEventId,
+      reusedPersistedEvidence: true,
+    });
+  }
+  if (input.validatorOutcome !== "present") {
+    return Object.freeze({ kind: "block", reason: "validator_result_conflict" });
+  }
+  if (prior === null) {
+    return Object.freeze({ kind: "block", reason: "missing_regression_evidence" });
+  }
+  if (input.currentPinnedBaseline.digest !== prior.pinnedBaselineDigest) {
+    return Object.freeze({ kind: "block", reason: "pinned_baseline_changed" });
+  }
+  if (input.semanticContextFingerprint !== prior.semanticContextFingerprint) {
+    return Object.freeze({ kind: "block", reason: "semantic_context_changed" });
+  }
+  return Object.freeze({
+    kind: "lineage_regressed",
+    regression: Object.freeze({
+      lineageId: input.lineageId,
+      priorResolutionEventId: prior.resolutionEventId,
+      newObservationEventId: input.validatorEventId,
+      contextDigest: input.semanticContextFingerprint,
+    }),
   });
 }
 
