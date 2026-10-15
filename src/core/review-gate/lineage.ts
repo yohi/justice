@@ -24,6 +24,10 @@ import type {
   ReviewGateEvent,
   ReviewGatePhase,
   ReviewGateProjection,
+  SemanticBlockerEvidence,
+  ValidatedTargetOutcome,
+  VerifiedCommittedResolution,
+  VerifiedRegression,
   WriterId,
 } from "./types.js";
 import type { SelfReviewResultV1 } from "./agent-protocol.js";
@@ -537,45 +541,14 @@ function getOwnerScopeDepth(scope: FindingOwnerScope): number {
 // Task 11 — commit-bound lineage evidence and verified reconciliation
 // ---------------------------------------------------------------------------
 
-export type SemanticBlockerEvidence = Readonly<{
-  readonly lineageId: LineageId;
-  readonly basisDigest: string;
-  readonly semanticLocation: string;
-  readonly ownerScope: FindingOwnerScope;
-  readonly violationType: string;
-  readonly governingReference: string;
-  readonly violatedContract: string;
-  readonly observationEventId: string;
-}>;
+export type {
+  SemanticBlockerEvidence,
+  ValidatedTargetOutcome,
+  VerifiedCommittedResolution,
+  VerifiedRegression,
+} from "./types.js";
 
-export type ValidatedTargetOutcome = Readonly<{
-  readonly lineageId: LineageId;
-  readonly roundOrdinal: number;
-  readonly result: "STILL_PRESENT" | "RESOLVED" | "INDETERMINATE";
-  readonly validationEventId: string;
-  readonly targetEventId: string;
-}>;
-
-export type VerifiedCommittedResolution = Readonly<{
-  readonly lineageId: LineageId;
-  readonly resolutionEventId: string;
-  readonly verifiedCommitOid: string;
-  readonly contextDigest: string;
-}>;
-
-export type VerifiedRegression = Readonly<{
-  readonly lineageId: LineageId;
-  readonly priorResolutionEventId: string;
-  readonly newObservationEventId: string;
-  readonly contextDigest: string;
-}>;
-
-export type VerifiedCommittedResolutionInput = Readonly<{
-  readonly lineageId: LineageId;
-  readonly resolutionEventId: string;
-  readonly verifiedCommitOid: string;
-  readonly contextDigest: string;
-}>;
+export type VerifiedCommittedResolutionInput = VerifiedCommittedResolution;
 
 export function buildVerifiedCommittedResolution(
   input: VerifiedCommittedResolutionInput,
