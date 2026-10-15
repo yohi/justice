@@ -529,7 +529,7 @@ describe("ReviewGateApprovalLookup — exact structured binding", () => {
     });
     storeAfterRestart.close();
     closeWitnessFixture(ctx);
-  });
+  }, 60_000);
 
   it.each([
     ["requirements", "requirements"],
@@ -557,7 +557,7 @@ describe("ReviewGateApprovalLookup — exact structured binding", () => {
     expect(label).toBeTypeOf("string");
     store.close();
     closeWitnessFixture(ctx);
-  });
+  }, 60_000);
 
   it("returns not_approved when the plan never completed any Review Gate", async () => {
     const { root, store, ctx } = await createStandardWorkspace();

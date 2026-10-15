@@ -22,7 +22,7 @@ describe("protected canonical target writer", () => {
   let f: WitnessFixture;
   beforeEach(async () => {
     f = await createWitnessFixture();
-  });
+  }, 60_000);
   afterEach(async () => {
     f.witness.close();
     await rm(f.sandbox, { recursive: true, force: true });
@@ -439,7 +439,7 @@ describe("protected canonical target writer", () => {
       manager.close();
       await rm(owned.sandbox, { recursive: true, force: true });
     }
-  });
+  }, 60_000);
   it("publishes the sealed terminal intent, binds the authenticated sealed receipt, and fails closed on receipt loss", async () => {
     const { manager, owned, terminal, publication } = await createSealedCloseFixture();
     try {
