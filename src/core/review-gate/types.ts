@@ -385,6 +385,24 @@ export type VerifiedTerminalStateV1 = Readonly<{
   readonly targets: ReadonlyArray<VerifiedCanonicalMutationTargetV1>;
 }>;
 
+export type VerifiedTargetWriterHandoffStateV1 = Readonly<{
+  readonly status:
+    | "REQUESTED"
+    | "WAITING_FOR_GUARDS"
+    | "PROTECTED_PREPARED"
+    | "FENCED_NO_ACTIVE_WRITER"
+    | "CLAIMED_OUTCOME_UNRECORDED"
+    | "RESUMED";
+  readonly handoffOperationId: string;
+  readonly originalOperationId: string;
+  readonly target: VerifiedCanonicalMutationTargetV1;
+  readonly protectedTargetFrontier: string;
+  readonly expectedGlobalTargetWriterGeneration: number;
+  readonly newOwner: VerifiedTargetWriterAuthorityV1["activeOwner"];
+  readonly pendingNativeEffectReference: string | null;
+}>;
+
+
 
 export type TrustedProtocolReleaseAnchorV1 = Readonly<{
   readonly installationId: string;

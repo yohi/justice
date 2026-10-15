@@ -20,6 +20,7 @@ import type {
   PrivateResponseEvidenceV1,
   VerifiedScopeFrontier,
   VerifiedTargetWriterAuthorityV1,
+  VerifiedTargetWriterHandoffStateV1,
   VerifiedTerminalStateV1,
   SemanticContextInputsV1,
   VerifiedCycleEvidence,
@@ -647,6 +648,7 @@ export function projectVerifiedGateTip(
     dispatchRecoveryCursors: projectVerifiedDispatchRecoveryCursors(input.events),
     terminalState: projectVerifiedTerminalState(input.events),
     targetWriterAuthority: projectVerifiedTargetWriterAuthority(input.events),
+    targetWriterHandoffState: projectVerifiedTargetWriterHandoffState(input.events),
   });
 }
 
@@ -785,6 +787,62 @@ export function projectVerifiedTargetWriterAuthority(
     durableTombstoneProofDigest: null,
   });
 }
+
+/**
+ * Project the yielded handoff replay state (Task 9 PLAN-027) from a verified
+ * V2 event history. Returns the latest handoff state, or null if no handoff
+ * event has been witnessed.
+ */
+export function projectVerifiedTargetWriterHandoffState(
+  events: readonly VerifiedReviewGateEvent[],
+): VerifiedTargetWriterHandoffStateV1 | null {
+  let latest: VerifiedTargetWriterHandoffStateV1 | null = null;
+
+  for (const event of events) {
+    if (!isV2Event(event)) continue;
+    if (event.eventType === "TARGET_WRITER_HANDOFF_REQUESTED") {
+      const payload = event.payload;
+      const status =
+        payload.status === "REQUESTED"
+          ? "REQUESTED"
+          : payload.status === "FENCED"
+            ? "FENCED_NO_ACTIVE_WRITER"
+            : payload.status === "CLAIMED"
+              ? "CLAIMED_OUTCOME_UNRECORDED"
+              : payload.status === "RESUMED"
+                ? "RESUMED"
+                : "WAITING_FOR_GUARDS";
+      latest = Object.freeze({
+        status,
+        handoffOperationId: payload.handoffOperationId,
+        originalOperationId: payload.originalOperationId,
+        target: payload.targets[0] ?? payload.target,
+        protectedTargetFrontier: payload.expectedTargetWriterFrontier,
+        expectedGlobalTargetWriterGeneration: payload.expectedGlobalTargetWriterGeneration,
+        newOwner: payload.newOwner,
+        pendingNativeEffectReference: payload.pendingNativeEffectReference,
+      });
+      continue;
+    }
+    if (event.eventType === "TARGET_WRITER_HANDOFF_RESUMED") {
+      const payload = event.payload;
+      const intent = payload.intent;
+      latest = Object.freeze({
+        status: "RESUMED",
+        handoffOperationId: intent.handoffOperationId,
+        originalOperationId: intent.originalOperationId,
+        target: intent.targets[0] ?? intent.target,
+        protectedTargetFrontier: payload.protectedTargetFrontier,
+        expectedGlobalTargetWriterGeneration: payload.globalTargetWriterGeneration,
+        newOwner: intent.newOwner,
+        pendingNativeEffectReference: payload.pendingNativeEffectReference,
+      });
+    }
+  }
+
+  return latest;
+}
+
 
 /**
  * Projected Task 9 semantic cycle history: the verified phase context plus
