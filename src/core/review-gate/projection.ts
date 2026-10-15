@@ -819,6 +819,7 @@ export function projectVerifiedTargetWriterHandoffState(
     if (!isV2Event(event)) continue;
     if (event.eventType === "TARGET_WRITER_HANDOFF_REQUESTED") {
       const payload = event.payload;
+      if (payload.purpose !== "HANDOFF") continue;
       const status =
         payload.status === "REQUESTED"
           ? "REQUESTED"

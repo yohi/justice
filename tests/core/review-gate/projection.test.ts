@@ -1390,6 +1390,24 @@ describe("projectVerifiedGateTip", () => {
     expect(tip.targetWriterHandoffState?.newOwner).toEqual(owner);
   });
 
+  it("does not project terminal revoke requests as yielded handoffs", () => {
+    const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+    const terminalRevoke = validateReviewGateEventRecord(
+      v2TerminalHandoffRequested("event-handoff", "event-genesis", "handoff-1", ["target.md"]),
+    );
+
+    const tip = projectVerifiedGateTip({
+      gateId: "gate-1",
+      scopeId: "scope-1",
+      events: [genesis, terminalRevoke],
+      frontier: frontier() as VerifiedScopeFrontier,
+    });
+
+    expect(tip.status).toBe("active");
+    if (tip.status !== "active") return;
+    expect(tip.targetWriterHandoffState).toBeNull();
+  });
+
   it("projects RESUMED from TARGET_WRITER_HANDOFF_RESUMED", () => {
     const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
     const owner = { scopeId: "scope-2", gateId: "gate-2", generationId: "generation-1", operationId: "op-1", attemptId: "attempt-1" };
