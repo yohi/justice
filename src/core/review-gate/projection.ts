@@ -19,6 +19,7 @@ import type {
   VerifiedDispatchRecoveryCursorV1,
   PrivateResponseEvidenceV1,
   VerifiedScopeFrontier,
+  VerifiedTargetWriterAuthorityV1,
   VerifiedTerminalStateV1,
 } from "./types.js";
 import type { RequirementsAuthoritySnapshotV1 } from "../review-gate-types.js";
@@ -641,6 +642,7 @@ export function projectVerifiedGateTip(
     nc1Stop,
     dispatchRecoveryCursors: projectVerifiedDispatchRecoveryCursors(input.events),
     terminalState: projectVerifiedTerminalState(input.events),
+    targetWriterAuthority: projectVerifiedTargetWriterAuthority(input.events),
   });
 }
 
@@ -698,6 +700,91 @@ export function projectVerifiedTerminalState(
   }
   return latest;
 }
+
+/**
+ * Project the verified cross-Gate target writer authority from a verified V2
+ * event history. Returns the latest authority snapshot, or null if no handoff
+ * events have been witnessed.
+ */
+export function projectVerifiedTargetWriterAuthority(
+  events: readonly VerifiedReviewGateEvent[],
+): VerifiedTargetWriterAuthorityV1 | null {
+  let latest: VerifiedTargetWriterAuthorityV1 | null = null;
+
+  for (const event of events) {
+    if (!isV2Event(event)) continue;
+    if (event.eventType === "TARGET_WRITER_HANDOFF_REQUESTED") {
+      const payload = event.payload;
+      const owner = payload.purpose === "HANDOFF" ? payload.newOwner : null;
+      const priorOwner = payload.oldOwner;
+      const target = payload.targets[0] ?? payload.target;
+      if (target === undefined) {
+        throw new Error("review_gate_target_writer_authority_missing_target");
+      }
+      latest = Object.freeze({
+        target,
+        globalTargetWriterGeneration: payload.expectedGlobalTargetWriterGeneration,
+        activeOwner: owner,
+        priorOwner,
+        expectedImage: Object.freeze({
+          digest: payload.expectedPreImageDigest,
+          gitMode: payload.expectedGitMode,
+        }),
+        protectedTargetFrontier: payload.expectedTargetWriterFrontier,
+        protectedTargetCasProofDigest: payload.protocolFingerprint,
+        durableTombstoneProofDigest: null,
+      });
+      continue;
+    }
+    if (event.eventType === "TARGET_WRITER_HANDOFF_RESUMED") {
+      const payload = event.payload;
+      const intent = payload.intent;
+      const owner = intent.purpose === "HANDOFF" ? intent.newOwner : null;
+      const priorOwner = intent.oldOwner;
+      const target = intent.targets[0] ?? intent.target;
+      if (target === undefined) {
+        throw new Error("review_gate_target_writer_authority_missing_target");
+      }
+      latest = Object.freeze({
+        target,
+        globalTargetWriterGeneration: payload.globalTargetWriterGeneration,
+        activeOwner: owner,
+        priorOwner,
+        expectedImage: Object.freeze({
+          digest: intent.expectedPreImageDigest,
+          gitMode: intent.expectedGitMode,
+        }),
+        protectedTargetFrontier: payload.protectedTargetFrontier,
+        protectedTargetCasProofDigest: payload.continuationProofDigest,
+        durableTombstoneProofDigest: null,
+      });
+      continue;
+    }
+    if (event.eventType === "TARGET_WRITER_TERMINAL_REVOKED") {
+      const payload = event.payload;
+      const target = payload.targets[0];
+      if (target === undefined) {
+        throw new Error("review_gate_target_writer_authority_missing_target");
+      }
+      latest = Object.freeze({
+        target,
+        globalTargetWriterGeneration: payload.globalTargetWriterHighWatermark,
+        activeOwner: null,
+        priorOwner: payload.priorOwners[0] ?? null,
+        expectedImage: Object.freeze({
+          digest: payload.nativeNonWriteabilityProofDigest,
+          gitMode: "100644",
+        }),
+        protectedTargetFrontier: payload.protectedTargetFrontier,
+        protectedTargetCasProofDigest: payload.protectedRevokeCasProofDigest,
+        durableTombstoneProofDigest: payload.nativeNonWriteabilityProofDigest,
+      });
+    }
+  }
+
+  return latest;
+}
+
 
 /**
  * Mutable accumulator for one dispatched external operation while folding the
