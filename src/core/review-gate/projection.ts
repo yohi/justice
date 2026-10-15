@@ -6,6 +6,7 @@ import type {
   FindingState,
   GateCreatedV1,
   GateCreatedV2,
+  EpochId,
   LineageId,
   PlanClearMilestone,
   RemediationRound,
@@ -14,6 +15,7 @@ import type {
   ReviewGatePhase,
   ReviewGateProjection,
   ReviewGateState,
+  ReviewGateSuspensionDetail,
   ReviewTargetWorkspaceState,
   VerifiedRequirementsBinding,
   VerifiedDispatchRecoveryCursorV1,
@@ -67,13 +69,20 @@ export function projectReviewGateState(events: readonly ReviewGateEvent[]): Revi
   }
 
   let state = getInitialReviewGateState(firstEvent);
+  let suspendedEpochId: EpochId | null = null;
   for (const event of events.slice(1)) {
     switch (event.eventType) {
       case "GATE_CREATED":
         throw new Error("review_gate_duplicate_gate_creation");
       case "ARTIFACT_BINDINGS_UPDATED":
         break;
-      case "ORCHESTRATION_RESUMED":
+      case "ORCHESTRATION_RESUMED": {
+        // Task 14: only a same-epoch resumption clears a plain execution
+        // suspension; a resumption from a different epoch leaves the stop durable.
+        const clearsExecution =
+          state.status === "suspended" &&
+          state.suspensionReason === "execution_suspended" &&
+          suspendedEpochId === event.epochId;
         state = {
           ...state,
           epoch: {
@@ -81,14 +90,12 @@ export function projectReviewGateState(events: readonly ReviewGateEvent[]): Revi
             startedAt: event.emittedAt,
             reason: "orchestration_resumed",
           },
-          status:
-            state.status === "suspended" && state.suspensionReason === "execution_suspended"
-              ? "active"
-              : state.status,
-          suspensionReason:
-            state.suspensionReason === "execution_suspended" ? null : state.suspensionReason,
+          status: clearsExecution ? "active" : state.status,
+          suspensionReason: clearsExecution ? null : state.suspensionReason,
         };
+        if (clearsExecution) suspendedEpochId = null;
         break;
+      }
       case "DESIGN_CLEAR":
         if (state.phase !== "design") {
           throw new Error("review_gate_design_clear_not_in_design_phase");
@@ -110,9 +117,13 @@ export function projectReviewGateState(events: readonly ReviewGateEvent[]): Revi
       case "REVIEW_NON_CONVERGENT":
         state = { ...state, status: "suspended", suspensionReason: "review_non_convergent" };
         break;
-      case "EXECUTION_SUSPENDED":
+      case "EXECUTION_SUSPENDED": {
+        // The stop identity is Task 14's reentry key; recording it is exactly
+        // what makes a later resumption provable.
+        suspendedEpochId = event.epochId;
         state = { ...state, status: "suspended", suspensionReason: "execution_suspended" };
         break;
+      }
       case "FINDING_DISCOVERED": {
         if (state.findings.has(event.payload.lineageId)) {
           throw new Error("review_gate_duplicate_lineage");
@@ -292,6 +303,7 @@ export function projectReviewGate(events: readonly ReviewGateEvent[]): ReviewGat
     ...baseState,
     effectiveDesignClear,
     planClearMilestone,
+    suspensionDetail: deriveSuspensionDetail(events),
     workspaceStates,
     currentRemediableBlockers: Object.freeze(currentRemediableBlockers),
     currentUpstreamBlockers: Object.freeze(currentUpstreamBlockers),
@@ -299,6 +311,71 @@ export function projectReviewGate(events: readonly ReviewGateEvent[]): ReviewGat
     phaseBaselineRevision,
     phaseReviewContextIdentity,
   });
+}
+
+/**
+ * Project the durable stop identity of the current suspension from the event
+ * history (Task 14). Mirrors the reducer's suspension transitions exactly —
+ * including the same-epoch execution-suspension resumption rule — so the
+ * resume cursor and the orchestrator's reentry classification share one
+ * authority with the projection.
+ */
+function deriveSuspensionDetail(events: readonly ReviewGateEvent[]): ReviewGateSuspensionDetail | null {
+  let detail: ReviewGateSuspensionDetail | null = null;
+  for (const event of events) {
+    switch (event.eventType) {
+      case "REOPEN_REQUIRED":
+        detail = Object.freeze({
+          kind: "reopen_required",
+          phase: event.payload.phase,
+          lineageIds: event.payload.lineageIds,
+          stoppedByEpochId: event.epochId,
+        });
+        break;
+      case "ROUND_LIMIT_EXHAUSTED":
+        detail = Object.freeze({
+          kind: "round_limit_exhausted",
+          phase: event.payload.phase,
+          roundLimit: event.payload.roundLimit,
+          stoppedByEpochId: event.epochId,
+          stoppedByWriterId: event.writerId,
+        });
+        break;
+      case "REVIEW_NON_CONVERGENT":
+        detail = Object.freeze({
+          kind: "review_non_convergent",
+          phase: event.payload.phase,
+          lineageIds: event.payload.lineageIds,
+          stoppedByEpochId: event.epochId,
+          stoppedByWriterId: event.writerId,
+        });
+        break;
+      case "EXECUTION_SUSPENDED":
+        detail = Object.freeze({
+          kind: "execution_suspended",
+          reason: event.payload.reason,
+          stoppedByEpochId: event.epochId,
+        });
+        break;
+      case "ORCHESTRATION_RESUMED":
+        if (
+          detail !== null &&
+          detail.kind === "execution_suspended" &&
+          detail.stoppedByEpochId === event.epochId
+        ) {
+          detail = null;
+        }
+        break;
+      case "FINDING_REOPENED":
+        if (detail !== null && detail.kind === "reopen_required") {
+          detail = null;
+        }
+        break;
+      default:
+        break;
+    }
+  }
+  return detail;
 }
 
 function getGateCreatedEvent(events: readonly ReviewGateEvent[]): GateCreatedV1 {
@@ -451,6 +528,7 @@ function makeNc1Stop(
   stopEventId: string,
   phase: ReviewGatePhase,
   epochId: string,
+  stoppedWriterId: string,
   effectiveContext: VerifiedGateContextBinding,
   frontierHash: string,
   remainingRounds: number,
@@ -459,6 +537,7 @@ function makeNc1Stop(
     stopEventId,
     phase,
     epochId,
+    stoppedWriterId,
     stoppedContextDigest: contextDigest(effectiveContext),
     remainingRounds,
     witnessFrontierAtStop: frontierHash,
@@ -506,6 +585,7 @@ export function projectVerifiedGateTip(
   const rounds = { design: 0, plan: 0 };
   const countedOperations = new Set<string>();
   let suspensionReason: string | null = null;
+  let suspensionEpochId: string | null = null;
   let executionSuspended = false;
   let reopenRequired = false;
   let nc1Reason: "round_limit_exhausted" | "review_non_convergent" | null = null;
@@ -517,38 +597,70 @@ export function projectVerifiedGateTip(
         case "REOPEN_REQUIRED":
           reopenRequired = true;
           suspensionReason = "reopen_required";
+          suspensionEpochId = event.epochId;
           break;
         case "ROUND_LIMIT_EXHAUSTED": {
           const phase = event.payload.phase;
           suspensionReason = "round_limit_exhausted";
+          suspensionEpochId = event.epochId;
           nc1Reason = "round_limit_exhausted";
           const remainingRounds = phase === "design"
             ? MAX_DESIGN_REMEDIATION_ROUNDS - rounds.design
             : MAX_PLAN_REMEDIATION_ROUNDS - rounds.plan;
-          nc1Stop = makeNc1Stop("synthetic-v1-stop", phase, event.epochId, effectiveContext, frontierHash, remainingRounds);
+          nc1Stop = makeNc1Stop(
+            "synthetic-v1-stop",
+            phase,
+            event.epochId,
+            event.writerId,
+            effectiveContext,
+            frontierHash,
+            remainingRounds,
+          );
           break;
         }
         case "REVIEW_NON_CONVERGENT": {
           const phase = event.payload.phase;
           suspensionReason = "review_non_convergent";
+          suspensionEpochId = event.epochId;
           nc1Reason = "review_non_convergent";
           const remainingRounds = phase === "design"
             ? MAX_DESIGN_REMEDIATION_ROUNDS - rounds.design
             : MAX_PLAN_REMEDIATION_ROUNDS - rounds.plan;
-          nc1Stop = makeNc1Stop("synthetic-v1-stop", phase, event.epochId, effectiveContext, frontierHash, remainingRounds);
+          nc1Stop = makeNc1Stop(
+            "synthetic-v1-stop",
+            phase,
+            event.epochId,
+            event.writerId,
+            effectiveContext,
+            frontierHash,
+            remainingRounds,
+          );
           break;
         }
         case "EXECUTION_SUSPENDED":
           executionSuspended = true;
           if (suspensionReason === null) suspensionReason = "execution_suspended";
+          suspensionEpochId = event.epochId;
           break;
         case "ORCHESTRATION_RESUMED":
+          // Task 14: only a same-epoch resumption clears a plain execution
+          // suspension; a resumption from a different epoch leaves the stop durable.
+          if (
+            !reopenRequired &&
+            nc1Reason === null &&
+            suspensionReason === "execution_suspended" &&
+            suspensionEpochId !== event.epochId
+          ) {
+            break;
+          }
           executionSuspended = false;
           suspensionReason = reopenRequired ? "reopen_required" : nc1Reason;
+          if (suspensionReason === null) suspensionEpochId = null;
           break;
         case "FINDING_REOPENED":
           reopenRequired = false;
           suspensionReason = nc1Reason ?? (executionSuspended ? "execution_suspended" : null);
+          if (suspensionReason === null) suspensionEpochId = null;
           break;
         default:
           break;
@@ -643,6 +755,7 @@ export function projectVerifiedGateTip(
     supersedesGateId: gateCreated.payload.supersedesGateId,
     rounds: Object.freeze({ design: rounds.design, plan: rounds.plan }),
     suspensionReason,
+    suspensionEpochId,
     lastVerifiedBinding,
     nc1Stop,
     dispatchRecoveryCursors: projectVerifiedDispatchRecoveryCursors(input.events),

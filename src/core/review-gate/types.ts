@@ -17,6 +17,7 @@ import type {
   ReviewGatePhase,
   ReviewGateState,
   ReviewScopeId,
+  WriterId,
 } from "../review-gate-types.js";
 
 /**
@@ -56,6 +57,41 @@ export type PlanClearMilestone = Readonly<{
   readonly completedApprovalBinding: ReviewApprovalBindingV1;
 }>;
 
+/**
+ * Durable stop identity of the current suspension, projected from the
+ * suspension event payloads (Task 14 two-key reentry + phase reopen). It is
+ * cleared along exactly the same transitions as `suspensionReason` (a
+ * same-epoch resumption clears a plain execution suspension; reopening a
+ * finding clears a reopen-required suspension) so the resume cursor and the
+ * orchestrator's reentry classification never guess a stop they cannot prove.
+ */
+export type ReviewGateSuspensionDetail =
+  | Readonly<{
+      readonly kind: "reopen_required";
+      readonly phase: ReviewGatePhase;
+      readonly lineageIds: ReadonlyArray<LineageId>;
+      readonly stoppedByEpochId: EpochId;
+    }>
+  | Readonly<{
+      readonly kind: "round_limit_exhausted";
+      readonly phase: ReviewGatePhase;
+      readonly roundLimit: number;
+      readonly stoppedByEpochId: EpochId;
+      readonly stoppedByWriterId: WriterId;
+    }>
+  | Readonly<{
+      readonly kind: "review_non_convergent";
+      readonly phase: ReviewGatePhase;
+      readonly lineageIds: ReadonlyArray<LineageId>;
+      readonly stoppedByEpochId: EpochId;
+      readonly stoppedByWriterId: WriterId;
+    }>
+  | Readonly<{
+      readonly kind: "execution_suspended";
+      readonly reason: string;
+      readonly stoppedByEpochId: EpochId;
+    }>;
+
 /** Payload carried by a non-convergent current-phase disposition. */
 export type ReviewNonConvergentPayload = Readonly<{
   readonly phase: ReviewGatePhase;
@@ -72,6 +108,18 @@ export type CurrentPhaseDisposition =
   | Readonly<{ readonly kind: "non_convergent"; readonly payload: ReviewNonConvergentPayload }>
   | Readonly<{ readonly kind: "round_limit" }>
   | Readonly<{ readonly kind: "remediate" }>;
+
+
+/**
+ * Resume cursor for a Review Gate. `resume_execution` carries the identity of
+ * the epoch whose execution was suspended so a coordinator can verify the
+ * epoch has not changed before resuming. `dispatch_recovery` carries a
+ * verified recovery cursor for an external operation dispatch whose outcome
+ * is still pending (Task 9 projection seam). The Task 14 reentry variants
+ * carry the durable stop's payload so a qualified resumption can drive the
+ * phase reopen, the round-limit block, or the non-convergence reentry
+ * without re-deriving it from raw events.
+ */
 
 /**
  * Resume cursor for a Review Gate. `resume_execution` carries the identity of
@@ -92,7 +140,21 @@ export type ReviewGateResumeCursor =
   | Readonly<{ readonly kind: "resolve_upstream"; readonly lineageIds: ReadonlyArray<LineageId> }>
   | Readonly<{ readonly kind: "revalidate"; readonly lineageIds: ReadonlyArray<LineageId> }>
   | Readonly<{ readonly kind: "non_convergent"; readonly payload: ReviewNonConvergentPayload }>
-  | Readonly<{ readonly kind: "round_limit_exhausted" }>
+  | Readonly<{
+      readonly kind: "reopen_required";
+      readonly phase: ReviewGatePhase;
+      readonly lineageIds: ReadonlyArray<LineageId>;
+    }>
+  | Readonly<{
+      readonly kind: "round_limit_exhausted";
+      readonly phase: ReviewGatePhase;
+      readonly roundLimit: number;
+    }>
+  | Readonly<{
+      readonly kind: "review_non_convergent";
+      readonly phase: ReviewGatePhase;
+      readonly lineageIds: ReadonlyArray<LineageId>;
+    }>
   | Readonly<{ readonly kind: "remediate"; readonly lineageIds: ReadonlyArray<LineageId> }>
   | Readonly<{ readonly kind: "review" }>
   | Readonly<{
@@ -132,6 +194,7 @@ export type ReviewGateProjection = Readonly<
     readonly pendingRevalidationBlockers: ReadonlyArray<LineageId>;
     readonly phaseBaselineRevision: number;
     readonly phaseReviewContextIdentity: string;
+    readonly suspensionDetail: ReviewGateSuspensionDetail | null;
     readonly dispatchRecoveryCursors?: ReadonlyArray<VerifiedDispatchRecoveryCursorV1>;
     readonly terminalState?: VerifiedTerminalStateV1 | null;
   }
