@@ -17,60 +17,15 @@ import {
 import type {
   ReviewGatePhase,
   SemanticContextInputsV1,
+  VerifiedCycleEvidence,
+  VerifiedSemanticContext,
   VerifiedSemanticContextTransitionInput,
 } from "./types.js";
-import type {
-  SemanticBlockerEvidence,
-  ValidatedTargetOutcome,
-  VerifiedCommittedResolution,
-  VerifiedRegression,
-} from "./lineage.js";
+import type { VerifiedLineageHistory } from "./projection.js";
 
-export type VerifiedSemanticContext = Readonly<{
-  readonly gateId: string;
-  readonly generationId: string;
-  readonly phase: ReviewGatePhase;
-  readonly phaseBaselineId: string;
-  readonly semanticContractFingerprint: string;
-  readonly protocolFingerprint: string;
-  readonly contextDigest: string;
-}>;
+export type { VerifiedSemanticContext, VerifiedCycleEvidence, VerifiedLineageHistory };
 
-export type VerifiedSemanticCycle = Readonly<{
-  readonly context: VerifiedSemanticContext;
-  readonly roundOrdinal: number;
-  readonly operationId: string;
-  readonly roundStartedEventId: string;
-  readonly preRevisionDigest: string;
-  readonly postRevisionDigest: string;
-  readonly revisionCommitEventId: string | null;
-  readonly comparisonSegmentId: string;
-  readonly preLandscapeEventId: string;
-  readonly postLandscapeEventId: string;
-  readonly preBlockers: readonly SemanticBlockerEvidence[];
-  readonly postBlockers: readonly SemanticBlockerEvidence[];
-  readonly preCount: number;
-  readonly postCount: number;
-  readonly preFingerprint: string;
-  readonly postFingerprint: string;
-  readonly targetOutcomes: readonly ValidatedTargetOutcome[];
-  readonly committedResolutions: readonly VerifiedCommittedResolution[];
-  readonly regressions: readonly VerifiedRegression[];
-}>;
-
-/**
- * A cycle as supplied by a runtime projection, before the builder validates
- * cross-cycle links and freezes the result.
- */
-export type VerifiedCycleEvidence = Readonly<{
-  [K in keyof VerifiedSemanticCycle]: VerifiedSemanticCycle[K];
-}>;
-
-export type VerifiedLineageHistory = Readonly<{
-  readonly frontierHash: string;
-  readonly context: VerifiedSemanticContext;
-  readonly rounds: readonly VerifiedCycleEvidence[];
-}>;
+export type VerifiedSemanticCycle = VerifiedCycleEvidence;
 
 export type VerifiedSemanticCyclesResult =
   | Readonly<{ readonly kind: "verified"; readonly cycles: readonly VerifiedSemanticCycle[] }>
