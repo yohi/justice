@@ -3,7 +3,9 @@ import type { ArtifactDigest, EpochId, FindingId, GateId, LineageId, ReviewGateE
 import type {
   CompletedApprovalBindingV2, DesignClearV2,
   CrossGenerationReconciliationCompletedV2, ExternalOperationDispatchedV2,
+  ExternalOperationOutcomeAppliedV2, ExternalOperationResponseStagedV2, ExternalOperationResultCommittedV2,
   FindingValidationCompletedV2, GateCreatedV2, LineageRegressedV2,
+  PrivateResponseEvidenceV1,
   RemediationCommitSucceededV2, ReviewCommitFailedV2, ReviewCommitPreparedV2,
   ReviewTargetRestorePreparedV2, ReviewTargetRestoreRecoveredV2, ReviewTargetRestoreSucceededV2,
   VerifiedCanonicalMutationTargetV1,
@@ -66,6 +68,23 @@ const dispatch: z.ZodType<ExternalOperationDispatchedV2> = z.strictObject({
   candidateOrTargetSetDigest: text, inputBindingDigest: text, protocolFingerprint: text,
   expectedWitnessFrontier: text, protectedLeaseProofDigest: text.nullable(),
 }).refine((value) => (value.role === "remediator") === (value.protectedLeaseProofDigest !== null));
+const responseEvidence: z.ZodType<PrivateResponseEvidenceV1> = z.strictObject({
+  operationId: id, dispatchAttemptId: id, contentDigest: text,
+  byteLength: z.number().int().nonnegative(), privateStoreRecordId: id, policyVersion: text,
+});
+const responseStaged: z.ZodType<ExternalOperationResponseStagedV2> = z.strictObject({
+  eventType: z.literal("EXTERNAL_OPERATION_RESPONSE_STAGED"), gateId: id, generationId: id, epochId: id,
+  operationId: id, dispatchAttemptId: id, responseEvidence,
+}).refine((value) => value.responseEvidence.operationId === value.operationId
+  && value.responseEvidence.dispatchAttemptId === value.dispatchAttemptId);
+const resultCommitted: z.ZodType<ExternalOperationResultCommittedV2> = z.strictObject({
+  eventType: z.literal("EXTERNAL_OPERATION_RESULT_COMMITTED"), gateId: id, generationId: id, epochId: id,
+  operationId: id, dispatchAttemptId: id, resultEventId: id, redeliveryEvidenceDigest: text.nullable(),
+});
+const outcomeApplied: z.ZodType<ExternalOperationOutcomeAppliedV2> = z.strictObject({
+  eventType: z.literal("EXTERNAL_OPERATION_OUTCOME_APPLIED"), gateId: id, generationId: id, epochId: id,
+  operationId: id, dispatchAttemptId: id, outcomeAppliedEventId: id,
+});
 const validationBase = {
   operationId: id, validationEventId: id, pinnedBaselineDigest: text,
   semanticContextFingerprint: text, witnessedFrontierHash: text,
@@ -267,6 +286,9 @@ function versioned<T extends string, P>(eventType: T, payload: z.ZodType<P>): z.
 const v2Schema = z.union([
   versioned("GATE_CREATED", gateCreated),
   versioned("EXTERNAL_OPERATION_DISPATCHED", dispatch),
+  versioned("EXTERNAL_OPERATION_RESPONSE_STAGED", responseStaged),
+  versioned("EXTERNAL_OPERATION_RESULT_COMMITTED", resultCommitted),
+  versioned("EXTERNAL_OPERATION_OUTCOME_APPLIED", outcomeApplied),
   versioned("FINDING_VALIDATION_COMPLETED", validation),
   versioned("LINEAGE_REGRESSED", regression),
   versioned("CROSS_GENERATION_RECONCILIATION_COMPLETED", reconciliation),
@@ -290,6 +312,9 @@ const v2Schema = z.union([
     case "GATE_CREATED":
       return true;
     case "EXTERNAL_OPERATION_DISPATCHED":
+    case "EXTERNAL_OPERATION_RESPONSE_STAGED":
+    case "EXTERNAL_OPERATION_RESULT_COMMITTED":
+    case "EXTERNAL_OPERATION_OUTCOME_APPLIED":
       return value.payload.gateId === value.gateId && value.payload.generationId === value.generationId
         && value.payload.epochId === value.epochId;
     case "SEMANTIC_CONTEXT_TRANSITION":

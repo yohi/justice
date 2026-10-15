@@ -16,8 +16,10 @@ import type {
 } from "../review-gate-types.js";
 import type {
   ScopeEnrollmentV1,
+  VerifiedDispatchRecoveryCursorV1,
   VerifiedFirstEnrollmentAuthorityV1,
   VerifiedRequirementsBinding,
+  VerifiedTerminalStateV1,
 } from "./types.js";
 import { computeCanonicalJsonFingerprint } from "./identity.js";
 
@@ -159,7 +161,9 @@ export type VerifiedGateTip =
       readonly suspensionReason: string | null;
       readonly lastVerifiedBinding: VerifiedUnfinishedBindingSnapshot;
       readonly nc1Stop: VerifiedNC1StopV1 | null;
-    }>;
+      readonly dispatchRecoveryCursors: ReadonlyArray<VerifiedDispatchRecoveryCursorV1>;
+      readonly terminalState: VerifiedTerminalStateV1 | null;
+    }>
 
 export type VerifiedWorkspaceContinuityV1 = Readonly<{
   readonly installationId: string;

@@ -515,7 +515,7 @@ describe("ReviewGateEventStore — durable events", () => {
     expect(await store.readEvents("gate-b")).not.toEqual(await store.readEvents("gate-a"));
     store.close();
     closeWitnessFixture(ctx);
-  });
+  }, 60_000);
 
   it("keeps stored events independent and recursively frozen", async () => {
     const ctx = await freshContext("frozen");

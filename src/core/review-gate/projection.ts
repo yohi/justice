@@ -16,7 +16,10 @@ import type {
   ReviewGateState,
   ReviewTargetWorkspaceState,
   VerifiedRequirementsBinding,
+  VerifiedDispatchRecoveryCursorV1,
+  PrivateResponseEvidenceV1,
   VerifiedScopeFrontier,
+  VerifiedTerminalStateV1,
 } from "./types.js";
 import type { RequirementsAuthoritySnapshotV1 } from "../review-gate-types.js";
 import { MAX_DESIGN_REMEDIATION_ROUNDS, MAX_PLAN_REMEDIATION_ROUNDS } from "../review-gate-types.js";
@@ -636,5 +639,242 @@ export function projectVerifiedGateTip(
     suspensionReason,
     lastVerifiedBinding,
     nc1Stop,
+    dispatchRecoveryCursors: projectVerifiedDispatchRecoveryCursors(input.events),
+    terminalState: projectVerifiedTerminalState(input.events),
   });
+}
+
+/**
+ * Project the terminal writer-revoke state from a verified V2 event history.
+ * Returns the latest non-finalized terminal revoke state, or null if no
+ * terminal handoff has been requested.
+ */
+export function projectVerifiedTerminalState(
+  events: readonly VerifiedReviewGateEvent[],
+): VerifiedTerminalStateV1 | null {
+  let latest: VerifiedTerminalStateV1 | null = null;
+
+  for (const event of events) {
+    if (!isV2Event(event)) continue;
+    if (event.eventType === "TARGET_WRITER_HANDOFF_REQUESTED") {
+      const payload = event.payload;
+      if (payload.purpose !== "TERMINAL_REVOKE_ONLY") continue;
+      const state = Object.freeze({
+        kind: "TERMINAL_REVOKE_PENDING" as const,
+        handoffOperationId: payload.handoffOperationId,
+        terminalTransitionOperationId: payload.handoffOperationId,
+        targets: payload.targets,
+      });
+      latest = state;
+      continue;
+    }
+    if (event.eventType === "TARGET_WRITER_TERMINAL_REVOKED") {
+      const payload = event.payload;
+      const finalized =
+        payload.status === "NEVER_CLAIMED_OR_ALREADY_REVOKED" ||
+        payload.nativeEffectDisposition === "APPLIED" ||
+        payload.nativeEffectDisposition === "COMMITTED";
+      const state = Object.freeze({
+        kind: finalized
+          ? "TERMINAL_FINALIZED" as const
+          : "REVOKED_AWAITING_TERMINAL_PUBLICATION" as const,
+        handoffOperationId: payload.handoffOperationId,
+        terminalTransitionOperationId: payload.terminalTransitionOperationId,
+        targets: payload.targets,
+      });
+      latest = state;
+    }
+  }
+
+  return latest;
+}
+
+/**
+ * Mutable accumulator for one dispatched external operation while folding the
+ * verified event history. Mutation is private to this projection fold; every
+ * returned cursor is rebuilt as a frozen immutable snapshot.
+ */
+type DispatchRecoveryFoldState = {
+  readonly gateId: string;
+  readonly generationId: string;
+  readonly epochId: string;
+  readonly operationId: string;
+  readonly dispatchAttemptId: string;
+  readonly role: string;
+  readonly candidateOrTargetSetDigest: string;
+  readonly inputBindingDigest: string;
+  readonly protocolFingerprint: string;
+  readonly dispatchEventId: string;
+  readonly dispatchFrontierHash: string;
+  kind:
+    | "INTENT_PRE_LAUNCH"
+    | "IN_FLIGHT"
+    | "RESPONSE_STAGED"
+    | "RESULT_COMMITTED_OUTCOME_PENDING"
+    | "APPLIED"
+    | "EVIDENCE_UNAVAILABLE";
+  responseEvidence: PrivateResponseEvidenceV1 | null;
+  resultEventId: string | null;
+  redeliveryEvidenceDigest: string | null;
+};
+
+/**
+ * Project the outstanding external-operation dispatch recovery cursors from a
+ * verified V2 event history. Each `EXTERNAL_OPERATION_DISPATCHED` starts as
+ * `IN_FLIGHT`; the private response-custody lifecycle events advance it —
+ * `EXTERNAL_OPERATION_RESPONSE_STAGED` → `RESPONSE_STAGED`,
+ * `EXTERNAL_OPERATION_RESULT_COMMITTED` → `RESULT_COMMITTED_OUTCOME_PENDING`,
+ * and `EXTERNAL_OPERATION_OUTCOME_APPLIED` removes the cursor from the
+ * outstanding set (the authoritative outcome is applied; nothing to recover).
+ *
+ * `INTENT_PRE_LAUNCH` and `EVIDENCE_UNAVAILABLE` are not produced by the
+ * pure event fold here; they are emitted by the Task 18 runtime coordinator
+ * when it has a verified intent before dispatch, or when independently
+ * verified private evidence is unavailable. The fold type includes them so
+ * the same cursor machinery can carry them through `deriveResumeCursor`.
+ * Operations are keyed by `operationId` + `dispatchAttemptId`: every lifecycle
+ * payload carries both ids, matching the private response record keying, so
+ * the attempt is stable across events. Result events may appear before their
+ * matching dispatch in the folded order, so dispatches are indexed in a first
+ * pass and lifecycle states advance in a second pass. Inconsistent histories
+ * (unknown dispatch reference, duplicate dispatch, or a repeated lifecycle
+ * stage) fail closed instead of silently dropping evidence.
+ */
+export function projectVerifiedDispatchRecoveryCursors(
+  events: readonly VerifiedReviewGateEvent[],
+): ReadonlyArray<VerifiedDispatchRecoveryCursorV1> {
+  const states = new Map<string, DispatchRecoveryFoldState>();
+  const keyOf = (operationId: string, dispatchAttemptId: string): string =>
+    `${operationId}\u0000${dispatchAttemptId}`;
+
+  for (const event of events) {
+    if (!isV2Event(event)) continue;
+    if (event.eventType !== "EXTERNAL_OPERATION_DISPATCHED") continue;
+    const payload = event.payload;
+    const key = keyOf(payload.operationId, payload.dispatchAttemptId);
+    if (states.has(key)) throw new Error("review_gate_dispatch_recovery_duplicate_dispatch");
+    states.set(key, {
+      gateId: payload.gateId,
+      generationId: payload.generationId,
+      epochId: payload.epochId,
+      operationId: payload.operationId,
+      dispatchAttemptId: payload.dispatchAttemptId,
+      role: payload.role,
+      candidateOrTargetSetDigest: payload.candidateOrTargetSetDigest,
+      inputBindingDigest: payload.inputBindingDigest,
+      protocolFingerprint: payload.protocolFingerprint,
+      dispatchEventId: event.eventId,
+      dispatchFrontierHash: payload.expectedWitnessFrontier,
+      kind: "IN_FLIGHT",
+      responseEvidence: null,
+      resultEventId: null,
+      redeliveryEvidenceDigest: null,
+    });
+  }
+
+  for (const event of events) {
+    if (!isV2Event(event)) continue;
+    switch (event.eventType) {
+      case "EXTERNAL_OPERATION_RESPONSE_STAGED":
+      case "EXTERNAL_OPERATION_RESULT_COMMITTED":
+      case "EXTERNAL_OPERATION_OUTCOME_APPLIED":
+        break;
+      default:
+        continue;
+    }
+    const target = states.get(keyOf(event.payload.operationId, event.payload.dispatchAttemptId));
+    if (target === undefined) throw new Error("review_gate_dispatch_recovery_unknown_dispatch");
+    if (event.eventType === "EXTERNAL_OPERATION_RESPONSE_STAGED") {
+      if (target.kind !== "IN_FLIGHT") {
+        throw new Error("review_gate_dispatch_recovery_response_conflict");
+      }
+      target.kind = "RESPONSE_STAGED";
+      target.responseEvidence = event.payload.responseEvidence;
+      continue;
+    }
+    if (event.eventType === "EXTERNAL_OPERATION_RESULT_COMMITTED") {
+      if (target.kind !== "IN_FLIGHT" && target.kind !== "RESPONSE_STAGED") {
+        throw new Error("review_gate_dispatch_recovery_result_conflict");
+      }
+      target.kind = "RESULT_COMMITTED_OUTCOME_PENDING";
+      target.resultEventId = event.payload.resultEventId;
+      target.redeliveryEvidenceDigest = event.payload.redeliveryEvidenceDigest;
+      continue;
+    }
+    if (target.kind === "APPLIED") {
+      throw new Error("review_gate_dispatch_recovery_apply_conflict");
+    }
+    target.kind = "APPLIED";
+  }
+
+  const cursors: VerifiedDispatchRecoveryCursorV1[] = [];
+  for (const state of states.values()) {
+    if (state.kind === "APPLIED") continue;
+    const base = {
+      gateId: state.gateId,
+      generationId: state.generationId,
+      epochId: state.epochId,
+      operationId: state.operationId,
+      dispatchAttemptId: state.dispatchAttemptId,
+      role: state.role,
+      candidateOrTargetSetDigest: state.candidateOrTargetSetDigest,
+      inputBindingDigest: state.inputBindingDigest,
+      protocolFingerprint: state.protocolFingerprint,
+      dispatchEventId: state.dispatchEventId,
+      dispatchFrontierHash: state.dispatchFrontierHash,
+    };
+    if (state.kind === "RESPONSE_STAGED") {
+      cursors.push(
+        Object.freeze({
+          ...base,
+          kind: "RESPONSE_STAGED" as const,
+          responseEvidence: state.responseEvidence,
+          resultEventId: null,
+          outcomeAppliedEventId: null,
+          redeliveryEvidenceDigest: null,
+        }),
+      );
+      continue;
+    }
+    if (state.kind === "RESULT_COMMITTED_OUTCOME_PENDING") {
+      cursors.push(
+        Object.freeze({
+          ...base,
+          kind: "RESULT_COMMITTED_OUTCOME_PENDING" as const,
+          responseEvidence: state.responseEvidence,
+          resultEventId: state.resultEventId,
+          outcomeAppliedEventId: null,
+          redeliveryEvidenceDigest: state.redeliveryEvidenceDigest,
+        }),
+      );
+      continue;
+    }
+    if (state.kind === "INTENT_PRE_LAUNCH" || state.kind === "EVIDENCE_UNAVAILABLE") {
+      // Task 18 runtime coordinator produces these states; the pure Core
+      // projection only preserves them when forwarded. No current V2 event
+      // emits them, so this branch is unreachable from event history alone.
+      cursors.push(
+        Object.freeze({
+          ...base,
+          kind: state.kind,
+          responseEvidence: null,
+          resultEventId: null,
+          outcomeAppliedEventId: null,
+          redeliveryEvidenceDigest: null,
+        }),
+      );
+      continue;
+    }
+    cursors.push(
+      Object.freeze({
+        ...base,
+        kind: "IN_FLIGHT" as const,
+        responseEvidence: null,
+        resultEventId: null,
+        outcomeAppliedEventId: null,
+        redeliveryEvidenceDigest: null,
+      }),
+    );
+  }
+  return Object.freeze(cursors);
 }
