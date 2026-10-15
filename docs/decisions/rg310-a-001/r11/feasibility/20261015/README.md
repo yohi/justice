@@ -13,10 +13,10 @@
 
 | Archive | SHA-256 | CRC | Internal SHA256SUMS | GitHub bytes status |
 |---|---|---|---|---|
-| `Justice_RG310_FEAS001_A_Independent_Result_20261014(1).zip` | `11496294bff7f558b1fe21810edd62f67a59107371a624335a8e136abdb5979f` | PASS | 31/31 MATCH | **NOT UPLOADED** |
-| `Justice_RG310_R11_Independent_Infra_Storage_Security_Investigation_B_20261014(1).zip` | `8906f74ad02add9625ef93b57494b0c83fa64f3e190fa80ff0aa86599bba65ec` | PASS | 12/12 MATCH | **NOT UPLOADED** |
+| `Justice_RG310_FEAS001_A_Independent_Result_20261014(1).zip` | `11496294bff7f558b1fe21810edd62f67a59107371a624335a8e136abdb5979f` | PASS | 31/31 MATCH | [ARCHIVED](archives/Justice_RG310_FEAS001_A_Independent_Result_20261014(1).zip) (blob `d4928023753b71354342ed50821846a425e0d109`) |
+| `Justice_RG310_R11_Independent_Infra_Storage_Security_Investigation_B_20261014(1).zip` | `8906f74ad02add9625ef93b57494b0c83fa64f3e190fa80ff0aa86599bba65ec` | PASS | 12/12 MATCH | [ARCHIVED](archives/Justice_RG310_R11_Independent_Infra_Storage_Security_Investigation_B_20261014(1).zip) (blob `612362fed8aeb32fb4f5735773a653cbdb520358`) |
 
-The above identifies original submitted ZIPs that remain accessible in the source ChatGPT handoff. The original binary ZIP bytes have **not** been committed to GitHub. This README does not claim otherwise. The full ZIPs are included byte-for-byte in the separate A1/B1 independent-investigation handoff packages generated from the original uploads; those packages are not an approval.
+Both submitted original ZIP archives are now stored as Git blobs under `archives/`, with returned Git blob SHA-1 IDs matching independent Git blob SHA-1 values computed from the original local bytes. The original ZIPs' SHA-256 identities and their CRC/internal manifests are unchanged. These archives are technical evidence only and confer no approval or execution authorization.
 
 ## Committed evidence
 
@@ -39,4 +39,4 @@ Keep PRs #295/#325 **OPEN and Draft**. R11 `UNAPPROVED`; R'/D'/P' `NOT_ADOPTED`;
 2. **B1/B2:** versioned deployed-environment principal/effect/reader/writer/credential inventory and concrete gateway storage transaction/reader visibility design; report unknowns instead of inventing deployments.
 3. Distinct independent technical review, then actual human Architecture Decision and Owner-led normative Requirements→Design→Plan process **before** any implementation/run.
 
-Preserve original result archives externally until actual byte-identical GitHub archival is completed and SHA-256 verified. Do not remove this pending-provenance warning before that verification.
+The original result archives are committed as content-addressed Git blobs. The source SHA-256 hashes above identify the original exact bytes, and GitHub's returned blob IDs match independent locally calculated Git blob hashes. Keep all formal Gate, HSA, Design/Plan adoption, and execution STOP restrictions unchanged.
