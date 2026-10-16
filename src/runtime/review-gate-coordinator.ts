@@ -1521,14 +1521,18 @@ export function createReviewGateCoordinator(
     try {
       const fetched = await readPreparedOperation(session, operationId);
       if (fetched === "missing" || fetched === "mismatch" || fetched === "ambiguous") {
+        let guidance: string;
+        if (fetched === "missing") {
+          guidance = "review_gate_prepared_operation_unavailable";
+        } else if (fetched === "mismatch") {
+          guidance = "review_gate_prepared_operation_mismatch";
+        } else {
+          guidance = "review_gate_prepared_operation_ambiguous";
+        }
         return preparedDecisionOutcome(
           "blocked",
           operationId,
-          fetched === "missing"
-            ? "review_gate_prepared_operation_unavailable"
-            : fetched === "mismatch"
-              ? "review_gate_prepared_operation_mismatch"
-              : "review_gate_prepared_operation_ambiguous",
+          guidance,
         );
       }
       prepared = fetched;
