@@ -90,6 +90,7 @@ export type ReviewGateSuspensionDetail =
       readonly kind: "execution_suspended";
       readonly reason: string;
       readonly stoppedByEpochId: EpochId;
+      readonly stoppedByStartedAt: string;
     }>;
 
 /** Payload carried by a non-convergent current-phase disposition. */
@@ -597,6 +598,11 @@ export type VerifiedTargetWriterAuthorityV1 = Readonly<{
   readonly protectedTargetCasProofDigest: string;
   readonly durableTombstoneProofDigest: string | null;
 }>;
+
+export type VerifiedTargetWriterAuthoritiesV1 = ReadonlyMap<
+  string,
+  VerifiedTargetWriterAuthorityV1
+>;
 
 export type VerifiedTargetWriterHandoffV1 = Readonly<{
   readonly status: "REVOKED_NO_ACTIVE_WRITER" | "CLAIMED_CURRENT_WRITER" | "BLOCKED";

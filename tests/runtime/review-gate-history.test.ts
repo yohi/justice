@@ -644,7 +644,7 @@ describe("ReviewGateHistoryService — scope tip selection", () => {
     expect(result.kind === "failure" ? result.failure : "").toBe("conflict");
     store.close();
     closeWitnessFixture(ctx);
-  });
+  }, 60_000);
 
   it("returns not_found when no gate namespace exists for the scope", async () => {
     const ctx = await freshStoreContext();

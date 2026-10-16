@@ -17,11 +17,13 @@ import { projectReviewGate } from "../../../src/core/review-gate/projection.js";
 import type {
   ArtifactDigest,
   EpochId,
+  FindingId,
   FindingRemediatedV1,
   GateCreatedV1,
   GateId,
   LineageId,
   ReviewArtifactBinding,
+  ReviewGateEvent,
   ReviewScopeId,
   WriterId,
 } from "../../../src/core/review-gate/types.js";

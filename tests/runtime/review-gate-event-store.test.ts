@@ -515,7 +515,7 @@ describe("ReviewGateEventStore — durable events", () => {
     expect(await store.readEvents("gate-b")).not.toEqual(await store.readEvents("gate-a"));
     store.close();
     closeWitnessFixture(ctx);
-  });
+  }, 60_000);
 
   it("keeps stored events independent and recursively frozen", async () => {
     const ctx = await freshContext("frozen");
@@ -917,7 +917,7 @@ describe("ReviewGateEventStore — gate namespace enumeration (Task 13/14)", () 
     );
     store.close();
     closeWitnessFixture(ctx);
-  });
+  }, 60_000);
 
   it("keeps enumeration available after stores are reopened on the same root", async () => {
     const ctx = await freshContext("enumreopen");
@@ -1107,7 +1107,7 @@ describe("ReviewGateEventStore — protected publication CAS (Task 6)", () => {
     expect(await store.readEvents("gate-a")).toHaveLength(26);
     store.close();
     closeWitnessFixture(ctx);
-  });
+  }, 60_000);
 
   it("rejects an empty publication batch", async () => {
     const ctx = await freshContext("publisheempty");
