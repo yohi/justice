@@ -100,9 +100,12 @@ const EVENTS_DIR = `${REVIEW_GATES_DIR}/events`;
 const SCOPE_INDEX_FILE = `${REVIEW_GATES_DIR}/locks/scope-index.json`;
 const DISPATCH_JOURNALS_DIR = ".justice/review-gate-dispatches";
 
+/** Task 18 — durable V2 journal file inside the Gate namespace. */
+const V2_JOURNAL_FILENAME = "events-v2.jsonl";
+
 /** Temp-file naming used by the atomic rename writes (`<ledger>.<uuid>.tmp`). */
 const JOURNAL_TEMP_PATTERN =
-  /^(?:events|dispatches)\.jsonl\.[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.tmp$/u;
+  /^(?:events-v2|events|dispatches)\.jsonl\.[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.tmp$/u;
 
 const SHA256_OF_EMPTY = createHash("sha256").update("").digest("hex");
 
@@ -131,6 +134,22 @@ export type ReviewGatePublicationResult = Readonly<{
   readonly eventCount: number;
 }>;
 
+/**
+ * Task 18 — durable state of one Gate's V2 journal
+ * (`.justice/review-gates/<gateId>/events-v2.jsonl`). The V2 journal is the
+ * durable anchor for chained V2 events; legacy V1 projection surfaces never
+ * read it, so the legacy state-machine journal stays untouched by V2 custody.
+ */
+export type ReviewGateV2Journal = Readonly<{
+  readonly events: readonly VerifiedReviewGateEvent[];
+  /** Frontier hash of the journal bytes (sha256 of the canonical JSONL). */
+  readonly frontierHash: string;
+  /** eventId of the last chained event; null when the journal is empty. */
+  readonly tailEventId: string | null;
+  /** Number of chained V2 events. */
+  readonly eventCount: number;
+}>;
+
 /** Result of the explicit journal recovery entrypoint. */
 export type ReviewGateJournalRecovery = Readonly<{
   readonly status: "clean" | "recovered";
@@ -155,6 +174,16 @@ export type ReviewGateEventStore = Readonly<{
   readonly listGateIds: () => Promise<readonly string[]>;
   readonly readScopeIndex: (reviewScopeId: string) => Promise<string | null>;
   readonly writeScopeIndex: (reviewScopeId: string, gateId: string) => Promise<void>;
+  /**
+   * Task 18 — append one batch of codec-verified V2 events to the Gate's
+   * durable V2 journal. The batch must be a non-empty chain: each event
+   * carries `schemaVersion: 2`, named `gateId`, an eventId unique to the
+   * journal, and a parentEventId chaining from the journal tail (first batch
+   * member when the journal is empty). Fail closed on any violation.
+   */
+  readonly appendV2Events: (gateId: string, events: readonly VerifiedReviewGateEvent[]) => Promise<void>;
+  /** Task 18 — durable V2 journal state: chained events, frontier hash, tail. */
+  readonly readV2Journal: (gateId: string) => Promise<ReviewGateV2Journal>;
   readonly close: () => void;
 }>;
 
@@ -441,6 +470,173 @@ function createLocalDispatchJournal(rootDir: string) {
   };
 }
 
+/** Runtime guard for the Task 18 V2 envelope over the codec union. */
+type V2CodedEvent = VerifiedReviewGateEvent & {
+  readonly schemaVersion: 2;
+  readonly eventId: string;
+  readonly parentEventId: string;
+};
+const asV2CodedEvent = (event: VerifiedReviewGateEvent): V2CodedEvent => {
+  if (!("schemaVersion" in event) || event.schemaVersion !== 2) {
+    throw new Error("review_gate_event_v2_required");
+  }
+  return event as V2CodedEvent;
+};
+
+/**
+ * Task 18 — durable V2 journal shared by both store modes:
+ * `.justice/review-gates/<gateId>/events-v2.jsonl`. Every record passes the
+ * Task 4c codec, carries `schemaVersion: 2` and the named gate, and chains
+ * from the journal tail (eventId unique across the journal; the first member
+ * of every batch must name the current tail as parentEventId whenever the
+ * journal is non-empty). Legacy events and torn tails fail closed; the
+ * journal is owned by the append-only codec path and never read directly by
+ * the legacy V1 state-machine projection.
+ */
+function createLocalV2Journal(rootDir: string) {
+  const eventsByGate = new Map<string, readonly V2CodedEvent[]>();
+
+  const journalFile = (gateId: string): string =>
+    join(rootDir, REVIEW_GATES_DIR, gateId, V2_JOURNAL_FILENAME);
+
+  const assertStorageId = (id: string): void => {
+    if (!validateStorageGateId(id)) {
+      throw new Error("review_gate_invalid_id");
+    }
+  };
+
+  /** Canonical journal bytes for the committed V2 event list. */
+  const journalBytes = (events: readonly V2CodedEvent[]): string =>
+    events.length === 0 ? "" : `${events.map(encodeReviewGateEventRecord).join("\n")}\n`;
+
+  const frontierHashOf = (events: readonly V2CodedEvent[]): string =>
+    events.length === 0
+      ? SHA256_OF_EMPTY
+      : createHash("sha256").update(journalBytes(events), "utf8").digest("hex");
+
+  const acquireJournalLock = (gateId: string): (() => void) => {
+    const file = journalFile(gateId);
+    const directory = dirname(file);
+    const lockDirectory = `${file}.lock`;
+    mkdirSync(directory, { recursive: true });
+    try {
+      mkdirSync(lockDirectory, { mode: 0o700 });
+    } catch (error: unknown) {
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        (error as NodeJS.ErrnoException).code === "EEXIST"
+      ) {
+        throw new Error("review_gate_v2_journal_busy_retryable", { cause: error });
+      }
+      throw error;
+    }
+    return () => {
+      rmdirSync(lockDirectory);
+      fsyncDirectorySync(directory);
+    };
+  };
+
+  const readCommittedEvents = (gateId: string, refresh = false): readonly V2CodedEvent[] => {
+    const cached = eventsByGate.get(gateId);
+    if (!refresh && cached !== undefined) return cached;
+    let content: string;
+    try {
+      content = readFileSync(journalFile(gateId), "utf8");
+    } catch (err) {
+      if (isEnoent(err)) {
+        const empty = Object.freeze([]) as readonly V2CodedEvent[];
+        eventsByGate.set(gateId, empty);
+        return empty;
+      }
+      throw err;
+    }
+    if (content.length > 0 && !content.endsWith("\n")) {
+      // The V2 journal is append-only with atomic rename commits; a torn
+      // tail means foreign or corrupted custody and fails closed.
+      throw new Error("review_gate_journal_torn_tail");
+    }
+    const lines = content.split("\n").filter((line) => line.length > 0);
+    const events: V2CodedEvent[] = [];
+    for (const [index, line] of lines.entries()) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        throw new Error("review_gate_journal_corrupt");
+      }
+      const verified = asV2CodedEvent(validateReviewGateEventRecord(parsed));
+      const prior = events[index - 1];
+      if (prior !== undefined && verified.parentEventId !== prior.eventId) {
+        throw new Error("review_gate_v2_journal_chain_invalid");
+      }
+      events.push(verified);
+    }
+    const frozen = Object.freeze(events);
+    eventsByGate.set(gateId, frozen);
+    return frozen;
+  };
+
+  return {
+    append(gateId: string, batch: readonly VerifiedReviewGateEvent[]): void {
+      assertStorageId(gateId);
+      if (batch.length === 0) throw new Error("review_gate_event_batch_empty");
+      const current = readCommittedEvents(gateId);
+      const releaseLock = acquireJournalLock(gateId);
+      try {
+        const durable = readCommittedEvents(gateId, true);
+        if (frontierHashOf(durable) !== frontierHashOf(current)) {
+          throw new Error("review_gate_v2_journal_frontier_conflict");
+        }
+        const tailEventId = current.length > 0 ? current.at(-1)?.eventId ?? null : null;
+        const seenEventIds = new Set<string>(current.map((event) => event.eventId));
+        const verified: V2CodedEvent[] = [];
+        for (const event of batch) {
+          const validated = asV2CodedEvent(
+            validateReviewGateEventRecord(structuredClone(event)),
+          );
+          if (validated.gateId !== gateId) {
+            throw new Error("review_gate_event_gate_mismatch");
+          }
+          if (seenEventIds.has(validated.eventId)) {
+            throw new Error("review_gate_v2_journal_event_id_conflict");
+          }
+          const expectedParentEventId =
+            verified.length > 0 ? verified.at(-1)?.eventId ?? null : tailEventId;
+          if (expectedParentEventId !== null && validated.parentEventId !== expectedParentEventId) {
+            // The batch must chain from the durable journal tail (or the prior
+            // batch member). The first V2 event of an empty journal anchors
+            // freely — the coordinator pins it to the gate id.
+            throw new Error("review_gate_v2_journal_chain_invalid");
+          }
+          seenEventIds.add(validated.eventId);
+          verified.push(validated);
+        }
+        const next = Object.freeze([...current, ...verified]);
+        writeAtomicUtf8File(journalFile(gateId), journalBytes(next));
+        eventsByGate.set(gateId, next);
+      } finally {
+        releaseLock();
+      }
+    },
+
+    readJournal(gateId: string): ReviewGateV2Journal {
+      assertStorageId(gateId);
+      const events = readCommittedEvents(gateId);
+      return Object.freeze({
+        events,
+        frontierHash: frontierHashOf(events),
+        tailEventId: events.at(-1)?.eventId ?? null,
+        eventCount: events.length,
+      });
+    },
+
+    reset(): void {
+      eventsByGate.clear();
+    },
+  };
+}
+
 /** Non-authoritative `scope-index.json` cache shared by both store modes. */
 function createLocalScopeIndexCache(rootDir: string) {
   let scopeIndex: Record<string, string> | null = null;
@@ -508,6 +704,8 @@ export function createLegacyReviewGateEventStore(rootDir: string): ReviewGateEve
   const eventsByGate = new Map<string, readonly VerifiedReviewGateEvent[]>();
   const dispatchJournal = createLocalDispatchJournal(rootDir);
   const scopeIndexCache = createLocalScopeIndexCache(rootDir);
+  /** Task 18 — durable V2 journal custody shared by the Task 18 coordinator. */
+  const v2Journal = createLocalV2Journal(rootDir);
 
   let opChain: Promise<unknown> = Promise.resolve();
 
@@ -777,12 +975,27 @@ export function createLegacyReviewGateEventStore(rootDir: string): ReviewGateEve
         return undefined;
       }),
 
+    /** Task 18 — durable V2 journal custody (append-only, fail closed). */
+    appendV2Events: (gateId, events) =>
+      serialize(() => {
+        assertOpen();
+        v2Journal.append(gateId, events);
+        return undefined;
+      }),
+
+    readV2Journal: (gateId) =>
+      serialize(() => {
+        assertOpen();
+        return v2Journal.readJournal(gateId);
+      }),
+
     close: () => {
       if (closed) return;
       closed = true;
       eventsByGate.clear();
       dispatchJournal.reset();
       scopeIndexCache.reset();
+      v2Journal.reset();
     },
   };
 
@@ -824,6 +1037,8 @@ export function createReviewGateEventStore(
   let closed = false;
   const dispatchJournal = createLocalDispatchJournal(rootDir);
   const scopeIndexCache = createLocalScopeIndexCache(rootDir);
+  /** Task 18 — durable V2 journal custody shared by the Task 18 coordinator. */
+  const v2Journal = createLocalV2Journal(rootDir);
 
   let opChain: Promise<unknown> = Promise.resolve();
 
@@ -1718,12 +1933,26 @@ export function createReviewGateEventStore(
         }
         return witness.recoverPreparedTerminalIntentPublication(input);
       }),
+    /** Task 18 — durable V2 journal custody (shared local journal namespace). */
+    appendV2Events: (gateId, events) =>
+      serialize(async () => {
+        assertOpen();
+        v2Journal.append(gateId, events);
+        return undefined;
+      }),
+
+    readV2Journal: (gateId) =>
+      serialize(async () => {
+        assertOpen();
+        return v2Journal.readJournal(gateId);
+      }),
 
     close: () => {
       if (closed) return;
       closed = true;
       dispatchJournal.reset();
       scopeIndexCache.reset();
+      v2Journal.reset();
     },
   };
 
