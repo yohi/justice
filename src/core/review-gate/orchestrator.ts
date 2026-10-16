@@ -562,7 +562,7 @@ function suspensionStateConflicts(projection: ReviewGateProjection): boolean {
     case "review_non_convergent":
       return detail === null || detail.kind !== projection.suspensionReason;
     case "execution_suspended":
-      return detail !== null && detail.kind !== "execution_suspended";
+      return detail === null || detail.kind !== "execution_suspended";
     case null:
       return false;
   }

@@ -1731,4 +1731,17 @@ describe("planReviewGateNextOperation — Task 14 two-key reentry routing", () =
       planReviewGateNextOperation(conflicting, planningContext()),
     ).toMatchObject({ detail: "suspension_state_conflict" });
   });
+
+  it("blocks an execution suspension with a missing durable stop record", () => {
+    const conflicting = Object.freeze({
+      ...suspendedProjectionWithoutDetail(),
+      suspensionReason: "execution_suspended" as const,
+    });
+
+    expect(planReviewGateNextOperation(conflicting, planningContext())).toEqual({
+      kind: "suspended",
+      reason: "execution_suspended",
+      detail: "suspension_state_conflict",
+    });
+  });
 });
