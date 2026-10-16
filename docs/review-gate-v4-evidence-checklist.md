@@ -7,12 +7,43 @@ test files that guard it, the declared test case count per file (counted from
 the current branch at the date below), the verification command, and the PR
 that carries the change.
 
-**Verification basis (2026-10-16, branch `feature/task-20-real-host-e2e`):
+**Historical verification basis (2026-10-16,
+branch `feature/task-20-real-host-e2e`; not reissued below):
 `bun run test` → 222 files passed | 2 skipped (224 files),
 3522 tests passed | 7 skipped (3529);
 `bun run typecheck` → 0 errors;
 `bun run lint` → 0 errors (711 pre-existing-style warnings);
 `bun run build` → exits 0.**
+
+## Current Reconciliation (2026-10-16)
+
+Source baseline: `b86562aa6ce7543bf11d78f9ba1067d1f101b1e1`.
+PR #338 is merged. The table below preserves historical component evidence;
+its test counts and commands do not establish full contract coverage or current
+acceptance. Current task/checkbox status belongs to the
+[implementation plan](./superpowers/plans/2026-10-09-review-gate-v4-contract-conformance.md#current-progress-reconciliation-2026-10-16).
+The [remediation plan](./superpowers/plans/2026-10-16-review-gate-authority-wiring.md)
+defines the outstanding authority-wiring work.
+
+Fresh configured-devcontainer checks (`remoteUser: root`, Bun 1.4.2):
+
+- `bun run test`: exit 1; 41 suites failed to load, 182 passed, 1 skipped;
+  2776 tests passed, 5 skipped. Zod consumers report undefined `z.string` /
+  `z.strictObject`; root cause is unconfirmed. These load failures are not
+  contract-specific RED evidence and prevent a current global GREEN claim.
+- `bun run typecheck`: exit 0.
+- `bun run lint`: exit 0 with warnings.
+- `bun run build`: exit 0.
+- Native/live-host opt-ins: NOT RUN in this reconciliation; G3 NOT CLAIMED.
+
+Task 18 is PARTIAL: production Legacy fallback, V1 creation, Requirements
+selector loss and non-exhaustive Core decision application remain. Task 19's
+principal harness uses a Legacy store, in-process locks and a recording seam;
+its separate protected-store tests do not prove actual command composition.
+Task 20 adds native/Git regression infrastructure, but uses a Legacy store and
+injected mutation substrate rather than the live OpenCode production graph.
+Full G2/G3 and DEP-02/03/04 acceptance are not established. The required final
+implementation-verification report is absent.
 
 ## Task evidence table
 
@@ -29,7 +60,7 @@ that carries the change.
 | 17 | Caller-owned routing (`subagent_type` string/preserve) + host adapter compatibility | `tests/hooks/plan-bridge.test.ts` (64) · `tests/hooks/plan-bridge-review-lock.test.ts` (19) · `tests/runtime/review-gate-query.test.ts` (21) · `tests/integration/review-gate-adapter-orchestration.test.ts` (3) | `bun run vitest run tests/hooks/plan-bridge.test.ts tests/hooks/plan-bridge-review-lock.test.ts tests/runtime/review-gate-query.test.ts` | [#335](https://github.com/yohi/justice/pull/335) |
 | 18 | Production coordinator end-to-end authority wiring | `tests/integration/review-gate-event-sourced-flow.test.ts` (2) · `tests/integration/review-gate-implementation-lock.test.ts` (5) · `tests/runtime/review-gate-scope-admission.test.ts` (14) · `tests/runtime/review-gate-protocol-release-authority.test.ts` (4) · `tests/integration/review-gate-restart-recovery.test.ts` (24, shared) | `bun run vitest run tests/integration/review-gate-event-sourced-flow.test.ts tests/integration/review-gate-implementation-lock.test.ts tests/runtime/review-gate-scope-admission.test.ts` | [#336](https://github.com/yohi/justice/pull/336) |
 | 19 | G2 devcontainer production-path negative matrix (N1–N7) | `tests/integration/review-gate-production-path.test.ts` (9) | `bun run vitest run tests/integration/review-gate-production-path.test.ts` | [#337](https://github.com/yohi/justice/pull/337) |
-| 20 | G3 real-host E2E entry point + final evidence-based review | `tests/integration/review-gate-real-host.test.ts` (2: full staged gate + unprepared-commit negative) · this checklist | `bun run vitest run tests/integration/review-gate-real-host.test.ts` (with `JUSTICE_REAL_HOST_E2E=1` to execute) | this branch (unmerged at checklist time) |
+| 20 | Native/Git E2E entry point; full G3/final review outstanding | `tests/integration/review-gate-real-host.test.ts` (2: staged gate + unprepared-commit negative) · this checklist | `bun run vitest run tests/integration/review-gate-real-host.test.ts` (with `JUSTICE_REAL_HOST_E2E=1` to execute) | [#338](https://github.com/yohi/justice/pull/338), merged; partial acceptance evidence |
 
 Declared test counts include `it()`/`test()`/`it.each()` declarations in the
 named files; several cases in the shared files cover more than one task, so
@@ -47,7 +78,8 @@ the counts are per-file declarations, not unique-contract tallies.
 
 ## Task 20 acceptance notes (read before claiming G3)
 
-- The new entry point is **skipped by default**: full-suite skip count grows
+- The new entry point is **skipped by default when suite loading succeeds**;
+  the historical full-suite skip count grew
   by exactly 1 test file (baseline `222 passed | 1 skipped` file tally →
   `222 passed | 2 skipped` with this file) and both cases report `skipped`.
 - With `JUSTICE_REAL_HOST_E2E=1` the file executes 2 cases against a real
