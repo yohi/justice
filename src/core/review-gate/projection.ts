@@ -797,7 +797,6 @@ export function projectVerifiedGateTip(
           currentRequirements = payload.currentRequirements;
           currentRequirementsAuthorityEventId = payload.currentRequirementsAuthorityEventId;
           break;
-        break;
       }
       default:
         break;
