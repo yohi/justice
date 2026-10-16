@@ -548,7 +548,6 @@ describe("ReviewGateEventStore — durable events", () => {
     closeWitnessFixture(ctx);
   });
 
-  // Durable witness publication includes filesystem syncs and needs CI-load headroom.
   it("persists events durably across store instances on the same root", async () => {
     const ctx = await freshContext("durable");
     const first = createReviewGateEventStore(
@@ -565,7 +564,7 @@ describe("ReviewGateEventStore — durable events", () => {
     expect(await second.readEvents("gate-a")).toEqual([gateCreatedEvent("gate-a")]);
     second.close();
     closeWitnessFixture(ctx);
-  }, 30_000);
+  });
 
   it("writes the authority shard atomically at the events layout", async () => {
     const ctx = await freshContext("layout");
