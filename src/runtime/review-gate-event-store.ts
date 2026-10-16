@@ -514,6 +514,29 @@ function createLocalV2Journal(rootDir: string) {
       ? SHA256_OF_EMPTY
       : createHash("sha256").update(journalBytes(events), "utf8").digest("hex");
 
+  const acquireJournalLock = (gateId: string): (() => void) => {
+    const file = journalFile(gateId);
+    const directory = dirname(file);
+    const lockDirectory = `${file}.lock`;
+    mkdirSync(directory, { recursive: true });
+    try {
+      mkdirSync(lockDirectory, { mode: 0o700 });
+    } catch (error: unknown) {
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        (error as NodeJS.ErrnoException).code === "EEXIST"
+      ) {
+        throw new Error("review_gate_v2_journal_busy_retryable", { cause: error });
+      }
+      throw error;
+    }
+    return () => {
+      rmdirSync(lockDirectory);
+      fsyncDirectorySync(directory);
+    };
+  };
+
   const readCommittedEvents = (gateId: string, refresh = false): readonly V2CodedEvent[] => {
     const cached = eventsByGate.get(gateId);
     if (!refresh && cached !== undefined) return cached;
@@ -559,37 +582,42 @@ function createLocalV2Journal(rootDir: string) {
       assertStorageId(gateId);
       if (batch.length === 0) throw new Error("review_gate_event_batch_empty");
       const current = readCommittedEvents(gateId);
-      const tailEventId = current.length > 0 ? current.at(-1)?.eventId ?? null : null;
-      const seenEventIds = new Set<string>(current.map((event) => event.eventId));
-      const verified: V2CodedEvent[] = [];
-      for (const event of batch) {
-        const validated = asV2CodedEvent(
-          validateReviewGateEventRecord(structuredClone(event)),
-        );
-        if (validated.gateId !== gateId) {
-          throw new Error("review_gate_event_gate_mismatch");
+      const releaseLock = acquireJournalLock(gateId);
+      try {
+        const durable = readCommittedEvents(gateId, true);
+        if (frontierHashOf(durable) !== frontierHashOf(current)) {
+          throw new Error("review_gate_v2_journal_frontier_conflict");
         }
-        if (seenEventIds.has(validated.eventId)) {
-          throw new Error("review_gate_v2_journal_event_id_conflict");
+        const tailEventId = current.length > 0 ? current.at(-1)?.eventId ?? null : null;
+        const seenEventIds = new Set<string>(current.map((event) => event.eventId));
+        const verified: V2CodedEvent[] = [];
+        for (const event of batch) {
+          const validated = asV2CodedEvent(
+            validateReviewGateEventRecord(structuredClone(event)),
+          );
+          if (validated.gateId !== gateId) {
+            throw new Error("review_gate_event_gate_mismatch");
+          }
+          if (seenEventIds.has(validated.eventId)) {
+            throw new Error("review_gate_v2_journal_event_id_conflict");
+          }
+          const expectedParentEventId =
+            verified.length > 0 ? verified.at(-1)?.eventId ?? null : tailEventId;
+          if (expectedParentEventId !== null && validated.parentEventId !== expectedParentEventId) {
+            // The batch must chain from the durable journal tail (or the prior
+            // batch member). The first V2 event of an empty journal anchors
+            // freely — the coordinator pins it to the gate id.
+            throw new Error("review_gate_v2_journal_chain_invalid");
+          }
+          seenEventIds.add(validated.eventId);
+          verified.push(validated);
         }
-        const expectedParentEventId =
-          verified.length > 0 ? verified.at(-1)?.eventId ?? null : tailEventId;
-        if (expectedParentEventId !== null && validated.parentEventId !== expectedParentEventId) {
-          // The batch must chain from the durable journal tail (or the prior
-          // batch member). The first V2 event of an empty journal anchors
-          // freely — the coordinator pins it to the gate id.
-          throw new Error("review_gate_v2_journal_chain_invalid");
-        }
-        seenEventIds.add(validated.eventId);
-        verified.push(validated);
+        const next = Object.freeze([...current, ...verified]);
+        writeAtomicUtf8File(journalFile(gateId), journalBytes(next));
+        eventsByGate.set(gateId, next);
+      } finally {
+        releaseLock();
       }
-      const next = Object.freeze([...current, ...verified]);
-      const durable = readCommittedEvents(gateId, true);
-      if (frontierHashOf(durable) !== frontierHashOf(current)) {
-        throw new Error("review_gate_v2_journal_frontier_conflict");
-      }
-      writeAtomicUtf8File(journalFile(gateId), journalBytes(next));
-      eventsByGate.set(gateId, next);
     },
 
     readJournal(gateId: string): ReviewGateV2Journal {

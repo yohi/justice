@@ -729,6 +729,7 @@ describe("Task 19 production-path negative matrix", () => {
       const firstStore = harness.eventStore();
       const staleStore = harness.eventStore();
       await Promise.all([firstStore.readV2Journal(gateId), staleStore.readV2Journal(gateId)]);
+      const journalBeforeLock = await firstStore.readV2Journal(gateId);
 
       const firstRecord = {
         schemaVersion: 2,
@@ -765,6 +766,14 @@ describe("Task 19 production-path negative matrix", () => {
           dispatchAttemptId: "task19-v2-attempt-2",
         },
       };
+
+      const journalLockPath = `${v2JournalPath(harness.rootDir, gateId)}.lock`;
+      mkdirSync(journalLockPath);
+      await expect(
+        firstStore.appendV2Events(gateId, [asV2BypassRecord(firstRecord)]),
+      ).rejects.toThrow("review_gate_v2_journal_busy_retryable");
+      expect(await firstStore.readV2Journal(gateId)).toEqual(journalBeforeLock);
+      rmSync(journalLockPath, { recursive: true });
 
       await firstStore.appendV2Events(gateId, [asV2BypassRecord(firstRecord)]);
       await expect(
