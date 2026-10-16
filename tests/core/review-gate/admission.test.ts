@@ -216,6 +216,7 @@ function activeTip(gateId: string, scopeId: string): VerifiedGateTip {
     supersedesGateId: null,
     rounds: { design: 1, plan: 0 },
     suspensionReason: null,
+    suspensionEpochId: null,
     lastVerifiedBinding: unfinishedBinding(),
     nc1Stop: null,
   };
@@ -235,6 +236,7 @@ function suspendedTip(
     supersedesGateId: null,
     rounds: { design: 2, plan: 1 },
     suspensionReason: reason,
+    suspensionEpochId: null,
     lastVerifiedBinding: unfinishedBinding(),
     nc1Stop: nc1Stop ?? null,
   };
@@ -613,6 +615,7 @@ function nc1Stop(phase: "design" | "plan" = "design"): VerifiedNC1StopV1 {
     stopEventId: "nc1-stop-1",
     phase,
     epochId: "epoch-1",
+    stoppedWriterId: "writer-1",
     stoppedContextDigest: computeVerifiedContextDigest(context),
     remainingRounds: 3,
     witnessFrontierAtStop: FRONTIER,

@@ -27,6 +27,7 @@ import {
 import { computeSemanticGoverningProjectionDigest } from "../../../src/core/review-gate/deterministic-validation.js";
 import { deriveResumeCursor } from "../../../src/core/review-gate/resume-cursor.js";
 import { validateReviewGateEventRecord } from "../../../src/core/review-gate/event-schema.js";
+import type { VerifiedReviewGateEvent } from "../../../src/core/review-gate/event-schema.js";
 
 const gateId = "gate-1" as GateId;
 const writerId = "writer-1" as WriterId;
@@ -81,6 +82,27 @@ describe("projectReviewGate upstream blockers", () => {
 
     expect(projection.currentUpstreamBlockers).toEqual([lineageId]);
     expect(deriveResumeCursor(projection)).toEqual({ kind: "resolve_upstream", lineageIds: [lineageId] });
+  });
+
+  it("resumes an execution suspension from its stopped epoch after a different-epoch audit", () => {
+    const stoppedAt = "2026-10-08T00:00:01.000Z";
+    const suspended = {
+      ...event("EXECUTION_SUSPENDED", { reason: "execution failed" }),
+      emittedAt: stoppedAt,
+    };
+    const resumed = {
+      ...event("ORCHESTRATION_RESUMED", { resumedAt: "2026-10-08T00:00:02.000Z" }),
+      epochId: "epoch-2" as EpochId,
+      emittedAt: "2026-10-08T00:00:02.000Z",
+    };
+    const projected = projectReviewGate([created, suspended, resumed]);
+
+    expect(projected.status).toBe("suspended");
+    expect(projected.epoch).toMatchObject({ epochId: "epoch-2", startedAt: resumed.emittedAt });
+    expect(deriveResumeCursor(projected)).toEqual({
+      kind: "resume_execution",
+      cursor: { epochId, startedAt: stoppedAt },
+    });
   });
 });
 
@@ -758,7 +780,7 @@ describe("projectVerifiedGateTip", () => {
     });
     const suspended = validateReviewGateEventRecord({
       eventType: "EXECUTION_SUSPENDED", gateId: "gate-1", writerId: "writer-1",
-      epochId: "epoch-1", emittedAt: "2026-10-11T00:00:01.000Z",
+      epochId: "epoch-2", emittedAt: "2026-10-11T00:00:01.000Z",
       payload: { reason: "execution failed" },
     });
     const resumed = validateReviewGateEventRecord({
@@ -772,7 +794,11 @@ describe("projectVerifiedGateTip", () => {
       frontier: frontier() as VerifiedScopeFrontier,
     });
 
-    expect(tip).toMatchObject({ status: "suspended", suspensionReason: "review_non_convergent" });
+    expect(tip).toMatchObject({
+      status: "suspended",
+      suspensionReason: "review_non_convergent",
+      suspensionEpochId: "epoch-1",
+    });
     expect(tip.nc1Stop).not.toBeNull();
   });
 
@@ -1368,29 +1394,50 @@ describe("projectVerifiedGateTip", () => {
     });
   });
 
-  it("projects REQUESTED from TARGET_WRITER_HANDOFF_REQUESTED", () => {
-    const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
-    const owner = { scopeId: "scope-2", gateId: "gate-2", generationId: "generation-1", operationId: "op-1", attemptId: "attempt-1" };
-    const handoff = validateReviewGateEventRecord(
-      v2HandoffRequested("event-handoff", "event-genesis", "handoff-1", "target.md", owner),
-    );
+  describe("target writer handoff replay state projection", () => {
+    it("projects REQUESTED from TARGET_WRITER_HANDOFF_REQUESTED", () => {
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+      const owner = { scopeId: "scope-2", gateId: "gate-2", generationId: "generation-1", operationId: "op-1", attemptId: "attempt-1" };
+      const handoff = validateReviewGateEventRecord(
+        v2HandoffRequested("event-handoff", "event-genesis", "handoff-1", "target.md", owner),
+      );
 
-    const tip = projectVerifiedGateTip({
-      gateId: "gate-1",
-      scopeId: "scope-1",
-      events: [genesis, handoff],
-      frontier: frontier() as VerifiedScopeFrontier,
+      const tip = projectVerifiedGateTip({
+        gateId: "gate-1",
+        scopeId: "scope-1",
+        events: [genesis, handoff],
+        frontier: frontier() as VerifiedScopeFrontier,
+      });
+
+      expect(tip.status).toBe("active");
+      if (tip.status !== "active") return;
+      expect(tip.targetWriterHandoffState).not.toBeNull();
+      expect(tip.targetWriterHandoffState?.status).toBe("REQUESTED");
+      expect(tip.targetWriterHandoffState?.handoffOperationId).toBe("handoff-1");
+      expect(tip.targetWriterHandoffState?.newOwner).toEqual(owner);
     });
 
-    expect(tip.status).toBe("active");
-    if (tip.status !== "active") return;
-    expect(tip.targetWriterHandoffState).not.toBeNull();
-    expect(tip.targetWriterHandoffState?.status).toBe("REQUESTED");
-    expect(tip.targetWriterHandoffState?.handoffOperationId).toBe("handoff-1");
-    expect(tip.targetWriterHandoffState?.newOwner).toEqual(owner);
-  });
+    it("projects RESUMED from TARGET_WRITER_HANDOFF_RESUMED", () => {
+      const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+      const owner = { scopeId: "scope-2", gateId: "gate-2", generationId: "generation-1", operationId: "op-1", attemptId: "attempt-1" };
+      const resumed = validateReviewGateEventRecord(
+        v2HandoffResumed("event-resumed", "event-genesis", "handoff-1", "target.md", owner),
+      );
 
-  it("does not project terminal revoke requests as yielded handoffs", () => {
+      const tip = projectVerifiedGateTip({
+        gateId: "gate-1",
+        scopeId: "scope-1",
+        events: [genesis, resumed],
+        frontier: frontier() as VerifiedScopeFrontier,
+      });
+
+      expect(tip.status).toBe("active");
+      if (tip.status !== "active") return;
+      expect(tip.targetWriterHandoffState).not.toBeNull();
+      expect(tip.targetWriterHandoffState?.status).toBe("RESUMED");
+      expect(tip.targetWriterHandoffState?.expectedGlobalTargetWriterGeneration).toBe(2);
+    });
+    it("does not project terminal revoke requests as yielded handoffs", () => {
     const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
     const terminalRevoke = validateReviewGateEventRecord(
       v2TerminalHandoffRequested("event-handoff", "event-genesis", "handoff-1", ["target.md"]),
@@ -1406,27 +1453,7 @@ describe("projectVerifiedGateTip", () => {
     expect(tip.status).toBe("active");
     if (tip.status !== "active") return;
     expect(tip.targetWriterHandoffState).toBeNull();
-  });
-
-  it("projects RESUMED from TARGET_WRITER_HANDOFF_RESUMED", () => {
-    const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
-    const owner = { scopeId: "scope-2", gateId: "gate-2", generationId: "generation-1", operationId: "op-1", attemptId: "attempt-1" };
-    const resumed = validateReviewGateEventRecord(
-      v2HandoffResumed("event-resumed", "event-genesis", "handoff-1", "target.md", owner),
-    );
-
-    const tip = projectVerifiedGateTip({
-      gateId: "gate-1",
-      scopeId: "scope-1",
-      events: [genesis, resumed],
-      frontier: frontier() as VerifiedScopeFrontier,
     });
-
-    expect(tip.status).toBe("active");
-    if (tip.status !== "active") return;
-    expect(tip.targetWriterHandoffState).not.toBeNull();
-    expect(tip.targetWriterHandoffState?.status).toBe("RESUMED");
-    expect(tip.targetWriterHandoffState?.expectedGlobalTargetWriterGeneration).toBe(2);
   });
 });
 

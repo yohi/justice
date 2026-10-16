@@ -7,10 +7,16 @@ import {
   type MandatoryValidationDispatch,
 } from "../../../src/core/review-gate/deterministic-validation.js";
 import {
+  classifyReentryEligibility,
   planReviewGateNextOperation,
   type ReviewGatePlanningContext,
   type VerifiedUpstreamReopenContextV1,
 } from "../../../src/core/review-gate/orchestrator.js";
+import type {
+  VerifiedGateTip,
+  VerifiedGateContextBinding,
+  VerifiedNC1StopV1,
+} from "../../../src/core/review-gate/admission.js";
 import type {
   ReviewRestoreDestinationBinding,
   ReviewRestoreSourceBinding,
@@ -35,6 +41,7 @@ import type {
   RemediationRound,
   ReviewApprovalBindingV1,
   ReviewGateEvent,
+  ReviewGateProjection,
   ReviewScopeId,
   WriterId,
 } from "../../../src/core/review-gate/types.js";
@@ -225,6 +232,37 @@ function planningContext(
   overrides: Omit<ReviewGatePlanningContext, "artifacts"> = {},
 ): ReviewGatePlanningContext {
   return { artifacts, ...overrides };
+}
+
+
+/**
+ * Hand-built suspended projection for fail-closed conflict tests: production
+ * projections always carry a matching suspensionDetail, so a mismatch or
+ * missing stop record is only constructible by foreign or corrupt state.
+ */
+function suspendedProjectionWithoutDetail(): ReviewGateProjection {
+  return Object.freeze({
+    reviewScopeId: scopeId,
+    gateId,
+    status: "suspended" as const,
+    phase: "design" as const,
+    epoch: { epochId, startedAt: created.emittedAt, reason: "gate_created" as const },
+    designRemediationRounds: [],
+    planRemediationRounds: [],
+    findings: new Map(),
+    suspensionReason: "review_non_convergent" as const,
+    suspensionDetail: null,
+    approvalBinding: null,
+    supersedesGateId: null,
+    effectiveDesignClear: null,
+    planClearMilestone: null,
+    workspaceStates: new Map(),
+    currentRemediableBlockers: [],
+    currentUpstreamBlockers: [],
+    pendingRevalidationBlockers: [],
+    phaseBaselineRevision: 0,
+    phaseReviewContextIdentity: "phase-context-1",
+  });
 }
 
 function referenceConsistencyDispatch(
@@ -628,7 +666,7 @@ describe("planReviewGateNextOperation — state-machine scenarios", () => {
     expect(planReviewGateNextOperation(nonConvergent, planningContext())).toEqual({
       kind: "suspended",
       reason: "review_non_convergent",
-      resumeCursor: { kind: "await_material_progress" },
+      resumeCursor: { kind: "review_non_convergent", phase: "design", lineageIds: [lineageA] },
     });
     expect(
       planReviewGateNextOperation(nonConvergent, planningContext({ materialProgressObserved: true })),
@@ -641,7 +679,7 @@ describe("planReviewGateNextOperation — state-machine scenarios", () => {
     expect(planReviewGateNextOperation(reopenedGate, planningContext())).toEqual({
       kind: "suspended",
       reason: "reopen_required",
-      resumeCursor: { kind: "await_upstream_commit" },
+      resumeCursor: { kind: "reopen_required", phase: "design", lineageIds: [lineageA] },
     });
   });
 
@@ -1128,7 +1166,7 @@ describe("planReviewGateNextOperation — Task 14 upstream reopen state machine"
     ).toEqual({
       kind: "suspended",
       reason: "reopen_required",
-      resumeCursor: { kind: "await_upstream_commit" },
+      resumeCursor: { kind: "reopen_required", phase: "design", lineageIds: [lineageA] },
     });
   });
 
@@ -1418,6 +1456,292 @@ describe("planReviewGateNextOperation — Task 14 upstream reopen state machine"
       kind: "suspended",
       reason: "execution_suspended",
       detail: "upstream_reopen_blocker_owner_mismatch",
+    });
+  });
+});
+
+describe("classifyReentryEligibility — Task 14 two-key reentry", () => {
+  function context(): VerifiedGateContextBinding {
+    const requirements = {
+      source: "explicit",
+      workspaceIdentity: "workspace-1",
+      canonicalPath: "docs/requirements.md",
+      digest,
+      gitMode: "100644" as const,
+      gitBlobOid: "req-blob-1",
+      selectedByEventId: "created-event-1",
+    };
+    return {
+      requirements,
+      design: designArtifact,
+      plan: planArtifact,
+      globalProtocolFingerprint: "review-v1",
+      designProtocolFingerprint: "design-v1",
+      planProtocolFingerprint: "plan-v1",
+    };
+  }
+
+  function unfinishedBinding(): VerifiedGateTip["lastVerifiedBinding"] {
+    return {
+      admission: {
+        gateCreatedEventId: "created-event-1",
+        historicalRequirementsV2EventId: "req-v2-event-1",
+        context: context(),
+      },
+      effective: {
+        context: context(),
+        authorityEventId: "authority-event-1",
+        operationId: "op-effective-1",
+        verifiedHistoryFrontier: verificationFrontier,
+      },
+      ownDesignClear: null,
+    };
+  }
+
+  function nc1StopFixture(overrides: Partial<VerifiedNC1StopV1> = {}): VerifiedNC1StopV1 {
+    return {
+      stopEventId: "nc1-stop-event-1",
+      phase: "design",
+      epochId,
+      stoppedContextDigest: "stop-context-digest",
+      remainingRounds: 2,
+      witnessFrontierAtStop: verificationFrontier,
+      protocolRelease: {
+        stopEventId: "nc1-stop-event-1",
+        historicalReleaseId: null,
+        historicalReleaseProofDigest: null,
+        historicalPublisherTrustPolicyVersion: null,
+      },
+      stoppedWriterId: writerId,
+      ...overrides,
+    };
+  }
+
+  function suspendedTip(
+    overrides: Partial<Extract<VerifiedGateTip, { status: "suspended" }>> = {},
+  ): VerifiedGateTip {
+    return {
+      status: "suspended",
+      gateId,
+      generationId: "generation-1",
+      scopeId,
+      supersedesGateId: null,
+      rounds: { design: 2, plan: 1 },
+      suspensionReason: "review_non_convergent",
+      lastVerifiedBinding: unfinishedBinding(),
+      nc1Stop: null,
+      dispatchRecoveryCursors: [],
+      terminalState: null,
+      targetWriterAuthority: null,
+      targetWriterHandoffState: null,
+      suspensionEpochId: epochId,
+      ...overrides,
+    };
+  }
+
+  it("is eligible for the same epoch and writer that stopped an NC1 gate", () => {
+    expect(
+      classifyReentryEligibility(
+        suspendedTip({ nc1Stop: nc1StopFixture() }),
+        epochId,
+        writerId,
+      ),
+    ).toBe("eligible");
+  });
+
+  it("rejects a different writer with the same epoch on an NC1 stop", () => {
+    expect(
+      classifyReentryEligibility(
+        suspendedTip({ nc1Stop: nc1StopFixture() }),
+        epochId,
+        "writer-2" as WriterId,
+      ),
+    ).toEqual({ kind: "writer_mismatch" });
+  });
+
+  it("rejects a different epoch on an NC1 stop", () => {
+    expect(
+      classifyReentryEligibility(
+        suspendedTip({ nc1Stop: nc1StopFixture({ epochId: "epoch-2" }) }),
+        epochId,
+        writerId,
+      ),
+    ).toEqual({ kind: "epoch_mismatch" });
+  });
+
+  it("is eligible for any writer in the same epoch on a plain execution suspension", () => {
+    const tip = suspendedTip({ suspensionReason: "execution_suspended" });
+    expect(classifyReentryEligibility(tip, epochId, "writer-2" as WriterId)).toBe("eligible");
+  });
+
+  it("rejects a different epoch on a plain execution suspension", () => {
+    const tip = suspendedTip({ suspensionReason: "execution_suspended", suspensionEpochId: "epoch-2" });
+    expect(classifyReentryEligibility(tip, epochId, writerId)).toEqual({ kind: "epoch_mismatch" });
+  });
+
+  it("rejects a suspension whose stop epoch is unrecorded", () => {
+    const tip = suspendedTip({ suspensionReason: "reopen_required", suspensionEpochId: null });
+    expect(classifyReentryEligibility(tip, epochId, writerId)).toEqual({ kind: "no_stop_recorded" });
+  });
+
+  it("rejects an active tip without a stop record", () => {
+    expect(
+      classifyReentryEligibility(suspendedTip({ status: "active" }), epochId, writerId),
+    ).toEqual({ kind: "no_stop_recorded" });
+  });
+
+  it("rejects a completed tip without a stop record", () => {
+    expect(classifyReentryEligibility(suspendedTip({ status: "completed" }), epochId, writerId)).toEqual({
+      kind: "no_stop_recorded",
+    });
+  });
+});
+
+describe("planReviewGateNextOperation — Task 14 two-key reentry routing", () => {
+  const resumingIdentity = { epochId, writerId };
+  const otherEpochIdentity = { epochId: "epoch-2" as EpochId, writerId };
+  const otherWriterIdentity = { epochId, writerId: "writer-2" as WriterId };
+
+  it("routes an eligible reopen_required reentry to the phase reopen operation", () => {
+    const reopenedGate = projectReviewGate([
+      created,
+      designClear,
+      discover(lineageA, "f-a", "design"),
+      event("REOPEN_REQUIRED", { phase: "design", lineageIds: [lineageA] }),
+    ]);
+    expect(
+      planReviewGateNextOperation(reopenedGate, planningContext({ resumingIdentity })),
+    ).toEqual({
+      kind: "append_reopen",
+      phase: "design",
+      lineageIds: [lineageA],
+      verifiedRestoreCompletionEventId: null,
+    });
+  });
+
+  it("blocks a reopen_required reentry from a foreign epoch", () => {
+    const reopenedGate = projectReviewGate([
+      created,
+      event("REOPEN_REQUIRED", { phase: "design", lineageIds: [lineageA] }),
+    ]);
+    expect(
+      planReviewGateNextOperation(
+        reopenedGate,
+        planningContext({ resumingIdentity: otherEpochIdentity }),
+      ),
+    ).toMatchObject({
+      kind: "suspended",
+      reason: "reopen_required",
+      detail: "reentry_epoch_mismatch",
+    });
+  });
+
+  it("routes an eligible non-convergence reentry to the reentry validation", () => {
+    const suspended = projectReviewGate([
+      created,
+      event("REVIEW_NON_CONVERGENT", { phase: "design", lineageIds: [lineageA] }),
+    ]);
+    expect(
+      planReviewGateNextOperation(suspended, planningContext({ resumingIdentity })),
+    ).toEqual({ kind: "validate_non_convergence_reentry", phase: "design" });
+  });
+
+  it("blocks a non-convergence reentry whose writer differs from the stopping writer", () => {
+    const suspended = projectReviewGate([
+      created,
+      event("REVIEW_NON_CONVERGENT", { phase: "design", lineageIds: [lineageA] }),
+    ]);
+    expect(
+      planReviewGateNextOperation(
+        suspended,
+        planningContext({ resumingIdentity: otherWriterIdentity }),
+      ),
+    ).toMatchObject({
+      kind: "suspended",
+      reason: "review_non_convergent",
+      detail: "reentry_writer_mismatch",
+    });
+  });
+
+  it("keeps a round_limit_exhausted suspension blocked even for an eligible reentry", () => {
+    const exhausted = projectReviewGate([
+      created,
+      event("ROUND_LIMIT_EXHAUSTED", { phase: "design", roundLimit: 5 }),
+    ]);
+    expect(
+      planReviewGateNextOperation(exhausted, planningContext({ resumingIdentity })),
+    ).toEqual({
+      kind: "suspended",
+      reason: "round_limit_exhausted",
+      resumeCursor: { kind: "round_limit_exhausted", phase: "design", roundLimit: 5 },
+      detail: "round_limit_exhausted_no_new_rounds",
+    });
+  });
+
+  it("resumes an execution suspension for any writer in the same epoch", () => {
+    const suspended = projectReviewGate([
+      created,
+      event("EXECUTION_SUSPENDED", { reason: "native_capability_missing" }),
+    ]);
+    expect(
+      planReviewGateNextOperation(
+        suspended,
+        planningContext({ resumingIdentity: otherWriterIdentity }),
+      ),
+    ).toEqual({
+      kind: "suspended",
+      reason: "execution_suspended",
+      resumeCursor: {
+        kind: "resume_execution",
+        cursor: { epochId, startedAt: "2026-10-08T00:00:01.000Z" },
+      },
+    });
+  });
+
+  it("blocks an execution suspension reentry from a foreign epoch", () => {
+    const suspended = projectReviewGate([
+      created,
+      event("EXECUTION_SUSPENDED", { reason: "native_capability_missing" }),
+    ]);
+    expect(
+      planReviewGateNextOperation(
+        suspended,
+        planningContext({ resumingIdentity: otherEpochIdentity }),
+      ),
+    ).toMatchObject({
+      kind: "suspended",
+      reason: "execution_suspended",
+      detail: "reentry_epoch_mismatch",
+    });
+  });
+
+  it("blocks conflicting suspension states fail closed", () => {
+    const conflicting = suspendedProjectionWithoutDetail();
+    expect(
+      planReviewGateNextOperation(
+        conflicting,
+        planningContext({ resumingIdentity }),
+      ),
+    ).toMatchObject({
+      kind: "suspended",
+      reason: "review_non_convergent",
+      detail: "suspension_state_conflict",
+    });
+    expect(
+      planReviewGateNextOperation(conflicting, planningContext()),
+    ).toMatchObject({ detail: "suspension_state_conflict" });
+  });
+
+  it("blocks an execution suspension with a missing durable stop record", () => {
+    const conflicting = Object.freeze({
+      ...suspendedProjectionWithoutDetail(),
+      suspensionReason: "execution_suspended" as const,
+    });
+
+    expect(planReviewGateNextOperation(conflicting, planningContext())).toEqual({
+      kind: "suspended",
+      reason: "execution_suspended",
+      detail: "suspension_state_conflict",
     });
   });
 });

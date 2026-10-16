@@ -6,6 +6,7 @@ import type {
   ReviewGateProjection,
   ReviewScopeId,
   VerifiedDispatchRecoveryCursorV1,
+  WriterId,
 } from "../../../src/core/review-gate/types.js";
 import { deriveResumeCursor } from "../../../src/core/review-gate/resume-cursor.js";
 
@@ -57,6 +58,7 @@ function projection(overrides: Partial<ReviewGateProjection> = {}): ReviewGatePr
     planRemediationRounds: [],
     findings: new Map(),
     suspensionReason: null,
+    suspensionDetail: null,
     approvalBinding: null,
     supersedesGateId: null,
     effectiveDesignClear: null,
@@ -94,7 +96,9 @@ describe("deriveResumeCursor dispatch recovery", () => {
     ).toEqual({ kind: "dispatch_recovery", recovery: first });
   });
 
-  it("suspended states still win over dispatch recovery", () => {
+  it("Task 14: dispatch recovery wins over suspended reentry states", () => {
+    // The raised recovery precedence resolves an interrupted dispatch exactly
+    // once before any reentry selection (terminal states stay above it).
     const recovery = recoveryCursor();
     expect(
       deriveResumeCursor(
@@ -104,10 +108,10 @@ describe("deriveResumeCursor dispatch recovery", () => {
           dispatchRecoveryCursors: [recovery],
         }),
       ),
-    ).toEqual({ kind: "resume_execution", cursor: { epochId, startedAt: epochStartedAt } });
+    ).toEqual({ kind: "dispatch_recovery", recovery });
   });
 
-  it("upstream blockers still win over dispatch recovery", () => {
+  it("Task 14: dispatch recovery wins over upstream blockers", () => {
     const recovery = recoveryCursor();
     expect(
       deriveResumeCursor(
@@ -116,10 +120,10 @@ describe("deriveResumeCursor dispatch recovery", () => {
           dispatchRecoveryCursors: [recovery],
         }),
       ),
-    ).toEqual({ kind: "resolve_upstream", lineageIds: [lineageId] });
+    ).toEqual({ kind: "dispatch_recovery", recovery });
   });
 
-  it("pending revalidation blockers still win over dispatch recovery", () => {
+  it("Task 14: dispatch recovery wins over pending revalidation blockers", () => {
     const recovery = recoveryCursor();
     expect(
       deriveResumeCursor(
@@ -128,14 +132,17 @@ describe("deriveResumeCursor dispatch recovery", () => {
           dispatchRecoveryCursors: [recovery],
         }),
       ),
-    ).toEqual({ kind: "revalidate", lineageIds: [lineageId] });
+    ).toEqual({ kind: "dispatch_recovery", recovery });
   });
 
-  it("the current-phase remediate disposition still wins over dispatch recovery", () => {
+  it("Task 14: dispatch recovery wins over the current-phase remediate disposition", () => {
     const recovery = recoveryCursor();
     expect(
-      deriveResumeCursor(projection({ dispatchRecoveryCursors: [recovery] }), { kind: "remediate" }),
-    ).toEqual({ kind: "remediate", lineageIds: [] });
+      deriveResumeCursor(
+        projection({ dispatchRecoveryCursors: [recovery] }),
+        { kind: "remediate" },
+      ),
+    ).toEqual({ kind: "dispatch_recovery", recovery });
   });
 
   it("returns a deeply frozen dispatch_recovery cursor", () => {
@@ -163,4 +170,120 @@ describe("deriveResumeCursor dispatch recovery", () => {
     expect(cursor).toEqual({ kind: "dispatch_recovery", recovery });
   });
 
+});
+
+describe("deriveResumeCursor — Task 14 two-key reentry cursor precedence", () => {
+  it("carries the recorded reopen lineages for a reopen_required suspension", () => {
+    expect(
+      deriveResumeCursor(
+        projection({
+          status: "suspended",
+          suspensionReason: "reopen_required",
+          suspensionDetail: {
+            kind: "reopen_required",
+            phase: "design",
+            lineageIds: [lineageId],
+            stoppedByEpochId: epochId as EpochId,
+          },
+        }),
+      ),
+    ).toEqual({
+      kind: "reopen_required",
+      phase: "design",
+      lineageIds: [lineageId],
+    });
+  });
+
+  it("carries the recorded phase and round limit for a round_limit_exhausted suspension", () => {
+    expect(
+      deriveResumeCursor(
+        projection({
+          status: "suspended",
+          phase: "plan",
+          suspensionReason: "round_limit_exhausted",
+          suspensionDetail: {
+            kind: "round_limit_exhausted",
+            phase: "plan",
+            roundLimit: 3,
+            stoppedByEpochId: epochId as EpochId,
+            stoppedByWriterId: "writer-1" as WriterId,
+          },
+        }),
+      ),
+    ).toEqual({ kind: "round_limit_exhausted", phase: "plan", roundLimit: 3 });
+  });
+
+  it("carries the recorded phase and lineages for a review_non_convergent suspension", () => {
+    expect(
+      deriveResumeCursor(
+        projection({
+          status: "suspended",
+          suspensionReason: "review_non_convergent",
+          suspensionDetail: {
+            kind: "review_non_convergent",
+            phase: "design",
+            lineageIds: [lineageId],
+            stoppedByEpochId: epochId as EpochId,
+            stoppedByWriterId: "writer-1" as WriterId,
+          },
+        }),
+      ),
+    ).toEqual({
+      kind: "review_non_convergent",
+      phase: "design",
+      lineageIds: [lineageId],
+    });
+  });
+
+  it("maps a coordinator round_limit disposition to the payload cursor", () => {
+    expect(
+      deriveResumeCursor(projection(), { kind: "round_limit" }),
+    ).toEqual({ kind: "round_limit_exhausted", phase: "design", roundLimit: 5 });
+  });
+
+  it("fails closed when a reentry suspension lacks its stop detail", () => {
+    expect(() =>
+      deriveResumeCursor(
+        projection({
+          status: "suspended",
+          suspensionReason: "reopen_required",
+        }),
+      ),
+    ).toThrow("review_gate_suspension_detail_conflict");
+  });
+
+  it("fails closed when the stop detail contradicts the suspension reason", () => {
+    expect(() =>
+      deriveResumeCursor(
+        projection({
+          status: "suspended",
+          suspensionReason: "round_limit_exhausted",
+          suspensionDetail: {
+            kind: "review_non_convergent",
+            phase: "design",
+            lineageIds: [lineageId],
+            stoppedByEpochId: epochId as EpochId,
+            stoppedByWriterId: "writer-1" as WriterId,
+          },
+        }),
+      ),
+    ).toThrow("review_gate_suspension_detail_conflict");
+  });
+
+  it("still resumes an execution suspension without recovery cursors", () => {
+    expect(
+      deriveResumeCursor(
+        projection({
+          status: "suspended",
+          suspensionReason: "execution_suspended",
+          suspensionDetail: {
+            kind: "execution_suspended",
+            reason: "execution failed",
+            stoppedByEpochId: epochId,
+            stoppedByStartedAt: epochStartedAt,
+          },
+        }),
+      ),
+    ).toEqual({ kind: "resume_execution", cursor: { epochId, startedAt: epochStartedAt } });
+  });
 });

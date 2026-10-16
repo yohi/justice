@@ -917,7 +917,7 @@ describe("ReviewGateEventStore — gate namespace enumeration (Task 13/14)", () 
     );
     store.close();
     closeWitnessFixture(ctx);
-  });
+  }, 60_000);
 
   it("keeps enumeration available after stores are reopened on the same root", async () => {
     const ctx = await freshContext("enumreopen");

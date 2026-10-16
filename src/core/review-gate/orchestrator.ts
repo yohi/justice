@@ -18,9 +18,15 @@
  * 3. Suspended gates route the ordinary orchestrator first when a durably
  *    verified CURRENT upstream blocker (Task 14 verified upstream reopen
  *    context) exists — except a `reopen_required` suspension, whose reopen is
- *    already durable — then a `review_non_convergent` suspension with observed
- *    material progress routes to `validate_non_convergence_reentry`, and the
- *    rest map to `suspended` (with the shared `deriveResumeCursor` mapping).
+ *    already durable. With a coordinator-supplied two-key `resumingIdentity`,
+ *    the Task 14 reentry state machine classifies the resumption
+ *    (`classifyReentryEligibility`) and routes the reason's own state machine
+ *    (the reopen-phase decision via `append_reopen`, the explicit round-limit
+ *    BLOCK, or the non-convergence reentry); unprovable or conflicting
+ *    identities fail closed. Without an identity a `review_non_convergent`
+ *    suspension with observed material progress routes to
+ *    `validate_non_convergence_reentry`, and the rest map to `suspended`
+ *    (with the shared `deriveResumeCursor` mapping).
  * 4. Coordinator-committed chain steps (review observed, remediation
  *    completed, self-review passed, commit completed, resolutions committed)
  *    take precedence over projection-derived routing so already-committed
@@ -38,6 +44,7 @@
 
 import type {
   CurrentPhaseDisposition,
+  EpochId,
   FindingState,
   LineageId,
   RemediationRound,
@@ -49,7 +56,10 @@ import type {
   ReviewGateSuspensionReason,
   ReviewNonConvergentPayload,
   ReviewTargetWorkspaceState,
+  WriterId,
 } from "./types.js";
+import type { VerifiedGateTip } from "./admission.js";
+
 import { deriveResumeCursor } from "./resume-cursor.js";
 import {
   decideCurrentPhaseRemediationDisposition,
@@ -247,6 +257,16 @@ export type ReviewGatePlanningContext = Readonly<{
    * is not permission to infer or manufacture an upstream reopen.
    */
   readonly verifiedUpstreamReopen?: VerifiedUpstreamReopenContextV1;
+  /**
+   * Task 14 two-key reentry identity: the epoch/writer attempting to resume
+   * the gate. Its presence turns the suspended routing into the reentry
+   * state machine; without it planning keeps the existing suspension
+   * behavior exactly.
+   */
+  readonly resumingIdentity?: Readonly<{
+    readonly epochId: EpochId;
+    readonly writerId: WriterId;
+  }>;
 }>;
 
 // ---------------------------------------------------------------------------
@@ -356,6 +376,106 @@ export type ReviewGateNextOperation =
       readonly approvalBinding: ReviewApprovalBindingV1;
     }>;
 
+
+// ---------------------------------------------------------------------------
+// Task 14 — two-key reentry classification
+// ---------------------------------------------------------------------------
+
+/**
+ * The provable stop identity a suspension resumption is classified against,
+ * in a shape both the verified tip (admission pipeline) and the projection
+ * (planner path) can be reduced to.
+ */
+export type ReviewGateReentryGateState = Readonly<{
+  readonly status: "active" | "suspended" | "completed";
+  readonly suspensionReason: string | null;
+  readonly nc1Stop: Readonly<{
+    readonly epochId: string;
+    readonly stoppedWriterId: string;
+  }> | null;
+  /** The epoch that recorded a plain execution/reopen suspension. */
+  readonly suspendedEpochId: string | null;
+}>;
+
+export type ReviewGateReentryEligibility =
+  | "eligible"
+  | Readonly<{ readonly kind: "epoch_mismatch" | "writer_mismatch" | "no_stop_recorded" }>;
+
+/**
+ * Classify a suspension resumption against the verified tip (Task 14). An
+ * NC1 stop records the exact epoch AND writer of the stop: resuming it
+ * requires both keys. Plain execution suspensions and reopen-required
+ * suspensions record only the stopping epoch: any writer in that epoch may
+ * resume. Without a provable stop, reentry is unavailable (fail closed).
+ */
+export function classifyReentryEligibility(
+  tip: VerifiedGateTip,
+  resumingEpochId: EpochId,
+  resumingWriterId: WriterId,
+): ReviewGateReentryEligibility {
+  if (tip.status === "completed") {
+    return freezeEligibility({ kind: "no_stop_recorded" });
+  }
+  return classifyReentryGate(
+    Object.freeze({
+      status: tip.status,
+      suspensionReason: tip.suspensionReason,
+      nc1Stop:
+        tip.nc1Stop === null
+          ? null
+          : Object.freeze({
+              epochId: tip.nc1Stop.epochId,
+              stoppedWriterId: tip.nc1Stop.stoppedWriterId,
+            }),
+      suspendedEpochId: tip.suspensionEpochId ?? null,
+    }),
+    resumingEpochId,
+    resumingWriterId,
+  );
+}
+
+function classifyReentryGate(
+  stop: ReviewGateReentryGateState,
+  resumingEpochId: EpochId,
+  resumingWriterId: WriterId,
+): ReviewGateReentryEligibility {
+  if (stop.status !== "suspended") {
+    return freezeEligibility({ kind: "no_stop_recorded" });
+  }
+  if (stop.nc1Stop !== null) {
+    if (stop.nc1Stop.epochId.length === 0 || stop.nc1Stop.stoppedWriterId.length === 0) {
+      return freezeEligibility({ kind: "no_stop_recorded" });
+    }
+    if (resumingEpochId !== stop.nc1Stop.epochId) {
+      return freezeEligibility({ kind: "epoch_mismatch" });
+    }
+    if (resumingWriterId !== stop.nc1Stop.stoppedWriterId) {
+      return freezeEligibility({ kind: "writer_mismatch" });
+    }
+    return "eligible";
+  }
+  if (
+    (stop.suspensionReason === "execution_suspended" ||
+      stop.suspensionReason === "reopen_required") &&
+    stop.suspendedEpochId !== null &&
+    stop.suspendedEpochId.length > 0
+  ) {
+    if (resumingEpochId !== stop.suspendedEpochId) {
+      return freezeEligibility({ kind: "epoch_mismatch" });
+    }
+    return "eligible";
+  }
+  return freezeEligibility({ kind: "no_stop_recorded" });
+}
+
+function freezeEligibility(
+  eligibility: ReviewGateReentryEligibility,
+): ReviewGateReentryEligibility {
+  return typeof eligibility === "string" ? eligibility : Object.freeze(eligibility);
+}
+
+// ---------------------------------------------------------------------------
+// Planner
 // ---------------------------------------------------------------------------
 // Planner
 // ---------------------------------------------------------------------------
@@ -377,6 +497,16 @@ export function planReviewGateNextOperation(
   }
 
   if (projection.status === "suspended") {
+    // Task 14 fail-closed first: a suspension whose durable stop record is
+    // missing or contradicts the recorded reason is a corrupt or foreign
+    // state and every routing surface blocks.
+    if (suspensionStateConflicts(projection)) {
+      return freezeOperation({
+        kind: "suspended",
+        reason: requireSuspensionReason(projection),
+        detail: "suspension_state_conflict",
+      });
+    }
     // PLAN-012 OSC1 precedence: an ordinary suspension with a verified CURRENT
     // upstream blocker routes through the ordinary orchestrator before the
     // generic suspended/NC1 selection. A `reopen_required` suspension already
@@ -389,6 +519,12 @@ export function planReviewGateNextOperation(
       projection.currentUpstreamBlockers.length > 0
     ) {
       return planUpstreamReopen(projection, context, projection.currentUpstreamBlockers);
+    }
+    // Task 14 two-key reentry: planning with a resuming identity routes the
+    // suspended state machine; identities that do not match the durable stop
+    // record fail closed.
+    if (context.resumingIdentity !== undefined) {
+      return planSuspendedReentry(projection, context.resumingIdentity);
     }
     if (
       projection.suspensionReason === "review_non_convergent" &&
@@ -414,7 +550,108 @@ export function planReviewGateNextOperation(
   return planFromCursor(projection, context);
 }
 
-// ---------------------------------------------------------------------------
+/**
+ * A reentry-suspended projection must carry its matching durable stop record;
+ * anything else is a corrupt or foreign state and blocks fail closed (Task 14).
+ */
+function suspensionStateConflicts(projection: ReviewGateProjection): boolean {
+  const detail = projection.suspensionDetail;
+  switch (projection.suspensionReason) {
+    case "reopen_required":
+    case "round_limit_exhausted":
+    case "review_non_convergent":
+      return detail === null || detail.kind !== projection.suspensionReason;
+    case "execution_suspended":
+      return detail === null || detail.kind !== "execution_suspended";
+    case null:
+      return false;
+  }
+}
+
+/**
+ * Task 14 two-key reentry routing for suspended gates. The eligibility
+ * classification fails closed on any unprovable stop; eligible reentries
+ * route the reason's state machine: `reopen_required` re-serves the durable
+ * reopen as the phase-reopen decision (`append_reopen`), round-limit
+ * exhaustion carries the explicit BLOCK reason (exhaustion never resumes
+ * rounds), and a non-convergence suspension dispatches its reentry validation.
+ */
+function planSuspendedReentry(
+  projection: ReviewGateProjection,
+  identity: Readonly<{ readonly epochId: EpochId; readonly writerId: WriterId }>,
+): ReviewGateNextOperation {
+  const reason = requireSuspensionReason(projection);
+  const detail = projection.suspensionDetail;
+  const nc1Stop =
+    detail !== null &&
+    (detail.kind === "round_limit_exhausted" || detail.kind === "review_non_convergent")
+      ? Object.freeze({
+          epochId: detail.stoppedByEpochId,
+          stoppedWriterId: detail.stoppedByWriterId,
+        })
+      : null;
+  const suspendedEpochId =
+    detail !== null &&
+    (detail.kind === "execution_suspended" || detail.kind === "reopen_required")
+      ? detail.stoppedByEpochId
+      : null;
+  const eligibility = classifyReentryGate(
+    Object.freeze({
+      status: projection.status,
+      suspensionReason: reason,
+      nc1Stop,
+      suspendedEpochId,
+    }),
+    identity.epochId,
+    identity.writerId,
+  );
+  if (eligibility !== "eligible") {
+    return freezeOperation({
+      kind: "suspended",
+      reason,
+      resumeCursor: deriveResumeCursor(projection),
+      detail: `reentry_${eligibility.kind}`,
+    });
+  }
+  switch (reason) {
+    case "reopen_required":
+      // The pending reopen is durable; a same-epoch resumption drives the
+      // phase reopen through the existing append_reopen vocabulary, bound to
+      // the durable reopen's phase and lineages.
+      if (detail === null || detail.kind !== "reopen_required") {
+        // Unreachable after the conflict check: the record always matches.
+        throw new Error("review_gate_suspension_detail_conflict");
+      }
+      return freezeOperation({
+        kind: "append_reopen",
+        phase: detail.phase,
+        lineageIds: detail.lineageIds,
+        verifiedRestoreCompletionEventId: null,
+      });
+    case "round_limit_exhausted":
+      // Exhaustion never resumes rounds; the gate stays blocked with the
+      // explicit reason.
+      return freezeOperation({
+        kind: "suspended",
+        reason: "round_limit_exhausted",
+        resumeCursor: deriveResumeCursor(projection),
+        detail: "round_limit_exhausted_no_new_rounds",
+      });
+    case "review_non_convergent":
+      return freezeOperation({
+        kind: "validate_non_convergence_reentry",
+        phase: projection.phase,
+      });
+    case "execution_suspended":
+      return freezeOperation({
+        kind: "suspended",
+        reason: "execution_suspended",
+        resumeCursor: deriveResumeCursor(projection),
+      });
+  }
+}
+
+
 // Crash-window recovery
 // ---------------------------------------------------------------------------
 
@@ -919,10 +1156,13 @@ function planFromCursor(
         resumeCursor: Object.freeze({ kind: "await_material_progress" }),
       });
     case "round_limit_exhausted":
+      // Task 14: the exhausted stop now carries its phase and round limit;
+      // the block reason stays explicit for the coordinator.
       return freezeOperation({
         kind: "suspended",
         reason: "round_limit_exhausted",
-        resumeCursor: Object.freeze({ kind: "await_external_change" }),
+        resumeCursor: cursor,
+        detail: "round_limit_exhausted_no_new_rounds",
       });
     case "resume_execution":
       return freezeOperation({
@@ -961,6 +1201,12 @@ function planFromCursor(
       // Terminal writer-revoke routing is owned by Task 18 runtime coordinator;
       // the pure Core orchestrator does not plan native terminal effects.
       throw new Error("review_gate_orchestrator_terminal_state_unrouted");
+    case "reopen_required":
+    case "review_non_convergent":
+      // Task 14 reentry cursors only derive from suspended gates; an ACTIVE
+      // projection can never carry them. Fail closed instead of guessing a
+      // routing surface.
+      throw new Error("review_gate_orchestrator_reentry_cursor_unrouted");
   }
 }
 

@@ -93,10 +93,16 @@ export type VerifiedNC1StoppedProtocolReleaseV1 = Readonly<{
   readonly historicalPublisherTrustPolicyVersion: string | null;
 }>;
 
+/**
+ * One durable NC1 stop. `epochId` + `stoppedWriterId` are the Task 14 two-key
+ * reentry keys: resuming a gate stopped here requires the same epoch and
+ * writer.
+ */
 export type VerifiedNC1StopV1 = Readonly<{
   readonly stopEventId: string;
   readonly phase: ReviewGatePhase;
   readonly epochId: string;
+  readonly stoppedWriterId: string;
   readonly stoppedContextDigest: string;
   readonly remainingRounds: number;
   readonly witnessFrontierAtStop: string;
@@ -161,6 +167,7 @@ export type VerifiedGateTip =
       readonly supersedesGateId: string | null;
       readonly rounds: Readonly<{ readonly design: number; readonly plan: number }>;
       readonly suspensionReason: string | null;
+      readonly suspensionEpochId: string | null;
       readonly lastVerifiedBinding: VerifiedUnfinishedBindingSnapshot;
       readonly nc1Stop: VerifiedNC1StopV1 | null;
       readonly dispatchRecoveryCursors: ReadonlyArray<VerifiedDispatchRecoveryCursorV1>;
