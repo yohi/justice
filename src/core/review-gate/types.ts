@@ -90,6 +90,7 @@ export type ReviewGateSuspensionDetail =
       readonly kind: "execution_suspended";
       readonly reason: string;
       readonly stoppedByEpochId: EpochId;
+      readonly stoppedByStartedAt: string;
     }>;
 
 /** Payload carried by a non-convergent current-phase disposition. */

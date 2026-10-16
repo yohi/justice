@@ -83,6 +83,27 @@ describe("projectReviewGate upstream blockers", () => {
     expect(projection.currentUpstreamBlockers).toEqual([lineageId]);
     expect(deriveResumeCursor(projection)).toEqual({ kind: "resolve_upstream", lineageIds: [lineageId] });
   });
+
+  it("resumes an execution suspension from its stopped epoch after a different-epoch audit", () => {
+    const stoppedAt = "2026-10-08T00:00:01.000Z";
+    const suspended = {
+      ...event("EXECUTION_SUSPENDED", { reason: "execution failed" }),
+      emittedAt: stoppedAt,
+    };
+    const resumed = {
+      ...event("ORCHESTRATION_RESUMED", { resumedAt: "2026-10-08T00:00:02.000Z" }),
+      epochId: "epoch-2" as EpochId,
+      emittedAt: "2026-10-08T00:00:02.000Z",
+    };
+    const projected = projectReviewGate([created, suspended, resumed]);
+
+    expect(projected.status).toBe("suspended");
+    expect(projected.epoch).toMatchObject({ epochId: "epoch-2", startedAt: resumed.emittedAt });
+    expect(deriveResumeCursor(projected)).toEqual({
+      kind: "resume_execution",
+      cursor: { epochId, startedAt: stoppedAt },
+    });
+  });
 });
 
 function v2Target(
@@ -759,7 +780,7 @@ describe("projectVerifiedGateTip", () => {
     });
     const suspended = validateReviewGateEventRecord({
       eventType: "EXECUTION_SUSPENDED", gateId: "gate-1", writerId: "writer-1",
-      epochId: "epoch-1", emittedAt: "2026-10-11T00:00:01.000Z",
+      epochId: "epoch-2", emittedAt: "2026-10-11T00:00:01.000Z",
       payload: { reason: "execution failed" },
     });
     const resumed = validateReviewGateEventRecord({
@@ -773,7 +794,11 @@ describe("projectVerifiedGateTip", () => {
       frontier: frontier() as VerifiedScopeFrontier,
     });
 
-    expect(tip).toMatchObject({ status: "suspended", suspensionReason: "review_non_convergent" });
+    expect(tip).toMatchObject({
+      status: "suspended",
+      suspensionReason: "review_non_convergent",
+      suspensionEpochId: "epoch-1",
+    });
     expect(tip.nc1Stop).not.toBeNull();
   });
 

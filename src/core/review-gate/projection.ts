@@ -355,6 +355,7 @@ function deriveSuspensionDetail(events: readonly ReviewGateEvent[]): ReviewGateS
           kind: "execution_suspended",
           reason: event.payload.reason,
           stoppedByEpochId: event.epochId,
+          stoppedByStartedAt: event.emittedAt,
         });
         break;
       case "ORCHESTRATION_RESUMED":
@@ -639,8 +640,10 @@ export function projectVerifiedGateTip(
         }
         case "EXECUTION_SUSPENDED":
           executionSuspended = true;
-          if (suspensionReason === null) suspensionReason = "execution_suspended";
-          suspensionEpochId = event.epochId;
+          if (suspensionReason === null) {
+            suspensionReason = "execution_suspended";
+            suspensionEpochId = event.epochId;
+          }
           break;
         case "ORCHESTRATION_RESUMED":
           // Task 14: only a same-epoch resumption clears a plain execution

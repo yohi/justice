@@ -276,6 +276,12 @@ describe("deriveResumeCursor — Task 14 two-key reentry cursor precedence", () 
         projection({
           status: "suspended",
           suspensionReason: "execution_suspended",
+          suspensionDetail: {
+            kind: "execution_suspended",
+            reason: "execution failed",
+            stoppedByEpochId: epochId,
+            stoppedByStartedAt: epochStartedAt,
+          },
         }),
       ),
     ).toEqual({ kind: "resume_execution", cursor: { epochId, startedAt: epochStartedAt } });
