@@ -309,6 +309,7 @@ const MAX_DRIVE_ITERATIONS = 64;
 
 /** Distinguishing record kind claimed by prepared-operation recovery records. */
 const PREPARED_OPERATION_RECORD_KIND = "review_gate_prepared_operation" as const;
+const EXECUTED_OPERATION_RECORD_KIND = "review_gate_executed_operation" as const;
 
 /** All operation kinds the gate planner can produce. */
 const REVIEW_GATE_OPERATION_KINDS: ReadonlySet<string> = new Set<string>([
@@ -1769,10 +1770,10 @@ export function createReviewGateCoordinator(
 
   /**
    * Task 17 — execute the caller-owned routing decision for the session's
-   * active gate. The coordinator never calls the gate planner itself: for
-   * `execute_operation` it fetches the durable prepared operation from the
-   * recovery store, verifies the caller's operation id against it, executes
-   * the one step and witnesses the result; for `block` it records the
+   * active gate. For `execute_operation` it fetches the durable prepared
+   * operation from the recovery store, verifies the caller's operation id
+   * and the current planner result against it, records execution once, then
+   * executes the one step and witnesses the result; for `block` it records the
    * caller's reason as a durable stop event; for `await_evidence` it returns
    * without mutating any state.
    */
@@ -1810,6 +1811,14 @@ export function createReviewGateCoordinator(
       // coordinator's journal is the legacy Review Gate event stream, which
       // carries no REVIEW_COMMIT_FAILED event; the caller's reason is
       // recorded on EXECUTION_SUSPENDED instead of inventing an event type.
+      const projection = await loadProjection(session.gateId);
+      if (projection.status === "completed" || projection.status === "suspended") {
+        return preparedDecisionOutcome(
+          "blocked",
+          decision.operationId,
+          `review_gate_already_${projection.status}`,
+        );
+      }
       const response = await suspendAndBlock(
         session,
         reason,
@@ -1841,14 +1850,18 @@ export function createReviewGateCoordinator(
     try {
       const fetched = await readPreparedOperation(session, operationId);
       if (fetched === "missing" || fetched === "mismatch" || fetched === "ambiguous") {
+        let guidance: string;
+        if (fetched === "missing") {
+          guidance = "review_gate_prepared_operation_unavailable";
+        } else if (fetched === "mismatch") {
+          guidance = "review_gate_prepared_operation_mismatch";
+        } else {
+          guidance = "review_gate_prepared_operation_ambiguous";
+        }
         return preparedDecisionOutcome(
           "blocked",
           operationId,
-          fetched === "missing"
-            ? "review_gate_prepared_operation_unavailable"
-            : fetched === "mismatch"
-              ? "review_gate_prepared_operation_mismatch"
-              : "review_gate_prepared_operation_ambiguous",
+          guidance,
         );
       }
       prepared = fetched;
@@ -1870,8 +1883,53 @@ export function createReviewGateCoordinator(
       );
     }
     const projection = await loadProjection(session.gateId);
+    let planned: ReviewGateNextOperation;
     try {
-      const step = await executeOperation(session, projection, prepared.operation);
+      const context = await buildContext(session, projection);
+      planned = planReviewGateNextOperation(projection, context);
+    } catch (err: unknown) {
+      return preparedDecisionOutcome(
+        "blocked",
+        operationId,
+        `review_gate_replanning_failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    if (
+      computeCanonicalJsonFingerprint(planned) !==
+      computeCanonicalJsonFingerprint(prepared.operation)
+    ) {
+      return preparedDecisionOutcome(
+        "blocked",
+        operationId,
+        "review_gate_prepared_operation_mismatch",
+      );
+    }
+    const executedRecord = Object.freeze({
+      recordKind: EXECUTED_OPERATION_RECORD_KIND,
+      schemaVersion: 1,
+      gateId: session.gateId,
+      operationId,
+    });
+    const executedBytes = Buffer.from(JSON.stringify(executedRecord), "utf8");
+    const executedDigest = computeArtifactDigest(executedBytes);
+    try {
+      const publication = await recovery.publish(executedDigest, executedBytes);
+      if (publication === "exists") {
+        return preparedDecisionOutcome(
+          "blocked",
+          operationId,
+          "review_gate_operation_already_executed",
+        );
+      }
+    } catch (err: unknown) {
+      return preparedDecisionOutcome(
+        "blocked",
+        operationId,
+        `review_gate_operation_execution_record_failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    try {
+      const step = await executeOperation(session, projection, planned);
       // Task 18 — V2 evidence append after a successful execute_operation,
       // based on the executed operation kind. The legacy outcome above is
       // already durable; a V2 journal/witness failure after it fails closed
@@ -1886,9 +1944,9 @@ export function createReviewGateCoordinator(
           buildDispatchedDraftForExecution(session, dispatchDraftContext, journal.frontierHash),
         ].filter((draft): draft is V2EventDraft => draft !== null));
       } else if (
-        step === DRIVE_CONTINUE && prepared.operation.kind === "commit_finding_reconciliation"
+        step === DRIVE_CONTINUE && planned.kind === "commit_finding_reconciliation"
       ) {
-        const batch = prepared.operation.batch;
+        const batch = planned.batch;
         await appendV2JournalEvents(session, operationId, (journal) =>
           buildResolutionDraftsForBatch(session, projection, operationId, batch.findings, journal.frontierHash),
         );

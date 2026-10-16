@@ -44,17 +44,19 @@ export interface ReviewGateHostAdapter {
    */
   readonly translateRoutingDecision: (
     hostDisposition: string,
+    preparedOperationId?: string | null,
   ) => CallerRoutingDecisionV1;
 }
 
 export function createReviewGateHostAdapter(): ReviewGateHostAdapter {
   const translateRoutingDecision = (
     hostDisposition: string,
+    preparedOperationId: string | null = null,
   ): CallerRoutingDecisionV1 => {
     if (EXECUTE_OPERATION_DISPOSITIONS.has(hostDisposition)) {
       return Object.freeze({
         kind: "execute_operation",
-        operationId: null,
+        operationId: preparedOperationId,
         reason: null,
       });
     }

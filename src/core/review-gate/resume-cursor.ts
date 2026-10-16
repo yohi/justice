@@ -57,14 +57,19 @@ export function deriveResumeCursor(
         return freezeCursor(
           reentryCursorFromDetail(projection.suspensionDetail, projection.suspensionReason),
         );
-      case "execution_suspended":
+      case "execution_suspended": {
+        const detail = projection.suspensionDetail;
+        if (detail === null || detail.kind !== "execution_suspended") {
+          throw new Error("review_gate_suspension_detail_conflict");
+        }
         return freezeCursor({
           kind: "resume_execution",
           cursor: Object.freeze({
-            epochId: projection.epoch.epochId,
-            startedAt: projection.epoch.startedAt,
+            epochId: detail.stoppedByEpochId,
+            startedAt: detail.stoppedByStartedAt,
           }),
         });
+      }
       case null:
       default:
         // Unreachable via valid reductions: the reducer never suspends without
@@ -168,4 +173,3 @@ function freezeTerminalCursor(
     targets: terminal.targets,
   });
 }
-

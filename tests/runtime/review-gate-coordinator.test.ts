@@ -37,6 +37,7 @@ const PLAN_PATH = "docs/plan.md";
 let harnessCounter = 0;
 
 interface Task17Harness {
+  readonly sessionId: string;
   readonly coordinator: ReturnType<typeof createReviewGateCoordinator>;
   readonly eventStore: InMemoryReviewGateEventStore;
   readonly recoveryStore: ReviewGateRecoveryStore;
@@ -173,15 +174,21 @@ describe("Task 17 coordinator caller-owned routing", () => {
 
     // The caller supplies the planned operation; the coordinator validates it,
     // mints the logical operation id and publishes a durable prepared record.
+    const dispatchesBefore = await harness.eventStore.listDispatches(gateId);
+    const inFlightOperationId = dispatchesBefore.at(-1)?.operationId;
+    expect(inFlightOperationId).toBeDefined();
     const prepared = await harness.coordinator.prepareCallerOperation(
       harness.sessionId,
-      { kind: "dispatch_reviewer", phase: "design" } as ReviewGateNextOperation,
+      {
+        kind: "dispatch_reviewer",
+        phase: "design",
+        redispatchedOperationId: inFlightOperationId,
+      } as ReviewGateNextOperation,
     );
     expect(Object.isFrozen(prepared)).toBe(true);
     expect(prepared.operationId.length).toBeGreaterThan(0);
     expect(await harness.recoveryStore.list()).toContain(prepared.preparedRecoveryDigest);
 
-    const dispatchesBefore = await harness.eventStore.listDispatches(gateId);
     const decision: CallerRoutingDecisionV1 = {
       kind: "execute_operation",
       operationId: prepared.operationId,
@@ -194,10 +201,15 @@ describe("Task 17 coordinator caller-owned routing", () => {
     expect(outcome.kind).toBe("executed");
     expect(outcome.operationId).toBe(prepared.operationId);
 
-    // The execution witnessed the result as a fresh durable dispatch ...
+    const replay = await harness.coordinator.executeNextOperation(
+      harness.sessionId,
+      decision,
+    );
+    expect(replay.kind).toBe("blocked");
+    expect(replay.guidance).toBe("review_gate_operation_already_executed");
+
     const dispatches = await harness.eventStore.listDispatches(gateId);
-    expect(dispatches.length).toBe(dispatchesBefore.length + 1);
-    // ... and the injected packet is claimable by the exact worker prompt.
+    expect(dispatches.length).toBe(dispatchesBefore.length);
     expect(outcome.guidance).not.toBeNull();
     const claim = await harness.coordinator.preToolUse({
       type: "PreToolUse",
@@ -243,6 +255,47 @@ describe("Task 17 coordinator caller-owned routing", () => {
     expect(
       (stop as { payload: { readonly reason: string } }).payload.reason,
     ).toBe("caller_blocked_pending_review");
+  });
+
+  it("does not append another stop event when the Gate is already suspended", async () => {
+    const harness = createHarness();
+    afterAllCleanups.push(() => {
+      harness.recoveryStore.close();
+      rmSync(harness.rootDir, { recursive: true, force: true });
+    });
+    const gateId = await startGateWithSession(harness);
+    const decision: CallerRoutingDecisionV1 = {
+      kind: "block",
+      operationId: null,
+      reason: "caller_blocked_pending_review",
+    };
+    await harness.coordinator.executeNextOperation(harness.sessionId, decision);
+    const suspendedEvents = await harness.eventStore.readEvents(gateId);
+
+    await harness.coordinator.executeNextOperation(harness.sessionId, decision);
+
+    expect(await harness.eventStore.readEvents(gateId)).toEqual(suspendedEvents);
+  });
+
+  it("blocks a prepared operation that differs from the current planner result", async () => {
+    const harness = createHarness();
+    afterAllCleanups.push(() => {
+      harness.recoveryStore.close();
+      rmSync(harness.rootDir, { recursive: true, force: true });
+    });
+    await startGateWithSession(harness);
+    const prepared = await harness.coordinator.prepareCallerOperation(
+      harness.sessionId,
+      { kind: "commit_resolutions", lineageIds: [] } as ReviewGateNextOperation,
+    );
+
+    const result = await harness.coordinator.executeNextOperation(
+      harness.sessionId,
+      { kind: "execute_operation", operationId: prepared.operationId, reason: null },
+    );
+
+    expect(result.kind).toBe("blocked");
+    expect(result.guidance).toBe("review_gate_prepared_operation_mismatch");
   });
 
   it("await_evidence returns without mutating any durable state", async () => {
@@ -363,7 +416,11 @@ describe("Task 18 coordinator V2 journal custody and witness publication", () =>
 
     const prepared = await harness.coordinator.prepareCallerOperation(
       harness.sessionId,
-      { kind: "dispatch_reviewer", phase: "design" } as ReviewGateNextOperation,
+      {
+        kind: "dispatch_reviewer",
+        phase: "design",
+        redispatchedOperationId: (await harness.eventStore.listDispatches(gateId)).at(-1)?.operationId,
+      },
     );
 
     // Prepared record publication: one bounded V2 intent event whose input
@@ -371,6 +428,9 @@ describe("Task 18 coordinator V2 journal custody and witness publication", () =>
     let journal = await harness.eventStore.readV2Journal(gateId);
     expect(journal.eventCount).toBe(1);
     const intentEvent = journal.events[0];
+    if (intentEvent === undefined || !("schemaVersion" in intentEvent)) {
+      throw new Error("expected V2 intent event");
+    }
     expect(intentEvent?.eventType).toBe("EXTERNAL_OPERATION_DISPATCHED");
     expect("schemaVersion" in intentEvent ? intentEvent.schemaVersion : null).toBe(2);
     expect(journal.tailEventId).toBe(intentEvent?.eventId ?? null);
@@ -400,6 +460,9 @@ describe("Task 18 coordinator V2 journal custody and witness publication", () =>
     journal = await harness.eventStore.readV2Journal(gateId);
     expect(journal.eventCount).toBe(2);
     const dispatchEvent = journal.events[1];
+    if (dispatchEvent === undefined || !("schemaVersion" in dispatchEvent)) {
+      throw new Error("expected V2 dispatch event");
+    }
     expect(dispatchEvent?.eventType).toBe("EXTERNAL_OPERATION_DISPATCHED");
     expect(dispatchEvent?.parentEventId).toBe(intentEvent?.eventId);
     const dispatchPayload = dispatchEvent?.payload as { readonly role: string; readonly phase: string };
@@ -432,129 +495,58 @@ describe("Task 18 coordinator V2 journal custody and witness publication", () =>
     );
   });
 
-  it("appends FINDING_VALIDATION_COMPLETED and LINEAGE_REGRESSED for commit_finding_reconciliation", async () => {
-    const seam = createRecordingWitnessSeam();
-    const harness = createHarness(seam);
-    afterAllCleanups.push(() => {
-      harness.recoveryStore.close();
-      rmSync(harness.rootDir, { recursive: true, force: true });
-    });
-    const gateId = await startGateWithSession(harness);
+  it.each(["new", "existing_resolved", "existing_regressed"] as const)(
+    "rejects unobserved %s reconciliation without publishing resolution evidence",
+    async (status) => {
+      const seam = createRecordingWitnessSeam();
+      const harness = createHarness(seam);
+      afterAllCleanups.push(() => {
+        harness.recoveryStore.close();
+        rmSync(harness.rootDir, { recursive: true, force: true });
+      });
+      const gateId = await startGateWithSession(harness);
 
-    // Step 1 — reconcile a new blocking finding to mint a tracked lineage.
-    const newFindingPrepared = await harness.coordinator.prepareCallerOperation(
-      harness.sessionId,
-      {
-        kind: "commit_finding_reconciliation",
-        batch: {
-          findings: [
-            {
-              candidateId: "candidate-1",
-              existingLineageId: null,
-              basisDigest: asArtifactDigest("a".repeat(64)),
-              ownerScope: "design",
-              observedPhase: "design",
-              status: "new",
-              severity: "blocking",
-              descriptionDigest: asArtifactDigest("a".repeat(64)),
-            },
-          ],
+      const eventsBefore = await harness.eventStore.readEvents(gateId);
+      const dispatchesBefore = await harness.eventStore.listDispatches(gateId);
+      const journalBefore = await harness.eventStore.readV2Journal(gateId);
+      // Caller-supplied findings are not observed validation evidence. The
+      // current planner still requires redispatch of the in-flight reviewer.
+      const newFindingPrepared = await harness.coordinator.prepareCallerOperation(
+        harness.sessionId,
+        {
+          kind: "commit_finding_reconciliation",
+          batch: {
+            findings: [
+              {
+                candidateId: "candidate-1",
+                existingLineageId: null,
+                basisDigest: asArtifactDigest("a".repeat(64)),
+                ownerScope: "design",
+                observedPhase: "design",
+                status,
+                severity: "blocking",
+                descriptionDigest: asArtifactDigest("a".repeat(64)),
+              },
+            ],
+          },
         },
-      } as unknown as ReviewGateNextOperation,
-    );
-    await harness.coordinator.executeNextOperation(harness.sessionId, {
-      kind: "execute_operation",
-      operationId: newFindingPrepared.operationId,
-      reason: null,
-    });
-
-    const legacyEvents = await harness.eventStore.readEvents(gateId);
-    const discovered = legacyEvents.find((event) => event.eventType === "FINDING_DISCOVERED");
-    expect(discovered).toBeDefined();
-    const lineageId = (discovered?.payload as { readonly lineageId: string }).lineageId;
-
-    // Step 2 — reconcile an already-resolved claim and a regression against
-    // the tracked lineage; both must land as chained V2 resolution events.
-    const resolutionsPrepared = await harness.coordinator.prepareCallerOperation(
-      harness.sessionId,
-      {
-        kind: "commit_finding_reconciliation",
-        batch: {
-          findings: [
-            {
-              candidateId: "candidate-2",
-              existingLineageId: lineageId as never,
-              basisDigest: asArtifactDigest("b".repeat(64)),
-              ownerScope: "design",
-              observedPhase: "design",
-              status: "existing_resolved",
-              severity: "minor",
-              descriptionDigest: asArtifactDigest("b".repeat(64)),
-            },
-            {
-              candidateId: "candidate-3",
-              existingLineageId: lineageId as never,
-              basisDigest: asArtifactDigest("c".repeat(64)),
-              ownerScope: "design",
-              observedPhase: "design",
-              status: "existing_regressed",
-              severity: "blocking",
-              descriptionDigest: asArtifactDigest("c".repeat(64)),
-            },
-          ],
-        },
-      } as unknown as ReviewGateNextOperation,
-    );
-    const outcome = await harness.coordinator.executeNextOperation(harness.sessionId, {
-      kind: "execute_operation",
-      operationId: resolutionsPrepared.operationId,
-      reason: null,
-    });
-    expect(outcome.kind).toBe("executed");
-
-    const journal = await harness.eventStore.readV2Journal(gateId);
-    // commit_finding_reconciliation preparations carry no phase/role → no
-    // intent event; exactly the two resolution events are durable after the
-    // second execution.
-    expect(journal.eventCount).toBe(2);
-    const first = journal.events[0];
-    const second = journal.events[1];
-    expect(first?.eventType).toBe("FINDING_VALIDATION_COMPLETED");
-    const validationPayload = first?.payload as {
-      readonly disposition: string;
-      readonly relation: string;
-      readonly lineageId: string;
-      readonly validatedAbsenceProofDigest: string;
-      readonly priorCommittedResolutionEventId: string;
-      readonly operationId: string;
-      readonly validatedPresenceProofDigest?: string;
-    };
-    expect(validationPayload.disposition).toBe("ALREADY_RESOLVED");
-    expect(validationPayload.relation).toBe("EXISTING");
-    expect(validationPayload.lineageId).toBe(lineageId);
-    expect(validationPayload.validatedAbsenceProofDigest).toBe("b".repeat(64));
-    expect(validationPayload.validatedPresenceProofDigest).toBeUndefined();
-    expect(validationPayload.priorCommittedResolutionEventId).toBe(
-      "synthetic-v1-lineage-resolution",
-    );
-    expect(validationPayload.operationId).toBe(resolutionsPrepared.operationId);
-
-    expect(second?.eventType).toBe("LINEAGE_REGRESSED");
-    expect(second?.parentEventId).toBe(first?.eventId);
-    const regressionPayload = second?.payload as {
-      readonly lineageId: string;
-      readonly validatedPresenceProofDigest: string;
-      readonly validatedAbsenceProofDigest?: string;
-    };
-    expect(regressionPayload.lineageId).toBe(lineageId);
-    expect(regressionPayload.validatedPresenceProofDigest).toBe("c".repeat(64));
-    expect(regressionPayload.validatedAbsenceProofDigest).toBeUndefined();
-
-    // Every event re-decodes through the Task 4c codec.
-    for (const event of journal.events) {
-      expect(validateReviewGateEventRecord(JSON.parse(JSON.stringify(event)))).toEqual(event);
-    }
-  });
+      );
+      const outcome = await harness.coordinator.executeNextOperation(harness.sessionId, {
+        kind: "execute_operation",
+        operationId: newFindingPrepared.operationId,
+        reason: null,
+      });
+      expect(outcome).toEqual({
+        kind: "blocked",
+        operationId: newFindingPrepared.operationId,
+        guidance: "review_gate_prepared_operation_mismatch",
+      });
+      expect(await harness.eventStore.readEvents(gateId)).toEqual(eventsBefore);
+      expect(await harness.eventStore.listDispatches(gateId)).toEqual(dispatchesBefore);
+      expect(await harness.eventStore.readV2Journal(gateId)).toEqual(journalBefore);
+      expect(seam.calls()).toHaveLength(0);
+    },
+  );
 
   it("fails closed with a typed reason when the witness publication seam rejects", async () => {
     const seam = createRecordingWitnessSeam();
@@ -568,7 +560,11 @@ describe("Task 18 coordinator V2 journal custody and witness publication", () =>
     // The first seam call is the prepare-time intent publication.
     const prepared = await harness.coordinator.prepareCallerOperation(
       harness.sessionId,
-      { kind: "dispatch_reviewer", phase: "design" } as ReviewGateNextOperation,
+      {
+        kind: "dispatch_reviewer",
+        phase: "design",
+        redispatchedOperationId: (await harness.eventStore.listDispatches(gateId)).at(-1)?.operationId,
+      },
     );
     expect((await harness.eventStore.readV2Journal(gateId)).eventCount).toBe(1);
     expect(seam.calls().length).toBe(1);
@@ -596,7 +592,11 @@ describe("Task 18 coordinator V2 journal custody and witness publication", () =>
 
     const prepared = await harness.coordinator.prepareCallerOperation(
       harness.sessionId,
-      { kind: "dispatch_reviewer", phase: "design" } as ReviewGateNextOperation,
+      {
+        kind: "dispatch_reviewer",
+        phase: "design",
+        redispatchedOperationId: (await harness.eventStore.listDispatches(gateId)).at(-1)?.operationId,
+      },
     );
     expect((await harness.eventStore.readV2Journal(gateId)).eventCount).toBe(1);
 

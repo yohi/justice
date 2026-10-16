@@ -7,15 +7,15 @@ import {
 describe("Task 17 host adapter routing translation", () => {
   const adapter = createReviewGateHostAdapter();
 
-  it("maps execute dispositions to execute_operation without fabricating ids or reasons", () => {
-    expect(adapter.translateRoutingDecision("execute_operation")).toEqual({
+  it("maps execute dispositions to execute_operation with the prepared operation id", () => {
+    expect(adapter.translateRoutingDecision("execute_operation", "prepared-1")).toEqual({
       kind: "execute_operation",
-      operationId: null,
+      operationId: "prepared-1",
       reason: null,
     });
-    expect(adapter.translateRoutingDecision("resume")).toEqual({
+    expect(adapter.translateRoutingDecision("resume", "prepared-2")).toEqual({
       kind: "execute_operation",
-      operationId: null,
+      operationId: "prepared-2",
       reason: null,
     });
   });

@@ -219,6 +219,7 @@ describe("Task 18 production coordinator end-to-end authority path", () => {
     const prepared = await first.coordinator.prepareCallerOperation(sessionId, {
       kind: "dispatch_reviewer",
       phase: "design",
+      redispatchedOperationId: (await first.eventStore.listDispatches(gateId)).at(-1)?.operationId,
     } as ReviewGateNextOperation);
 
     // The record digest is content-addressed and validates on read.
@@ -288,6 +289,7 @@ describe("Task 18 production coordinator end-to-end authority path", () => {
     const preparedBeforeRestart = await first.coordinator.prepareCallerOperation(sessionId, {
       kind: "dispatch_reviewer",
       phase: "design",
+      redispatchedOperationId: (await first.eventStore.listDispatches(gateId)).at(-1)?.operationId,
     } as ReviewGateNextOperation);
     await first.coordinator.executeNextOperation(sessionId, {
       kind: "execute_operation",
@@ -326,6 +328,7 @@ describe("Task 18 production coordinator end-to-end authority path", () => {
     const rePrepared = await second.coordinator.prepareCallerOperation(restartedSessionId, {
       kind: "dispatch_reviewer",
       phase: "design",
+      redispatchedOperationId: (await second.eventStore.listDispatches(gateId)).at(-1)?.operationId,
     } as ReviewGateNextOperation);
     expect(rePrepared.operationId).not.toBe(preparedBeforeRestart.operationId);
     const outcome = await second.coordinator.executeNextOperation(restartedSessionId, {
@@ -432,6 +435,7 @@ describe("Task 19 production-path negative matrix", () => {
       // stays the authoritative custody over the shared workspace root.
       const prepared = await first.coordinator.prepareCallerOperation("task19-compete-winner", {
         kind: "dispatch_reviewer", phase: "design",
+        redispatchedOperationId: (await first.eventStore.listDispatches(gateId)).at(-1)?.operationId,
       } as ReviewGateNextOperation);
       expect(
         await first.coordinator.executeNextOperation("task19-compete-winner", {
@@ -605,6 +609,7 @@ describe("Task 19 production-path negative matrix", () => {
       await expect(
         crashed.coordinator.prepareCallerOperation(sessionId, {
           kind: "dispatch_reviewer", phase: "design",
+          redispatchedOperationId: (await crashed.eventStore.listDispatches(gateId)).at(-1)?.operationId,
         } as ReviewGateNextOperation),
       ).rejects.toThrow("review_gate_witness_publication_failed");
 
@@ -649,8 +654,11 @@ describe("Task 19 production-path negative matrix", () => {
         }),
       ).toMatchObject({ kind: "executed" });
 
-      // No new prepared id was minted: durable custody is byte-identical.
-      expect(await harness.recoveryStore().list()).toEqual(recoveryDigests);
+      // The prepared payload stays byte-identical; execution adds its own record.
+      expect(await restarted.recoveryStore.read(recoveryDigests[0])).toEqual(recordBytes);
+      const recoveredDigests = await restarted.recoveryStore.list();
+      expect(recoveredDigests).toEqual(expect.arrayContaining(recoveryDigests));
+      expect(recoveredDigests).toHaveLength(recoveryDigests.length + 1);
 
       // The executed dispatch chains from the crash window's durable intent.
       const journalAfter = await harness.eventStore().readV2Journal(gateId);
@@ -677,6 +685,7 @@ describe("Task 19 production-path negative matrix", () => {
       const gateId = started.gateId as string;
       const prepared = await first.coordinator.prepareCallerOperation(sessionId, {
         kind: "dispatch_reviewer", phase: "design",
+        redispatchedOperationId: (await first.eventStore.listDispatches(gateId)).at(-1)?.operationId,
       } as ReviewGateNextOperation);
       expect(first.seam.calls()).toBe(1);
 

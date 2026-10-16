@@ -470,7 +470,7 @@ describe("legacy continuation verification — verified gates", () => {
     });
     expect(verified.resumeCursor).toEqual({
       kind: "resume_execution",
-      cursor: { epochId: EPOCH_1, startedAt: T0 },
+      cursor: { epochId: EPOCH_1, startedAt: T2 },
     });
     expect(verified.commitBinding).toBeNull();
     expect(verified.requirementsResolution).toEqual(explicitRequirements);
