@@ -115,6 +115,7 @@ function createRealFsProvider(rootDir: string): ReviewGateWorkspaceProvider {
 
 type RealFixture = {
   readonly rootDir: string;
+  readonly genesisSha: string;
   readonly provider: ReviewGateWorkspaceProvider;
   readonly git: ReturnType<typeof createReviewGateGit>;
 };
@@ -131,13 +132,14 @@ function createRealGitWorkspace(): RealFixture {
   writeFileSync(join(rootDir, PLAN_PATH), PLAN_V1, "utf8");
   runGit(rootDir, ["add", "-A"]);
   runGit(rootDir, ["commit", "-q", "--no-gpg-sign", "-m", "genesis"]);
+  const genesisSha = runGit(rootDir, ["rev-parse", "HEAD"]).trim();
   const provider = createRealFsProvider(rootDir);
   const git = createReviewGateGit({
     rootDir,
     provider,
     recoveryStore: createReviewGateRecoveryStore(rootDir),
   });
-  return { rootDir, provider, git };
+  return { rootDir, genesisSha, provider, git };
 }
 
 /**
@@ -460,7 +462,10 @@ describe.skipIf(!RUN_REAL_HOST_E2E)("Review Gate real-host E2E (Task 20 G3)", ()
         fixture.rootDir,
         ["rev-parse", `${runGit(fixture.rootDir, ["rev-parse", "HEAD"]).trim()}:${PLAN_PATH}`],
       ).trim();
-      const genesisPlanBlob = runGit(fixture.rootDir, ["rev-parse", "HEAD~1:docs/plan.md"]).trim();
+      const genesisPlanBlob = runGit(
+        fixture.rootDir,
+        ["rev-parse", `${fixture.genesisSha}:${PLAN_PATH}`],
+      ).trim();
       expect(reviewedPlanBlob).toBe(genesisPlanBlob);
 
       // The durable legacy event history reconstructs the staged Design→Plan

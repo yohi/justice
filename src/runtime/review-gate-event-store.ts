@@ -514,9 +514,9 @@ function createLocalV2Journal(rootDir: string) {
       ? SHA256_OF_EMPTY
       : createHash("sha256").update(journalBytes(events), "utf8").digest("hex");
 
-  const readCommittedEvents = (gateId: string): readonly V2CodedEvent[] => {
+  const readCommittedEvents = (gateId: string, refresh = false): readonly V2CodedEvent[] => {
     const cached = eventsByGate.get(gateId);
-    if (cached !== undefined) return cached;
+    if (!refresh && cached !== undefined) return cached;
     let content: string;
     try {
       content = readFileSync(journalFile(gateId), "utf8");
@@ -584,6 +584,10 @@ function createLocalV2Journal(rootDir: string) {
         verified.push(validated);
       }
       const next = Object.freeze([...current, ...verified]);
+      const durable = readCommittedEvents(gateId, true);
+      if (frontierHashOf(durable) !== frontierHashOf(current)) {
+        throw new Error("review_gate_v2_journal_frontier_conflict");
+      }
       writeAtomicUtf8File(journalFile(gateId), journalBytes(next));
       eventsByGate.set(gateId, next);
     },

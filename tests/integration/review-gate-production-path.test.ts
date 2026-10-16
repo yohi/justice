@@ -28,9 +28,9 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   createReviewGateCoordinator,
   type CallerRoutingDecisionV1,
-  type ReviewGateWitnessPublicationSeamV1,
   type ReviewGateWorkspaceReader,
 } from "../../src/runtime/review-gate-coordinator";
+import type { ReviewGateWitnessPublicationSeamV1 } from "../../src/runtime/review-gate-witness-contracts";
 import {
   createLegacyReviewGateEventStore,
   type ReviewGateEventStore,
@@ -40,7 +40,10 @@ import { createReviewGateRecoveryStore } from "../../src/runtime/review-gate-rec
 import { createReviewGateLockManager } from "../../src/runtime/review-gate-lock-manager";
 import { createReviewGateProtocolDescriptor } from "../../src/runtime/review-gate-protocol";
 import type { ReviewGateNextOperation } from "../../src/core/review-gate/orchestrator";
-import { validateReviewGateEventRecord } from "../../src/core/review-gate/event-schema";
+import {
+  validateReviewGateEventRecord,
+  type VerifiedReviewGateEvent,
+} from "../../src/core/review-gate/event-schema";
 import { createReviewGateGit } from "../../src/runtime/review-gate-git";
 import type { ReviewGateWorkspaceProvider } from "../../src/runtime/review-gate-git";
 import type {
@@ -713,6 +716,64 @@ describe("Task 19 production-path negative matrix", () => {
         readFileSync(join(harness.rootDir, ".justice", "review-gates", gateId, "events.jsonl"), "utf8"),
       ).not.toContain("schemaVersion");
       expect(await durable.recoverJournal(gateId)).toMatchObject({ status: "clean" });
+    });
+
+    it("rejects a stale V2 journal append from another store instance without replacing committed events", async () => {
+      const harness = createProductionHarness();
+      const started = await harness
+        .buildCoordinator()
+        .coordinator.startOrResume("task19-stale-v2-writer", {
+          source: "command", designPath: DESIGN_PATH, planPath: PLAN_PATH,
+        });
+      const gateId = started.gateId as string;
+      const firstStore = harness.eventStore();
+      const staleStore = harness.eventStore();
+      await Promise.all([firstStore.readV2Journal(gateId), staleStore.readV2Journal(gateId)]);
+
+      const firstRecord = {
+        schemaVersion: 2,
+        eventId: "task19-v2-first",
+        parentEventId: gateId,
+        emittedAt: "2026-10-15T00:00:00.000Z",
+        gateId,
+        epochId: "task19-v2-epoch",
+        generationId: gateId,
+        writerId: "task19-v2-writer",
+        eventType: "EXTERNAL_OPERATION_DISPATCHED",
+        payload: {
+          eventType: "EXTERNAL_OPERATION_DISPATCHED",
+          gateId,
+          generationId: gateId,
+          epochId: "task19-v2-epoch",
+          operationId: "task19-v2-operation-1",
+          dispatchAttemptId: "task19-v2-attempt-1",
+          phase: "design",
+          role: "reviewer",
+          candidateOrTargetSetDigest: "c".repeat(64),
+          inputBindingDigest: "c".repeat(64),
+          protocolFingerprint: "c".repeat(64),
+          expectedWitnessFrontier: "c".repeat(64),
+          protectedLeaseProofDigest: null,
+        },
+      };
+      const staleRecord = {
+        ...firstRecord,
+        eventId: "task19-v2-stale",
+        payload: {
+          ...firstRecord.payload,
+          operationId: "task19-v2-operation-2",
+          dispatchAttemptId: "task19-v2-attempt-2",
+        },
+      };
+
+      await firstStore.appendV2Events(gateId, [asV2BypassRecord(firstRecord)]);
+      await expect(
+        staleStore.appendV2Events(gateId, [asV2BypassRecord(staleRecord)]),
+      ).rejects.toThrow("review_gate_v2_journal_frontier_conflict");
+
+      expect((await firstStore.readV2Journal(gateId)).events.map((event) => event.eventId)).toContain(
+        "task19-v2-first",
+      );
     });
 
     it("N7 rejects a coordinator bypass of the V2 journal append at every custody boundary", async () => {
