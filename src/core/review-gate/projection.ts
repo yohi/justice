@@ -28,7 +28,7 @@ import type {
   VerifiedCycleEvidence,
   VerifiedSemanticContext,
 } from "./types.js";
-import type { RequirementsAuthoritySnapshotV1 } from "../review-gate-types.js";
+import type { RequirementsAuthoritySnapshotV1, RequirementsResolutionV2 } from "../review-gate-types.js";
 import { MAX_DESIGN_REMEDIATION_ROUNDS, MAX_PLAN_REMEDIATION_ROUNDS } from "../review-gate-types.js";
 import type { VerifiedReviewGateEvent } from "./event-schema.js";
 import type {
@@ -493,6 +493,68 @@ function v2RequirementsBinding(
   });
 }
 
+/**
+ * Legacy V1 events carry no event id, so any V1-derived authority pointer
+ * uses this deterministic marker (same identity rule as `synthetic-v1-stop`).
+ */
+const SYNTHETIC_V1_REQUIREMENTS_AUTHORITY_EVENT_ID = "synthetic-v1-requirements-authority";
+
+/**
+ * Immutable projection of the Review Gate requirements authority (Task 15):
+ * the historical V2 resolution pinned by `GATE_CREATED`, and the latest
+ * validated current authority selected by a V2 `COMPLETED_APPROVAL_BINDING`
+ * (its explicit binding) or a legacy `ARTIFACT_BINDINGS_UPDATED` (which
+ * re-validates the pinned V2 resolution and never rewrites it). A V1-only
+ * gate pins no V2 requirements authority and fails closed to null. The
+ * historical and current records are always reported separately and are
+ * never merged.
+ */
+export type VerifiedRequirementsAuthorityProjection = Readonly<{
+  readonly historical: RequirementsResolutionV2;
+  readonly historicalEventId: string;
+  readonly current: VerifiedRequirementsBinding | null;
+  readonly currentAuthorityEventId: string | null;
+}>;
+
+/** Pure projection of the historical versus current requirements authority. */
+export function projectVerifiedRequirementsAuthority(
+  events: readonly VerifiedReviewGateEvent[],
+): VerifiedRequirementsAuthorityProjection | null {
+  const gateCreated = getV2GateCreated(events);
+  if (gateCreated === null) return null;
+
+  const historical = gateCreated.payload.requirementsResolution;
+  let current: VerifiedRequirementsBinding | null = null;
+  let currentAuthorityEventId: string | null = null;
+
+  for (const event of events) {
+    if (isV2CompletedApprovalBinding(event)) {
+      current = event.payload.currentRequirements;
+      currentAuthorityEventId = event.payload.currentRequirementsAuthorityEventId;
+      continue;
+    }
+    if (event.eventType !== "ARTIFACT_BINDINGS_UPDATED") continue;
+    current = v2RequirementsBinding(historical, SYNTHETIC_V1_REQUIREMENTS_AUTHORITY_EVENT_ID);
+    currentAuthorityEventId = SYNTHETIC_V1_REQUIREMENTS_AUTHORITY_EVENT_ID;
+  }
+
+  return Object.freeze({
+    historical,
+    historicalEventId: gateCreated.eventId,
+    current,
+    currentAuthorityEventId,
+  });
+}
+
+type V2CompletedApprovalEvent = Extract<
+  VerifiedReviewGateEvent,
+  { readonly eventType: "COMPLETED_APPROVAL_BINDING"; readonly schemaVersion: 2 }
+>;
+
+function isV2CompletedApprovalBinding(event: VerifiedReviewGateEvent): event is V2CompletedApprovalEvent {
+  return isV2Event(event) && event.eventType === "COMPLETED_APPROVAL_BINDING";
+}
+
 function buildContextBinding(
   payload: GateCreatedV2,
   selectedByEventId: string,
@@ -579,6 +641,10 @@ export function projectVerifiedGateTip(
   const effectiveContext = admissionContext;
   let authorityEventId = gateCreatedEventId;
   let operationId = gateCreatedEventId;
+  const historicalRequirements = gateCreated.payload.requirementsResolution;
+  let currentRequirements = admissionContext.requirements;
+  let currentRequirementsAuthorityEventId = gateCreatedEventId;
+
 
   let ownDesignClear: VerifiedUnfinishedBindingSnapshot["ownDesignClear"] = null;
   let completedApproval: VerifiedCompletedBindingSnapshot | null = null;
@@ -638,6 +704,16 @@ export function projectVerifiedGateTip(
           );
           break;
         }
+        case "ARTIFACT_BINDINGS_UPDATED":
+          // Task 15: a legacy artifact rebinding re-validates the gate context
+          // against the still-pinned V2 resolution; it never rewrites the
+          // historical requirements authority.
+          currentRequirements = v2RequirementsBinding(
+            historicalRequirements,
+            SYNTHETIC_V1_REQUIREMENTS_AUTHORITY_EVENT_ID,
+          );
+          currentRequirementsAuthorityEventId = SYNTHETIC_V1_REQUIREMENTS_AUTHORITY_EVENT_ID;
+          break;
         case "EXECUTION_SUSPENDED":
           executionSuspended = true;
           if (suspensionReason === null) {
@@ -705,6 +781,7 @@ export function projectVerifiedGateTip(
         completedApproval = Object.freeze({
           approvalEventId: event.eventId,
           gateId: input.gateId,
+          approvalBinding: payload.approvalBinding,
           generationId: gateGenerationId,
           historicalRequirementsV2EventId: gateCreatedEventId,
           historicalRequirements: gateCreated.payload.requirementsResolution,
@@ -717,7 +794,9 @@ export function projectVerifiedGateTip(
           globalProtocolFingerprint: gateCreated.payload.reviewProtocolFingerprint,
           verifiedHistoryFrontier: frontierHash,
         });
-        break;
+          currentRequirements = payload.currentRequirements;
+          currentRequirementsAuthorityEventId = payload.currentRequirementsAuthorityEventId;
+          break;
       }
       default:
         break;
@@ -739,10 +818,13 @@ export function projectVerifiedGateTip(
     admission: Object.freeze({
       gateCreatedEventId,
       historicalRequirementsV2EventId: gateCreatedEventId,
+      historicalRequirements,
       context: admissionContext,
     }),
     effective: Object.freeze({
       context: effectiveContext,
+      currentRequirementsAuthorityEventId,
+      currentRequirements,
       authorityEventId,
       operationId,
       verifiedHistoryFrontier: frontierHash,

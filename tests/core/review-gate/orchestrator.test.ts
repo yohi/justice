@@ -1482,14 +1482,28 @@ describe("classifyReentryEligibility — Task 14 two-key reentry", () => {
   }
 
   function unfinishedBinding(): VerifiedGateTip["lastVerifiedBinding"] {
+    const ctx = context();
     return {
       admission: {
         gateCreatedEventId: "created-event-1",
         historicalRequirementsV2EventId: "req-v2-event-1",
-        context: context(),
+        historicalRequirements: {
+          schemaVersion: 2,
+          source: "explicit",
+          canonicalPath: "docs/requirements.md",
+          digest,
+          gitMode: "100644",
+          requirementsGitBlobOid: "req-blob-1",
+          committedBaselineOid: "baseline-1",
+          workspaceIdentity: "workspace-1",
+          selectionEvidence: {},
+        },
+        context: ctx,
       },
       effective: {
-        context: context(),
+        context: ctx,
+        currentRequirementsAuthorityEventId: "authority-event-1",
+        currentRequirements: ctx.requirements,
         authorityEventId: "authority-event-1",
         operationId: "op-effective-1",
         verifiedHistoryFrontier: verificationFrontier,
