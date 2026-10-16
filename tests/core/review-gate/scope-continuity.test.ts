@@ -235,7 +235,7 @@ function activePredecessorTip(gateId: string): VerifiedGateTip {
     nc1Stop: null,
     dispatchRecoveryCursors: [],
     terminalState: null,
-    targetWriterAuthority: null,
+    targetWriterAuthorities: null,
     targetWriterHandoffState: null,
   };
 }

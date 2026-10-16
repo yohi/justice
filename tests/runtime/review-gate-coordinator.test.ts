@@ -102,15 +102,21 @@ describe("Task 17 coordinator caller-owned routing", () => {
 
     // The caller supplies the planned operation; the coordinator validates it,
     // mints the logical operation id and publishes a durable prepared record.
+    const dispatchesBefore = await harness.eventStore.listDispatches(gateId);
+    const inFlightOperationId = dispatchesBefore.at(-1)?.operationId;
+    expect(inFlightOperationId).toBeDefined();
     const prepared = await harness.coordinator.prepareCallerOperation(
       harness.sessionId,
-      { kind: "dispatch_reviewer", phase: "design" } as ReviewGateNextOperation,
+      {
+        kind: "dispatch_reviewer",
+        phase: "design",
+        redispatchedOperationId: inFlightOperationId,
+      } as ReviewGateNextOperation,
     );
     expect(Object.isFrozen(prepared)).toBe(true);
     expect(prepared.operationId.length).toBeGreaterThan(0);
     expect(await harness.recoveryStore.list()).toContain(prepared.preparedRecoveryDigest);
 
-    const dispatchesBefore = await harness.eventStore.listDispatches(gateId);
     const decision: CallerRoutingDecisionV1 = {
       kind: "execute_operation",
       operationId: prepared.operationId,
@@ -123,10 +129,15 @@ describe("Task 17 coordinator caller-owned routing", () => {
     expect(outcome.kind).toBe("executed");
     expect(outcome.operationId).toBe(prepared.operationId);
 
-    // The execution witnessed the result as a fresh durable dispatch ...
+    const replay = await harness.coordinator.executeNextOperation(
+      harness.sessionId,
+      decision,
+    );
+    expect(replay.kind).toBe("blocked");
+    expect(replay.guidance).toBe("review_gate_operation_already_executed");
+
     const dispatches = await harness.eventStore.listDispatches(gateId);
-    expect(dispatches.length).toBe(dispatchesBefore.length + 1);
-    // ... and the injected packet is claimable by the exact worker prompt.
+    expect(dispatches.length).toBe(dispatchesBefore.length);
     expect(outcome.guidance).not.toBeNull();
     const claim = await harness.coordinator.preToolUse({
       type: "PreToolUse",
@@ -172,6 +183,47 @@ describe("Task 17 coordinator caller-owned routing", () => {
     expect(
       (stop as { payload: { readonly reason: string } }).payload.reason,
     ).toBe("caller_blocked_pending_review");
+  });
+
+  it("does not append another stop event when the Gate is already suspended", async () => {
+    const harness = createHarness();
+    afterAllCleanups.push(() => {
+      harness.recoveryStore.close();
+      rmSync(harness.rootDir, { recursive: true, force: true });
+    });
+    const gateId = await startGateWithSession(harness);
+    const decision: CallerRoutingDecisionV1 = {
+      kind: "block",
+      operationId: null,
+      reason: "caller_blocked_pending_review",
+    };
+    await harness.coordinator.executeNextOperation(harness.sessionId, decision);
+    const suspendedEvents = await harness.eventStore.readEvents(gateId);
+
+    await harness.coordinator.executeNextOperation(harness.sessionId, decision);
+
+    expect(await harness.eventStore.readEvents(gateId)).toEqual(suspendedEvents);
+  });
+
+  it("blocks a prepared operation that differs from the current planner result", async () => {
+    const harness = createHarness();
+    afterAllCleanups.push(() => {
+      harness.recoveryStore.close();
+      rmSync(harness.rootDir, { recursive: true, force: true });
+    });
+    await startGateWithSession(harness);
+    const prepared = await harness.coordinator.prepareCallerOperation(
+      harness.sessionId,
+      { kind: "commit_resolutions", lineageIds: [] } as ReviewGateNextOperation,
+    );
+
+    const result = await harness.coordinator.executeNextOperation(
+      harness.sessionId,
+      { kind: "execute_operation", operationId: prepared.operationId, reason: null },
+    );
+
+    expect(result.kind).toBe("blocked");
+    expect(result.guidance).toBe("review_gate_prepared_operation_mismatch");
   });
 
   it("await_evidence returns without mutating any durable state", async () => {
