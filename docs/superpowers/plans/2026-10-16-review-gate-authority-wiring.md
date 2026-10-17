@@ -5,8 +5,8 @@
 > superpowers:executing-plans to implement this plan task-by-task.
 > Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Close the verified NEG-001–003 production-authority gaps and keep
-NEG-004 progress and acceptance claims consistent with executed evidence.
+**Goal:** Close NEG-001–003 through the SRG-340-001–004 execution contracts below
+and keep NEG-004 progress and acceptance claims consistent with actual evidence.
 
 **Architecture:** Keep the existing Core admission/reentry planners, protected
 witness, event codec and Git primitives. Replace production Legacy routing with
@@ -66,18 +66,26 @@ The design/plan approval dependencies recorded there remain in force.
 1. Missing native/witness configuration must block the actual command, including
    the adapter's graph-construction failure path (Task 1).
 2. A valid first-use authorization and CLI-only Requirements must create one
-   V2 Gate even though no prior `GATE_CREATED` exists (Tasks 2, 4).
+   V2 Gate before any prior `GATE_CREATED`; unrelated dirty/staged paths and an
+   unentered dirty Plan do not prevent Design admission (Tasks 2, 4).
 3. A competing caller changing the frontier between observation and application
    cannot receive stale authority or bypass admission on contention (Task 3).
 4. Changed unfinished artifacts and NC1 reentry must preserve Gate/generation,
    spent rounds and independent validation across restart (Tasks 5–6).
 5. Completed reuse after unrelated HEAD movement is read-only. Changed
    Requirements/protocol and unknown Legacy authority cannot arm implementation
-   (Tasks 7–8).
+   (Tasks 7–8). During Plan review, all approved-Design content paths return D0,
+   even with a dirty D1 worktree; unsupported paths are denied before reading.
 
 ## Baseline and Scope of Completion
 
 Source baseline: `b86562aa6ce7543bf11d78f9ba1067d1f101b1e1` (2026-10-16).
+PR #340 comparison is **`v4...PR HEAD`**, not `master`. The reviewed HEAD is
+`de56d8df7f8f200cdd0e5988a87a8443bd704c3c` (ahead 1 / behind 0; 3 files).
+This revision changes only the three PR documents. All source signatures and
+tests introduced below are **planned**, not implemented or executed here.
+The Review Gate remains **BLOCKED / independent fresh review pending**;
+document remediation is not approval or G1/G2/G3/DEP proof.
 The repository-root `REPORT.md` supplied by the user is an untracked review
 input; this plan records its finding IDs without making that file a dependency.
 
@@ -96,13 +104,14 @@ workspace enrollment fields, and returns `precedence: null`. The verified store
 also requires membership before ordinary appends. Merely replacing the V1
 payload or adding a switch cannot establish a functioning admitted V2 path.
 
-Fresh planning-time checks, before product changes, used Bun **1.4.2** in the
+Historical planning-time checks, before product changes, used Bun **1.4.2** in the
 configured container. `bun run test` exited 1: **41 suites failed to load,
 182 passed, 1 skipped; 2776 tests passed, 5 skipped**. Failures include undefined
 `z.string` / `z.strictObject` at Zod consumers. Root cause is not established;
 do not attribute these failures to NEG-001–003 or fabricate contract RED from
 them. `bun run typecheck` and `bun run build` exited 0; `bun run lint` exited 0
-with warnings. Historical checklist success is not a current GREEN result.
+with warnings. These commands were not rerun for this document-only revision.
+Historical checklist success is not a current GREEN result.
 
 **Execution prerequisite:** first reproduce the baseline with the lockfile and
 configured runtime; diagnose the import/load blocker before interpreting RED
@@ -110,15 +119,240 @@ or GREEN. Do not change dependency versions, lockfile or product behavior just
 to conceal the failure. If a source fix is required, capture its own failing
 test and reviewed fix before executing the tasks below.
 
-**Scoped completion:** NEG-001/002 and decision/lease integration have production
-regression evidence; every unsupported transition remains explicitly BLOCKED.
+**Scoped completion criteria (not current status):** NEG-001/002, decision/lease
+integration and D0 host mediation require actual production regression evidence;
+every unsupported transition remains explicitly BLOCKED.
 **Full original acceptance:** additionally requires every original Task 19/20
 obligation, protocol-plan dependencies and DEP-02/03/04 proofs. Scoped completion
 must never be relabeled G2/G3 PASS or Implementation Ready.
 
+## Binding Execution Contracts for SRG-340-001–004
+
+The following choices are part of Tasks 2–5 and 7–8, not optional worker design.
+Reuse the existing protected store/registry, event publication and read service.
+Do not introduce a second signer, journal authority, TTL or approval protocol.
+
+### Owned Admission Publication (SRG-340-001)
+
+**New Runtime entry point:** `withAdmissionWitnessTransaction<T>(context,
+request: ScopeAdmissionRequest, run: (owned: AdmissionOwnedWitness)
+=> Promise<T>): Promise<T>` in `review-gate-witness-context.ts`.
+`context` has the existing `WitnessContext` type. The witness factory exposes
+this entry only to scope admission, not as an agent/custom tool capability.
+
+It acquires the existing protected `store.withGuard("installation", ...)`
+once, authenticates installation/repository/registry, and discovers related
+scopes/Gates and any pending admitted publication under that ownership. Include
+the signed proposal's new Gate and all predecessor/related Gates in the sorted
+lock set. For genesis, allocate only tentative IDs under installation ownership
+before locking, and bind them to the one protected pending publication before
+any shard effect; tentative IDs confer no budget or membership. Then use
+`withWitnessScopeGateLocks` once for sorted scopes followed
+by sorted Gates. Verify journals, rebuild observation and run Core only after
+these locks are owned; no pre-lock selection has authority. Busy acquisition
+releases the partial set. Release Gate→scope→installation in `finally`.
+Recover relevant authenticated pending publications before the ordinary
+committed-journal completeness scan: only their exact named/staged bytes may
+explain an advanced shard or new member awaiting CAS. An unaccounted orphan,
+missing history or conflicting staged bytes remains BLOCK, never an empty scope.
+
+`AdmissionOwnedWitness` is a new non-serializable Runtime capability created only
+by that entry point, bound to its live guard owner and workspace/lock set. Its
+methods reject use after callback exit, foreign Gate/scope IDs or another owner.
+The wrapper verifies ownership at runtime; a DTO/type assertion is not proof.
+Its narrow methods mirror existing public witness operations:
+
+- `read(): Promise<WitnessTransaction>` authenticates/reloads the registry under
+  the already held installation guard; it acquires no lock.
+- `readVerifiedScope(scopeId: string): Promise<VerifiedScopeFrontier>` uses
+  `workspaceFrom` and `verifyWitnessJournals` under the same ownership.
+- `preparePublication(input: PreparedWitnessPublicationV1,
+  bytes: Uint8Array): Promise<"prepared" | "already_prepared">` invokes existing
+  `preparePublicationUnlocked(context, current, input, bytes)` with Task 4's
+  authenticated admission validation. Re-read `current` after every advance.
+- `publishPreparedJournal(publicationId: string): Promise<void>` uses a new
+  private `publishPreparedJournalUnlocked(context, current, publicationId)`
+  extracted from the existing public wrapper. It verifies protected staging,
+  pending revision, terminal seal, exact preimage and bytes, then calls the
+  existing native `durableReplaceWriterShard`; no nested scope/Gate guard.
+- `commitPreparedPublicationCAS(input: PublicationCommitInput)
+  : Promise<PublicationCommitResult>` calls existing `commitPublicationUnlocked`
+  with freshly read `current`. Protected journal, consumed authorization and
+  frontier move remain one `store.advance` CAS, not separate authority writes.
+- `recoverPreparedPublication(publicationId: string)
+  : Promise<PublicationCommitResult>` authenticates the same protected pending
+  record, syncs its exact bytes if needed, and uses the same commit method;
+  no new operation, event, Gate or authorization is allocated for recovery.
+
+**Call order:** scope admission → owned entry → verified read/recovery → current
+Git/Requirements observation → Core decision → Task 5 handler → Task 4 prepare
+→ exact shard sync → fresh-registry CAS → internal result → reverse release.
+The EventStore methods take `owned: AdmissionOwnedWitness` explicitly. They
+must not call public `prepareVerifiedEventPublication`'s ordinary witness path,
+`withWitnessTransaction` or `withGateOwnedWitnessTransaction` from this callback:
+the last helper still acquires installation, despite its name. Public wrappers
+remain usable only when their own guard acquisition is legal. Terminal intent
+cannot pass generic publication: preserve the existing sealed specialized route.
+
+This is a short authoritative slice, not a guard held while an external worker,
+host signer, closing seal or revoke operation runs. Response/result application
+re-enters ownership and rebuilds current authority. No worker inherits handles.
+
+### Internal Results and Outer Driver (SRG-340-001)
+
+Define the new Runtime union in `review-gate-admission-context.ts`:
+
+```typescript
+type ReviewGateAdmissionExecutionResult =
+  | Readonly<{ kind: "RESULT"; result: ReviewGateCommandResult }>
+  | Readonly<{
+      kind: "BLOCK";
+      reason: string;
+      result: ReviewGateCommandResult;
+    }>
+  | Readonly<{
+      kind: "HANDOFF_PENDING";
+      continuation: VerifiedTargetWriterHandoffContinuationV1;
+    }>
+  | Readonly<{
+      kind: "TERMINAL_INTENT_PREPARED_UNPUBLISHED";
+      gateId: string;
+      publicationId: string;
+      terminalTransitionOperationId: string;
+    }>;
+```
+
+`ReviewGateCommandResult` remains the PlanBridge-facing public result. The
+executor/handlers and admission callback return the union; only the outer
+coordinator converts RESULT/BLOCK to the public result. The terminal IDs resolve
+the exact authenticated pending record and target set; they are not authority
+to seal/revoke. No continuation carries a reusable `AdmissionDecision`.
+The driver interfaces below are requirements from the original plan; their
+production completeness is not assumed or certified by this document.
+
+- **HANDOFF:** persist the original bounded intent, return HANDOFF_PENDING,
+  release all admission guards, then run the original PLAN-027
+  `executeWriterHandoffContinuation`. It acquires the complete ordered guard
+  set, revalidates/fences/claims, releases it, and invokes `withAdmissionLease`
+  again. Resume only from verified receipt plus fresh Core planning.
+- **Terminal:** protected-prepare exact intent, return the terminal variant
+  with no witnessed intent/COMPLETED. After full release, the original PLAN-030
+  `executeTerminalClosingSealContinuation` owns ordered workspace/scope/Gate/
+  target guards, verifies native ordering and installs the complete seal.
+  Release and re-admit; the specialized sealed route alone can witness the
+  original intent and enter CLOSING_PENDING. Yield HANDOFF_PENDING with the
+  existing revoke-only continuation, release, perform PLAN-029 protected revoke
+  and tombstone, release and re-admit again before terminal confirmation.
+- **Busy:** before prepare, release and return retryable blocked guidance with
+  zero side effects. A durably prepared handoff/terminal operation retains its
+  original pending state and operation ID; outer-driver retry does not publish
+  completion or allocate rounds. Never bypass admission or spin under a guard.
+- **Exception/crash:** release every acquired guard. Before durable prepare,
+  grant no authority; after prepare, recover the same protected record. After
+  shard sync but before CAS, no authoritative Gate completion exists. After CAS
+  but before response, recover the committed result once. Sealed-unpublished
+  recovery denies old writes but is not CLOSING_PENDING or completion.
+- **CAS conflict:** no reviewer/worker dispatch, no index-tip promotion and no
+  new authorization. Preserve pending exact bytes, release, and re-admit to
+  recover the same operation or BLOCK if its frontier/proof is unrecoverable.
+  Never rebind a signed authorization or prepared event to a different frontier.
+
+### Authenticated Membership Publication (SRG-340-002)
+
+**Genesis producer:** independently provisioned `authorizeWorkspace` signs and
+stores the first authorization. Task 2 authenticates pending enrollment, actual
+installation identity and absence/continuity proof. Admission never signs.
+Extract new private `validateFirstEnrollmentUnderAdmission(context, current,
+authorization, snapshot): Promise<VerifiedFirstEnrollmentAuthorityV1>` from the
+existing consumer's signature/nonce/identity checks. It does not advance state;
+Task 4's genesis prepare atomically records nonce/enrollment consumption and
+the exact pending publication in one registry CAS. The stage bytes are durable
+first. Validate genesis against that intended consumed state before advance;
+do not weaken `validatePublication`'s genesis rules or consume on a separate
+irrecoverable admission call. Existing consumed-without-matching-pending state
+is not permission for a new genesis; BLOCK if its operation cannot be proved.
+
+**Successor producer:** the independently authenticated host provisioner invokes
+existing `authorizeAdditionalScope(context, { scope, operationId, authorize })`
+outside admission ownership. Its host signer validates the existing payload:
+installation ID, workspace identity, stable operation ID, expected workspace
+frontier and exact proposed `ScopeEnrollmentV1`. The existing helper validates
+completed predecessor, continuity and absence of active prior target owner,
+verifies host signature and persists `scopeAuthorizations[operationId]`.
+No agent access, Runtime signing callback, fabricated signature or first-use
+authorization reuse is allowed. A deployment lacking this provisioner BLOCKS.
+
+The signed scope proposal fixes new Gate/writer IDs and predecessor before
+admission; for the same scope, keep old enrollment/members byte-identical and
+add only the authorized successor member. Cross-scope proposals retain the
+existing verified-completed-successor provenance/continuity checks. Changed
+proposal/operation/frontier requires independent reauthorization, never a
+Runtime rewrite. Do not invent an expiry field or time-based lease: existing
+freshness is exact frontier, operation identity and one-time consumption.
+
+**Consumer:** Task 4 adds `membership: AdmittedMembership` to its prepared input.
+Define the new union in `review-gate-admission-context.ts`: genesis carries
+`kind: "genesis"` and `firstEnrollment: VerifiedFirstEnrollment`; successor
+carries `kind: "successor"`, `scope: ScopeEnrollmentV1` and
+`authorizationOperationId: string`. The owned validator loads that exact
+protected authorization record, verifies signature, installation/workspace,
+unconsumed status and expected frontier with
+`verifyAdditionalScopeAuthorization(current, scope, expectedFrontier,
+authorizationOperationId): void`; add the fourth required argument rather
+than accepting any matching record. Reverify the Core predecessor approval,
+relation proof and current completed tip, then build the exact next frontier.
+
+Extend `buildPublication` only for that authenticated union; absence of
+firstEnrollment is not an exception to membership checks. Preserve generic
+append validation. `preparePublicationUnlocked` authenticates the new Gate
+membership, allowed writer, genesis/successor relation and exact next frontier.
+`commitPublicationUnlocked` consumes the **matching operation's** additional
+authorization in the same CAS that installs membership and new writer head.
+Do not consume all merely scope-equal records. `expectedInstallationFrontier`
+uses the fresh registry hash after the provisioner saved its record;
+`expectedGlobalFrontier` must still match its signed workspace frontier.
+Carry `scopeAuthorizationOperationId: string | null` in newly prepared
+`PreparedWitnessPublicationV1` and its protected schema/receipt: successor uses
+its exact authorization ID; genesis and ordinary unchanged-membership appends
+use null. Extend the witness contracts and registry schema, not event bytes or
+the host-signed payload. Historical records remain immutable; a missing field
+is not additional membership authority, and unprovable old pending membership
+changes BLOCK rather than gaining a fabricated operation ID.
+
+Recovery reuses signed proposal, IDs, bytes and publication ID. Prepared but
+uncommitted authorization remains tied to that pending record; an already
+committed identical publication returns the recorded result, not a second use.
+Invalid signature, replay for another operation, missing proof, changed
+predecessor/frontier, competing authorization or missing staged bytes means
+BLOCK/no allocation. Full CAS races are serialized by installation ownership;
+injected stale/CAS conflicts still fail closed. Successor always starts fresh
+Design review and never inherits Design CLEAR.
+
+### First-use Target Clean Policy (SRG-340-003)
+
+Define `VerifiedEnrollmentAdmissionSnapshot` in the Runtime context module as
+`Readonly<{ phase: "design"; requirementsResolution: RequirementsResolutionV2;
+designArtifact: ReviewArtifactBinding; planArtifact: ReviewArtifactBinding }>`.
+It is an observed candidate, not caller-authenticated proof. The owned validator
+recomputes canonical path/blob/mode/digest and a single stable HEAD/index/worktree
+snapshot; require clean committed Requirements and the Design target. For Plan,
+bind only its committed Git entry as unapproved downstream input, allowing dirty
+or staged Plan bytes. Allow unrelated modified, staged and untracked paths;
+they never enter selection, scoped index updates or commit payloads.
+
+Remove the blanket porcelain-empty condition from the ordinary first-enrollment
+consumer and reuse this target-local validator there and in admitted prepare.
+Signature/nonce, repository identity, absent-prior-enrollment/related-scope,
+safe-path/alias, HEAD and exact artifact checks remain mandatory. No current
+host provisioning operation is shown to require global cleanliness; do not
+retain it as an undocumented admission prerequisite. A separately approved
+installer policy, if any, is not a reason to reject ordinary Gate admission.
+Later Plan entry rechecks clean Plan and approved D0 independently. Dirty current
+target without exact prepared recovery proof BLOCKS; no broad clean waiver.
+
 ## File and Responsibility Map
 
-Paths in this table are relative to the repository root.
+Paths below are relative to the repository root; these are future code changes.
 
 - `src/runtime/opencode-adapter.ts`, `src/hooks/plan-bridge.ts`: actual command
   composition, graph-unavailable denial and shared services.
@@ -135,8 +369,12 @@ Paths in this table are relative to the repository root.
   and membership publication.
 - `src/runtime/review-gate-event-store.ts`,
   `src/runtime/review-gate-witness-publication.ts` and
-  `src/runtime/review-gate-publication-record.ts`: atomic admitted
+  `src/runtime/review-gate-publication-record.ts` and
+  `src/runtime/review-gate-publication-validation.ts`: atomic admitted
   generation/writer membership and witnessed V2 publication.
+- `src/runtime/review-gate-witness-contracts.ts` and
+  `src/runtime/review-gate-witness-registry.ts`: exact protected publication
+  authorization-operation reference, preserving immutable historical records.
 - `src/runtime/review-gate-admission-executor.ts` (new) and
   `src/runtime/review-gate-coordinator.ts`: exhaustive decision application
   and existing driver integration.
@@ -144,6 +382,10 @@ Paths in this table are relative to the repository root.
   `src/runtime/review-gate-approval.ts` and
   `src/runtime/review-gate-history.ts`: original V2 versus effective authority
   and verified read-only consumers.
+- `src/runtime/review-gate-approved-design-authority.ts` (new),
+  `src/runtime/review-gate-query.ts`, `src/runtime/justice-tools.ts` and the
+  adapter/PlanBridge: operation-bound D0 producer, verified query facade,
+  prompt input and last-mile host mediation (Task 7).
 - `src/core/review-gate/` modules `admission.ts`, `event-schema.ts`,
   `projection.ts`, `reentry.ts`, `orchestrator.ts`, `types.ts`: only required
   pure DTO/codec/transition gaps; no Runtime imports.
@@ -213,6 +455,9 @@ and isolated tests, never a missing-trust fallback.
 **Interfaces:** In the new Runtime module define
 `ReviewGateAdmissionObservation = Readonly<{ snapshot: VerifiedAdmissionSnapshot;
 requirementsResolution: RequirementsResolutionV2 }>`.
+Also declare the Runtime-only owned port, membership, internal-result and
+first-use snapshot types specified in the binding execution contracts above;
+Task 3 creates their authenticated live transaction, not Task 2's test fixtures.
 Add `request: Readonly<{ designPath: string; planPath: string;
 explicitRequirementsPath?: string }>` and a verified authority input to the
 observer options. Retain a separate history-derived call mode for read-only
@@ -231,6 +476,13 @@ membership is not an authenticated producer. No Core type imports Runtime.
   independent installation ID and original proof; zero prior Gate is valid
   only with authenticated enrollment. Include aliases, dirty Requirements,
   duplicate marker, unrelated HEAD movement and a related unfinished scope.
+  Add `first enrollment permits unrelated dirty staged and untracked paths`
+  and `first Design enrollment permits dirty downstream Plan`. Assert both
+  preserve unrelated index/worktree bytes and pin committed Plan, never its
+  dirty bytes. `dirty Design or Requirements blocks first enrollment` must
+  leave nonce pending and create no Gate or writer. Reject unsafe path/alias,
+  mixed HEAD/index snapshot, replayed nonce and related unfinished scope even
+  when all current targets are clean.
 - [ ] **Step 2: Run RED**:
 
   ```bash
@@ -249,6 +501,13 @@ membership is not an authenticated producer. No Core type imports Runtime.
   into `VerifiedAdmissionPrecedenceV1`, not `null` or fabricated empty proof.
   Preserve persisted original Requirements selection on existing generations;
   later selectors are observed changes, not replacements.
+  Extract `validateFirstEnrollmentUnderAdmission` and the required
+  `VerifiedEnrollmentAdmissionSnapshot`; ordinary
+  `consumeFirstEnrollment(context, authorization, snapshot)` shares its
+  target-local validation rather than porcelain-empty. The admitted genesis
+  path calls the non-consuming owned validator, not the public consuming
+  wrapper. Task 4 owns atomic consumed-plus-pending publication. Do not remove
+  signature, nonce, absence/continuity or exact Git evidence checks.
 - [ ] **Step 4: Run GREEN** using the focused command and four global checks.
   Missing protected first-use evidence must remain BLOCK, not a new workspace.
 - [ ] **Step 5: Commit checkpoint**:
@@ -266,18 +525,24 @@ membership is not an authenticated producer. No Core type imports Runtime.
 
 **Interfaces:** Change the Runtime-only callback to
 `withAdmissionLease<T>(request: ScopeAdmissionRequest,
-run: (decision: AdmissionDecision, observation: ReviewGateAdmissionObservation)
-=> Promise<T>): Promise<T>`. The transaction owns ordered locks through the
-callback and releases in `finally`. Context-internal publication must use
-already-owned lock-aware primitives; no public witness call may nest the
-installation guard. Wider writer handoff/terminal continuation is yielded to
-the existing original-plan outer driver, then freshly admitted on re-entry.
+run: (decision: AdmissionDecision, observation: ReviewGateAdmissionObservation,
+owned: AdmissionOwnedWitness) => Promise<T>): Promise<T>`.
+For coordinator application, `T` is `ReviewGateAdmissionExecutionResult`, not
+the public command result. Implement the owned entry, exact lock set/lifetime,
+private shard-sync extraction and continuation state machine specified above.
+No external worker/signer/seal/revoke is awaited while this callback owns guards.
 
 - [ ] **Step 1: Add tests** `keeps admission ownership until genesis is durable`,
   `contention never skips admission`, `replans after yielded authority changes`
   and `releases every guard on callback failure`. Pause two real callers;
   assert only one generation/publication, no stale-frontier dispatch and no
   Gate→workspace inversion. An occupied guard must not call Legacy routing.
+  Add `owned publication acquires each guard once` with a real protected store:
+  assert installation→sorted scopes→sorted Gates→read→prepare→shard sync→CAS
+  and reverse release; spy-reject public transaction/witness wrapper re-entry.
+  Cover busy second scope/Gate, read/prepare/sync/callback exceptions, stale
+  CAS, capability use after release and foreign-Gate capability use. No worker
+  dispatch/index-tip promotion on failure; durable pending IDs survive.
 - [ ] **Step 2: Run RED**:
 
   ```bash
@@ -293,6 +558,11 @@ the existing original-plan outer driver, then freshly admitted on re-entry.
   the frontier. Do not reuse the first-pass spread as second-pass authority.
   Read-only completed reuse obtains no writer lease or append; mutable
   continuation yields before wider guards and revalidates on return.
+  Construct the owner-checked port only inside
+  `withAdmissionWitnessTransaction`; reload `WitnessTransaction` after every
+  registry advance so shard sync/CAS use the prepared revision. Do not reuse
+  the immutable pre-prepare transaction object for later mutations. Keep
+  existing public witness wrappers for callers outside this owned path.
 - [ ] **Step 4: Run GREEN** with the focused command and four global checks;
   instrument actual acquisition/release order, including thrown exceptions.
 - [ ] **Step 5: Commit checkpoint**:
@@ -303,6 +573,10 @@ the existing original-plan outer driver, then freshly admitted on re-entry.
 **Files:** Modify `src/runtime/review-gate-event-store.ts`,
 `src/runtime/review-gate-witness-publication.ts`,
 `src/runtime/review-gate-publication-record.ts`,
+`src/runtime/review-gate-publication-validation.ts`,
+`src/runtime/review-gate-witness-contracts.ts`,
+`src/runtime/review-gate-witness-registry.ts`,
+`src/runtime/review-gate-witness-enrollment.ts`,
 `src/runtime/review-gate-witness-scope-enrollment.ts`,
 `src/runtime/review-gate-coordinator.ts`; test
 `tests/runtime/review-gate-event-store.test.ts`,
@@ -311,14 +585,20 @@ the existing original-plan outer driver, then freshly admitted on re-entry.
 
 **Interfaces:** Extend the existing verified publication owner, not the Legacy
 `appendEvents` interface. Add
-`prepareAdmittedGenerationPublication(input: VerifiedEventPublicationInput &
+`prepareAdmittedGenerationPublication(input:
+Omit<VerifiedEventPublicationInput, "firstEnrollment"> &
 Readonly<{ decision: Extract<AdmissionDecision, { kind: "CREATE_GENESIS" |
-"CREATE_SUCCESSOR" }>; observation: ReviewGateAdmissionObservation }>)
+"CREATE_SUCCESSOR" }>; observation: ReviewGateAdmissionObservation;
+membership: AdmittedMembership }>, owned: AdmissionOwnedWitness)
 : Promise<PreparedWitnessPublicationV1>` to the durable store. Runtime validates
 the input against live protected authority; structural typing is not trust.
-Genesis consumes the original first-enrollment authorization. Successor records
-verified predecessor and new writer membership in the same expected-frontier
-publication, without reusing first-enrollment authorization.
+The admitted path has one membership authority source, not a second conflicting
+`firstEnrollment` field inherited from the ordinary publication input.
+Genesis/successor use the separate producers, exact protected authorization
+lookup, owned publication methods and CAS consumption specified above.
+No `authorizeAdditionalScope` call or host signing callback runs under a held
+admission lease. Missing independent signed proposal means BLOCK guidance to
+the provisioner; it does not start an implicit enrollment workflow.
 
 - [ ] **Step 1: Add tests** `creates one witnessed V2 genesis from authorized
   pending enrollment`, `publishes successor membership with exact predecessor`
@@ -328,6 +608,16 @@ publication, without reusing first-enrollment authorization.
   crashes before prepare, after staging, after shard sync and after CAS;
   concurrent authorization consumption must have one winner. Plan-only completed
   drift gets fresh Design review, not inherited CLEAR.
+  Add `same-scope successor consumes exact additional authorization once` and
+  `cross-scope successor preserves signed continuity`. Use actual host-signed
+  registry records, not a DTO or mocked verifier. Assert membership and writer
+  head appear together with the advanced frontier; only that operation's
+  authorization becomes consumed. Test missing/wrong signer, altered membership,
+  wrong operation/installation/workspace/frontier, unfinished/ambiguous prior
+  Gate and active old writer; none may allocate or dispatch. Crash after signed
+  authorization, after prepare, after sync and after CAS must recover identical
+  IDs/bytes or BLOCK, never sign again or consume for another publication.
+  Re-run Task 2's dirty unrelated/Plan positives through real genesis prepare.
 - [ ] **Step 2: Run RED**:
 
   ```bash
@@ -343,6 +633,12 @@ publication, without reusing first-enrollment authorization.
   restart. Make verified projection the coordinator's production state source;
   do not cast V2 events into V1 projection or use a locally appended V2 mirror
   as canonical authority. Scope index remains a hint, not the selected tip.
+  Implement the authenticated `AdmittedMembership` branch in `buildPublication`
+  and `validatePublication`, including exact-operation authorization selection.
+  Genesis atomically prepares and consumes its nonce; successor keeps its
+  authorization unconsumed until the same CAS installs membership/head/frontier.
+  Recovery verifies the original protected pending/committed record. Do not
+  replace existing signature/continuity checks with the Core decision alone.
 - [ ] **Step 4: Run GREEN** with focused and global checks; reopen disk stores
   and independently read `readVerifiedScope` to assert the same authority.
 - [ ] **Step 5: Commit checkpoint**:
@@ -359,11 +655,13 @@ publication, without reusing first-enrollment authorization.
 
 **Interfaces:** Define `applyReviewGateAdmissionDecision(input:
 Readonly<{ decision: AdmissionDecision;
-observation: ReviewGateAdmissionObservation }>,
-handlers: ReviewGateAdmissionHandlers): Promise<ReviewGateCommandResult>`.
+observation: ReviewGateAdmissionObservation; owned: AdmissionOwnedWitness }>,
+handlers: ReviewGateAdmissionHandlers)
+: Promise<ReviewGateAdmissionExecutionResult>`.
 `ReviewGateAdmissionHandlers` is a mapped type over `AdmissionDecision["kind"]`;
 each handler receives `Extract<AdmissionDecision, { kind: K }>` and the same
-observation. Coordinator supplies Runtime execution handlers; the executor's
+observation/owned port and returns that internal union. Coordinator supplies
+Runtime execution handlers; the executor's
 exhaustive switch and `never` check cannot invent a new decision. Internal
 `INSPECT_NC1_ELIGIBLE_CHANGE` reaching final application blocks, never resumes.
 
@@ -375,6 +673,14 @@ exhaustive switch and `never` check cannot invent a new decision. Internal
   ID/proof, and no generic `runStartOrResume` handler exists. Through the real
   coordinator, changed unfinished input cannot create a new Gate, a suspended
   tip cannot generically resume, and exact crash resume keeps epoch/rounds.
+  Add `handoff returns before outer guards are acquired` and
+  `terminal seal and revoke each require fresh admission`. Assert the sequence
+  prepared-unpublished→release→seal→release→re-admit→sealed intent CAS→release
+  →revoke/tombstone→release→re-admit→terminal confirmation. No CLOSING_PENDING
+  before seal, no COMPLETED before verified revoke, no worker write after seal.
+  Competing frontier changes between every slice must trigger fresh Core
+  planning or BLOCK. Cover busy/exception/CAS/crash in every slice and prove
+  no continuation can carry/use an old decision or leaked capability.
 - [ ] **Step 2: Run RED**:
 
   ```bash
@@ -391,6 +697,14 @@ exhaustive switch and `never` check cannot invent a new decision. Internal
   reprojected first. `REVALIDATE_OR_BLOCK` uses same-generation invalidation and
   authority revalidation; absent prerequisite proof blocks without allocation.
   `STAY_SUSPENDED` has no reviewer/remediator dispatch or budget/epoch change.
+  Implement `driveReviewGateAdmission(sessionId: string,
+  request: ScopeAdmissionRequest)
+  : Promise<ReviewGateCommandResult>` as the outer coordinator loop. It consumes
+  the internal union using the original PLAN-027/029/030 drivers; return public
+  results only for RESULT/BLOCK. Resolve terminal IDs from authenticated pending
+  records, never synthesize target/seal authority. Every driver outcome releases
+  guards before another `withAdmissionLease`; a retry resumes the original
+  operation under fresh observation, not a saved callback/AdmissionDecision.
 - [ ] **Step 4: Run GREEN** with focused and global checks. Prove the actual
   coordinator branches, not just a mocked decision handler table.
 - [ ] **Step 5: Commit checkpoint**:
@@ -441,21 +755,100 @@ transitions allows ACTIVE. Preserve existing operation protocol result types.
 - [ ] **Step 5: Commit checkpoint**:
   `git commit -m "fix: NC1再入場を独立証拠と同一世代へ接続"`.
 
-### Task 7: Preserve V2 Provenance in Approval and Read-Only Reuse
+### Task 7: Wire V2 Approval and Immutable D0 Through the Real Host
 
 **Files:** Modify `src/runtime/review-gate-approval.ts`,
 `src/runtime/review-gate-history.ts`,
 `src/runtime/review-gate-admission-snapshot.ts`,
-`src/runtime/review-gate-coordinator.ts`; test
+`src/runtime/review-gate-coordinator.ts`,
+`src/runtime/review-gate-recovery-store.ts`,
+`src/runtime/review-gate-query.ts`, `src/runtime/opencode-adapter.ts`,
+`src/runtime/justice-tools.ts`, `src/hooks/plan-bridge.ts`;
+create `src/runtime/review-gate-approved-design-authority.ts`;
+test `tests/runtime/review-gate-query.test.ts`,
+`tests/hooks/plan-bridge-review-lock.test.ts`,
+`tests/runtime/opencode-adapter-v2.test.ts`,
 `tests/runtime/review-gate-approval.test.ts`,
 `tests/runtime/review-gate-history.test.ts` and
-`tests/integration/review-gate-implementation-lock.test.ts`.
+`tests/integration/review-gate-implementation-lock.test.ts`;
+create `tests/integration/review-gate-approved-design-read.test.ts`.
 
 **Interfaces:** Preserve `ReviewGateApprovalLookup` and history wire shapes.
 The history-mode observer derives its selector from immutable V2 and latest
 verified effective authority, not absent CLI input or current marker alone.
 Approval consumes the same Core exact-reuse decision and exact durable approval
 event ID; no Legacy equality fallback for production V2/unverified histories.
+
+**SRG-340-004 producer:** the new Runtime module exports
+`buildApprovedDesignOperationReadBinding(owned: AdmissionOwnedWitness,
+input: Readonly<{ gateId: string; operationId: string; designPath: string }>)
+: Promise<ApprovedDesignOperationReadBinding | null>`.
+The new Runtime value contains `operationId: string`, `inputBindingDigest:
+string` and `approvedDesign: VerifiedApprovedDesignReadBindingV1`. Under owned
+verified read, require the current Plan operation, same-generation Design CLEAR,
+latest effective Requirements/protocol/Design authority, exact committed Git
+tree/blob/mode/digest and witness frontier. Dirty/staged D1 is diagnostic only.
+No proof means null/BLOCK, never a shape-only DTO or worktree-derived binding.
+
+Coordinator calls that builder directly with its existing owned port; no nested
+admission or public witness call. Persist the bounded binding with the existing
+prepared logical operation/recovery input and bind its digest into the existing
+dispatch input binding. Recover the same D0 for that operation after restart;
+do not replace it with current HEAD/D1. Do not persist raw Design text/prompts
+in authority events. Revalidate effective authority before content use and
+commit/CLEAR; irrelevant HEAD movement alone is not invalidation.
+
+**Composition:** export `createReviewGateApprovedDesignAuthority(input:
+Readonly<{ admission: ReviewGateScopeAdmission; eventStore: ReviewGateEventStore;
+git: ReviewGateGit; query: ReviewGateQueryService }>)
+: ReviewGateApprovedDesignAuthority` from that module. Consume the shared
+instances; the PlanBridge interface uses operation-bound inputs.
+Extend `getApprovedDesignBinding` input with required
+`operationId: string`; extend read/search inputs likewise. Retain the existing
+query-service read/search signatures internally, delegating only after current
+operation/authority checks. A host query starts a fresh short read-only owned
+transaction; it cannot allocate writer/round/event. Add verified durable
+`reviewPhase: ReviewGatePhase | null` and `operationId: string | null` to
+`ReviewGateLockSnapshot`; null cannot authorize Plan content. A child request
+cannot supply/override them. The composition root injects the created authority
+using `setReviewGateApprovedDesignAuthority` alongside coordinator/approval,
+before any Plan worker can run. No producer configured means blocked Plan
+dispatch/content, never a global clean-Design prerequisite.
+Read-mode observation uses the verified effective selector/approved Git binding,
+not dirty D1's bytes or marker as new authority. Dirty D1 alone does not revoke
+D0; a genuinely verified committed authority change still invalidates it.
+Add the query and approved-design authority to the shared runtime graph;
+never construct a second witness/store instance for the read path.
+
+**Last-mile choice:** the current OpenCode before-hook can cancel a native tool,
+but cannot safely replace native `read` output with arbitrary D0 bytes. Extend
+the existing read-only `justice_review` tool with a strict optional `query`
+union: `artifact_read { path }`, `artifact_search { path, literal }`,
+`show { path }`, `status {}` or `diff { staged }` (each has a `kind` field).
+Keep resolution actions disjoint and forbidden to reviewers. This is one
+scoped query facade over existing services, not a new general shell/read API.
+`show` of the approved Design has no caller revision override and returns D0.
+Resolve operation/session authority from actual host context, not query args.
+
+Wire `OpenCodeAdapter.onToolExecuteBefore` and the scoped query facade to
+`PlanBridge.mediateReviewerArtifactRead`, resolving root/child session and
+current operation first. Generic Design `read`, `grep/search`, content-bearing
+Git `show`, shell fallback, alias/absolute paths and other unmediated content
+tools are denied **before filesystem/tool execution** with scoped-query
+guidance; after-hook output replacement is not an authorization barrier.
+The facade returns the mediation result's exact D0 text/matches through the
+normal plugin-tool response. Permit independent scoped status/diff diagnostics
+through existing query methods, label D1 patches unapproved and never use them
+as prompt/CLEAR evidence. Preserve unrelated allowed queries and exact denial
+taxonomy; do not blanket-deny all queries as implementation-not-authorized.
+
+**Prompt/attachment:** before dispatch, coordinator reads the same operation's
+D0 via the verified query service and assembles all Plan reviewer, independent
+validator, revalidation and applicable self-review context from those bytes.
+Remove mutable `@Design` references and workspace attachments in that path.
+If an attachment/content provider cannot deliver the pinned bytes with matching
+proof, BLOCK that dispatch. Plan P0 must be clean; dirty D1 never becomes source
+authority. The child worker receives neither the owned port nor signing keys.
 
 - [ ] **Step 1: Add tests** `reuses CLI-selected completed gate without a marker`,
   `HEAD-only movement keeps approval read-only` and `stale Requirements prevents
@@ -464,20 +857,42 @@ event ID; no Legacy equality fallback for production V2/unverified histories.
   drift and ambiguous completed tips reject reuse. Count zero append, writer
   allocation, validator dispatch and Git mutation for history/reuse; CLEAR alone
   cannot arm, explicit approved command still needs exact current binding.
+  Add `actual Plan host serves approved D0 while D1 is dirty or staged`: run
+  the actual adapter/tool hook and dispatched prompt path with contradictory
+  D0/D1 fixtures, no mocked authority producer. Assert every Plan role's prompt,
+  attachment and facade read/search/show contains only exact D0 bytes, pinned
+  mode/blob/digest and logical operation. Exercise an actual generic tool
+  callback and assert its workspace-reader/shell executor is never invoked
+  after denial; do not prove this with mediator-only mocks. Scoped status/diff
+  still report D1 as diagnostics without replacing D0. Assert
+  `review_operation_not_permitted` for missing/unbound proof and
+  `review_scope_violation` for outside paths, not implementation authorization.
+  Missing/corrupt D0 blob, stale CLEAR, changed Requirements/protocol, wrong
+  operation/session/generation, alias spoof and unsupported attachment must
+  block before content/dispatch. Restart restores the original bound D0; an
+  invalidated binding cannot commit/CLEAR even if older read bytes are cached.
 - [ ] **Step 2: Run RED**:
 
   ```bash
   bun run vitest run \
     tests/runtime/review-gate-approval.test.ts \
     tests/runtime/review-gate-history.test.ts \
-    tests/integration/review-gate-implementation-lock.test.ts
+    tests/runtime/review-gate-query.test.ts \
+    tests/hooks/plan-bridge-review-lock.test.ts \
+    tests/runtime/opencode-adapter-v2.test.ts \
+    tests/integration/review-gate-implementation-lock.test.ts \
+    tests/integration/review-gate-approved-design-read.test.ts
   ```
 
 - [ ] **Step 3: Implement shared verified observation** for read-only consumers
   and remove selector loss or V1 payload adaptation as authority. Validate original
   provenance plus latest effective Requirements/approved Design proof. Keep
   independently verified approved D0 reads when upstream worktree D1 is dirty;
-  never silently substitute mutable Design bytes.
+never silently substitute mutable Design bytes.
+  Implement the producer, bounded recovery binding, exact authority injection,
+  before-execution denial, strict scoped facade and pinned prompt/attachment
+  assembly specified above. Existing helper shape tests, a setter with no
+  composition caller or an unused mediator are not implementation completion.
 - [ ] **Step 4: Run GREEN** with focused/global checks; compare durable directory
   bytes before/after read-only calls and process restart.
 - [ ] **Step 5: Commit checkpoint**:
@@ -505,6 +920,10 @@ trust root, change global credentials or authorize human approval implicitly.
   cross-scope relabel, competing claims and unanchored Legacy corpus. Assert
   no fallback/capacity reset, durable replay equality and no mutable worker
   dispatch when FDR-015/016 or closing-seal prerequisites are unproven.
+  Include Task 7's D0/D1 matrix through actual `OpenCodePlugin` hooks, returned
+  tool schema and worker packets; the provider must be the real producer from
+  the shared graph. No fixture-only query scope, post-read redaction or
+  broad tool denial may stand in for serving D0 and preserving diagnostics.
 - [ ] **Step 2: Run RED**:
 
   ```bash
@@ -512,7 +931,8 @@ trust root, change global credentials or authorize human approval implicitly.
     tests/integration/review-gate-authority-wiring.test.ts \
     tests/integration/review-gate-production-path.test.ts \
     tests/runtime/review-gate-legacy-bridge.test.ts \
-    tests/integration/review-gate-adapter-orchestration.test.ts
+    tests/integration/review-gate-adapter-orchestration.test.ts \
+    tests/integration/review-gate-approved-design-read.test.ts
   ```
 
 - [ ] **Step 3: Fix only demonstrated integration defects**. Use one real
@@ -521,6 +941,9 @@ trust root, change global credentials or authorize human approval implicitly.
   `mutationSubstrate` until the original PLAN-027/029/030 and FDR-015/016 effect
   guards and host isolation are demonstrated; otherwise assert typed suspension.
   Retain immutable Legacy bytes and explicit fail-closed classification.
+  Assert original PLAN-027/029/030 acquisition/prepare/seal/CAS/revoke order
+  and authenticated Successor membership consumption in this same real graph;
+  component PASS cannot substitute for the producer→consumer chain.
 - [ ] **Step 4: Run GREEN** with focused/global checks. On a supported host,
   additionally run
   `JUSTICE_REAL_HOST_E2E=1 bun run vitest run tests/integration/review-gate-real-host.test.ts`.
@@ -586,6 +1009,8 @@ The source inspection above exposes integration prerequisites, so the lower
 estimate is not a fixed-price commitment or an assurance of G3 readiness.
 
 Plan self-review: NEG-001→1/3/8; NEG-002→2/4/7/8; NEG-003→3–6/8;
-NEG-004→9. Each Review Focus item has explicit positive/negative owner tests.
+NEG-004→9; SRG-340-001→3/4/5/8; SRG-340-002→4/8;
+SRG-340-003→2/4/8; SRG-340-004→7/8. Each Review Focus item has explicit
+positive/negative owner tests. All 45 execution steps remain unchecked.
 Existing design remains the contract owner; this follow-up neither reapproves
 the old plan nor grants implementation/merge/deployment authority.

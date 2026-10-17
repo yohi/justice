@@ -30,7 +30,7 @@ from current GREEN and is not newly checked here.
 | 1–3 | Implementation steps confirmed | Pending global GREEN |
 | 4–8 | Components exist; full scope unaudited | Unverified / partial |
 | 9–14 | Components delivered | GREEN steps reopened |
-| 15–17 | Components delivered | Production integration partial |
+| 15–17 | Components delivered; D0 host wiring incomplete | Acceptance pending |
 | 18 | Authority wiring partial | Steps 1–4 reopened |
 | 19 | Regression infrastructure partial | Steps 1–4 reopened; no G2 PASS |
 | 20 | Native/Git opt-in infrastructure | All steps reopened; no G3 PASS |
@@ -50,6 +50,8 @@ from current GREEN and is not newly checked here.
   because the fresh global test run failed; no whole-contract acceptance claim.
 - **Tasks 15–17:** Requirements authority, approval/history and routing/query
   components delivered. Production composition remains partial under Task 18.
+  Task 17 Step 3 is reopened: routing/query components exist, but the approved-D0
+  producer/setter/mediator are not connected through the actual host path.
   Original component/commit checks are historical, not new acceptance.
 - **Task 18:** factory/Core integration exists, but Legacy fallback, V1 creation,
   selector loss and non-exhaustive decision application remain. PR #336 is
@@ -61,7 +63,8 @@ from current GREEN and is not newly checked here.
   Full live-host cases, actual execution, complete acceptance and required final
   report are not established; G3 NOT CLAIMED.
 
-Fresh checks in the configured devcontainer (`remoteUser: root`, Bun 1.4.2):
+Historical planning-time checks in the configured devcontainer
+(`remoteUser: root`, Bun 1.4.2), not rerun for this document-only revision:
 
 - `bun run test`: exit 1; 41 suites failed to load, 182 passed, 1 skipped;
   2776 tests passed and 5 skipped. Undefined Zod `z.string` / `z.strictObject`
@@ -77,6 +80,41 @@ NOT STARTED. DEP-02 deployment isolation and DEP-03 real Legacy proof or explici
 fail-closed classification remain PENDING; DEP-05/G3 remains NOT CLAIMED.
 Neither this progress correction nor the follow-up plan grants implementation,
 merge, release or deployment approval.
+
+### PR #340 Document Remediation Status
+
+Compare **`v4...PR HEAD`**, with base
+`b86562aa6ce7543bf11d78f9ba1067d1f101b1e1` and reviewed HEAD
+`de56d8df7f8f200cdd0e5988a87a8443bd704c3c`; `master` is not this PR's base.
+The follow-up plan now specifies the following execution details. They are
+**document remedies pending independent fresh review**, not executed fixes:
+
+- **SRG-340-001 / Tasks 7,18:** new-plan Tasks 3–5 define installation→scope→Gate
+  ownership, non-reentrant read/prepare/shard-sync/CAS, internal continuation
+  versus public result, exception/busy/CAS/crash recovery, and fresh admission
+  after each outer PLAN-027/029/030 step. Existing public witness wrappers,
+  including `withGateOwnedWitnessTransaction`, still acquire installation;
+  naming one is not proof of a valid already-owned publication path.
+- **SRG-340-002 / Tasks 5–7,18:** new-plan Task 4 separates first-use authority
+  from independently signed additional membership authorization. Exact operation,
+  proposed membership, writer head and expected frontier are verified; its
+  consumption is atomic with the relevant protected publication. Missing host
+  authorization stays BLOCK; predecessor approval does not replace it.
+- **SRG-340-003 / Tasks 3,5,18:** new-plan Tasks 2/4 replace ordinary first-use
+  porcelain-empty admission with authenticated phase-local Git evidence:
+  clean Requirements/Design, committed unapproved Plan, unrelated dirty/staged
+  allowed. Signature/nonce, absence, continuity and path protections remain.
+- **SRG-340-004 / Tasks 16–19:** new-plan Tasks 7/8 bind the same-generation
+  Design CLEAR D0 to the actual logical Plan operation, inject the verified
+  producer, mediate host tool reads before execution, and build prompts and
+  attachments from pinned bytes. Real adapter D0/D1 positives, rejection cases
+  and allowed diagnostic queries are mandatory; shape/helper tests are not proof.
+
+The original 20 Tasks / 100 Steps remain; Task 17 Step 3 is additionally
+unchecked (40 checked steps, not a completion percentage). No new execution
+step was marked complete. PLAN-027/029/030, FDR-011/014/015/016 and DEP-02/03/04
+are unchanged. Review Gate **BLOCKED** and formal approval/Implementation Ready
+**NOT APPROVED** remain until independent review and authorized evidence exist.
 
 ## Global Constraints
 
@@ -493,6 +531,13 @@ type VerifiedAdmissionAuthorityDecisionV1 =
 - [ ] **Step 4: Verify GREEN** — Task 7's pure tests and all four global checks pass against the actual Core function and typed DTOs; no runtime admission claim. Concurrent Gate creation and lease recovery are covered as Task 18 G2 tests.
 - [ ] **Step 5: Commit** — `git add src/core/review-gate/admission.ts src/core/review-gate/types.ts src/core/review-gate/identity.ts tests/core/review-gate/admission.test.ts tests/core/review-gate-identity.test.ts && git commit -m "feat: determine verified Review Gate admission in pure Core"`.
 
+> **SRG-340-001 execution clarification:** Task 7's Core planner stays pure.
+> Its Runtime lease owner is implemented by Task 18 using new-plan Task 3's
+> `AdmissionOwnedWitness` path. Hold installation→scope→Gate once per short
+> authoritative slice; use its read/prepare/shard-sync/CAS without nested public
+> witness calls. Release all guards for PLAN-027/029/030 outer continuations,
+> then re-admit and replan. A generic callback type is not a lock/recovery design.
+
 ### Task 8: Immutable Legacy Snapshot and Atomic Continuation Bridge
 
 **Files:**
@@ -738,13 +783,28 @@ type VerifiedAdmissionAuthorityDecisionV1 =
 
 - [x] **Step 1: Write RED tests** — `subagent_type:"general"` bypasses Justice category and preserves object identity; arbitrary caller strings, absent type, `task-N`, real `ses_...`, field sanitization and implementation-not-authorized boundary; exact `PlanTask.rawBody` to worker.
 - [x] **Step 2: Verify RED** — `bun run vitest run tests/hooks/plan-bridge.test.ts tests/hooks/plan-bridge-review-lock.test.ts tests/runtime/review-gate-query.test.ts tests/integration/review-gate-adapter-orchestration.test.ts`; expect the new `general` and FDR-014 immutable approved-Design read assertions to FAIL wherever unsupported.
-- [x] **Step 3: Patch routing ownership and actual last-mile adapter** — preserve review locks, parent-session task correlation and foreground mandatory review. Do not change worker privileges or add unsupported model/provider/reasoning fields.
+- [ ] **Step 3: Patch routing ownership and actual last-mile adapter** — preserve review locks, parent-session task correlation and foreground mandatory review. Do not change worker privileges or add unsupported model/provider/reasoning fields.
 - [ ] **Step 4: Verify GREEN** — focused tests and four global commands.
 - [x] **Step 5: Commit** — stage **only** actually modified `src/hooks/plan-bridge.ts`, `src/core/review-gate/capabilities.ts`, `src/runtime/review-gate-query.ts`, final host adapter file and matching tests (`tests/hooks/plan-bridge.test.ts`, `tests/hooks/plan-bridge-review-lock.test.ts`, `tests/runtime/review-gate-query.test.ts`, `tests/integration/review-gate-adapter-orchestration.test.ts`); `git commit -m "fix: preserve caller-owned routing and approved Design read binding"`.
 
-> **Implementation evidence:** PR #335 (caller-owned routing + host adapter compatibility); focused tests: `tests/hooks/plan-bridge.test.ts` (64), `tests/hooks/plan-bridge-review-lock.test.ts` (19), `tests/runtime/review-gate-query.test.ts` (21), `tests/integration/review-gate-adapter-orchestration.test.ts` (3); verification basis in `docs/review-gate-v4-evidence-checklist.md`.
+> **Partial implementation evidence:** PR #335 delivered routing/query components
+> and tests; see the historical evidence checklist. Task 17 Step 3 is reopened
+> for SRG-340-004: proof DTOs, a setter and an unused mediation method do not
+> establish actual Plan worker D0 reads. The follow-up Tasks 7/8 own the verified
+> producer, composition injection, prompt/attachment binding, host pre-execution
+> mediation, real D0/D1 tests and preservation of allowed diagnostic queries.
 
 ### Task 18: Production Coordinator End-to-end Authority Wiring
+
+> **SRG-340-001–004 execution clarification:** Use the follow-up plan's binding
+> execution contracts and Tasks 2–5,7–8. Internal RESULT/BLOCK/handoff/terminal
+> continuations are not `ReviewGateCommandResult`. Genesis consumes first-use
+> authority atomically with protected prepare; successor requires independently
+> signed additional membership authorization consumed with membership/head CAS.
+> First-use dirty checks remain phase-local; Plan roles must receive approved
+> D0 through the actual host read and prompt path. These details do not relax
+> PLAN-027/029/030 or FDR-011/014/015/016. Original acceptance stays unmet until
+> the actual production paths and deployment prerequisites are proven.
 
 **Files:**
 - Create: `src/runtime/review-gate-scope-admission.ts`, `tests/runtime/review-gate-scope-admission.test.ts` (**deferred concrete implementation from Task 7**)

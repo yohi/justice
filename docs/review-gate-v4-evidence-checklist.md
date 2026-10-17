@@ -25,7 +25,8 @@ acceptance. Current task/checkbox status belongs to the
 The [remediation plan](./superpowers/plans/2026-10-16-review-gate-authority-wiring.md)
 defines the outstanding authority-wiring work.
 
-Fresh configured-devcontainer checks (`remoteUser: root`, Bun 1.4.2):
+Historical planning-time devcontainer checks (`remoteUser: root`, Bun 1.4.2),
+not rerun for this document-only revision:
 
 - `bun run test`: exit 1; 41 suites failed to load, 182 passed, 1 skipped;
   2776 tests passed, 5 skipped. Zod consumers report undefined `z.string` /
@@ -44,6 +45,43 @@ Task 20 adds native/Git regression infrastructure, but uses a Legacy store and
 injected mutation substrate rather than the live OpenCode production graph.
 Full G2/G3 and DEP-02/03/04 acceptance are not established. The required final
 implementation-verification report is absent.
+
+## PR #340 Review Findings and Document-only Revision
+
+Compare **`v4...PR HEAD`**, not `master`: base
+`b86562aa6ce7543bf11d78f9ba1067d1f101b1e1`, reviewed HEAD
+`de56d8df7f8f200cdd0e5988a87a8443bd704c3c`.
+Only this checklist and the two PR plans are revised. Source, tests, Design and
+SPEC remain read-only evidence. Planned APIs/tests are not executed fixes.
+
+| Finding | Document owner | Execution / acceptance |
+| --- | --- | --- |
+| SRG-340-001 | New-plan Tasks 3–5,8 | NOT RUN / BLOCKED |
+| SRG-340-002 | New-plan Tasks 4,8 | NOT RUN / BLOCKED |
+| SRG-340-003 | New-plan Tasks 2,4,8 | NOT RUN / BLOCKED |
+| SRG-340-004 | New-plan Tasks 7,8 | NOT RUN / BLOCKED |
+
+- **001:** owned installation→scope→Gate publication; explicit non-reentrant
+  read/prepare/shard-sync/CAS; separate internal continuation/public result;
+  release→outer handoff/seal/revoke→fresh admission, including race/crash cases.
+- **002:** independent host-signed successor scope authorization, bound to exact
+  operation/membership/frontier; atomic consumed authorization and writer-head
+  publication. Missing signer/proof BLOCKS; no new TTL or Runtime signing.
+- **003:** ordinary first-use enrollment cannot reject only unrelated dirty,
+  staged or untracked paths or unentered dirty Plan. Clean target/Requirements,
+  signed enrollment, nonce, continuity and stable Git proof remain mandatory.
+- **004:** operation-bound D0 producer and authority injection, actual prompt/
+  attachment and scoped tool path, pre-execution denial of unmediated reads,
+  and allowed diagnostic status/diff. DTO/helper-only tests are insufficient.
+
+Task 17 Step 3 is now unchecked because its actual host integration is not
+established; routing/query components remain delivered historical evidence.
+Original Tasks 18/19 Steps 1–4 and all Task 20 steps stay unchecked. The new
+plan's 45 execution steps stay unchecked. No tests, build, native operation,
+implementation, merge or deployment were executed for this text revision.
+Document remedies are **pending independent fresh review**; Review Gate stays
+**BLOCKED**, G1/G2/G3 and DEP-02/03/04 are not newly passed, and Implementation
+Ready is not approved. Only documentation validation is applicable here.
 
 ## Task evidence table
 
