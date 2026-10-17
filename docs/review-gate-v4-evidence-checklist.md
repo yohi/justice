@@ -7,12 +7,97 @@ test files that guard it, the declared test case count per file (counted from
 the current branch at the date below), the verification command, and the PR
 that carries the change.
 
-**Verification basis (2026-10-16, branch `feature/task-20-real-host-e2e`):
+**Historical verification basis (2026-10-16,
+branch `feature/task-20-real-host-e2e`; not reissued below):
 `bun run test` → 222 files passed | 2 skipped (224 files),
 3522 tests passed | 7 skipped (3529);
 `bun run typecheck` → 0 errors;
 `bun run lint` → 0 errors (711 pre-existing-style warnings);
 `bun run build` → exits 0.**
+
+## Current Reconciliation (2026-10-16)
+
+Source baseline: `b86562aa6ce7543bf11d78f9ba1067d1f101b1e1`.
+PR #338 is merged. The table below preserves historical component evidence;
+its test counts and commands do not establish full contract coverage or current
+acceptance. Current task/checkbox status belongs to the
+[implementation plan](./superpowers/plans/2026-10-09-review-gate-v4-contract-conformance.md#current-progress-reconciliation-2026-10-16).
+The [remediation plan](./superpowers/plans/2026-10-16-review-gate-authority-wiring.md)
+defines the outstanding authority-wiring work.
+
+Historical planning-time devcontainer checks (`remoteUser: root`, Bun 1.4.2),
+not rerun for this document-only revision:
+
+- `bun run test`: exit 1; 41 suites failed to load, 182 passed, 1 skipped;
+  2776 tests passed, 5 skipped. Zod consumers report undefined `z.string` /
+  `z.strictObject`; root cause is unconfirmed. These load failures are not
+  contract-specific RED evidence and prevent a current global GREEN claim.
+- `bun run typecheck`: exit 0.
+- `bun run lint`: exit 0 with warnings.
+- `bun run build`: exit 0.
+- Native/live-host opt-ins: NOT RUN in this reconciliation; G3 NOT CLAIMED.
+
+Task 18 is PARTIAL: production Legacy fallback, V1 creation, Requirements
+selector loss and non-exhaustive Core decision application remain. Task 19's
+principal harness uses a Legacy store, in-process locks and a recording seam;
+its separate protected-store tests do not prove actual command composition.
+Task 20 adds native/Git regression infrastructure, but uses a Legacy store and
+injected mutation substrate rather than the live OpenCode production graph.
+Full G2/G3 and DEP-02/03/04 acceptance are not established. The required final
+implementation-verification report is absent.
+
+## PR #340 Review Findings and Document-only Revision
+
+Compare **`v4...PR HEAD`**, not `master`: base
+`b86562aa6ce7543bf11d78f9ba1067d1f101b1e1`, independently re-reviewed HEAD
+`c7ef6a4daf19f0ac4848a1e0c041a1737be1c711` (2026-10-18 JST).
+`de56d8df7f8f200cdd0e5988a87a8443bd704c3c` is the previous Review HEAD.
+Only this checklist and the two PR plans are revised. Source, tests, Design and
+SPEC remain read-only evidence. Planned APIs/tests are not executed fixes.
+
+| Finding | Independent proposal review at c7ef6a4 | Execution |
+| --- | --- | --- |
+| SRG-340-001 | PARTIALLY RESOLVED / BLOCKER | NOT RUN |
+| SRG-340-002 | RESOLVED IN PROPOSAL | NOT RUN |
+| SRG-340-003 | RESOLVED IN PROPOSAL | NOT RUN |
+| SRG-340-004 | RESOLVED IN PROPOSAL | NOT RUN |
+
+- **001:** owned installation→scope→Gate publication; explicit non-reentrant
+  read/prepare/shard-sync/CAS; separate internal continuation/public result;
+  release→outer handoff/seal/revoke→fresh admission, including race/crash cases.
+  The c7ef6a4 re-review retained the missing complete owned-history path as the
+  sole blocker. New-plan Tasks 2/3/7 now specify
+  `readVerifiedScopeOwned(owned, scopeId): Promise<VerifiedScopeRead>`, shared
+  frontier/membership/shard/causal/orphan verification, related-scope completeness,
+  pending first-use separation and the owned observer. Admission/NC1 and D0
+  cannot call guarded public readers or enter their serialization queue.
+  Admission recovers only the same authenticated pending operation; read-only
+  D0 queries deny unreadable pending state without performing recovery writes.
+  Planned real-composition tests cover nested/duplicate guards, multi-Gate/
+  multi-writer projection, related scopes, pending first use, orphan/corruption,
+  same-operation prepared recovery, stale cached frontier and D0 non-reentry.
+  This correction awaits independent review; it is not a new GREEN result.
+- **002:** independent host-signed successor scope authorization, bound to exact
+  operation/membership/frontier; atomic consumed authorization and writer-head
+  publication. Missing signer/proof BLOCKS; no new TTL or Runtime signing.
+- **003:** ordinary first-use enrollment cannot reject only unrelated dirty,
+  staged or untracked paths or unentered dirty Plan. Clean target/Requirements,
+  signed enrollment, nonce, continuity and stable Git proof remain mandatory.
+- **004:** operation-bound D0 producer and authority injection, actual prompt/
+  attachment and scoped tool path, pre-execution denial of unmediated reads,
+  and allowed diagnostic status/diff. DTO/helper-only tests are insufficient.
+
+Task 17 Step 3 is now unchecked because its actual host integration is not
+established; routing/query components remain delivered historical evidence.
+Original Tasks 18/19 Steps 1–4 and all Task 20 steps stay unchecked. The new
+plan's 45 execution steps stay unchecked. No tests, build, native operation,
+implementation, merge or deployment were executed for this text revision.
+Document remedies are **pending independent fresh review**; Review Gate stays
+**BLOCKED**, G1/G2/G3 and DEP-02/03/04 are not newly passed, and Implementation
+Ready is not approved. Only documentation validation is applicable here.
+Progress remains exactly 100 / 40 / 60 (original total/checked/unchecked) and
+45 / 0 / 45 (new plan). The reported GitHub CI SUCCESS for c7ef6a4 is CI evidence,
+not proof of planned owned-read behavior, deployment isolation or G1/G2/G3.
 
 ## Task evidence table
 
@@ -29,7 +114,7 @@ that carries the change.
 | 17 | Caller-owned routing (`subagent_type` string/preserve) + host adapter compatibility | `tests/hooks/plan-bridge.test.ts` (64) · `tests/hooks/plan-bridge-review-lock.test.ts` (19) · `tests/runtime/review-gate-query.test.ts` (21) · `tests/integration/review-gate-adapter-orchestration.test.ts` (3) | `bun run vitest run tests/hooks/plan-bridge.test.ts tests/hooks/plan-bridge-review-lock.test.ts tests/runtime/review-gate-query.test.ts` | [#335](https://github.com/yohi/justice/pull/335) |
 | 18 | Production coordinator end-to-end authority wiring | `tests/integration/review-gate-event-sourced-flow.test.ts` (2) · `tests/integration/review-gate-implementation-lock.test.ts` (5) · `tests/runtime/review-gate-scope-admission.test.ts` (14) · `tests/runtime/review-gate-protocol-release-authority.test.ts` (4) · `tests/integration/review-gate-restart-recovery.test.ts` (24, shared) | `bun run vitest run tests/integration/review-gate-event-sourced-flow.test.ts tests/integration/review-gate-implementation-lock.test.ts tests/runtime/review-gate-scope-admission.test.ts` | [#336](https://github.com/yohi/justice/pull/336) |
 | 19 | G2 devcontainer production-path negative matrix (N1–N7) | `tests/integration/review-gate-production-path.test.ts` (9) | `bun run vitest run tests/integration/review-gate-production-path.test.ts` | [#337](https://github.com/yohi/justice/pull/337) |
-| 20 | G3 real-host E2E entry point + final evidence-based review | `tests/integration/review-gate-real-host.test.ts` (2: full staged gate + unprepared-commit negative) · this checklist | `bun run vitest run tests/integration/review-gate-real-host.test.ts` (with `JUSTICE_REAL_HOST_E2E=1` to execute) | this branch (unmerged at checklist time) |
+| 20 | Native/Git E2E entry point; full G3/final review outstanding | `tests/integration/review-gate-real-host.test.ts` (2: staged gate + unprepared-commit negative) · this checklist | `bun run vitest run tests/integration/review-gate-real-host.test.ts` (with `JUSTICE_REAL_HOST_E2E=1` to execute) | [#338](https://github.com/yohi/justice/pull/338), merged; partial acceptance evidence |
 
 Declared test counts include `it()`/`test()`/`it.each()` declarations in the
 named files; several cases in the shared files cover more than one task, so
@@ -47,7 +132,8 @@ the counts are per-file declarations, not unique-contract tallies.
 
 ## Task 20 acceptance notes (read before claiming G3)
 
-- The new entry point is **skipped by default**: full-suite skip count grows
+- The new entry point is **skipped by default when suite loading succeeds**;
+  the historical full-suite skip count grew
   by exactly 1 test file (baseline `222 passed | 1 skipped` file tally →
   `222 passed | 2 skipped` with this file) and both cases report `skipped`.
 - With `JUSTICE_REAL_HOST_E2E=1` the file executes 2 cases against a real
