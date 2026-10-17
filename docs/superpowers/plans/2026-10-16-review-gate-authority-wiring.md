@@ -80,8 +80,14 @@ The design/plan approval dependencies recorded there remain in force.
 ## Baseline and Scope of Completion
 
 Source baseline: `b86562aa6ce7543bf11d78f9ba1067d1f101b1e1` (2026-10-16).
-PR #340 comparison is **`v4...PR HEAD`**, not `master`. The reviewed HEAD is
-`de56d8df7f8f200cdd0e5988a87a8443bd704c3c` (ahead 1 / behind 0; 3 files).
+PR #340 comparison is **`v4...PR HEAD`**, not `master`. The independently
+re-reviewed HEAD is `c7ef6a4daf19f0ac4848a1e0c041a1737be1c711`
+(ahead 2 / behind 0; 3 files), reviewed on 2026-10-18 JST.
+`de56d8df7f8f200cdd0e5988a87a8443bd704c3c` is the **previous Review HEAD**.
+At c7ef6a4, SRG-340-001 was PARTIALLY RESOLVED and still BLOCKER;
+SRG-340-002–004 were RESOLVED IN PROPOSAL, not implemented or verified.
+This revision supplies the remaining owned-history read contract for 001;
+its independent acceptance is pending, not self-declared READY.
 This revision changes only the three PR documents. All source signatures and
 tests introduced below are **planned**, not implemented or executed here.
 The Review Gate remains **BLOCKED / independent fresh review pending**;
@@ -151,10 +157,11 @@ any shard effect; tentative IDs confer no budget or membership. Then use
 by sorted Gates. Verify journals, rebuild observation and run Core only after
 these locks are owned; no pre-lock selection has authority. Busy acquisition
 releases the partial set. Release Gate→scope→installation in `finally`.
-Recover relevant authenticated pending publications before the ordinary
-committed-journal completeness scan: only their exact named/staged bytes may
-explain an advanced shard or new member awaiting CAS. An unaccounted orphan,
+Admission explicitly recovers authenticated pending publications before the
+ordinary committed-journal completeness scan: only exact named/staged bytes
+may explain an advanced shard or new member awaiting CAS. An unaccounted orphan,
 missing history or conflicting staged bytes remains BLOCK, never an empty scope.
+The transaction entry itself does not automatically mutate for read-only use.
 
 `AdmissionOwnedWitness` is a new non-serializable Runtime capability created only
 by that entry point, bound to its live guard owner and workspace/lock set. Its
@@ -164,8 +171,11 @@ Its narrow methods mirror existing public witness operations:
 
 - `read(): Promise<WitnessTransaction>` authenticates/reloads the registry under
   the already held installation guard; it acquires no lock.
-- `readVerifiedScope(scopeId: string): Promise<VerifiedScopeFrontier>` uses
-  `workspaceFrom` and `verifyWitnessJournals` under the same ownership.
+- `readVerifiedFrontier(): Promise<VerifiedScopeFrontier>` uses `workspaceFrom`
+  and the existing protected journal verification under the same ownership.
+  It returns authenticated workspace membership/frontier, not Gate history.
+  Complete scope history is supplied by the EventStore owned method below;
+  the former frontier-only `readVerifiedScope` proposal is removed.
 - `preparePublication(input: PreparedWitnessPublicationV1,
   bytes: Uint8Array): Promise<"prepared" | "already_prepared">` invokes existing
   `preparePublicationUnlocked(context, current, input, bytes)` with Task 4's
@@ -197,6 +207,100 @@ cannot pass generic publication: preserve the existing sealed specialized route.
 This is a short authoritative slice, not a guard held while an external worker,
 host signer, closing seal or revoke operation runs. Response/result application
 re-enters ownership and rebuilds current authority. No worker inherits handles.
+
+### Owned Verified History Read (SRG-340-001 Remaining Blocker)
+
+Add the following Runtime-only method to the durable EventStore surface in
+`review-gate-event-store.ts`; reuse its existing `VerifiedScopeRead` type:
+
+```typescript
+readVerifiedScopeOwned(
+  owned: AdmissionOwnedWitness,
+  scopeId: string,
+): Promise<VerifiedScopeRead>
+
+// Existing result type; no frontier-only substitute or schema relaxation.
+type VerifiedScopeRead = Readonly<{
+  frontier: VerifiedScopeFrontier;
+  gateIds: readonly string[];
+  eventsByGate: ReadonlyMap<string, readonly VerifiedReviewGateEvent[]>;
+}>;
+```
+
+**Ownership and reuse:** validate the live owned capability, workspace and full
+required scope/Gate lock set. Use `owned.readVerifiedFrontier()` and existing
+frontier membership, `findScope`/`findGate`, `readShardBytes`, `decodeShard`,
+`readGateVerifiedEvents` and verified causal projection checks. Extract their
+common assembly into private
+`readVerifiedScopeFromFrontier(frontier: VerifiedScopeFrontier,
+scopeId: string): Promise<VerifiedScopeRead>`. That private assembler acquires
+no guard and never calls `observeFrontier` or a public witness/store read.
+Only the public wrapper's independently verified frontier or this live owned
+wrapper may call it; a caller-supplied/cached frontier grants no authority.
+Do not route owned reads through the public `serialize` queue: a queued public
+operation may itself wait for installation ownership held by this callback.
+
+The ordinary `eventStore.readVerifiedScope(scopeId)` retains its signature,
+public serialization and `observeFrontier()` entry, then uses the shared
+assembler. Read-only History/Approval callers outside admission keep that API.
+Owned callers never reach `witness.readWorkspaceScopeFrontier()`,
+`withWitnessTransaction()` or the public store wrapper, directly or transitively.
+
+**Completeness:** after admission's authenticated pending recovery, verify
+fresh protected frontier membership and exact per-writer shard/hash/sequence/
+protected-mirror agreement. Decode bounded typed events, validate their Gate,
+writer, generation, parent/causal ordering and unique tip; reject missing member
+shards, duplicate/conflicting events or unprovable ordering. Assemble all member
+Gates/writers in the same deterministic order as the shared verified projection.
+Every listed Gate has its complete `eventsByGate` entry; do not substitute `[]`
+for a missing map entry or shard. Preserve registered Legacy fail-closed rules.
+
+Observer discovers the required related scopes from the authenticated complete
+workspace registry, not a caller path list or scope index. Each required
+`readVerifiedScopeOwned(owned, relatedScopeId)` returns history bound to the
+same `globalFrontierHash`; require complete relation closure before projecting
+admission precedence/budgets. If recovery or a witnessed observation advances
+the frontier, discard **all** prior scope reads and rebuild under ownership.
+Reuse existing orphan detection: only an exact authenticated pending publication
+may explain staged/advanced bytes, and recovery must finish before those bytes
+become projection authority. Unknown orphan, corruption or incomplete required
+closure BLOCKS without partial projection, allocation or new operation IDs.
+Keep Design §4.1's scope boundary: independently unrelated-scope corruption alone
+cannot invalidate a verified healthy scope; this never permits omitting a
+required related scope or treating unknown membership as proven independence.
+
+**Observer wiring:** add
+`observeVerifiedAdmissionSnapshotOwned(options: VerifiedAdmissionSnapshotOptions
+& Readonly<{ owned: AdmissionOwnedWitness }>)
+: Promise<VerifiedAdmissionSnapshot | null>` in the snapshot module. Its shared
+observation logic uses only the owned reader closure
+`scopeId => eventStore.readVerifiedScopeOwned(owned, scopeId)` for the requested
+scope **and every related scope**. Scope admission invokes this entry, including
+NC1 second-pass observation after publication. Keep the existing public observer
+for outside-lease History/Approval, with the public reader bound separately;
+there is no optional owned→public fallback on missing proof or exceptions.
+
+**First use:** inspect authenticated pending enrollment and workspace frontier
+under ownership before requesting scope history. If the requested scope is
+absent, the owned scope reader still rejects membership absence. Only a valid
+first-use authorization plus proven empty committed membership/history permits
+the observer's distinct first-enrollment branch with no existing history and
+`currentTips: []`. Do not construct a fake registered scope, Gate or
+`GATE_CREATED`, and do not call `findV2GateCreated` in that branch. Any existing
+pending publication is recovered as its original operation first; missing or
+corrupt history never becomes first-use absence. Enrolled scopes always use
+complete verified history, including every related unfinished generation.
+
+**D0 consumer:** Task 7's `buildApprovedDesignOperationReadBinding` uses the
+same owned reader/observer to project Design CLEAR and effective authority.
+It cannot call the public approval/history lookup or public verified reader
+from a held guard. The host authority facade may start a fresh read-only owned
+transaction when none is held; its internal projection stays entirely owned.
+Immutable Git blob reads do not reacquire witness guards. Missing history/proof
+denies content; no cached frontier or shape-only D0 binding can authorize reads.
+A read-only D0 query never invokes publication recovery/CAS to make itself
+readable. If pending state prevents a complete committed projection, deny
+content until ordinary admission recovers it; keep the query mutation-free.
 
 ### Internal Results and Outer Driver (SRG-340-001)
 
@@ -448,6 +552,7 @@ and isolated tests, never a missing-trust fallback.
 **Files:** Create `src/runtime/review-gate-admission-context.ts` and
 `tests/runtime/review-gate-admission-snapshot.test.ts`; modify
 `src/runtime/review-gate-admission-snapshot.ts`,
+`src/runtime/review-gate-event-store.ts`,
 `src/runtime/review-gate-scope-admission.ts`,
 `src/runtime/review-gate-scope-witness.ts` and
 `src/runtime/review-gate-witness-enrollment.ts`.
@@ -458,6 +563,10 @@ requirementsResolution: RequirementsResolutionV2 }>`.
 Also declare the Runtime-only owned port, membership, internal-result and
 first-use snapshot types specified in the binding execution contracts above;
 Task 3 creates their authenticated live transaction, not Task 2's test fixtures.
+Define the owned observer entry and EventStore owned-reader signature from the
+remaining-blocker contract. Task 2 extracts shared observation/assembly and
+binds owned versus public readers explicitly; Task 3 supplies the live guard
+capability. Never satisfy projection with a frontier-only return value.
 Add `request: Readonly<{ designPath: string; planPath: string;
 explicitRequirementsPath?: string }>` and a verified authority input to the
 observer options. Retain a separate history-derived call mode for read-only
@@ -483,6 +592,12 @@ membership is not an authenticated producer. No Core type imports Runtime.
   leave nonce pending and create no Gate or writer. Reject unsafe path/alias,
   mixed HEAD/index snapshot, replayed nonce and related unfinished scope even
   when all current targets are clean.
+  Add `owned observer projects all Gates and writers at one verified frontier`
+  and `related unfinished history cannot be hidden by an empty requested scope`.
+  Assert exact gate IDs, complete per-Gate events/causal tips, spent rounds and
+  relation-closure frontier. Test valid pending enrollment as no-history first
+  use, distinct from registered-empty/missing/corrupt history. A mock frontier
+  alone or scope-index hint cannot make any positive case pass.
 - [ ] **Step 2: Run RED**:
 
   ```bash
@@ -508,6 +623,10 @@ membership is not an authenticated producer. No Core type imports Runtime.
   path calls the non-consuming owned validator, not the public consuming
   wrapper. Task 4 owns atomic consumed-plus-pending publication. Do not remove
   signature, nonce, absence/continuity or exact Git evidence checks.
+  Route scope admission and both NC1 passes to the owned observer; its requested
+  and related reads use `readVerifiedScopeOwned`. Public History/Approval retain
+  their outside-lease API. Owned exceptions become existing null/BLOCK handling,
+  never a public-reader retry or fabricated empty history.
 - [ ] **Step 4: Run GREEN** using the focused command and four global checks.
   Missing protected first-use evidence must remain BLOCK, not a new workspace.
 - [ ] **Step 5: Commit checkpoint**:
@@ -518,10 +637,13 @@ membership is not an authenticated producer. No Core type imports Runtime.
 **Files:** Modify `src/runtime/review-gate-scope-admission.ts`,
 `src/runtime/review-gate-lock-manager.ts`,
 `src/runtime/review-gate-witness-context.ts`,
+`src/runtime/review-gate-event-store.ts`,
+`src/runtime/review-gate-admission-snapshot.ts`,
 `src/runtime/review-gate-coordinator.ts`; test
 `tests/runtime/review-gate-scope-admission.test.ts`,
 `tests/runtime/review-gate-coordinator-scope-admission.test.ts` and
-`tests/runtime/review-gate-lock-manager.test.ts`.
+`tests/runtime/review-gate-lock-manager.test.ts`; extend
+`tests/runtime/review-gate-event-store.test.ts` and the new snapshot tests.
 
 **Interfaces:** Change the Runtime-only callback to
 `withAdmissionLease<T>(request: ScopeAdmissionRequest,
@@ -543,13 +665,25 @@ No external worker/signer/seal/revoke is awaited while this callback owns guards
   Cover busy second scope/Gate, read/prepare/sync/callback exceptions, stale
   CAS, capability use after release and foreign-Gate capability use. No worker
   dispatch/index-tip promotion on failure; durable pending IDs survive.
+  Add `owned verified history never reenters public reads`: use the real
+  EventStore/Witness/Admission graph with signed enrollment and actual writer
+  shards; fail the test on `readWorkspaceScopeFrontier`, public
+  `eventStore.readVerifiedScope` or duplicate installation/scope/Gate acquisition
+  inside the owned callback. Assert correct multi-Gate/multi-writer projection
+  at one frontier, complete related scopes and valid pending first enrollment.
+  Orphan, missing/corrupt shard, incomplete related history and stale cached
+  frontier must BLOCK with no partial projection/dispatch. A prepared but
+  uncommitted shard recovers the identical publication once before projection;
+  missing staging BLOCKS. No mocked frontier-only fixture counts as GREEN.
 - [ ] **Step 2: Run RED**:
 
   ```bash
   bun run vitest run \
     tests/runtime/review-gate-scope-admission.test.ts \
     tests/runtime/review-gate-coordinator-scope-admission.test.ts \
-    tests/runtime/review-gate-lock-manager.test.ts
+    tests/runtime/review-gate-lock-manager.test.ts \
+    tests/runtime/review-gate-event-store.test.ts \
+    tests/runtime/review-gate-admission-snapshot.test.ts
   ```
 
 - [ ] **Step 3: Implement transaction ownership** and remove
@@ -563,6 +697,11 @@ No external worker/signer/seal/revoke is awaited while this callback owns guards
   registry advance so shard sync/CAS use the prepared revision. Do not reuse
   the immutable pre-prepare transaction object for later mutations. Keep
   existing public witness wrappers for callers outside this owned path.
+  Implement `readVerifiedScopeOwned` using the shared unguarded assembler and
+  owned frontier verification, bypassing public guard-taking read/serialization.
+  Snapshot projection and all related-scope reads consume `VerifiedScopeRead`,
+  not the frontier-only port. Every witnessed change invalidates earlier read
+  material; retry builds a complete current snapshot or returns BLOCK.
 - [ ] **Step 4: Run GREEN** with the focused command and four global checks;
   instrument actual acquisition/release order, including thrown exceptions.
 - [ ] **Step 5: Commit checkpoint**:
@@ -641,6 +780,8 @@ the provisioner; it does not start an implicit enrollment workflow.
   replace existing signature/continuity checks with the Core decision alone.
 - [ ] **Step 4: Run GREEN** with focused and global checks; reopen disk stores
   and independently read `readVerifiedScope` to assert the same authority.
+  This public post-transaction assertion runs only after every owned guard has
+  been released; inside the callback use `readVerifiedScopeOwned` exclusively.
 - [ ] **Step 5: Commit checkpoint**:
   `git commit -m "fix: V2世代とWitness登録を一体で永続化"`.
 
@@ -789,6 +930,10 @@ verified read, require the current Plan operation, same-generation Design CLEAR,
 latest effective Requirements/protocol/Design authority, exact committed Git
 tree/blob/mode/digest and witness frontier. Dirty/staged D1 is diagnostic only.
 No proof means null/BLOCK, never a shape-only DTO or worktree-derived binding.
+Its Design CLEAR/effective-authority projection uses
+`eventStore.readVerifiedScopeOwned(owned, scopeId)` and the owned observer for
+all required scopes. Never obtain that projection through public Approval,
+History, `readVerifiedScope` or `readWorkspaceScopeFrontier` while owned.
 
 Coordinator calls that builder directly with its existing owned port; no nested
 admission or public witness call. Persist the bounded binding with the existing
@@ -871,6 +1016,11 @@ authority. The child worker receives neither the owned port nor signing keys.
   operation/session/generation, alias spoof and unsupported attachment must
   block before content/dispatch. Restart restores the original bound D0; an
   invalidated binding cannot commit/CLEAR even if older read bytes are cached.
+  Add `D0 read-only owned operation does not reacquire witness guards`: use
+  actual protected history and shared graph, fail on any nested public reader
+  or duplicate installation/scope/Gate acquisition, and assert exact D0 content
+  and unchanged writer/event/round state. Missing/corrupt history must deny
+  content even with a previously cached valid frontier and D0-shaped binding.
 - [ ] **Step 2: Run RED**:
 
   ```bash

@@ -49,21 +49,34 @@ implementation-verification report is absent.
 ## PR #340 Review Findings and Document-only Revision
 
 Compare **`v4...PR HEAD`**, not `master`: base
-`b86562aa6ce7543bf11d78f9ba1067d1f101b1e1`, reviewed HEAD
-`de56d8df7f8f200cdd0e5988a87a8443bd704c3c`.
+`b86562aa6ce7543bf11d78f9ba1067d1f101b1e1`, independently re-reviewed HEAD
+`c7ef6a4daf19f0ac4848a1e0c041a1737be1c711` (2026-10-18 JST).
+`de56d8df7f8f200cdd0e5988a87a8443bd704c3c` is the previous Review HEAD.
 Only this checklist and the two PR plans are revised. Source, tests, Design and
 SPEC remain read-only evidence. Planned APIs/tests are not executed fixes.
 
-| Finding | Document owner | Execution / acceptance |
+| Finding | Independent proposal review at c7ef6a4 | Execution |
 | --- | --- | --- |
-| SRG-340-001 | New-plan Tasks 3–5,8 | NOT RUN / BLOCKED |
-| SRG-340-002 | New-plan Tasks 4,8 | NOT RUN / BLOCKED |
-| SRG-340-003 | New-plan Tasks 2,4,8 | NOT RUN / BLOCKED |
-| SRG-340-004 | New-plan Tasks 7,8 | NOT RUN / BLOCKED |
+| SRG-340-001 | PARTIALLY RESOLVED / BLOCKER | NOT RUN |
+| SRG-340-002 | RESOLVED IN PROPOSAL | NOT RUN |
+| SRG-340-003 | RESOLVED IN PROPOSAL | NOT RUN |
+| SRG-340-004 | RESOLVED IN PROPOSAL | NOT RUN |
 
 - **001:** owned installation→scope→Gate publication; explicit non-reentrant
   read/prepare/shard-sync/CAS; separate internal continuation/public result;
   release→outer handoff/seal/revoke→fresh admission, including race/crash cases.
+  The c7ef6a4 re-review retained the missing complete owned-history path as the
+  sole blocker. New-plan Tasks 2/3/7 now specify
+  `readVerifiedScopeOwned(owned, scopeId): Promise<VerifiedScopeRead>`, shared
+  frontier/membership/shard/causal/orphan verification, related-scope completeness,
+  pending first-use separation and the owned observer. Admission/NC1 and D0
+  cannot call guarded public readers or enter their serialization queue.
+  Admission recovers only the same authenticated pending operation; read-only
+  D0 queries deny unreadable pending state without performing recovery writes.
+  Planned real-composition tests cover nested/duplicate guards, multi-Gate/
+  multi-writer projection, related scopes, pending first use, orphan/corruption,
+  same-operation prepared recovery, stale cached frontier and D0 non-reentry.
+  This correction awaits independent review; it is not a new GREEN result.
 - **002:** independent host-signed successor scope authorization, bound to exact
   operation/membership/frontier; atomic consumed authorization and writer-head
   publication. Missing signer/proof BLOCKS; no new TTL or Runtime signing.
@@ -82,6 +95,9 @@ implementation, merge or deployment were executed for this text revision.
 Document remedies are **pending independent fresh review**; Review Gate stays
 **BLOCKED**, G1/G2/G3 and DEP-02/03/04 are not newly passed, and Implementation
 Ready is not approved. Only documentation validation is applicable here.
+Progress remains exactly 100 / 40 / 60 (original total/checked/unchecked) and
+45 / 0 / 45 (new plan). The reported GitHub CI SUCCESS for c7ef6a4 is CI evidence,
+not proof of planned owned-read behavior, deployment isolation or G1/G2/G3.
 
 ## Task evidence table
 

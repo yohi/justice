@@ -84,8 +84,12 @@ merge, release or deployment approval.
 ### PR #340 Document Remediation Status
 
 Compare **`v4...PR HEAD`**, with base
-`b86562aa6ce7543bf11d78f9ba1067d1f101b1e1` and reviewed HEAD
-`de56d8df7f8f200cdd0e5988a87a8443bd704c3c`; `master` is not this PR's base.
+`b86562aa6ce7543bf11d78f9ba1067d1f101b1e1` and independently re-reviewed HEAD
+`c7ef6a4daf19f0ac4848a1e0c041a1737be1c711` (2026-10-18 JST).
+`de56d8df7f8f200cdd0e5988a87a8443bd704c3c` is the previous Review HEAD;
+`master` is not this PR's base.
+At c7ef6a4, independent review retained SRG-340-001 as PARTIALLY RESOLVED /
+BLOCKER; SRG-340-002–004 were RESOLVED IN PROPOSAL, not executed acceptance.
 The follow-up plan now specifies the following execution details. They are
 **document remedies pending independent fresh review**, not executed fixes:
 
@@ -95,6 +99,15 @@ The follow-up plan now specifies the following execution details. They are
   after each outer PLAN-027/029/030 step. Existing public witness wrappers,
   including `withGateOwnedWitnessTransaction`, still acquire installation;
   naming one is not proof of a valid already-owned publication path.
+  The remaining correction defines
+  `readVerifiedScopeOwned(owned, scopeId): Promise<VerifiedScopeRead>` with the
+  full frontier/Gate/event map, not a frontier-only result. Requested/related
+  observer reads and operation-bound D0 projection use that owned path; no
+  public store/witness read or public serialization-queue re-entry is allowed.
+  Shared verification preserves membership, complete shards, causal history,
+  related closure, orphan rejection and same-operation pending recovery.
+  Pending first enrollment is a distinct no-history observation, not a fake
+  registered Gate. D0 queries cannot mutate pending state to become readable.
 - **SRG-340-002 / Tasks 5–7,18:** new-plan Task 4 separates first-use authority
   from independently signed additional membership authorization. Exact operation,
   proposed membership, writer head and expected frontier are verified; its
@@ -115,6 +128,11 @@ unchecked (40 checked steps, not a completion percentage). No new execution
 step was marked complete. PLAN-027/029/030, FDR-011/014/015/016 and DEP-02/03/04
 are unchanged. Review Gate **BLOCKED** and formal approval/Implementation Ready
 **NOT APPROVED** remain until independent review and authorized evidence exist.
+The owned-history correction is specified in documents only and awaits another
+independent review. Required RED/GREEN now explicitly covers actual composed
+multi-Gate/multi-writer reads, related completeness, first use, corrupt/orphan
+shards, prepared recovery, cached-frontier rejection and no guard reacquisition
+for Admission or D0. No execution checkbox is changed by this revision.
 
 ## Global Constraints
 
@@ -537,6 +555,9 @@ type VerifiedAdmissionAuthorityDecisionV1 =
 > authoritative slice; use its read/prepare/shard-sync/CAS without nested public
 > witness calls. Release all guards for PLAN-027/029/030 outer continuations,
 > then re-admit and replan. A generic callback type is not a lock/recovery design.
+> Admission projection requires complete `VerifiedScopeRead` from the EventStore
+> owned reader, including every required related scope; a frontier alone cannot
+> replace history, and the public guarded reader is not callable here.
 
 ### Task 8: Immutable Legacy Snapshot and Atomic Continuation Bridge
 
@@ -805,6 +826,9 @@ type VerifiedAdmissionAuthorityDecisionV1 =
 > D0 through the actual host read and prompt path. These details do not relax
 > PLAN-027/029/030 or FDR-011/014/015/016. Original acceptance stays unmet until
 > the actual production paths and deployment prerequisites are proven.
+> Snapshot/NC1/D0 reads under the lease use `readVerifiedScopeOwned` and the
+> owned observer, never public verified-history or approval/history APIs that
+> acquire guards again. Outside-lease public read-only APIs retain their shapes.
 
 **Files:**
 - Create: `src/runtime/review-gate-scope-admission.ts`, `tests/runtime/review-gate-scope-admission.test.ts` (**deferred concrete implementation from Task 7**)
