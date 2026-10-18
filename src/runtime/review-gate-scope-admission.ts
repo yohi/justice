@@ -3,7 +3,7 @@ import { createHash, type KeyObject } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { promisify } from "node:util";
 import { z } from "zod";
-import type { GateId, ReviewGateEvent, ReviewScopeId } from "../core/review-gate-types.js";
+import type { ReviewScopeId } from "../core/review-gate-types.js";
 import {
   computeVerifiedContextDigest,
   planReviewGateAdmission,
@@ -21,7 +21,6 @@ import {
   computeReviewScopeId,
   computeWorkspaceIdentity,
 } from "../core/review-gate/identity.js";
-import { projectReviewGate } from "../core/review-gate/projection.js";
 import type {
   VerifiedFirstEnrollmentAuthorityV1,
   VerifiedScopeFrontier,
@@ -39,10 +38,7 @@ import {
   observeVerifiedAdmissionSnapshot,
   type VerifiedAdmissionSnapshotOptions,
 } from "./review-gate-admission-snapshot.js";
-import type {
-  DurableReviewGateEventStore,
-  ReviewGateEventStore,
-} from "./review-gate-event-store.js";
+import type { DurableReviewGateEventStore } from "./review-gate-event-store.js";
 import type { ReviewGateLockManager } from "./review-gate-lock-manager.js";
 import type { ReviewGateProtocolDescriptor } from "./review-gate-protocol.js";
 import type { VerifiedProtocolReleaseProvider as ProtocolReleaseProviderAuthority } from "./review-gate-protocol-release-authority.js";
@@ -238,11 +234,11 @@ export interface ReviewGateScopeWorkspaceReader {
 export interface ReviewGateScopeAdmissionOptions {
   /**
    * The one protected workspace scope witness of the shared runtime graph.
-   * `null` is admitted only for non-durable (legacy) event stores; a durable
-   * store without its witness fail closed.
+   * A `null` witness means the trusted installation is unavailable; admission
+   * fail-closed with `ScopeAdmissionBlocked("witness_unavailable")`.
    */
   readonly witness: ReviewGateScopeWitness | null;
-  readonly eventStore: ReviewGateEventStore;
+  readonly eventStore: DurableReviewGateEventStore;
   readonly lockManager: ReviewGateLockManager;
   readonly workspaceReader: ReviewGateScopeWorkspaceReader;
   readonly requirementsResolver: typeof resolveRequirementsForAdmission;
@@ -254,14 +250,8 @@ export interface ReviewGateScopeAdmissionOptions {
   ) => Promise<VerifiedAdmissionSnapshot | null>;
 }
 
-const isDurableEventStore = (
-  store: ReviewGateEventStore,
-): store is DurableReviewGateEventStore =>
-  "readVerifiedScope" in store && typeof store.readVerifiedScope === "function";
 
 /** Deterministic legacy-surface generation identity for V1-only histories. */
-const LEGACY_GENERATION_ID = "legacy-v1";
-
 const freezeDecision = (value: AdmissionDecision): AdmissionDecision =>
   Object.freeze(value) as AdmissionDecision;
 
@@ -365,115 +355,8 @@ export function createReviewGateScopeAdmission(
     snapshotObserver,
   } = options;
   const observeSnapshot = snapshotObserver ?? observeVerifiedAdmissionSnapshot;
-  const durable = isDurableEventStore(eventStore);
   void requirementsResolver; // pinned seam: admission snapshot observation resolves through §10.2.3
 
-  const legacyFrontierHash = async (gateId: string): Promise<string> => {
-    try {
-      return await eventStore.readFrontierHash(gateId);
-    } catch {
-      return "";
-    }
-  };
-
-  /**
-   * Legacy-compatible routing for stores without the Task 6 verified surface.
-   * This reproduces the pre-Task-18 start/resume routing decision-for-decision
-   * (completed reuse / resume / successor on drift / fresh creation) without
-   * claiming any verified material: the decision carries legacy-real gate
-   * identity only, and proof-named fields stay empty.
-   */
-  const legacyDecision = async (
-    scopeId: ReviewScopeId,
-    request: ScopeAdmissionRequest,
-  ): Promise<AdmissionDecision> => {
-    const gateIdRaw = await eventStore.readScopeIndex(scopeId);
-    if (gateIdRaw === null) {
-      return freezeDecision({
-        kind: "CREATE_GENESIS",
-        workspaceIdentity: request.workspaceIdentity,
-        scopeId,
-        installationId: "",
-        enrollmentAuthorizationEventId: "",
-        verifiedWorkspaceFrontierHash: "",
-        completeRelationClosureDigest: "",
-      });
-    }
-    const gateId = gateIdRaw as GateId;
-    const events = await eventStore.readEvents(gateId);
-    const projection = projectReviewGate(events);
-    const gateCreated = events.find(
-      (event): event is Extract<ReviewGateEvent, { eventType: "GATE_CREATED" }> =>
-        event.eventType === "GATE_CREATED",
-    );
-    if (gateCreated === undefined) {
-      throw new ScopeAdmissionBlocked("admission_scope_index_corrupt");
-    }
-    const latestBindingEvent = events
-      .filter((event) => event.eventType === "ARTIFACT_BINDINGS_UPDATED")
-      .at(-1);
-    const latestDesignArtifact =
-      latestBindingEvent?.eventType === "ARTIFACT_BINDINGS_UPDATED"
-        ? latestBindingEvent.payload.designArtifact
-        : gateCreated.payload.designArtifact;
-    const latestPlanArtifact =
-      latestBindingEvent?.eventType === "ARTIFACT_BINDINGS_UPDATED"
-        ? latestBindingEvent.payload.planArtifact
-        : gateCreated.payload.planArtifact;
-    const [designBytes, planBytes] = await Promise.all([
-      workspaceReader.readWorkspaceFile(request.designPath),
-      workspaceReader.readWorkspaceFile(request.planPath),
-    ]);
-    if (designBytes === null || planBytes === null) {
-      throw new ScopeAdmissionBlocked("admission_artifact_unreadable");
-    }
-    const designDigest = computeArtifactDigest(designBytes);
-    const planDigest = computeArtifactDigest(planBytes);
-    const expectedDesignArtifact =
-      projection.status === "completed"
-        ? projection.approvalBinding?.designArtifact
-        : latestDesignArtifact;
-    const expectedPlanArtifact =
-      projection.status === "completed"
-        ? projection.approvalBinding?.planArtifact
-        : latestPlanArtifact;
-    const bindingsMatch =
-      expectedDesignArtifact !== undefined &&
-      expectedPlanArtifact !== undefined &&
-      expectedDesignArtifact.digest === designDigest &&
-      expectedPlanArtifact.digest === planDigest &&
-      expectedDesignArtifact.canonicalPath === request.designPath &&
-      expectedPlanArtifact.canonicalPath === request.planPath;
-
-    if (projection.status === "completed" && bindingsMatch) {
-      return freezeDecision({
-        kind: "REUSE_COMPLETED",
-        gateId,
-        generationId: LEGACY_GENERATION_ID,
-        approvalEventId: `legacy:${gateId}:completed-approval`,
-        verifiedHistoryFrontier: await legacyFrontierHash(gateId),
-      });
-    }
-    if (projection.status !== "completed" && bindingsMatch) {
-      return freezeDecision({
-        kind: "RESUME",
-        gateId,
-        generationId: LEGACY_GENERATION_ID,
-        witnessFrontierHash: await legacyFrontierHash(gateId),
-      });
-    }
-    // Drifted binding: create a successor generation in the same scope.
-    return freezeDecision({
-      kind: "CREATE_SUCCESSOR",
-      scopeId,
-      predecessorScopeId: scopeId,
-      predecessorGateId: gateId,
-      predecessorApprovalEventId:
-        projection.approvalBinding !== null ? `legacy:${gateId}:completed-approval` : "",
-      predecessorRelationProofDigest: "",
-      verifiedWorkspaceFrontierHash: await legacyFrontierHash(gateId),
-    });
-  };
 
   type Nc1Inspection =
     | Readonly<{ readonly ok: true; readonly candidate: VerifiedNC1EligibleChangeV1 | null }>
@@ -833,15 +716,15 @@ export function createReviewGateScopeAdmission(
     request: ScopeAdmissionRequest,
     scopeId: ReviewScopeId,
   ): Promise<AdmissionDecision> => {
-    if (!durable) return await legacyDecision(scopeId, request);
     if (witness === null) {
-      // A durable store without its protected witness never inherits authority:
+      // A store without its protected witness never inherits authority:
       // graph-level fail closed, never a legacy unanchored fallback.
       throw new ScopeAdmissionBlocked("witness_unavailable");
     }
     if (request.workspaceRoot.length === 0 || request.workspaceIdentity.length === 0) {
       throw new ScopeAdmissionBlocked("workspace_identity");
     }
+
     // Fail closed on inconsistent workspace identity or missing ledger membership.
     const frontier = await witness.readWorkspaceScopeFrontier(request.workspaceIdentity);
     if (!frontier.scopes.some((scope) => scope.scopeId === scopeId)) {

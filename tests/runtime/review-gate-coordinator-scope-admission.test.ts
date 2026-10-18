@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { createReviewGateCoordinator } from "../../src/runtime/review-gate-coordinator";
 import { createReviewGateLockManager } from "../../src/runtime/review-gate-lock-manager";
 import { createReviewGateProtocolDescriptor } from "../../src/runtime/review-gate-protocol";
-import { ScopeAdmissionBlocked } from "../../src/runtime/review-gate-scope-admission";
+import { createReviewGateScopeAdmission, ScopeAdmissionBlocked } from "../../src/runtime/review-gate-scope-admission";
 import type { ReviewGateScopeAdmission } from "../../src/runtime/review-gate-scope-admission";
-import type { AdmissionDecision } from "../../src/core/review-gate/admission";
+import { resolveRequirementsForAdmission } from "../../src/runtime/review-gate-requirements";
 import {
   createInMemoryReviewGateEventStore,
   createMapReviewWorkspaceReader,
@@ -163,5 +163,39 @@ describe("coordinator startOrResume routes through scope admission", () => {
     expect(result.dispatched).toBe(true);
     expect(result.gateId).not.toBeNull();
     expect(result.guidance).toContain("[JUSTICE: REVIEW GATE OPERATION PAYLOAD]");
+  });
+});
+
+describe("createReviewGateScopeAdmission witness availability", () => {
+  it("throws witness_unavailable when the trusted witness is null", async () => {
+    const eventStore = createInMemoryReviewGateEventStore();
+    const protocol = createReviewGateProtocolDescriptor();
+    const files = new Map([
+      [DESIGN_PATH, DESIGN_CONTENT],
+      [PLAN_PATH, PLAN_CONTENT],
+    ]);
+    const admission = createReviewGateScopeAdmission({
+      witness: null,
+      eventStore,
+      lockManager: createReviewGateLockManager(`/nonexistent-test-root-witness`, {
+        provider: null,
+      }),
+      workspaceReader: createMapReviewWorkspaceReader(files),
+      requirementsResolver: resolveRequirementsForAdmission,
+      protocol,
+    });
+
+    await expect(
+      admission.withAdmissionLease(
+        {
+          workspaceRoot: `/nonexistent-test-root-witness`,
+          workspaceIdentity: "test-workspace-identity",
+          designPath: DESIGN_PATH,
+          planPath: PLAN_PATH,
+          protocol,
+        },
+        async () => "ran",
+      ),
+    ).rejects.toThrow(ScopeAdmissionBlocked);
   });
 });

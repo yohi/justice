@@ -44,7 +44,6 @@ import {
 } from "./review-gate-approval";
 import { createReviewGateGit } from "./review-gate-git";
 import {
-  createLegacyReviewGateEventStore,
   createReviewGateEventStore,
   type ReviewGateEventStore,
 } from "./review-gate-event-store";
@@ -1814,14 +1813,16 @@ async function buildSharedReviewGateRuntimeGraph(
       }
     }
 
-    const eventStore =
-      witness === null
-        ? createLegacyReviewGateEventStore(root)
-        : createReviewGateEventStore(root, {
-            workspaceIdentity: computeWorkspaceIdentity(root),
-            writerId,
-            witness,
-          });
+    if (witness === null) {
+      warn("[Justice] Review Gate trusted witness unavailable; runtime graph not configured");
+      return null;
+    }
+
+    const eventStore = createReviewGateEventStore(root, {
+      workspaceIdentity: computeWorkspaceIdentity(root),
+      writerId,
+      witness,
+    });
 
     const recoveryStore = createReviewGateRecoveryStore(root);
     const protocol = createReviewGateProtocolDescriptor();
