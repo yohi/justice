@@ -393,3 +393,11 @@ async function gitOutput(
   if (result.code !== 0) throw new Error(failureCode);
   return result.stdout;
 }
+
+export {
+  buildAuthorizedFirstEnrollment,
+  findV2GateCreated,
+  pinTrackedArtifact,
+  projectScopeTips,
+  relationClosureProofDigest,
+};

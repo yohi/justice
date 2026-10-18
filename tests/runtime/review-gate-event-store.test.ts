@@ -34,6 +34,8 @@ import {
   type ReviewGateDispatchRecordV1,
   type ReviewGateJournalEventInput,
 } from "../../src/runtime/review-gate-event-store";
+import type { AdmissionOwnedWitness } from "../../src/runtime/review-gate-admission-context";
+import type { VerifiedScopeFrontier } from "../../src/core/review-gate/types";
 
 const TEST_WRITER_ID = "writer-1";
 const DESIGN_PATH = "docs/design.md";
@@ -1490,5 +1492,89 @@ describe("ReviewGateEventStore — tamper and crash recovery (Task 6)", () => {
     );
     store.close();
     closeWitnessFixture(ctx);
+  });
+
+  describe("readVerifiedScopeOwned", () => {
+    function ownedFrontier(
+      workspaceIdentity: string,
+      scopes: VerifiedScopeFrontier["scopes"],
+    ): AdmissionOwnedWitness {
+      const frontier: VerifiedScopeFrontier = Object.freeze({
+        workspaceIdentity,
+        workspaceEnrollmentId: "enroll-owned",
+        scopes,
+        writerHeads: Object.freeze([]),
+        globalFrontierHash: "global-owned",
+      });
+      return {
+        readVerifiedFrontier: async () => frontier,
+        readVerifiedScope: async () =>
+          Object.freeze({ frontier, gateIds: Object.freeze([]), eventsByGate: new Map() }),
+      };
+    }
+
+    it("assembles an owned scope read from the supplied frontier", async () => {
+      const ctx = await freshContext("ownedreader");
+      const store = createReviewGateEventStore(
+        ctx.root,
+        eventStoreOptions(ctx.root, ctx.writerId, ctx.witness),
+      );
+      const scopeId = "scope-owned";
+      const scope = Object.freeze({
+        scopeId,
+        workflowContinuityId: "cont-owned",
+        canonicalDesignPath: DESIGN_PATH,
+        canonicalPlanPath: PLAN_PATH,
+        pathPairDigest: "digest-owned",
+        provenance: Object.freeze({
+          kind: "verified_genesis" as const,
+          evidenceDigest: "ev-owned",
+          priorScopeId: null,
+          priorGateId: null,
+        }),
+        gateMembership: Object.freeze([]),
+      });
+      const workspaceIdentity = computeWorkspaceIdentity(ctx.root);
+      const owned = ownedFrontier(workspaceIdentity, Object.freeze([scope]));
+
+      const read = await store.readVerifiedScopeOwned(owned, scopeId);
+
+      expect(read.frontier.workspaceIdentity).toBe(workspaceIdentity);
+      expect(read.gateIds).toEqual([]);
+      expect(read.eventsByGate.size).toBe(0);
+      store.close();
+      closeWitnessFixture(ctx);
+    });
+
+    it("rejects an owned frontier for a different workspace", async () => {
+      const ctx = await freshContext("ownedmismatch");
+      const store = createReviewGateEventStore(
+        ctx.root,
+        eventStoreOptions(ctx.root, ctx.writerId, ctx.witness),
+      );
+      const owned = ownedFrontier("other-workspace", Object.freeze([]));
+
+      await expect(store.readVerifiedScopeOwned(owned, "scope-x")).rejects.toThrow(
+        "review_gate_workspace_identity_mismatch",
+      );
+      store.close();
+      closeWitnessFixture(ctx);
+    });
+
+    it("rejects an owned read for a scope not in the frontier", async () => {
+      const ctx = await freshContext("ownedmissing");
+      const store = createReviewGateEventStore(
+        ctx.root,
+        eventStoreOptions(ctx.root, ctx.writerId, ctx.witness),
+      );
+      const workspaceIdentity = computeWorkspaceIdentity(ctx.root);
+      const owned = ownedFrontier(workspaceIdentity, Object.freeze([]));
+
+      await expect(store.readVerifiedScopeOwned(owned, "missing-scope")).rejects.toThrow(
+        "review_gate_scope_membership_missing",
+      );
+      store.close();
+      closeWitnessFixture(ctx);
+    });
   });
 });

@@ -13,6 +13,7 @@ import type {
 type AdmissionBlockCode =
   | "workspace_identity"
   | "workspace_dirty"
+  | "target_dirty"
   | "protected_frontier"
   | "prior_enrollment"
   | "proof"

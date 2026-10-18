@@ -251,6 +251,10 @@ export type SealedTerminalIntentInput = Readonly<{
 /** The Task 6 authority surface added on top of the legacy store shape. */
 export type VerifiedReviewGateEventStore = Readonly<{
   readonly readVerifiedScope: (scopeId: string) => Promise<VerifiedScopeRead>;
+  readonly readVerifiedScopeOwned: (
+    owned: import("./review-gate-admission-context.js").AdmissionOwnedWitness,
+    scopeId: string,
+  ) => Promise<VerifiedScopeRead>;
   readonly prepareVerifiedEventPublication: (
     input: VerifiedEventPublicationInput,
   ) => Promise<PreparedWitnessPublicationV1>;
@@ -1117,6 +1121,22 @@ export function createReviewGateEventStore(
   ): ScopeEnrollmentV1 | null =>
     frontier.scopes.find((scope) => scope.scopeId === scopeId) ?? null;
 
+  const assembleVerifiedScopeRead = async (
+    frontier: VerifiedScopeFrontier,
+    scopeId: string,
+  ): Promise<VerifiedScopeRead> => {
+    const scope = findScope(frontier, scopeId);
+    if (scope === null) throw new Error("review_gate_scope_membership_missing");
+    const gateIds = Object.freeze(
+      scope.gateMembership.map((gate) => gate.gateId).sort((left, right) => left.localeCompare(right)),
+    );
+    const eventsByGate = new Map<string, readonly VerifiedReviewGateEvent[]>();
+    for (const gate of scope.gateMembership) {
+      eventsByGate.set(gate.gateId, await readGateVerifiedEvents(scopeId, gate));
+    }
+    return Object.freeze({ frontier, gateIds, eventsByGate });
+  };
+
   const findGate = (scope: ScopeEnrollmentV1, gateId: string): GateMembership | null =>
     scope.gateMembership.find((gate) => gate.gateId === gateId) ?? null;
 
@@ -1663,16 +1683,18 @@ export function createReviewGateEventStore(
         assertOpen();
         assertStorageId(scopeId);
         const frontier = await observeFrontier();
-        const scope = findScope(frontier, scopeId);
-        if (scope === null) throw new Error("review_gate_scope_membership_missing");
-        const gateIds = Object.freeze(
-          scope.gateMembership.map((gate) => gate.gateId).sort((left, right) => left.localeCompare(right)),
-        );
-        const eventsByGate = new Map<string, readonly VerifiedReviewGateEvent[]>();
-        for (const gate of scope.gateMembership) {
-          eventsByGate.set(gate.gateId, await readGateVerifiedEvents(scopeId, gate));
+        return assembleVerifiedScopeRead(frontier, scopeId);
+      }),
+
+    readVerifiedScopeOwned: (owned, scopeId) =>
+      serialize(async () => {
+        assertOpen();
+        assertStorageId(scopeId);
+        const frontier = await owned.readVerifiedFrontier();
+        if (frontier.workspaceIdentity !== workspaceIdentity) {
+          throw new Error("review_gate_workspace_identity_mismatch");
         }
-        return Object.freeze({ frontier, gateIds, eventsByGate });
+        return assembleVerifiedScopeRead(frontier, scopeId);
       }),
 
     /**

@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -225,10 +225,26 @@ describe("trusted workspace scope admission", () => {
       "protected_frontier",
     );
   });
-  it("rejects a dirty workspace", async () => {
-    await writeFile(join(root, "untracked.txt"), "dirty");
+  it("rejects a dirty enrolled artifact", async () => {
+    const designDir = join(root, "docs");
+    await mkdir(designDir, { recursive: true });
+    const designPath = join(designDir, "design.md");
+    await writeFile(designPath, "# Design");
+    execFileSync("git", ["-C", root, "add", "docs/design.md"]);
+    execFileSync("git", [
+      "-C",
+      root,
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "commit",
+      "-qm",
+      "add design",
+    ]);
+    await writeFile(designPath, "# Dirty Design");
     await expect(admission().verifyFirstWorkspaceEnrollment(request())).rejects.toThrow(
-      "workspace_dirty",
+      "target_dirty",
     );
   });
   it("keeps identity stable after a commit", async () => {

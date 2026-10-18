@@ -196,9 +196,22 @@ export function createReviewGateScopeAdmissionVerifier(
           authority.verifiedAbsentPriorEnrollmentFrontierHash !== frontier.globalFrontierHash
         )
           throw new ScopeAdmissionBlocked("proof");
-        await git(workspaceRoot, ["rev-parse", "--verify", "HEAD"]);
-        if (await git(workspaceRoot, ["status", "--porcelain=v1", "--untracked-files=all"]))
-          throw new ScopeAdmissionBlocked("workspace_dirty");
+        const head = (
+          await runGitLiteral(workspaceRoot, ["rev-parse", "--verify", "HEAD"])
+        )
+          .stdout.toString("utf8")
+          .trim();
+        if (!HEAD_OID_PATTERN.test(head))
+          throw new ScopeAdmissionBlocked("workspace_identity");
+        const diff = await runGitLiteral(workspaceRoot, [
+          "diff",
+          "--quiet",
+          "HEAD",
+          "--",
+          request.canonicalDesignPath,
+          request.canonicalPlanPath,
+        ]);
+        if (diff.code !== 0) throw new ScopeAdmissionBlocked("target_dirty");
         return authority;
       });
     },
