@@ -12,12 +12,14 @@
 
 import { realpath } from "node:fs/promises";
 import type {
-  ReviewArtifactBinding,
-  ReviewScopeId,
+  RequirementsResolutionV2,
+ReviewArtifactBinding,
+ReviewScopeId,
 } from "../core/review-gate-types.js";
 import type {
   ScopeEnrollmentV1,
-  VerifiedScopeFrontier,
+  VerifiedFirstEnrollmentAuthorityV1,
+VerifiedScopeFrontier,
 } from "../core/review-gate/types.js";
 import type {
   VerifiedAdmissionSnapshot,
@@ -40,7 +42,7 @@ import type { ReviewGateProtocolDescriptor } from "./review-gate-protocol.js";
 import { runGitLiteral } from "./review-gate-query.js";
 import type { TrustedWitnessInstallationV1 } from "./review-gate-witness-contracts.js";
 import {
-  observeVerifiedAdmissionSnapshot,
+  observeVerifiedAdmissionSnapshotObservation,
   pinTrackedArtifact,
   relationClosureProofDigest,
 } from "./review-gate-admission-snapshot.js";
@@ -53,8 +55,20 @@ import { resolveRequirementsForAdmission } from "./review-gate-requirements.js";
  * raw witness to callers that do not hold the admission lock.
  */
 export type AdmissionOwnedWitness = Readonly<{
-  readonly readVerifiedFrontier: () => Promise<VerifiedScopeFrontier>;
+readonly readVerifiedFrontier: () => Promise<VerifiedScopeFrontier>;
   readonly readVerifiedScope: (scopeId: string) => Promise<VerifiedScopeRead>;
+  readonly readFirstEnrollmentAuthority: () => Promise<VerifiedFirstEnrollmentAuthorityV1 | null>;
+}>;
+
+/**
+ * Immutable product returned by the owned admission observer. The snapshot is
+ * the same shape produced by the public observer; the Requirements resolution
+ * carries the binding used to build it so the coordinator can keep authority
+ * through the admission decision.
+ */
+export type ReviewGateAdmissionObservation = Readonly<{
+  readonly snapshot: VerifiedEnrollmentAdmissionSnapshot;
+  readonly requirementsResolution: RequirementsResolutionV2;
 }>;
 
 /**
@@ -139,7 +153,7 @@ function buildTargetEnrollment(
  */
 export async function observeVerifiedAdmissionSnapshotOwned(
   options: VerifiedAdmissionSnapshotOwnedOptions,
-): Promise<VerifiedEnrollmentAdmissionSnapshot | null> {
+): Promise<ReviewGateAdmissionObservation | null> {
   try {
     const {
       workspaceRoot,
@@ -147,17 +161,19 @@ export async function observeVerifiedAdmissionSnapshotOwned(
       protocol,
       eventStore,
       workspaceReader,
+      owned,
       authority,
       request,
     } = options;
 
     if (authority.firstEnrollment === null) {
-      return observeVerifiedAdmissionSnapshot({
+      return observeVerifiedAdmissionSnapshotObservation({
         workspaceRoot,
         scopeId,
         protocol,
         eventStore,
         workspaceReader,
+        owned,
       });
     }
 
@@ -269,7 +285,7 @@ export async function observeVerifiedAdmissionSnapshotOwned(
       coverage: "COMPLETE",
     });
 
-    return Object.freeze({
+    const snapshot = Object.freeze({
       workspaceIdentity: authority.frontier.workspaceIdentity,
       scopeId,
       verifiedFrontierHash: authority.frontier.globalFrontierHash,
@@ -280,8 +296,38 @@ export async function observeVerifiedAdmissionSnapshotOwned(
       precedence: null,
       current,
     });
+
+    return Object.freeze({ snapshot, requirementsResolution });
   } catch (error) {
     if (error instanceof Error) return null;
     throw error;
   }
 }
+
+export type AdmissionOwnedWitnessOptions = Readonly<{
+  readonly eventStore: DurableReviewGateEventStore;
+  readonly scopeId: string;
+  readonly firstEnrollmentAuthority: VerifiedFirstEnrollmentAuthorityV1 | null;
+}>;
+
+/**
+ * Factory for the non-serializable capability the admission coordinator holds
+ * while it owns the workspace/scope lock. The witness delegates reads to the
+ * durable event store and carries the first-enrollment authority evidence so
+ * downstream code can distinguish a first-use admission from an enrolled scope.
+ */
+export function createAdmissionOwnedWitness(
+  options: AdmissionOwnedWitnessOptions,
+): AdmissionOwnedWitness {
+  const { eventStore, scopeId, firstEnrollmentAuthority } = options;
+
+  return Object.freeze({
+    readVerifiedFrontier: async () => {
+      const scopeRead = await eventStore.readVerifiedScope(scopeId);
+      return scopeRead.frontier;
+    },
+    readVerifiedScope: async (id: string) => eventStore.readVerifiedScope(id),
+    readFirstEnrollmentAuthority: async () => firstEnrollmentAuthority,
+  });
+}
+

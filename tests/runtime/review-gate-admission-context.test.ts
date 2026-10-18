@@ -202,12 +202,13 @@ describe("observeVerifiedAdmissionSnapshotOwned", () => {
       scopeId: "scope-first-use" as ReviewScopeId,
       protocol,
       eventStore,
-      workspaceReader: createWorkspaceReader(fixture.root),
-      owned: {
-        readVerifiedFrontier: async () => frontier,
-        readVerifiedScope: async () =>
+workspaceReader: createWorkspaceReader(fixture.root),
+owned: {
+readVerifiedFrontier: async () => frontier,
+readVerifiedScope: async () =>
           ({ frontier, gateIds: Object.freeze([]), eventsByGate: new Map() }),
-      },
+        readFirstEnrollmentAuthority: async () => null,
+},
       authority: {
         installation: await fixture.witness.readInstallation(),
         frontier,
@@ -220,16 +221,17 @@ describe("observeVerifiedAdmissionSnapshotOwned", () => {
       },
     };
 
-    const snapshot = await observeVerifiedAdmissionSnapshotOwned(options);
+    const observation = await observeVerifiedAdmissionSnapshotOwned(options);
 
-    expect(snapshot).not.toBeNull();
-    expect(snapshot?.currentTips).toEqual([]);
-    expect(snapshot?.workspaceContinuity.authorizedFirstEnrollment).not.toBeNull();
-    expect(snapshot?.workspaceContinuity.authorizedFirstEnrollment?.canonicalDesignPath).toBe(
+    expect(observation).not.toBeNull();
+    const snapshot = observation!.snapshot;
+    expect(snapshot.currentTips).toEqual([]);
+    expect(snapshot.workspaceContinuity.authorizedFirstEnrollment).not.toBeNull();
+    expect(snapshot.workspaceContinuity.authorizedFirstEnrollment?.canonicalDesignPath).toBe(
       DESIGN_PATH,
     );
-    expect(snapshot?.current.design.canonicalPath).toBe(DESIGN_PATH);
-    expect(snapshot?.current.plan.canonicalPath).toBe(PLAN_PATH);
+    expect(snapshot.current.design.canonicalPath).toBe(DESIGN_PATH);
+    expect(snapshot.current.plan.canonicalPath).toBe(PLAN_PATH);
 
     eventStore.close();
     closeFixture(fixture);
@@ -252,11 +254,12 @@ describe("observeVerifiedAdmissionSnapshotOwned", () => {
       protocol,
       eventStore,
       workspaceReader: createWorkspaceReader(fixture.root),
-      owned: {
-        readVerifiedFrontier: async () => frontier,
-        readVerifiedScope: async () =>
+owned: {
+readVerifiedFrontier: async () => frontier,
+readVerifiedScope: async () =>
           ({ frontier, gateIds: Object.freeze([]), eventsByGate: new Map() }),
-      },
+        readFirstEnrollmentAuthority: async () => null,
+},
       authority: {
         installation: await fixture.witness.readInstallation(),
         frontier,
@@ -265,9 +268,11 @@ describe("observeVerifiedAdmissionSnapshotOwned", () => {
       request: { designPath: DESIGN_PATH, planPath: PLAN_PATH },
     };
 
-    const snapshot = await observeVerifiedAdmissionSnapshotOwned(options);
+    const observation = await observeVerifiedAdmissionSnapshotOwned(options);
 
-    expect(snapshot).toBeNull();
+    expect(observation).toBeNull();
+
+    expect(observation).toBeNull();
 
     eventStore.close();
     closeFixture(fixture);
@@ -291,11 +296,12 @@ describe("observeVerifiedAdmissionSnapshotOwned", () => {
       protocol,
       eventStore,
       workspaceReader: createWorkspaceReader(fixture.root),
-      owned: {
-        readVerifiedFrontier: async () => frontier,
-        readVerifiedScope: async () =>
+owned: {
+readVerifiedFrontier: async () => frontier,
+readVerifiedScope: async () =>
           ({ frontier, gateIds: Object.freeze([]), eventsByGate: new Map() }),
-      },
+        readFirstEnrollmentAuthority: async () => null,
+},
       authority: {
         installation: await fixture.witness.readInstallation(),
         frontier,
@@ -304,11 +310,15 @@ describe("observeVerifiedAdmissionSnapshotOwned", () => {
       request: { designPath: DESIGN_PATH, planPath: PLAN_PATH },
     };
 
-    const snapshot = await observeVerifiedAdmissionSnapshotOwned(options);
+    const observation = await observeVerifiedAdmissionSnapshotOwned(options);
 
     // The scope is not enrolled and no Gate exists, so the public observer
     // correctly fails closed.
-    expect(snapshot).toBeNull();
+    expect(observation).toBeNull();
+
+    // The scope is not enrolled and no Gate exists, so the public observer
+    // correctly fails closed.
+    expect(observation).toBeNull();
 
     eventStore.close();
     closeFixture(fixture);
