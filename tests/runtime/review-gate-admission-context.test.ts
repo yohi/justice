@@ -27,7 +27,9 @@ import {
   type TrustedFirstEnrollmentV1,
 } from "../../src/runtime/review-gate-scope-witness";
 import {
+  markAdmissionOwnedWitnessLive,
   observeVerifiedAdmissionSnapshotOwned,
+  type AdmissionOwnedWitness,
   type VerifiedAdmissionSnapshotOwnedOptions,
 } from "../../src/runtime/review-gate-admission-context";
 import type { VerifiedFirstEnrollment } from "../../src/runtime/review-gate-event-store";
@@ -183,6 +185,25 @@ function closeFixture(fixture: Fixture): void {
   fixture.lockManager.close();
 }
 
+/**
+ * Task 3 owned capability DTO for observer tests. The live registry mark
+ * makes the store accept it; production witnesses come only from
+ * `withAdmissionWitnessTransaction`.
+ */
+function testOwnedWitness(frontier: VerifiedScopeFrontier): AdmissionOwnedWitness {
+  const owned: AdmissionOwnedWitness = {
+    readVerifiedFrontier: async () => frontier,
+    readFirstEnrollmentAuthority: async () => null,
+    readInstallation: async () => {
+      throw new Error("test_owned_installation_unused");
+    },
+    assertOwnedScope: () => undefined,
+    assertOwnedGate: () => undefined,
+  };
+  markAdmissionOwnedWitnessLive(owned);
+  return owned;
+}
+
 describe("observeVerifiedAdmissionSnapshotOwned", () => {
   it("builds a first-use snapshot without a Gate event", async () => {
     const fixture = await createFixture("firstuse");
@@ -203,12 +224,7 @@ describe("observeVerifiedAdmissionSnapshotOwned", () => {
       protocol,
       eventStore,
 workspaceReader: createWorkspaceReader(fixture.root),
-owned: {
-readVerifiedFrontier: async () => frontier,
-readVerifiedScope: async () =>
-          ({ frontier, gateIds: Object.freeze([]), eventsByGate: new Map() }),
-        readFirstEnrollmentAuthority: async () => null,
-},
+owned: testOwnedWitness(frontier),
       authority: {
         installation: await fixture.witness.readInstallation(),
         frontier,
@@ -254,12 +270,7 @@ readVerifiedScope: async () =>
       protocol,
       eventStore,
       workspaceReader: createWorkspaceReader(fixture.root),
-owned: {
-readVerifiedFrontier: async () => frontier,
-readVerifiedScope: async () =>
-          ({ frontier, gateIds: Object.freeze([]), eventsByGate: new Map() }),
-        readFirstEnrollmentAuthority: async () => null,
-},
+owned: testOwnedWitness(frontier),
       authority: {
         installation: await fixture.witness.readInstallation(),
         frontier,
@@ -296,12 +307,7 @@ readVerifiedScope: async () =>
       protocol,
       eventStore,
       workspaceReader: createWorkspaceReader(fixture.root),
-owned: {
-readVerifiedFrontier: async () => frontier,
-readVerifiedScope: async () =>
-          ({ frontier, gateIds: Object.freeze([]), eventsByGate: new Map() }),
-        readFirstEnrollmentAuthority: async () => null,
-},
+owned: testOwnedWitness(frontier),
       authority: {
         installation: await fixture.witness.readInstallation(),
         frontier,

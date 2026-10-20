@@ -115,7 +115,16 @@ import {
 } from "./review-gate-lock-manager";
 import type { ReviewGateProtocolDescriptor } from "./review-gate-protocol";
 import { ScopeAdmissionBlocked, type ReviewGateScopeAdmission } from "./review-gate-scope-admission";
+import type { ReviewGateAdmissionExecutionResult } from "./review-gate-admission-context";
 
+/**
+ * Task 3 — bounded wait for a scope admission lease under contention.
+ * A short admission transaction frees the lock quickly; an actively
+ * reviewing session holds it longer, so the wait stays bounded and
+ * fail-closed, never bypassing admission.
+ */
+const ADMISSION_LEASE_WAIT_ATTEMPTS = 5;
+const ADMISSION_LEASE_WAIT_MS = 50;
 export type ReviewGateCoordinatorLockPhase =
   | "reviewing"
   | "remediation"
@@ -2091,8 +2100,11 @@ export function createReviewGateCoordinator(
       return runStartOrResume();
     }
 
-    try {
-      return await scopeAdmission.withAdmissionLease(
+    // Admission authority spans decision application: the callback returns the
+    // internal execution result while the lease is held, and only the outer
+    // driver converts RESULT/BLOCK to the public command result.
+    const applyDecision = async (): Promise<ReviewGateAdmissionExecutionResult> =>
+      scopeAdmission.withAdmissionLease(
         {
           workspaceRoot,
           workspaceIdentity,
@@ -2101,13 +2113,19 @@ export function createReviewGateCoordinator(
           explicitRequirementsPath: request.requirementsPath,
           protocol,
         },
-        async (decision) => {
+        async (decision, observation, owned) => {
+          void observation;
+          void owned;
           if (decision.kind === "BLOCK") {
-            return blockedResult(
-              request.designPath,
-              planPath,
-              `[JUSTICE: REVIEW GATE BLOCKED] Scope admission blocked: ${decision.detail}`,
-            );
+            return Object.freeze({
+              kind: "BLOCK",
+              reason: decision.reason,
+              result: blockedResult(
+                request.designPath,
+                planPath,
+                `[JUSTICE: REVIEW GATE BLOCKED] Scope admission blocked: ${decision.detail}`,
+              ),
+            });
           }
           if (decision.kind === "REUSE_COMPLETED") {
             // Scope admission already verified the completed binding against the
@@ -2115,42 +2133,77 @@ export function createReviewGateCoordinator(
             const previous = dropSession(sessionId);
             if (previous !== undefined) releaseHandles(previous);
             return Object.freeze({
-              dispatched: false,
-              gateId: decision.gateId as GateId,
-              guidance: [
-                "---",
-                "[JUSTICE: REVIEW GATE CLEAR]",
-                "",
-                "An exactly matching completed Review Gate was reused read-only (verified by scope admission). Implementation authorization still requires the explicit user command:",
-                `/justice-implement --plan ${planPath} --approved`,
-                "---",
-              ].join("\n"),
-              designPath,
-              planPath,
-              designDigest,
-              planDigest,
-              lockPhase: "awaiting_implementation_authorization",
-              completedReuse: true,
+              kind: "RESULT",
+              result: Object.freeze({
+                dispatched: false,
+                gateId: decision.gateId as GateId,
+                guidance: [
+                  "---",
+                  "[JUSTICE: REVIEW GATE CLEAR]",
+                  "",
+                  "An exactly matching completed Review Gate was reused read-only (verified by scope admission). Implementation authorization still requires the explicit user command:",
+                  `/justice-implement --plan ${planPath} --approved`,
+                  "---",
+                ].join("\n"),
+                designPath,
+                planPath,
+                designDigest,
+                planDigest,
+                lockPhase: "awaiting_implementation_authorization",
+                completedReuse: true,
+              }),
             });
           }
-          return runStartOrResume();
+          // Mutable application yields the admission lease before the wider
+          // session guard chain; runStartOrResume revalidates the scope index
+          // and bindings on return. No continuation carries the decision.
+          return Object.freeze({ kind: "MUTABLE_APPLICATION_YIELDED" });
         },
       );
-    } catch (err) {
-      if (err instanceof ScopeAdmissionBlocked) {
-        if (err.code !== "scope_lease_occupied") {
+
+    // Contention waits for the lease (bounded); it never skips admission.
+    let execution: ReviewGateAdmissionExecutionResult | null = null;
+    for (let attempt = 0; attempt < ADMISSION_LEASE_WAIT_ATTEMPTS; attempt += 1) {
+      try {
+        execution = await applyDecision();
+        break;
+      } catch (err) {
+        if (
+          err instanceof ScopeAdmissionBlocked &&
+          err.code === "scope_lease_occupied" &&
+          attempt + 1 < ADMISSION_LEASE_WAIT_ATTEMPTS
+        ) {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, ADMISSION_LEASE_WAIT_MS);
+          });
+          continue;
+        }
+        if (err instanceof ScopeAdmissionBlocked) {
           return blockedResult(
             designPath,
             planPath,
             `[JUSTICE: REVIEW GATE BLOCKED] Scope admission failed closed (${err.code}); resolve the admission issue before retrying.`,
           );
         }
-        // The scope lock is already held by an active gate managed by this
-        // coordinator; skip the admission lease and use the legacy path.
-        return runStartOrResume();
+        throw err;
       }
-      throw err;
     }
+    if (execution === null) {
+      return blockedResult(
+        designPath,
+        planPath,
+        "[JUSTICE: REVIEW GATE BLOCKED] The scope admission lease stayed occupied; retry after the active gate releases it.",
+      );
+    }
+    if (execution.kind === "RESULT" || execution.kind === "BLOCK") {
+      return execution.result;
+    }
+    if (execution.kind === "MUTABLE_APPLICATION_YIELDED") {
+      return runStartOrResume();
+    }
+    // HANDOFF_PENDING / TERMINAL_INTENT_PREPARED_UNPUBLISHED are Task 5
+    // executor continuations; no production path produces them yet.
+    throw new Error("review_gate_admission_execution_unsupported");
   };
 
   const resumeExistingGate = async (

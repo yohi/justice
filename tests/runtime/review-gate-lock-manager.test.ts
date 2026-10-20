@@ -10,6 +10,7 @@ import {
   acquireGateLockChain,
   assertWitnessAdmissionOrder,
   createReviewGateLockManager,
+  withWitnessScopeGateLocks,
   type ReviewGateLockManager,
 } from "../../src/runtime/review-gate-lock-manager";
 
@@ -246,5 +247,61 @@ describe("acquireGateLockChain", () => {
       "gate-acquire-failed",
     );
     expect(calls).toEqual(["scope.release"]);
+  });
+});
+
+describe("withWitnessScopeGateLocks", () => {
+  it("acquires sorted scopes then sorted gates once and releases in reverse", async () => {
+    const calls: string[] = [];
+    const provider = makeProviderMock(calls);
+    const manager = createReviewGateLockManager(freshRoot(), { provider });
+
+    const outcome = await withWitnessScopeGateLocks(
+      manager,
+      { scopeIds: ["scope-b", "scope-a"], gateIds: ["gate-2", "gate-1"] },
+      async () => "ran" as const,
+    );
+    expect(outcome).toBe("ran");
+
+    const acquisitions = calls.filter((entry) => entry.startsWith("acquire"));
+    expect(acquisitions).toEqual([
+      "acquireScopeLock:scope-a",
+      "acquireScopeLock:scope-b",
+      "acquireGateLock:gate-1",
+      "acquireGateLock:gate-2",
+    ]);
+    const releases = calls.filter((entry) => entry.startsWith("release:"));
+    expect(releases).toEqual([
+      "release:gate:gate-2",
+      "release:gate:gate-1",
+      "release:scope:scope-b",
+      "release:scope:scope-a",
+    ]);
+    manager.close();
+  });
+
+  it("releases the partial set when a gate lock is busy", async () => {
+    const manager = createReviewGateLockManager(freshRoot(), { provider: null });
+    const held = await manager.acquireGateLock("gate-busy");
+    if (held === "occupied") throw new Error("test_gate_busy_unexpected");
+
+    await expect(
+      withWitnessScopeGateLocks(
+        manager,
+        { scopeIds: ["scope-a"], gateIds: ["gate-1", "gate-busy"] },
+        async () => "unreachable" as const,
+      ),
+    ).rejects.toThrow("review_gate_witness_busy_retryable");
+
+    // The scope and gate locks taken before the busy gate were released:
+    // both can be acquired again immediately.
+    const scopeAgain = await manager.acquireScopeLock("scope-a");
+    expect(scopeAgain).not.toBe("occupied");
+    const gateAgain = await manager.acquireGateLock("gate-1");
+    expect(gateAgain).not.toBe("occupied");
+    if (scopeAgain !== "occupied") scopeAgain.release();
+    if (gateAgain !== "occupied") gateAgain.release();
+    held.release();
+    manager.close();
   });
 });

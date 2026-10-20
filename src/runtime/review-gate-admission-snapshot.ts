@@ -49,7 +49,10 @@ import type {
 DurableReviewGateEventStore,
 VerifiedScopeRead,
 } from "./review-gate-event-store";
-import type { AdmissionOwnedWitness } from "./review-gate-admission-context";
+import type {
+  AdmissionOwnedWitness,
+  ReviewGateAdmissionObservationRequest,
+} from "./review-gate-admission-context";
 import type { ReviewGateProtocolDescriptor } from "./review-gate-protocol";
 import type { ReviewGateWorkspaceReader } from "./review-gate-coordinator";
 import { resolveRequirementsForAdmission } from "./review-gate-requirements";
@@ -66,6 +69,12 @@ readonly eventStore: DurableReviewGateEventStore;
   readonly workspaceReader: ReviewGateWorkspaceReader;
   /** Non-serializable owned witness when the caller already holds the lock. */
   readonly owned?: AdmissionOwnedWitness;
+  /**
+   * Canonical request paths under admission. The explicit Requirements
+   * selector is forwarded to the §10.2.3 resolution; omitted for the
+   * history-derived read-only mode.
+   */
+  readonly request?: ReviewGateAdmissionObservationRequest;
 }>;
 
 /**
@@ -106,8 +115,11 @@ async function observeSnapshot(
   options: VerifiedAdmissionSnapshotOptions,
 ): Promise<Readonly<{ snapshot: VerifiedAdmissionSnapshot; requirementsResolution: RequirementsResolutionV2 }> | null> {
   const { workspaceRoot, scopeId, protocol, eventStore, workspaceReader, owned } = options;
+  // With an owned capability every read — the requested scope AND every
+  // related scope — goes through the store's owned reader, which bypasses
+  // the public serialize queue and never re-enters a witness guard.
   const readScope = owned
-    ? (id: string) => owned.readVerifiedScope(id)
+    ? (id: string) => eventStore.readVerifiedScopeOwned(owned, id)
     : (id: string) => eventStore.readVerifiedScope(id);
 
   const scope = await readScope(scopeId);
@@ -121,7 +133,7 @@ async function observeSnapshot(
   const relatedTips: VerifiedGateTip[] = [...targetTips];
   for (const relatedEnrollment of scope.frontier.scopes) {
     if (relatedEnrollment.scopeId === scopeId) continue;
-    const relatedRead = await eventStore.readVerifiedScope(relatedEnrollment.scopeId);
+    const relatedRead = await readScope(relatedEnrollment.scopeId);
     relatedTips.push(
       ...projectScopeTips(scope.frontier, relatedEnrollment.scopeId, relatedRead),
     );
@@ -187,6 +199,7 @@ async function observeSnapshot(
     design: design.identity,
     plan: plan.identity,
     designBytes,
+    explicitPath: options.request?.explicitRequirementsPath,
   });
 
   const current = Object.freeze({

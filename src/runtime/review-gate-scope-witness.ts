@@ -7,6 +7,7 @@ import { WitnessBlocked } from "./review-gate-protected-store.js";
 import {
   createWitnessContext,
   verifyWitnessJournals,
+  withAdmissionWitnessTransaction,
   withGateOwnedWitnessTransaction,
   withWitnessTransaction,
   workspaceFrom,
@@ -37,6 +38,7 @@ import { createTerminalIntentPublication } from "./review-gate-target-writer-clo
 import { createTargetWriterEffect } from "./review-gate-target-writer-effect.js";
 import { createCanonicalTargetEffectBroker } from "./review-gate-canonical-target-effect-broker.js";
 import { targetRegistrySchema } from "./review-gate-target-writer-schema.js";
+import type { AdmissionOwnedWitness } from "./review-gate-admission-context.js";
 import { assertWitnessAdmissionOrder } from "./review-gate-lock-manager.js";
 import { authorizeAdditionalScope } from "./review-gate-witness-scope-enrollment.js";
 
@@ -69,6 +71,14 @@ export function createReviewGateScopeWitness(options: ReviewGateScopeWitnessOpti
     fenceAndAdvanceReviewWriterLease: recoverHandoff,
     withGateOwnedWitnessTransaction: <T>(run: (current: WitnessTransaction) => Promise<T>) =>
       withGateOwnedWitnessTransaction(context, run),
+    withAdmissionWitnessTransaction: <T>(
+      request: Readonly<{
+        readonly workspaceIdentity: string;
+        readonly designPath: string;
+        readonly planPath: string;
+      }>,
+      run: (owned: AdmissionOwnedWitness) => Promise<T>,
+    ): Promise<T> => withAdmissionWitnessTransaction(context, request, run),
     async readVerifiedReviewWriterLease(scopeId: string, gateId: string, targetPath: string) {
       return withWitnessTransaction(context, async () => {
         const state = await context.store.read("target", targetRegistrySchema);

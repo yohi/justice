@@ -15,7 +15,11 @@ import {
   computeCanonicalJsonFingerprint,
   computeWorkspaceIdentity,
 } from "../../src/core/review-gate/identity";
-import { createLinuxReviewGateProvider } from "../../src/runtime/linux-review-gate-provider";
+import {
+  createLinuxReviewGateProvider,
+  type LinuxReviewGateProvider,
+  type ReviewGateLockHandle,
+} from "../../src/runtime/linux-review-gate-provider";
 import {
   createReviewGateLockManager,
   type ReviewGateLockManager,
@@ -34,7 +38,14 @@ import {
   type ReviewGateDispatchRecordV1,
   type ReviewGateJournalEventInput,
 } from "../../src/runtime/review-gate-event-store";
-import type { AdmissionOwnedWitness } from "../../src/runtime/review-gate-admission-context";
+import {
+  observeVerifiedAdmissionSnapshotOwned,
+  type AdmissionOwnedWitness,
+  markAdmissionOwnedWitnessLive,
+} from "../../src/runtime/review-gate-admission-context";
+import type { ReviewGateScopeAdmissionRequest } from "../../src/runtime/review-gate-scope-admission";
+import { computeReviewScopeId } from "../../src/core/review-gate/identity";
+import { createReviewGateProtocolDescriptor } from "../../src/runtime/review-gate-protocol";
 import type { VerifiedScopeFrontier } from "../../src/core/review-gate/types";
 
 const TEST_WRITER_ID = "writer-1";
@@ -1506,11 +1517,17 @@ describe("ReviewGateEventStore — tamper and crash recovery (Task 6)", () => {
         writerHeads: Object.freeze([]),
         globalFrontierHash: "global-owned",
       });
-      return {
+      const owned: AdmissionOwnedWitness = {
         readVerifiedFrontier: async () => frontier,
-        readVerifiedScope: async () =>
-          Object.freeze({ frontier, gateIds: Object.freeze([]), eventsByGate: new Map() }),
+        readFirstEnrollmentAuthority: async () => null,
+        readInstallation: async () => {
+          throw new Error("test_owned_installation_unused");
+        },
+        assertOwnedScope: () => undefined,
+        assertOwnedGate: () => undefined,
       };
+      markAdmissionOwnedWitnessLive(owned);
+      return owned;
     }
 
     it("assembles an owned scope read from the supplied frontier", async () => {
@@ -1575,6 +1592,368 @@ describe("ReviewGateEventStore — tamper and crash recovery (Task 6)", () => {
       );
       store.close();
       closeWitnessFixture(ctx);
+    });
+
+    it("rejects an owned witness that was never issued by the transaction entry", async () => {
+      const ctx = await freshContext("ownedunissued");
+      const store = createReviewGateEventStore(
+        ctx.root,
+        eventStoreOptions(ctx.root, ctx.writerId, ctx.witness),
+      );
+      const frontier: VerifiedScopeFrontier = Object.freeze({
+        workspaceIdentity: computeWorkspaceIdentity(ctx.root),
+        workspaceEnrollmentId: "enroll-unissued",
+        scopes: Object.freeze([]),
+        writerHeads: Object.freeze([]),
+        globalFrontierHash: "global-unissued",
+      });
+      const forged = {
+        readVerifiedFrontier: async () => frontier,
+        readFirstEnrollmentAuthority: async () => null,
+        readInstallation: async () => null,
+        assertOwnedScope: () => undefined,
+        assertOwnedGate: () => undefined,
+      };
+
+      await expect(store.readVerifiedScopeOwned(forged, "scope-x")).rejects.toThrow(
+        "review_gate_admission_owned_witness_invalid",
+      );
+      store.close();
+      closeWitnessFixture(ctx);
+    });
+  });
+
+  describe("withAdmissionWitnessTransaction", () => {
+    const REQUEST_PROTOCOL = createReviewGateProtocolDescriptor();
+
+    function recordingProvider(
+      real: LinuxReviewGateProvider,
+      trace: string[],
+    ): LinuxProvider {
+      const wrapHandle = (
+        kind: "scope" | "gate",
+        id: string,
+        handle: ReviewGateLockHandle,
+      ): ReviewGateLockHandle =>
+        Object.freeze({
+          release: () => {
+            trace.push(`release:${kind}:${id}`);
+            handle.release();
+          },
+          verifyCloexec: () => handle.verifyCloexec(),
+        });
+      return {
+        ...real,
+        acquireScopeLock: async (reviewScopeId) => {
+          trace.push(`acquire:scope:${reviewScopeId}`);
+          const handle = await real.acquireScopeLock(reviewScopeId);
+          return handle === "occupied" ? handle : wrapHandle("scope", reviewScopeId, handle);
+        },
+        acquireGateLock: async (gateId) => {
+          trace.push(`acquire:gate:${gateId}`);
+          const handle = await real.acquireGateLock(gateId);
+          return handle === "occupied" ? handle : wrapHandle("gate", gateId, handle);
+        },
+      };
+    }
+
+    async function ownedFixture(prefix: string, trace: string[]): Promise<
+      Readonly<{
+        readonly root: string;
+        readonly witness: ReviewGateScopeWitness;
+        readonly store: SeedStore;
+        readonly ctx: StoreContext;
+      }>
+    > {
+      const root = await freshRoot(prefix);
+      // Committed Design/Plan artifacts: the owned observer reads them via
+      // the workspace reader and the enrollment requires clean committed targets.
+      const docs = path.join(root, "docs");
+      await mkdir(docs, { recursive: true });
+      await writeFile(path.join(docs, "design.md"), "# Design");
+      await writeFile(path.join(docs, "plan.md"), "# Plan");
+      await writeFile(path.join(docs, "requirements.md"), "# Requirements");
+      execFileSync("git", ["-C", root, "add", "docs/design.md", "docs/plan.md", "docs/requirements.md"]);
+      execFileSync("git", [
+        "-C", root,
+        "-c", "user.name=Fixture",
+        "-c", "user.email=fixture@example.invalid",
+        "commit", "-qm", "artifacts",
+      ]);
+      const admin = generateKeyPairSync("ed25519");
+      const approve = async (payload: unknown): Promise<string> =>
+        sign(null, Buffer.from(computeCanonicalJsonFingerprint(payload)), admin.privateKey).toString(
+          "base64",
+        );
+      const native = createLinuxReviewGateProvider(root);
+      if (native === undefined) throw new Error("test_native_provider_missing");
+      const lockManager = createReviewGateLockManager(root, {
+        provider: recordingProvider(native, trace),
+      });
+      const witnessDirectory = `${root}.witness`;
+      await provisionReviewGateWitnessInstallation({
+        witnessDirectory,
+        hostTrustRoot: admin.publicKey,
+        authorize: approve,
+      });
+      const witness = createReviewGateScopeWitness({
+        workspaceRoot: root,
+        workspaceIdentity: computeWorkspaceIdentity(root),
+        witnessDirectory,
+        hostTrustRoot: admin.publicKey,
+        lockManager,
+      });
+      witnessApprovers.set(witness, approve);
+      witnessContexts.set(witness, { root, writerId: TEST_WRITER_ID, serial: { value: 0 } });
+      const ctx: StoreContext = { root, witness, lockManager, writerId: TEST_WRITER_ID };
+      const store = createReviewGateEventStore(
+        root,
+        eventStoreOptions(root, TEST_WRITER_ID, witness),
+      );
+      return { root, witness, store, ctx };
+    }
+
+    function admissionRequest(root: string): ReviewGateScopeAdmissionRequest {
+      return {
+        workspaceRoot: root,
+        workspaceIdentity: computeWorkspaceIdentity(root),
+        designPath: DESIGN_PATH,
+        planPath: PLAN_PATH,
+        protocol: REQUEST_PROTOCOL,
+      };
+    }
+
+    /** V2 genesis event bound to the scope the admission lease computes. */
+    function gateCreatedV2OwnedEvent(
+      gateId: string,
+      root: string,
+      designPath = DESIGN_PATH,
+      planPath = PLAN_PATH,
+    ): ReviewGateEventV1 {
+      return validateReviewGateEventRecord({
+        schemaVersion: 2,
+        eventId: `event-owned-${gateId}`,
+        parentEventId: `parent-owned-${gateId}`,
+        emittedAt: "2026-10-16T00:00:00.000Z",
+        gateId,
+        epochId: "epoch-1",
+        generationId: `generation-owned-${gateId}`,
+        writerId: TEST_WRITER_ID,
+        eventType: "GATE_CREATED",
+        payload: {
+          reviewScopeId: computeReviewScopeId(designPath, planPath),
+          supersedesGateId: null,
+          requirementsResolution: {
+            schemaVersion: 2,
+            source: "explicit",
+            canonicalPath: "docs/requirements.md",
+            digest: "2".repeat(64),
+            gitMode: "100644",
+            requirementsGitBlobOid: "r".repeat(40),
+            committedBaselineOid: "c".repeat(40),
+            workspaceIdentity: computeWorkspaceIdentity(root),
+            selectionEvidence: {},
+          },
+          designArtifact: { canonicalPath: designPath, digest: "0".repeat(64), gitMode: "100644" },
+          planArtifact: { canonicalPath: planPath, digest: "1".repeat(64), gitMode: "100644" },
+          reviewProtocolFingerprint: REQUEST_PROTOCOL.reviewProtocolFingerprint,
+          designProtocolFingerprint: REQUEST_PROTOCOL.designProtocolFingerprint,
+          planProtocolFingerprint: REQUEST_PROTOCOL.planProtocolFingerprint,
+        },
+      });
+    }
+
+    function seedOwnedGate(
+      fixture: Readonly<{ root: string; ctx: StoreContext; store: SeedStore }>,
+      gateId: string,
+      designPath = DESIGN_PATH,
+      planPath = PLAN_PATH,
+    ): Promise<void> {
+      return seedGate(fixture.ctx, fixture.store, gateId, [
+        gateCreatedV2OwnedEvent(gateId, fixture.root, designPath, planPath),
+      ]);
+    }
+
+
+    it("owned publication acquires each guard once and releases every guard in reverse", async () => {
+      const trace: string[] = [];
+      const fixture = await ownedFixture("ownedorder", trace);
+      await seedOwnedGate(fixture, "gate-a");
+      trace.length = 0;
+
+      const requested = computeReviewScopeId(DESIGN_PATH, PLAN_PATH);
+      const outcome = await fixture.witness.withAdmissionWitnessTransaction(
+        admissionRequest(fixture.root),
+        async (owned) => {
+          const frontier = await owned.readVerifiedFrontier();
+          expect(frontier.scopes.map((scope) => scope.scopeId)).toContain(requested);
+          // The public witness re-entry is impossible while the owned
+          // transaction holds the installation guard and the Gate locks:
+          // the admission-order assertion rejects before any lock attempt.
+          await expect(fixture.witness.readWorkspaceScopeFrontier()).rejects.toThrow(
+            "review_gate_witness_lock_order",
+          );
+          // The public store read is also a guard-taking re-entry.
+          await expect(fixture.store.readVerifiedScope(requested)).rejects.toThrow(
+            "review_gate_witness_lock_order",
+          );
+          const read = await fixture.store.readVerifiedScopeOwned(owned, requested);
+          expect(read.gateIds).toEqual(["gate-a"]);
+          expect(read.eventsByGate.get("gate-a")?.[0]?.eventType).toBe("GATE_CREATED");
+          return "ran" as const;
+        },
+      );
+      expect(outcome).toBe("ran");
+
+      // The enrolled scope IS the computed requested scope: one scope lock,
+      // one gate lock, each acquired exactly once and released in reverse.
+      expect(trace.filter((entry) => entry.startsWith("acquire:"))).toEqual([
+        `acquire:scope:${requested}`,
+        "acquire:gate:gate-a",
+      ]);
+      expect(trace.filter((entry) => entry.startsWith("release:"))).toEqual([
+        "release:gate:gate-a",
+        `release:scope:${requested}`,
+      ]);
+
+      fixture.store.close();
+      closeWitnessFixture(fixture.ctx);
+    });
+
+    it("releases every guard when the callback throws", async () => {
+      const trace: string[] = [];
+      const fixture = await ownedFixture("ownedthrow", trace);
+      await seedOwnedGate(fixture, "gate-a");
+      trace.length = 0;
+
+      await expect(
+        fixture.witness.withAdmissionWitnessTransaction(admissionRequest(fixture.root), async () => {
+          throw new Error("callback_failure");
+        }),
+      ).rejects.toThrow("callback_failure");
+
+      const requested = computeReviewScopeId(DESIGN_PATH, PLAN_PATH);
+      expect(trace.filter((entry) => entry.startsWith("release:"))).toEqual([
+        "release:gate:gate-a",
+        `release:scope:${requested}`,
+      ]);
+
+      // The lease is free again: a second transaction succeeds.
+      await expect(
+        fixture.witness.withAdmissionWitnessTransaction(
+          admissionRequest(fixture.root),
+          async () => "reran" as const,
+        ),
+      ).resolves.toBe("reran");
+
+      fixture.store.close();
+      closeWitnessFixture(fixture.ctx);
+    });
+
+    it("rejects capability use after release and foreign scope/gate ids", async () => {
+      const trace: string[] = [];
+      const fixture = await ownedFixture("ownedforeign", trace);
+      await seedOwnedGate(fixture, "gate-a");
+
+      let captured: AdmissionOwnedWitness | null = null;
+      const requested = computeReviewScopeId(DESIGN_PATH, PLAN_PATH);
+      await fixture.witness.withAdmissionWitnessTransaction(
+        admissionRequest(fixture.root),
+        async (owned) => {
+          captured = owned;
+          expect(() => owned.assertOwnedScope(requested)).not.toThrow();
+          expect(() => owned.assertOwnedGate("gate-a")).not.toThrow();
+          expect(() => owned.assertOwnedScope("scope-foreign")).toThrow(
+            "review_gate_admission_owned_scope_foreign",
+          );
+          expect(() => owned.assertOwnedGate("gate-foreign")).toThrow(
+            "review_gate_admission_owned_gate_foreign",
+          );
+        },
+      );
+
+      if (captured === null) throw new Error("test_owned_not_captured");
+      await expect(captured.readVerifiedFrontier()).rejects.toThrow(
+        "review_gate_admission_owned_witness_released",
+      );
+      await expect(captured.readFirstEnrollmentAuthority()).rejects.toThrow(
+        "review_gate_admission_owned_witness_released",
+      );
+
+      fixture.store.close();
+      closeWitnessFixture(fixture.ctx);
+    });
+
+    function testObserverOwnedWitness(frontier: VerifiedScopeFrontier): AdmissionOwnedWitness {
+      const owned: AdmissionOwnedWitness = {
+        readVerifiedFrontier: async () => frontier,
+        readFirstEnrollmentAuthority: async () => null,
+        readInstallation: async () => {
+          throw new Error("test_owned_installation_unused");
+        },
+        assertOwnedScope: () => undefined,
+        assertOwnedGate: () => undefined,
+      };
+      markAdmissionOwnedWitnessLive(owned);
+      return owned;
+    }
+
+    it("owned verified history never reenters public reads", async () => {
+      const trace: string[] = [];
+      const fixture = await ownedFixture("ownedhistory", trace);
+      await seedOwnedGate(fixture, "gate-a");
+      await seedOwnedGate(fixture, "gate-b", "docs/design-b.md", "docs/plan-b.md");
+      const frontier = await fixture.witness.readWorkspaceScopeFrontier();
+      const installation = await fixture.witness.readInstallation();
+      const publicReads: string[] = [];
+      const guardedStore = {
+        ...fixture.store,
+        readVerifiedScope: (scopeId: string): Promise<never> => {
+          publicReads.push(scopeId);
+          return Promise.reject(new Error("public_read_forbidden_inside_lease"));
+        },
+      };
+      const owned = testObserverOwnedWitness(frontier);
+
+      const observation = await observeVerifiedAdmissionSnapshotOwned({
+        workspaceRoot: fixture.root,
+        scopeId: computeReviewScopeId(
+          DESIGN_PATH,
+          PLAN_PATH,
+        ) as import("../../src/core/review-gate-types").ReviewScopeId,
+        protocol: REQUEST_PROTOCOL,
+        eventStore: guardedStore,
+        workspaceReader: {
+          readWorkspaceFile: async (filePath) => {
+            try {
+              const { readFile } = await import("node:fs/promises");
+              return await readFile(path.join(fixture.root, filePath));
+            } catch {
+              return null;
+            }
+          },
+        },
+        owned,
+        authority: { installation, frontier, firstEnrollment: null },
+        request: { designPath: DESIGN_PATH, planPath: PLAN_PATH, explicitRequirementsPath: "docs/requirements.md" },
+      });
+
+      expect(publicReads).toEqual([]);
+      expect(observation).not.toBeNull();
+      const snapshot = observation === null ? null : observation.snapshot;
+      if (snapshot === null) throw new Error("test_observation_missing");
+      // The requested scope's tips plus every related scope's tips participate
+      // in the relation closure, all read through the owned reader.
+      expect(snapshot.currentTips.map((tip) => tip.gateId)).toEqual(["gate-a"]);
+      const relatedGateIds = snapshot.workspaceContinuity.relatedScopeTips
+        .map((tip) => tip.gateId)
+        .sort();
+      // relatedScopeTips carries the requested scope's tips plus every
+      // related scope's tips: gate-b must participate in the closure.
+      expect(relatedGateIds).toEqual(["gate-a", "gate-b"]);
+
+      fixture.store.close();
+      closeWitnessFixture(fixture.ctx);
     });
   });
 });

@@ -22,6 +22,12 @@ import {
   withWitnessScopeGateLocks,
   type ReviewGateLockManager,
 } from "./review-gate-lock-manager.js";
+import { computeReviewScopeId } from "../core/review-gate/identity.js";
+import type { VerifiedScopeFrontier } from "../core/review-gate/types.js";
+import {
+  type AdmissionOwnedWitness,
+  markAdmissionOwnedWitnessLive,
+} from "./review-gate-admission-context.js";
 
 export type WitnessOptions = Readonly<{
   workspaceRoot: string;
@@ -95,6 +101,135 @@ export async function withWitnessTransaction<T>(
       );
     });
   } catch (error: unknown) {
+    if (error instanceof WitnessBlocked) throw error;
+    if (error instanceof Error && error.message === "review_gate_witness_busy_retryable")
+      throw new WitnessBlocked("busy_retryable");
+    throw new WitnessBlocked("host_io");
+  }
+}
+
+/**
+ * Owned admission transaction (Task 3).
+ *
+ * Acquires the installation guard once, authenticates the installation/
+ * repository/registry, discovers the related scope/Gate lock set from the
+ * authenticated registry (plus the tentative requested scope), and runs the
+ * callback with the non-serializable `AdmissionOwnedWitness` while every
+ * guard is held: sorted scopes, then sorted Gates, release in reverse in
+ * `finally`. The owned capability is unusable after the callback exit and
+ * rejects scope/Gate ids outside the owned lock set.
+ */
+export async function withAdmissionWitnessTransaction<T>(
+  context: WitnessContext,
+  request: Readonly<{
+    readonly workspaceIdentity: string;
+    readonly designPath: string;
+    readonly planPath: string;
+  }>,
+  run: (owned: AdmissionOwnedWitness) => Promise<T>,
+): Promise<T> {
+  assertWitnessAdmissionOrder(context.lockManager);
+  let runFailed = false;
+  try {
+    return await context.store.withGuard("installation", async () => {
+      const installation = await readTrustedWitnessInstallation(
+        context.store,
+        context.options.hostTrustRoot,
+      );
+      const observed = await observeGitWorkspace(context.options.workspaceRoot);
+      if (observed.workspaceIdentity !== context.options.workspaceIdentity)
+        throw new WitnessBlocked("workspace_identity");
+      const current = await context.store.read("scope", scopeRegistrySchema);
+      if (current.data.installationId !== installation.installationId)
+        throw new WitnessBlocked("registry_invalid");
+
+      // Discover the owned lock set from the authenticated registry: the
+      // requested scope (tentative under installation ownership before any
+      // enrollment) plus every enrolled related scope and their Gates.
+      const scopeIds = new Set<string>([
+        computeReviewScopeId(request.designPath, request.planPath),
+      ]);
+      const gateIds = new Set<string>();
+      const workspace = current.data.workspaces[request.workspaceIdentity];
+      if (workspace !== undefined && workspace.repositoryIdentity === observed.repositoryIdentity) {
+        for (const scope of workspace.frontier.scopes) {
+          scopeIds.add(scope.scopeId);
+          for (const gate of scope.gateMembership) gateIds.add(gate.gateId);
+        }
+      }
+
+      let released = false;
+      const assertLive = (): void => {
+        if (released) throw new Error("review_gate_admission_owned_witness_released");
+      };
+      const readOwnedFrontier = async (): Promise<VerifiedScopeFrontier> => {
+        assertLive();
+        const owned = await context.store.read("scope", scopeRegistrySchema);
+        if (owned.data.installationId !== installation.installationId)
+          throw new WitnessBlocked("registry_invalid");
+        const ownedWorkspace = workspaceFrom(
+          { ...owned, installation, repositoryIdentity: observed.repositoryIdentity },
+          request.workspaceIdentity,
+        );
+        await verifyWitnessJournals(context, ownedWorkspace);
+        return ownedWorkspace.frontier;
+      };
+      const owned: AdmissionOwnedWitness = Object.freeze({
+        readVerifiedFrontier: readOwnedFrontier,
+        readFirstEnrollmentAuthority: async () => {
+          assertLive();
+          const snapshot = await context.store.read("scope", scopeRegistrySchema);
+          if (snapshot.data.installationId !== installation.installationId)
+            throw new WitnessBlocked("registry_invalid");
+          const snapshotWorkspace = snapshot.data.workspaces[request.workspaceIdentity];
+          if (snapshotWorkspace === undefined || snapshotWorkspace.enrollmentState !== "pending") {
+            return null;
+          }
+          return snapshotWorkspace.authorization.authority;
+        },
+        readInstallation: async () => {
+          assertLive();
+          return installation;
+        },
+        assertOwnedScope: (scopeId: string) => {
+          assertLive();
+          if (!scopeIds.has(scopeId)) {
+            throw new Error("review_gate_admission_owned_scope_foreign");
+          }
+        },
+        assertOwnedGate: (gateId: string) => {
+          assertLive();
+          if (!gateIds.has(gateId)) {
+            throw new Error("review_gate_admission_owned_gate_foreign");
+          }
+        },
+      });
+      markAdmissionOwnedWitnessLive(owned);
+
+      try {
+        return await withWitnessScopeGateLocks(
+          context.lockManager,
+          { scopeIds: [...scopeIds], gateIds: [...gateIds] },
+          async () => {
+            try {
+              return await run(owned);
+            } catch (error) {
+              // The callback's own failure propagates as-is after every
+              // guard releases; only the guard/registry phases map to
+              // WitnessBlocked codes.
+              runFailed = true;
+              throw error;
+            } finally {
+              released = true;
+            }
+          },
+        );
+      } finally {
+        released = true;
+      }
+    });
+  } catch (error: unknown) {
+    if (runFailed) throw error;
     if (error instanceof WitnessBlocked) throw error;
     if (error instanceof Error && error.message === "review_gate_witness_busy_retryable")
       throw new WitnessBlocked("busy_retryable");

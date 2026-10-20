@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 import { createReviewGateCoordinator } from "../../src/runtime/review-gate-coordinator";
 import { createReviewGateLockManager } from "../../src/runtime/review-gate-lock-manager";
 import { createReviewGateProtocolDescriptor } from "../../src/runtime/review-gate-protocol";
-import { createReviewGateScopeAdmission, ScopeAdmissionBlocked } from "../../src/runtime/review-gate-scope-admission";
-import type { ReviewGateScopeAdmission } from "../../src/runtime/review-gate-scope-admission";
+import {
+  createReviewGateScopeAdmission,
+  ScopeAdmissionBlocked,
+  type ReviewGateScopeAdmission,
+} from "../../src/runtime/review-gate-scope-admission";
+import type { AdmissionOwnedWitness } from "../../src/runtime/review-gate-admission-context";
 import { resolveRequirementsForAdmission } from "../../src/runtime/review-gate-requirements";
 import {
   createInMemoryReviewGateEventStore,
@@ -19,7 +23,21 @@ function createMockScopeAdmission(
   decision: AdmissionDecision,
 ): ReviewGateScopeAdmission {
   return {
-    withAdmissionLease: async (_request, run) => run(decision),
+    withAdmissionLease: async (_request, run) => run(decision, null, mockOwnedWitness()),
+  };
+}
+
+function mockOwnedWitness(): AdmissionOwnedWitness {
+  return {
+    readVerifiedFrontier: async () => {
+      throw new Error("mock_owned_unused");
+    },
+    readFirstEnrollmentAuthority: async () => null,
+    readInstallation: async () => {
+      throw new Error("mock_owned_unused");
+    },
+    assertOwnedScope: () => undefined,
+    assertOwnedGate: () => undefined,
   };
 }
 
@@ -102,13 +120,28 @@ describe("coordinator startOrResume routes through scope admission", () => {
     expect(result.planPath).toBe(PLAN_PATH);
   });
 
-  it("falls back to legacy path when scope admission lease is occupied", async () => {
+  it("waits for the lease and applies the decision when the lease frees", async () => {
+    let attempts = 0;
     const scopeAdmission: ReviewGateScopeAdmission = {
-      withAdmissionLease: async () => {
-        throw new ScopeAdmissionBlocked("scope_lease_occupied");
+      withAdmissionLease: async (_request, run) => {
+        attempts += 1;
+        if (attempts < 3) throw new ScopeAdmissionBlocked("scope_lease_occupied");
+        return run(
+          {
+            kind: "CREATE_GENESIS",
+            workspaceIdentity: "test-workspace-identity",
+            scopeId: "scope-1" as import("../../src/core/review-gate-types").ReviewScopeId,
+            installationId: "installation-1",
+            enrollmentAuthorizationEventId: "enrollment-1",
+            verifiedWorkspaceFrontierHash: "frontier-1",
+            completeRelationClosureDigest: "closure-1",
+          },
+          null,
+          mockOwnedWitness(),
+        );
       },
     };
-    const { coordinator } = createTestCoordinator(scopeAdmission);
+    const { coordinator, eventStore } = createTestCoordinator(scopeAdmission);
 
     const result = await coordinator.startOrResume("session-1", {
       source: "command",
@@ -116,10 +149,33 @@ describe("coordinator startOrResume routes through scope admission", () => {
       planPath: PLAN_PATH,
     });
 
-    // Legacy path creates a new gate because no existing gate is present.
+    expect(attempts).toBe(3);
+    // The decision is applied through the callback, not skipped.
     expect(result.dispatched).toBe(true);
     expect(result.gateId).not.toBeNull();
-    expect(result.guidance).toContain("[JUSTICE: REVIEW GATE OPERATION PAYLOAD]");
+    expect(await eventStore.listGateIds()).toEqual([result.gateId]);
+  });
+
+  it("never routes an occupied lease through the legacy path", async () => {
+    const scopeAdmission: ReviewGateScopeAdmission = {
+      withAdmissionLease: async () => {
+        throw new ScopeAdmissionBlocked("scope_lease_occupied");
+      },
+    };
+    const { coordinator, eventStore } = createTestCoordinator(scopeAdmission);
+
+    const result = await coordinator.startOrResume("session-1", {
+      source: "command",
+      designPath: DESIGN_PATH,
+      planPath: PLAN_PATH,
+    });
+
+    // Fail closed after the bounded wait: no gate is created and no legacy
+    // admission bypass runs.
+    expect(result.dispatched).toBe(false);
+    expect(result.gateId).toBeNull();
+    expect(result.guidance).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
+    expect(await eventStore.listGateIds()).toEqual([]);
   });
 
   it("blocks non-occupancy scope admission errors without using the legacy path", async () => {

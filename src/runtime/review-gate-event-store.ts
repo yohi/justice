@@ -94,6 +94,7 @@ import type {
   ReviewGateScopeWitness,
   TrustedFirstEnrollmentV1,
 } from "./review-gate-scope-witness";
+import { assertAdmissionOwnedWitnessLive } from "./review-gate-admission-context";
 
 const REVIEW_GATES_DIR = ".justice/review-gates";
 const EVENTS_DIR = `${REVIEW_GATES_DIR}/events`;
@@ -1686,16 +1687,26 @@ export function createReviewGateEventStore(
         return assembleVerifiedScopeRead(frontier, scopeId);
       }),
 
+    /**
+     * Task 3 owned verified scope read. Deliberately OUTSIDE the public
+     * `serialize` queue and free of any guard-taking witness re-entry: the
+     * caller holds the installation/scope/Gate guards via the live owned
+     * capability, and a queued public operation could wait for that same
+     * installation ownership. The frontier is verified by the owned witness
+     * itself (registry CAS check + journal verification) and the scope
+     * assembly reuses the shared unguarded assembler.
+     */
     readVerifiedScopeOwned: (owned, scopeId) =>
-      serialize(async () => {
+      (async () => {
         assertOpen();
         assertStorageId(scopeId);
+        assertAdmissionOwnedWitnessLive(owned);
         const frontier = await owned.readVerifiedFrontier();
         if (frontier.workspaceIdentity !== workspaceIdentity) {
           throw new Error("review_gate_workspace_identity_mismatch");
         }
         return assembleVerifiedScopeRead(frontier, scopeId);
-      }),
+      })(),
 
     /**
      * FDR-011 publication owner: create the exact encoded bytes/length/digest

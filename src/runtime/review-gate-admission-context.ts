@@ -19,7 +19,8 @@ ReviewScopeId,
 import type {
   ScopeEnrollmentV1,
   VerifiedFirstEnrollmentAuthorityV1,
-VerifiedScopeFrontier,
+  VerifiedScopeFrontier,
+  VerifiedTargetWriterHandoffContinuationV1,
 } from "../core/review-gate/types.js";
 import type {
   VerifiedAdmissionSnapshot,
@@ -32,11 +33,13 @@ import {
   computeRepositoryIdentity,
   computeWorkspaceIdentity,
 } from "../core/review-gate/identity.js";
-import type { ReviewGateWorkspaceReader } from "./review-gate-coordinator.js";
+import type {
+  ReviewGateCommandResult,
+  ReviewGateWorkspaceReader,
+} from "./review-gate-coordinator.js";
 import type {
   DurableReviewGateEventStore,
   VerifiedFirstEnrollment,
-  VerifiedScopeRead,
 } from "./review-gate-event-store.js";
 import type { ReviewGateProtocolDescriptor } from "./review-gate-protocol.js";
 import { runGitLiteral } from "./review-gate-query.js";
@@ -49,16 +52,61 @@ import {
 import { resolveRequirementsForAdmission } from "./review-gate-requirements.js";
 
 /**
- * Non-serializable owned capability held by the admission coordinator.
- * Task 3 produces the live guard; Task 2 only needs the read seam so the
- * coordinator can pass it into `readVerifiedScopeOwned` without exposing the
- * raw witness to callers that do not hold the admission lock.
+ * Non-serializable owned capability held by the admission coordinator while
+ * `withAdmissionWitnessTransaction` owns the installation/scope/Gate guards.
+ * The live instance is produced only by that entry point; every method
+ * rejects use after the callback exit, and the assert methods reject scope/
+ * Gate ids outside the owned lock set.
  */
 export type AdmissionOwnedWitness = Readonly<{
-readonly readVerifiedFrontier: () => Promise<VerifiedScopeFrontier>;
-  readonly readVerifiedScope: (scopeId: string) => Promise<VerifiedScopeRead>;
+  readonly readVerifiedFrontier: () => Promise<VerifiedScopeFrontier>;
   readonly readFirstEnrollmentAuthority: () => Promise<VerifiedFirstEnrollmentAuthorityV1 | null>;
+  readonly readInstallation: () => Promise<TrustedWitnessInstallationV1>;
+  readonly assertOwnedScope: (scopeId: string) => void;
+  readonly assertOwnedGate: (gateId: string) => void;
 }>;
+
+/**
+ * Runtime registry of live owned capabilities. The store refuses any value
+ * that was never issued by `withAdmissionWitnessTransaction`; a structural
+ * DTO alone is never ownership proof.
+ */
+const liveAdmissionOwnedWitnesses = new WeakSet<object>();
+export function markAdmissionOwnedWitnessLive(owned: AdmissionOwnedWitness): void {
+  liveAdmissionOwnedWitnesses.add(owned);
+}
+export function assertAdmissionOwnedWitnessLive(owned: AdmissionOwnedWitness): void {
+  if (!liveAdmissionOwnedWitnesses.has(owned)) {
+    throw new Error("review_gate_admission_owned_witness_invalid");
+  }
+}
+
+/**
+ * Internal result of one admission decision application. The admission
+ * callback returns this union; only the outer coordinator converts RESULT/
+ * BLOCK to the public command result. `MUTABLE_APPLICATION_YIELDED` marks the
+ * Task 3 bridge where the callback released the admission lease before the
+ * wider session guard chain; Task 5's executor replaces it with the
+ * HANDOFF/TERMINAL continuations.
+ */
+export type ReviewGateAdmissionExecutionResult =
+  | Readonly<{ kind: "RESULT"; result: ReviewGateCommandResult }>
+  | Readonly<{
+      kind: "BLOCK";
+      reason: string;
+      result: ReviewGateCommandResult;
+    }>
+  | Readonly<{
+      kind: "HANDOFF_PENDING";
+      continuation: VerifiedTargetWriterHandoffContinuationV1;
+    }>
+  | Readonly<{
+      kind: "TERMINAL_INTENT_PREPARED_UNPUBLISHED";
+      gateId: string;
+      publicationId: string;
+      terminalTransitionOperationId: string;
+    }>
+  | Readonly<{ kind: "MUTABLE_APPLICATION_YIELDED" }>;
 
 /**
  * Immutable product returned by the owned admission observer. The snapshot is
@@ -174,6 +222,7 @@ export async function observeVerifiedAdmissionSnapshotOwned(
         eventStore,
         workspaceReader,
         owned,
+        request,
       });
     }
 
@@ -302,32 +351,5 @@ export async function observeVerifiedAdmissionSnapshotOwned(
     if (error instanceof Error) return null;
     throw error;
   }
-}
-
-export type AdmissionOwnedWitnessOptions = Readonly<{
-  readonly eventStore: DurableReviewGateEventStore;
-  readonly scopeId: string;
-  readonly firstEnrollmentAuthority: VerifiedFirstEnrollmentAuthorityV1 | null;
-}>;
-
-/**
- * Factory for the non-serializable capability the admission coordinator holds
- * while it owns the workspace/scope lock. The witness delegates reads to the
- * durable event store and carries the first-enrollment authority evidence so
- * downstream code can distinguish a first-use admission from an enrolled scope.
- */
-export function createAdmissionOwnedWitness(
-  options: AdmissionOwnedWitnessOptions,
-): AdmissionOwnedWitness {
-  const { eventStore, scopeId, firstEnrollmentAuthority } = options;
-
-  return Object.freeze({
-    readVerifiedFrontier: async () => {
-      const scopeRead = await eventStore.readVerifiedScope(scopeId);
-      return scopeRead.frontier;
-    },
-    readVerifiedScope: async (id: string) => eventStore.readVerifiedScope(id),
-    readFirstEnrollmentAuthority: async () => firstEnrollmentAuthority,
-  });
 }
 
