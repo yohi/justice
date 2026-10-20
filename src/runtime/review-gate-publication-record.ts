@@ -224,6 +224,36 @@ export async function commitPublicationUnlocked(
   return "advanced";
 }
 
+export async function publishPreparedJournalUnlocked(
+  context: WitnessContext,
+  current: WitnessTransaction,
+  publicationId: string,
+): Promise<void> {
+  const { input, bytes } = await readPreparedPublication(context, current, publicationId);
+  if (context.provider === undefined) throw new WitnessBlocked("journal_native_unavailable");
+  const previous = await context.provider.readWriterShard(input.scopeId, input.gateId, input.writerId);
+  if (previous?.equals(bytes)) return;
+  if (current.data.committed[publicationId] !== undefined)
+    throw new WitnessBlocked("journal_history_lost");
+  if (current.revision !== (current.data.pending[publicationId]?.preparedRevision ?? -1))
+    throw new WitnessBlocked("publication_frontier");
+  const events = bytes
+    .toString("utf8")
+    .trimEnd()
+    .split("\n")
+    .map((line) => validateReviewGateEventRecord(JSON.parse(line)));
+  await verifyTerminalPublication(context, current, events.slice(input.expectedWriterSequence));
+  if ((previous === null ? "0".repeat(64) : computeArtifactDigest(previous)) !== input.expectedWriterHash)
+    throw new WitnessBlocked("publication_preimage");
+  await context.provider.durableReplaceWriterShard(
+    input.scopeId,
+    input.gateId,
+    input.writerId,
+    previous === null ? null : computeArtifactDigest(previous),
+    bytes,
+  );
+}
+
 export function createPublicationRecords(context: WitnessContext) {
   return {
     readPrepared: (current: WitnessTransaction, publicationId: string) =>

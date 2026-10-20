@@ -68,6 +68,7 @@ export type AdmissionOwnedWitness = Readonly<{
   readonly read: () => Promise<WitnessTransaction>;
   readonly readVerifiedFrontier: () => Promise<VerifiedScopeFrontier>;
   readonly readFirstEnrollmentAuthority: () => Promise<VerifiedFirstEnrollmentAuthorityV1 | null>;
+  readonly consumeFirstEnrollmentAuthority: (authorizationEventId: string) => Promise<void>;
   readonly readInstallation: () => Promise<TrustedWitnessInstallationV1>;
   readonly assertOwnedScope: (scopeId: string) => void;
   readonly assertOwnedGate: (gateId: string) => void;

@@ -14,7 +14,6 @@ import {
   type ScopeWorkspace,
 } from "./review-gate-witness-registry.js";
 import type { TrustedWitnessInstallationV1 } from "./review-gate-witness-contracts.js";
-import { computeArtifactDigest } from "../core/review-gate/identity.js";
 import { verifyScopeFrontierMembership } from "./review-gate-witness-verification.js";
 import {
   assertWitnessAdmissionOrder,
@@ -22,7 +21,15 @@ import {
   withWitnessScopeGateLocks,
   type ReviewGateLockManager,
 } from "./review-gate-lock-manager.js";
-import { computeReviewScopeId } from "../core/review-gate/identity.js";
+import { computeArtifactDigest, computeReviewScopeId } from "../core/review-gate/identity.js";
+import { validateFirstEnrollmentUnderAdmission } from "./review-gate-witness-enrollment.js";
+import {
+  commitPublicationUnlocked,
+  preparePublicationUnlocked,
+  publishPreparedJournalUnlocked,
+  readPreparedPublication,
+} from "./review-gate-publication-record.js";
+import { publicationSchema } from "./review-gate-witness-registry.js";
 import type { VerifiedScopeFrontier } from "../core/review-gate/types.js";
 import {
   type AdmissionOwnedWitness,
@@ -194,6 +201,33 @@ export async function withAdmissionWitnessTransaction<T>(
           }
           return snapshotWorkspace.authorization.authority;
         },
+        consumeFirstEnrollmentAuthority: async (authorizationEventId) => {
+          assertLive();
+          const snapshot = await context.store.read("scope", scopeRegistrySchema);
+          const workspace = snapshot.data.workspaces[request.workspaceIdentity];
+          if (
+            workspace === undefined ||
+            workspace.enrollmentState !== "pending" ||
+            workspace.authorization.authority.authorizationEventId !== authorizationEventId
+          ) throw new WitnessBlocked("nonce_consumed");
+          const transaction = {
+            ...snapshot,
+            installation,
+            repositoryIdentity: observed.repositoryIdentity,
+          };
+          await validateFirstEnrollmentUnderAdmission(context, transaction, workspace.authorization);
+          await context.store.advance("scope", transaction, {
+            ...transaction.data,
+            workspaces: {
+              ...transaction.data.workspaces,
+              [request.workspaceIdentity]: { ...workspace, enrollmentState: "consumed" },
+            },
+            nonces: {
+              ...transaction.data.nonces,
+              [workspace.authorization.workflowNonce]: "consumed",
+            },
+          });
+        },
         readInstallation: async () => {
           assertLive();
           return installation;
@@ -210,21 +244,65 @@ export async function withAdmissionWitnessTransaction<T>(
             throw new Error("review_gate_admission_owned_gate_foreign");
           }
         },
-        preparePublication: async () => {
+        preparePublication: async (untrusted, bytes) => {
           assertLive();
-          throw new Error("review_gate_admitted_publication_not_implemented");
+          const input = publicationSchema.parse(untrusted);
+          if (!scopeIds.has(input.scopeId) ||
+            (!gateIds.has(input.gateId) && input.firstEnrollmentAuthorizationId === null))
+            throw new Error("review_gate_admission_owned_publication_foreign");
+          const current = await owned.read();
+          return preparePublicationUnlocked(context, current, input, Buffer.from(bytes));
         },
-        publishPreparedJournal: async () => {
+        publishPreparedJournal: async (publicationId) => {
           assertLive();
-          throw new Error("review_gate_admitted_publication_not_implemented");
+          const prepared = await readPreparedPublication(context, await owned.read(), publicationId);
+          if (
+            !scopeIds.has(prepared.input.scopeId) ||
+            (!gateIds.has(prepared.input.gateId) && prepared.input.firstEnrollmentAuthorizationId === null)
+          )
+            throw new Error("review_gate_admission_owned_publication_foreign");
+          return publishPreparedJournalUnlocked(context, await owned.read(), publicationId);
         },
-        commitPreparedPublicationCAS: async () => {
+        commitPreparedPublicationCAS: async (input) => {
           assertLive();
-          throw new Error("review_gate_admitted_publication_not_implemented");
+          const current = await owned.read();
+          const prepared = await readPreparedPublication(context, current, input.publicationId);
+          if (
+            !scopeIds.has(prepared.input.scopeId) ||
+            (!gateIds.has(prepared.input.gateId) && prepared.input.firstEnrollmentAuthorizationId === null)
+          )
+            throw new Error("review_gate_admission_owned_publication_foreign");
+          return commitPublicationUnlocked(context, current, input);
         },
-        recoverPreparedPublication: async () => {
+        recoverPreparedPublication: async (publicationId) => {
           assertLive();
-          throw new Error("review_gate_admitted_publication_not_implemented");
+          let current = await owned.read();
+          const prepared = await readPreparedPublication(context, current, publicationId);
+          if (
+            !scopeIds.has(prepared.input.scopeId) ||
+            (!gateIds.has(prepared.input.gateId) && prepared.input.firstEnrollmentAuthorizationId === null)
+          )
+            throw new Error("review_gate_admission_owned_publication_foreign");
+          if (current.data.committed[publicationId] === undefined) {
+            const prior = await context.provider?.readWriterShard(
+              prepared.input.scopeId,
+              prepared.input.gateId,
+              prepared.input.writerId,
+            );
+            if (prior?.equals(prepared.bytes) !== true) {
+              const priorHash = prior === null || prior === undefined
+                ? "0".repeat(64)
+                : computeArtifactDigest(prior);
+              if (priorHash !== prepared.input.expectedWriterHash) return "blocked";
+              await publishPreparedJournalUnlocked(context, current, publicationId);
+              current = await owned.read();
+            }
+          }
+          return commitPublicationUnlocked(context, current, {
+            publicationId,
+            expectedGlobalFrontier: prepared.input.expectedGlobalFrontier,
+            expectedWriterHash: prepared.input.expectedWriterHash,
+          });
         },
       });
       markAdmissionOwnedWitnessLive(owned);

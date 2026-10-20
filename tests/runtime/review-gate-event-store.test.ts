@@ -46,7 +46,8 @@ import {
 import type { ReviewGateScopeAdmissionRequest } from "../../src/runtime/review-gate-scope-admission";
 import { computeReviewScopeId } from "../../src/core/review-gate/identity";
 import { createReviewGateProtocolDescriptor } from "../../src/runtime/review-gate-protocol";
-import type { VerifiedScopeFrontier } from "../../src/core/review-gate/types";
+import { planReviewGateAdmission } from "../../src/core/review-gate/admission";
+import type { ScopeEnrollmentV1, VerifiedScopeFrontier } from "../../src/core/review-gate/types";
 
 const TEST_WRITER_ID = "writer-1";
 const DESIGN_PATH = "docs/design.md";
@@ -1392,19 +1393,155 @@ describe("ReviewGateEventStore — V1/V2 codec journal (Task 6)", () => {
 
 describe("ReviewGateEventStore — tamper and crash recovery (Task 6)", () => {
   describe("admitted V2 publication foundation (Task 4a)", () => {
-    it.fails("creates one witnessed V2 genesis from authorized pending enrollment", async () => {
+    it("creates one witnessed V2 genesis from authorized pending enrollment", async () => {
       const ctx = await freshContext("admitted-genesis");
       const store = createReviewGateEventStore(
         ctx.root,
         eventStoreOptions(ctx.root, ctx.writerId, ctx.witness),
       );
-
-      const publication = await store.prepareAdmittedGenerationPublication(
-        {} as never,
-        {} as never,
+      await mkdir(path.join(ctx.root, "docs"), { recursive: true });
+      await writeFile(
+        path.join(ctx.root, DESIGN_PATH),
+        '# Design\n<!-- justice-review-gate:requirements="docs/requirements.md" -->\n',
       );
-
-      expect(publication.publicationId).toBeTruthy();
+      await writeFile(path.join(ctx.root, PLAN_PATH), "# Plan\n");
+      await writeFile(path.join(ctx.root, "docs/requirements.md"), "# Requirements\n");
+      execFileSync("git", ["-C", ctx.root, "add", "--", "docs"]);
+      execFileSync("git", [
+        "-C", ctx.root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+        "commit", "-qm", "admission artifacts",
+      ]);
+      const approve = witnessApprovers.get(ctx.witness);
+      if (approve === undefined) throw new Error("test_witness_missing_approver");
+      await authorizeFirstWorkspaceEnrollment({
+        witness: ctx.witness,
+        designPath: DESIGN_PATH,
+        planPath: PLAN_PATH,
+        workflowNonce: nextSeedId("admitted-nonce"),
+        operationId: nextSeedId("admitted-enrollment"),
+        authorize: approve,
+      });
+      const scopeId = computeReviewScopeId(DESIGN_PATH, PLAN_PATH);
+      const preparedResult = await ctx.witness.withAdmissionWitnessTransaction(
+        { workspaceIdentity: computeWorkspaceIdentity(ctx.root), designPath: DESIGN_PATH, planPath: PLAN_PATH },
+        async (owned) => {
+          const current = await owned.read();
+          const frontier = await owned.readVerifiedFrontier();
+          const firstEnrollment = current.data.workspaces[frontier.workspaceIdentity]?.authorization;
+          if (firstEnrollment === undefined) throw new Error("test_first_enrollment_missing");
+          const observation = await observeVerifiedAdmissionSnapshotOwned({
+            workspaceRoot: ctx.root,
+            scopeId,
+            protocol: createReviewGateProtocolDescriptor(),
+            eventStore: store,
+            workspaceReader: { readWorkspaceFile: async (relativePath) => readFile(path.join(ctx.root, relativePath)) },
+            owned,
+            authority: {
+              installation: current.installation,
+              frontier,
+              firstEnrollment: {
+                authorization: firstEnrollment,
+                generationId: "genesis-generation",
+                workflowContinuityId: "genesis-continuity",
+              },
+            },
+            request: { designPath: DESIGN_PATH, planPath: PLAN_PATH },
+          });
+          if (observation === null) throw new Error("test_admission_observation_missing");
+          const decision = planReviewGateAdmission(observation.snapshot);
+          if (decision.kind !== "CREATE_GENESIS") throw new Error("test_genesis_decision_missing");
+          const scope: ScopeEnrollmentV1 = {
+            scopeId,
+            workflowContinuityId: "genesis-continuity",
+            canonicalDesignPath: DESIGN_PATH,
+            canonicalPlanPath: PLAN_PATH,
+            pathPairDigest: computeCanonicalJsonFingerprint([DESIGN_PATH, PLAN_PATH]),
+            provenance: {
+              kind: "verified_genesis",
+              evidenceDigest: computeCanonicalJsonFingerprint(firstEnrollment.authority),
+              priorScopeId: null,
+              priorGateId: null,
+            },
+            gateMembership: [{
+              gateId: "genesis-gate",
+              generationId: "genesis-generation",
+              supersedesGateId: null,
+              admissionEventId: firstEnrollment.authority.authorizationEventId,
+              writerIds: [ctx.writerId],
+            }],
+          };
+          const membershipPayload = {
+            installationId: current.installation.installationId,
+            workspaceIdentity: frontier.workspaceIdentity,
+            operationId: "genesis-membership-op",
+            expectedWorkspaceFrontier: frontier.globalFrontierHash,
+            scope,
+          };
+          const membership = {
+            gateId: "genesis-gate",
+            generationId: "genesis-generation",
+            operationId: "genesis-membership-op",
+            writerId: ctx.writerId,
+            writerHead: { sequence: 1, hash: "0".repeat(64) },
+            supersedesGateId: null,
+            authorization: { ...membershipPayload, signature: await approve(membershipPayload) },
+          };
+          const gateEvent = validateReviewGateEventRecord({
+            schemaVersion: 2,
+            eventId: "genesis-created-event",
+            parentEventId: "genesis-parent-event",
+            emittedAt: "2026-10-16T00:00:00.000Z",
+            gateId: membership.gateId,
+            epochId: current.installation.epoch,
+            generationId: membership.generationId,
+            writerId: ctx.writerId,
+            eventType: "GATE_CREATED",
+            payload: {
+              reviewScopeId: scopeId,
+              supersedesGateId: null,
+              requirementsResolution: observation.requirementsResolution,
+              designArtifact: observation.snapshot.current.design,
+              planArtifact: observation.snapshot.current.plan,
+              reviewProtocolFingerprint: observation.snapshot.current.globalProtocolFingerprint,
+              designProtocolFingerprint: observation.snapshot.current.designProtocolFingerprint,
+              planProtocolFingerprint: observation.snapshot.current.planProtocolFingerprint,
+            },
+          });
+          membership.writerHead.hash = computeArtifactDigest(
+            Buffer.from(`${encodeReviewGateEventRecord(gateEvent)}\n`),
+          );
+          const input = {
+            scopeId,
+            gateId: membership.gateId,
+            writerId: ctx.writerId,
+            operationId: membership.operationId,
+            canonicalEvents: [gateEvent],
+            decision,
+            observation,
+            membership,
+          };
+          const prepared = await store.prepareAdmittedGenerationPublication(input, owned);
+          expect(prepared.gateId).toBe(membership.gateId);
+          expect(prepared.operationId).toBe(membership.operationId);
+          expect(prepared.newWriterSequence).toBe(1);
+          expect(prepared.firstEnrollmentAuthorizationId).toBe(firstEnrollment.authority.authorizationEventId);
+          await expect(store.prepareAdmittedGenerationPublication(input, owned)).rejects.toThrow();
+          return { publication: prepared, gateEvent };
+        },
+      );
+      const publication = preparedResult.publication;
+      const staged = await ctx.witness.readPreparedPublication(publication.publicationId);
+      expect(staged.bytes.toString("utf8")).toBe(
+        `${encodeReviewGateEventRecord(preparedResult.gateEvent)}\n`,
+      );
+      expect(publication.newWriterHash).toBe(computeArtifactDigest(staged.bytes));
+      expect(publication.publicationId).toBe(computeCanonicalJsonFingerprint({
+        scopeId,
+        gateId: publication.gateId,
+        writerId: publication.writerId,
+        operationId: publication.operationId,
+        newTailDigest: publication.newTailDigest,
+      }));
       store.close();
       closeWitnessFixture(ctx);
     });
