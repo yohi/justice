@@ -90,6 +90,7 @@ import type {
 import type { ReviewGateEvent, ReviewGatePhase } from "../core/review-gate-types";
 import type { ReviewGateOperationKind } from "../core/review-gate/agent-protocol";
 import type { AdmissionDecision } from "../core/review-gate/admission.js";
+import { projectVerifiedGateTip } from "../core/review-gate/projection.js";
 import type { AdmissionOwnedWitness, ReviewGateAdmissionObservation } from "./review-gate-admission-context.js";
 import type {
   PreparedWitnessPublicationV1,
@@ -1740,22 +1741,94 @@ export function createReviewGateEventStore(
     ): Promise<PreparedWitnessPublicationV1> => (async () => {
       assertOpen();
       assertAdmissionOwnedWitnessLive(owned);
-      if (input.decision.kind !== "CREATE_GENESIS")
-        throw new Error("review_gate_admitted_successor_not_implemented");
+      const decision = input.decision;
       const membership = admittedMembershipSchema.parse(input.membership);
       const current = await owned.read();
       const frontier = await owned.readVerifiedFrontier();
+      if (frontier.workspaceIdentity !== workspaceIdentity)
+        throw new Error("review_gate_admitted_frontier_invalid");
+      if (decision.kind === "CREATE_SUCCESSOR") {
+        const scope = frontier.scopes.find((value) => value.scopeId === decision.predecessorScopeId);
+        const predecessor = scope?.gateMembership.find(
+          (gate) => gate.gateId === decision.predecessorGateId,
+        );
+        if (
+          scope === undefined || predecessor === undefined ||
+          scope.scopeId !== input.scopeId ||
+          membership.supersedesGateId !== decision.predecessorGateId ||
+          membership.authorization.scope.scopeId !== input.scopeId ||
+          membership.authorization.scope.provenance.kind !== "verified_completed_successor" ||
+          membership.authorization.scope.provenance.priorScopeId !== decision.predecessorScopeId ||
+          membership.authorization.scope.provenance.priorGateId !== decision.predecessorGateId ||
+          membership.authorization.expectedWorkspaceFrontier !== frontier.globalFrontierHash ||
+          membership.authorization.operationId !== membership.operationId
+        ) throw new Error("review_gate_admitted_successor_membership_invalid");
+        const tip = projectVerifiedGateTip({
+          gateId: predecessor.gateId,
+          scopeId: scope.scopeId,
+          events: await readGateVerifiedEvents(scope.scopeId, predecessor),
+          frontier,
+        });
+        if (tip.status !== "completed" ||
+          tip.completedApproval.approvalEventId !== decision.predecessorApprovalEventId)
+          throw new Error("review_gate_admitted_successor_predecessor_invalid");
+        const continuityPredecessor =
+          input.observation.snapshot.workspaceContinuity.verifiedCrossScopePredecessor;
+        if (
+          decision.scopeId !== input.scopeId ||
+          decision.verifiedWorkspaceFrontierHash !== frontier.globalFrontierHash ||
+          decision.predecessorRelationProofDigest !==
+            input.observation.snapshot.workspaceContinuity.relationClosureProofDigest ||
+          continuityPredecessor === null ||
+          continuityPredecessor.priorScopeId !== decision.predecessorScopeId ||
+          continuityPredecessor.priorGateId !== decision.predecessorGateId ||
+          continuityPredecessor.completedApprovalEventId !== decision.predecessorApprovalEventId ||
+          continuityPredecessor.relationshipProofDigest !== decision.predecessorRelationProofDigest ||
+          input.observation.snapshot.scopeId !== input.scopeId ||
+          input.observation.snapshot.workspaceIdentity !== workspaceIdentity ||
+          input.observation.snapshot.verifiedFrontierHash !== frontier.globalFrontierHash ||
+          membership.authorization.installationId !== current.installation.installationId ||
+          membership.authorization.workspaceIdentity !== workspaceIdentity ||
+          membership.gateId !== input.gateId || membership.writerId !== input.writerId ||
+          membership.operationId !== input.operationId
+        ) throw new Error("review_gate_admitted_successor_decision_invalid");
+        const event = input.canonicalEvents[0];
+        if (
+          event === undefined || event.eventType !== "GATE_CREATED" ||
+          !("schemaVersion" in event) || event.schemaVersion !== 2 ||
+          event.gateId !== membership.gateId || event.writerId !== membership.writerId ||
+          !("generationId" in event) ||
+          event.generationId !== membership.generationId ||
+          event.payload.reviewScopeId !== input.scopeId ||
+          event.payload.supersedesGateId !== decision.predecessorGateId ||
+          event.payload.supersedesGateId !== membership.supersedesGateId
+        ) throw new Error("review_gate_admitted_successor_event_invalid");
+        owned.assertOwnedScope(input.scopeId);
+        owned.assertOwnedGate(decision.predecessorGateId);
+        const { publication, bytes } = await buildPublication({
+          scopeId: input.scopeId, gateId: input.gateId, writerId: input.writerId,
+          operationId: input.operationId,
+          canonicalEvents: validateJournalBatch(input.gateId, input.writerId, input.canonicalEvents),
+          firstEnrollment: null, admittedScope: membership.authorization.scope, owned,
+        }, frontier);
+        if (
+          membership.writerHead.sequence !== publication.newWriterSequence ||
+          membership.writerHead.hash !== publication.newWriterHash
+        ) throw new Error("review_gate_admitted_successor_writer_head_invalid");
+        await prepareAndSyncShard(publication, bytes, owned);
+        return publication;
+      }
       const authority = await owned.readFirstEnrollmentAuthority();
       if (authority === null) throw new Error("review_gate_first_enrollment_missing");
-      if (frontier.workspaceIdentity !== workspaceIdentity || frontier.scopes.length !== 0)
+      if (frontier.scopes.length !== 0)
         throw new Error("review_gate_admitted_genesis_frontier_invalid");
       if (
-        input.decision.workspaceIdentity !== workspaceIdentity ||
-        input.decision.scopeId !== input.scopeId ||
-        input.decision.installationId !== frontier.workspaceEnrollmentId ||
-        input.decision.enrollmentAuthorizationEventId !== authority.authorizationEventId ||
-        input.decision.verifiedWorkspaceFrontierHash !== frontier.globalFrontierHash ||
-        input.decision.completeRelationClosureDigest !==
+        decision.workspaceIdentity !== workspaceIdentity ||
+        decision.scopeId !== input.scopeId ||
+        decision.installationId !== frontier.workspaceEnrollmentId ||
+        decision.enrollmentAuthorizationEventId !== authority.authorizationEventId ||
+        decision.verifiedWorkspaceFrontierHash !== frontier.globalFrontierHash ||
+        decision.completeRelationClosureDigest !==
           input.observation.snapshot.workspaceContinuity.relationClosureProofDigest
       ) throw new Error("review_gate_admitted_genesis_decision_invalid");
       if (
