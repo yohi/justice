@@ -175,6 +175,13 @@ export async function withAdmissionWitnessTransaction<T>(
         return ownedWorkspace.frontier;
       };
       const owned: AdmissionOwnedWitness = Object.freeze({
+        read: async () => {
+          assertLive();
+          const snapshot = await context.store.read("scope", scopeRegistrySchema);
+          if (snapshot.data.installationId !== installation.installationId)
+            throw new WitnessBlocked("registry_invalid");
+          return { ...snapshot, installation, repositoryIdentity: observed.repositoryIdentity };
+        },
         readVerifiedFrontier: readOwnedFrontier,
         readFirstEnrollmentAuthority: async () => {
           assertLive();
@@ -202,6 +209,22 @@ export async function withAdmissionWitnessTransaction<T>(
           if (!gateIds.has(gateId)) {
             throw new Error("review_gate_admission_owned_gate_foreign");
           }
+        },
+        preparePublication: async () => {
+          assertLive();
+          throw new Error("review_gate_admitted_publication_not_implemented");
+        },
+        publishPreparedJournal: async () => {
+          assertLive();
+          throw new Error("review_gate_admitted_publication_not_implemented");
+        },
+        commitPreparedPublicationCAS: async () => {
+          assertLive();
+          throw new Error("review_gate_admitted_publication_not_implemented");
+        },
+        recoverPreparedPublication: async () => {
+          assertLive();
+          throw new Error("review_gate_admitted_publication_not_implemented");
         },
       });
       markAdmissionOwnedWitnessLive(owned);

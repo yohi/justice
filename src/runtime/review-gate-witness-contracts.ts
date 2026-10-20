@@ -1,6 +1,7 @@
 import type { KeyObject } from "node:crypto";
 import type {
   VerifiedFirstEnrollmentAuthorityV1,
+  ScopeEnrollmentV1,
   VerifiedScopeFrontier,
 } from "../core/review-gate/types.js";
 
@@ -27,6 +28,23 @@ export type TrustedFirstEnrollmentV1 = Readonly<{
   installationFrontierHash: string;
   hostSignature: string;
 }>;
+export type AdmittedMembership = Readonly<{
+  readonly gateId: string;
+  readonly generationId: string;
+  readonly operationId: string;
+  readonly writerId: string;
+  readonly writerHead: Readonly<{ readonly sequence: number; readonly hash: string }>;
+  readonly supersedesGateId: string | null;
+  readonly authorization: Readonly<{
+    readonly installationId: string;
+    readonly workspaceIdentity: string;
+    readonly operationId: string;
+    readonly expectedWorkspaceFrontier: string;
+    readonly scope: ScopeEnrollmentV1;
+    readonly signature: string;
+  }>;
+}>;
+
 export type PreparedWitnessPublicationV1 = Readonly<{
   installationId: string;
   workspaceIdentity: string;

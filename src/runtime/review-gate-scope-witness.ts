@@ -24,6 +24,7 @@ import { createWitnessPublication } from "./review-gate-witness-publication.js";
 import { readTrustedWitnessInstallation } from "./review-gate-witness-installation.js";
 export { provisionReviewGateWitnessInstallation } from "./review-gate-witness-installation.js";
 export type {
+  AdmittedMembership,
   PreparedWitnessPublicationV1,
   TrustedFirstEnrollmentV1,
   TrustedWitnessInstallationV1,

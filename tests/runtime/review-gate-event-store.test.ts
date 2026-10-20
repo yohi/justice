@@ -1391,6 +1391,60 @@ describe("ReviewGateEventStore — V1/V2 codec journal (Task 6)", () => {
 });
 
 describe("ReviewGateEventStore — tamper and crash recovery (Task 6)", () => {
+  describe("admitted V2 publication foundation (Task 4a)", () => {
+    it.fails("creates one witnessed V2 genesis from authorized pending enrollment", async () => {
+      const ctx = await freshContext("admitted-genesis");
+      const store = createReviewGateEventStore(
+        ctx.root,
+        eventStoreOptions(ctx.root, ctx.writerId, ctx.witness),
+      );
+
+      const publication = await store.prepareAdmittedGenerationPublication(
+        {} as never,
+        {} as never,
+      );
+
+      expect(publication.publicationId).toBeTruthy();
+      store.close();
+      closeWitnessFixture(ctx);
+    });
+
+    it.fails("publishes successor membership with exact predecessor", async () => {
+      const ctx = await freshContext("admitted-successor");
+      const store = createReviewGateEventStore(
+        ctx.root,
+        eventStoreOptions(ctx.root, ctx.writerId, ctx.witness),
+      );
+
+      const publication = await store.prepareAdmittedGenerationPublication(
+        {} as never,
+        {} as never,
+      );
+
+      expect(publication.nextFrontier.scopes).toHaveLength(1);
+      store.close();
+      closeWitnessFixture(ctx);
+    });
+
+    it.fails("recovers prepared genesis without a second budget", async () => {
+      const ctx = await freshContext("admitted-recovery");
+      const store = createReviewGateEventStore(
+        ctx.root,
+        eventStoreOptions(ctx.root, ctx.writerId, ctx.witness),
+      );
+
+      const publication = await store.prepareAdmittedGenerationPublication(
+        {} as never,
+        {} as never,
+      );
+      const recovery = await store.recoverPreparedPublication(publication.publicationId);
+
+      expect(recovery).toBe("committed");
+      store.close();
+      closeWitnessFixture(ctx);
+    });
+  });
+
   it("fails closed when the authority shard is tampered outside the witness", async () => {
     const ctx = await freshContext("tamper");
     const store = createReviewGateEventStore(
@@ -1518,6 +1572,9 @@ describe("ReviewGateEventStore — tamper and crash recovery (Task 6)", () => {
         globalFrontierHash: "global-owned",
       });
       const owned: AdmissionOwnedWitness = {
+        read: async () => {
+          throw new Error("test_owned_read_unused");
+        },
         readVerifiedFrontier: async () => frontier,
         readFirstEnrollmentAuthority: async () => null,
         readInstallation: async () => {
@@ -1525,6 +1582,18 @@ describe("ReviewGateEventStore — tamper and crash recovery (Task 6)", () => {
         },
         assertOwnedScope: () => undefined,
         assertOwnedGate: () => undefined,
+        preparePublication: async () => {
+          throw new Error("test_owned_prepare_unused");
+        },
+        publishPreparedJournal: async () => {
+          throw new Error("test_owned_publish_unused");
+        },
+        commitPreparedPublicationCAS: async () => {
+          throw new Error("test_owned_commit_unused");
+        },
+        recoverPreparedPublication: async () => {
+          throw new Error("test_owned_recover_unused");
+        },
       };
       markAdmissionOwnedWitnessLive(owned);
       return owned;

@@ -89,11 +89,14 @@ import type {
 } from "../core/review-gate/types";
 import type { ReviewGateEvent, ReviewGatePhase } from "../core/review-gate-types";
 import type { ReviewGateOperationKind } from "../core/review-gate/agent-protocol";
+import type { AdmissionDecision } from "../core/review-gate/admission.js";
+import type { AdmissionOwnedWitness, ReviewGateAdmissionObservation } from "./review-gate-admission-context.js";
 import type {
   PreparedWitnessPublicationV1,
   ReviewGateScopeWitness,
   TrustedFirstEnrollmentV1,
 } from "./review-gate-scope-witness";
+import type { AdmittedMembership } from "./review-gate-witness-contracts.js";
 import { assertAdmissionOwnedWitnessLive } from "./review-gate-admission-context";
 
 const REVIEW_GATES_DIR = ".justice/review-gates";
@@ -258,6 +261,14 @@ export type VerifiedReviewGateEventStore = Readonly<{
   ) => Promise<VerifiedScopeRead>;
   readonly prepareVerifiedEventPublication: (
     input: VerifiedEventPublicationInput,
+  ) => Promise<PreparedWitnessPublicationV1>;
+  readonly prepareAdmittedGenerationPublication: (
+    input: Omit<VerifiedEventPublicationInput, "firstEnrollment"> & Readonly<{
+      readonly decision: Extract<AdmissionDecision, { readonly kind: "CREATE_GENESIS" | "CREATE_SUCCESSOR" }>;
+      readonly observation: ReviewGateAdmissionObservation;
+      readonly membership: AdmittedMembership;
+    }>,
+    owned: AdmissionOwnedWitness,
   ) => Promise<PreparedWitnessPublicationV1>;
   readonly publishPreparedEvent: (
     input: PreparedWitnessPublicationV1,
@@ -1707,6 +1718,13 @@ export function createReviewGateEventStore(
         }
         return assembleVerifiedScopeRead(frontier, scopeId);
       })(),
+
+    prepareAdmittedGenerationPublication: async (
+      _input,
+      _owned,
+    ): Promise<PreparedWitnessPublicationV1> => {
+      throw new Error("review_gate_admitted_publication_not_implemented");
+    },
 
     /**
      * FDR-011 publication owner: create the exact encoded bytes/length/digest

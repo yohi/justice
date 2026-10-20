@@ -8,6 +8,7 @@ import {
 } from "./review-gate-witness-verification.js";
 import type {
   PreparedWitnessPublicationV1,
+  AdmittedMembership,
   TrustedFirstEnrollmentV1,
   TrustedWitnessInstallationV1,
 } from "./review-gate-witness-contracts.js";
@@ -52,6 +53,22 @@ export const publicationSchema = z.strictObject({
   payloadSchemaVersion: z.literal(1),
   nextFrontier: frontierSchema,
 }) satisfies z.ZodType<PreparedWitnessPublicationV1>;
+export const admittedMembershipSchema = z.strictObject({
+  gateId: id,
+  generationId: id,
+  operationId: id,
+  writerId: id,
+  writerHead: z.strictObject({ sequence: z.number().int().positive(), hash: digest }),
+  supersedesGateId: id.nullable(),
+  authorization: z.strictObject({
+    installationId: id,
+    workspaceIdentity: digest,
+    operationId: id,
+    expectedWorkspaceFrontier: digest,
+    scope: scopeSchema,
+    signature: z.string(),
+  }),
+}) satisfies z.ZodType<AdmittedMembership>;
 const committedPublicationSchema = z.strictObject({
   input: publicationSchema.omit({ nextFrontier: true }).extend({
     nextFrontier: frontierSchema.optional(),

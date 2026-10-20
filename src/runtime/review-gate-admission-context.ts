@@ -44,6 +44,12 @@ import type {
 import type { ReviewGateProtocolDescriptor } from "./review-gate-protocol.js";
 import { runGitLiteral } from "./review-gate-query.js";
 import type { TrustedWitnessInstallationV1 } from "./review-gate-witness-contracts.js";
+import type {
+  PreparedWitnessPublicationV1,
+  PublicationCommitInput,
+  PublicationCommitResult,
+} from "./review-gate-witness-contracts.js";
+import type { WitnessTransaction } from "./review-gate-witness-context.js";
 import {
   observeVerifiedAdmissionSnapshotObservation,
   pinTrackedArtifact,
@@ -59,11 +65,23 @@ import { resolveRequirementsForAdmission } from "./review-gate-requirements.js";
  * Gate ids outside the owned lock set.
  */
 export type AdmissionOwnedWitness = Readonly<{
+  readonly read: () => Promise<WitnessTransaction>;
   readonly readVerifiedFrontier: () => Promise<VerifiedScopeFrontier>;
   readonly readFirstEnrollmentAuthority: () => Promise<VerifiedFirstEnrollmentAuthorityV1 | null>;
   readonly readInstallation: () => Promise<TrustedWitnessInstallationV1>;
   readonly assertOwnedScope: (scopeId: string) => void;
   readonly assertOwnedGate: (gateId: string) => void;
+  readonly preparePublication: (
+    input: PreparedWitnessPublicationV1,
+    bytes: Uint8Array,
+  ) => Promise<"prepared" | "already_prepared">;
+  readonly publishPreparedJournal: (publicationId: string) => Promise<void>;
+  readonly commitPreparedPublicationCAS: (
+    input: PublicationCommitInput,
+  ) => Promise<PublicationCommitResult>;
+  readonly recoverPreparedPublication: (
+    publicationId: string,
+  ) => Promise<PublicationCommitResult>;
 }>;
 
 /**
@@ -352,4 +370,3 @@ export async function observeVerifiedAdmissionSnapshotOwned(
     throw error;
   }
 }
-
