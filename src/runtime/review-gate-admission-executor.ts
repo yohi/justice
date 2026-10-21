@@ -1,4 +1,24 @@
 import type { AdmissionDecision } from "../core/review-gate/admission";
+import {
+  buildSemanticContextCompatibilityProof,
+  createDefaultDeterministicValidatorRegistry,
+  encodeSemanticCompatibilityValidatorInput,
+  evaluateSemanticContextCompatibility,
+  SEMANTIC_CONTEXT_COMPATIBILITY_V1,
+  type VerifiedCompatibilityValidationInputV1,
+} from "../core/review-gate/deterministic-validation";
+import {
+  diffRequirementsSectionInventories,
+  buildRequirementsSectionInventory,
+  REQUIREMENTS_HEADING_ANCHOR_VERSION,
+  RequirementsSectionInventoryError,
+  type VerifiedSectionInventory,
+} from "../core/review-gate/requirements-section-inventory";
+import { planSemanticContextTransition, type SemanticContextTransitionDecision } from "../core/review-gate/cycle-evidence";
+import type {
+  SemanticContextInputsV1,
+  VerifiedSemanticContextTransitionInput,
+} from "../core/review-gate/types";
 import type {
   AdmissionOwnedWitness,
   ReviewGateAdmissionExecutionResult,
@@ -20,6 +40,143 @@ type ReviewGateAdmissionInput = Readonly<{
   readonly observation: ReviewGateAdmissionObservation | null;
   readonly owned: AdmissionOwnedWitness;
 }>;
+
+export type VerifiedSemanticContextTransitionResult = Readonly<{
+  readonly kind: "verified";
+  readonly input: VerifiedSemanticContextTransitionInput;
+  readonly decision: Exclude<SemanticContextTransitionDecision, { readonly kind: "BLOCK" }>;
+}> | Readonly<{ readonly kind: "BLOCK"; readonly reason: string }>;
+
+export type VerifiedSemanticContextTransitionPlanningInput = Readonly<{
+  readonly oldInputs: SemanticContextInputsV1;
+  readonly newInputs: SemanticContextInputsV1;
+  readonly oldSourceText: string;
+  readonly newSourceText: string;
+  readonly oldAuthorityEventId: string;
+  readonly newAuthorityEventId: string;
+  readonly triggeringAuthorityEventId: string;
+  readonly verifiedFrontierHash: string;
+  readonly roundCountersBefore: Readonly<{ readonly design: number; readonly plan: number }>;
+  readonly roundCountersAfter: Readonly<{ readonly design: number; readonly plan: number }>;
+  readonly operationId: string;
+  readonly validationEventId: string;
+  readonly executableDigest: string;
+  readonly registeredPolicyDigest: string;
+  readonly governingReferenceSectionKeys: readonly string[];
+}>;
+
+export function planVerifiedSemanticContextTransition(
+  input: VerifiedSemanticContextTransitionPlanningInput,
+): VerifiedSemanticContextTransitionResult {
+  if (
+    input.oldAuthorityEventId.length === 0 ||
+    input.newAuthorityEventId.length === 0 ||
+    input.triggeringAuthorityEventId.length === 0 ||
+    input.verifiedFrontierHash.length === 0 ||
+    input.operationId.length === 0 ||
+    input.validationEventId.length === 0 ||
+    input.executableDigest.length === 0 ||
+    input.oldInputs.requirements.authorityEventId !== input.oldAuthorityEventId ||
+    input.newInputs.requirements.authorityEventId !== input.newAuthorityEventId
+  ) {
+    return Object.freeze({ kind: "BLOCK", reason: "semantic_context_transition_binding_incomplete" });
+  }
+
+  let oldInventory: VerifiedSectionInventory;
+  let newInventory: VerifiedSectionInventory;
+  try {
+    oldInventory = buildRequirementsSectionInventory(
+      Buffer.from(input.oldSourceText, "utf8"),
+      input.oldInputs.requirements.gitBlobOid,
+      REQUIREMENTS_HEADING_ANCHOR_VERSION,
+    );
+    newInventory = buildRequirementsSectionInventory(
+      Buffer.from(input.newSourceText, "utf8"),
+      input.newInputs.requirements.gitBlobOid,
+      REQUIREMENTS_HEADING_ANCHOR_VERSION,
+    );
+  } catch (error: unknown) {
+    if (error instanceof RequirementsSectionInventoryError) {
+      return Object.freeze({ kind: "BLOCK", reason: "semantic_compatibility_inventory_invalid" });
+    }
+    throw error;
+  }
+  const diff = diffRequirementsSectionInventories(oldInventory, newInventory);
+  const validationInput: VerifiedCompatibilityValidationInputV1 = Object.freeze({
+    old: oldInventory,
+    new: newInventory,
+    diff,
+    governingReferenceSectionKeys: Object.freeze([...input.governingReferenceSectionKeys]),
+    oldAuthorityEventId: input.oldAuthorityEventId,
+    newAuthorityEventId: input.newAuthorityEventId,
+    triggerEventId: input.triggeringAuthorityEventId,
+    registeredPolicyDigest: input.registeredPolicyDigest,
+    contextInputs: Object.freeze({
+      old: input.oldInputs,
+      new: input.newInputs,
+      triggeringAuthorityEventId: input.triggeringAuthorityEventId,
+      verifiedFrontierHash: input.verifiedFrontierHash,
+    }),
+  });
+
+  const registry = createDefaultDeterministicValidatorRegistry();
+  const validator = registry.resolve(SEMANTIC_CONTEXT_COMPATIBILITY_V1.validatorId);
+  if (validator?.runner === null || validator === undefined) {
+    return Object.freeze({ kind: "BLOCK", reason: "semantic_context_compatibility_validator_unavailable" });
+  }
+  const runnerInput = {
+    oldSourceText: input.oldSourceText,
+    newSourceText: input.newSourceText,
+    oldGitBlobOid: input.oldInputs.requirements.gitBlobOid,
+    newGitBlobOid: input.newInputs.requirements.gitBlobOid,
+    oldFullDocumentDigest: oldInventory.inventory.normalizedDocumentDigest,
+    newFullDocumentDigest: newInventory.inventory.normalizedDocumentDigest,
+    governingReferenceSectionKeys: input.governingReferenceSectionKeys,
+    oldAuthorityEventId: input.oldAuthorityEventId,
+    newAuthorityEventId: input.newAuthorityEventId,
+    triggerEventId: input.triggeringAuthorityEventId,
+    registeredPolicyDigest: input.registeredPolicyDigest,
+    verifiedFrontierHash: input.verifiedFrontierHash,
+    oldContextInputs: input.oldInputs,
+    newContextInputs: input.newInputs,
+  };
+  const validation = validator.runner({
+    SEMANTIC_COMPATIBILITY_INPUTS: encodeSemanticCompatibilityValidatorInput(runnerInput),
+  });
+  if (validation.result === "INDETERMINATE") {
+    return Object.freeze({ kind: "BLOCK", reason: "semantic_compatibility_indeterminate" });
+  }
+
+  const classification = evaluateSemanticContextCompatibility(validationInput);
+  if (
+    classification.result === "INDETERMINATE" ||
+    (validation.result === "PASS") !== (classification.result === "EQUIVALENT")
+  ) {
+    return Object.freeze({ kind: "BLOCK", reason: "semantic_compatibility_indeterminate" });
+  }
+
+  const proof = buildSemanticContextCompatibilityProof({
+    input: validationInput,
+    classification,
+    validationEventId: input.validationEventId,
+    executableDigest: input.executableDigest,
+  });
+  const transitionInput: VerifiedSemanticContextTransitionInput = Object.freeze({
+    oldInputs: input.oldInputs,
+    newInputs: input.newInputs,
+    proof,
+    triggeringAuthorityEventId: input.triggeringAuthorityEventId,
+    verifiedHistoryFrontier: input.verifiedFrontierHash,
+    roundCountersBefore: input.roundCountersBefore,
+    roundCountersAfter: input.roundCountersAfter,
+    operationId: input.operationId,
+  });
+  const decision = planSemanticContextTransition(transitionInput);
+  if (decision.kind === "BLOCK") {
+    return Object.freeze({ kind: "BLOCK", reason: decision.reason });
+  }
+  return Object.freeze({ kind: "verified", input: transitionInput, decision });
+}
 
 function assertNever(value: never): never {
   throw new Error(`review_gate_admission_decision_unhandled: ${JSON.stringify(value)}`);

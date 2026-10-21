@@ -96,6 +96,15 @@ import {
   computeCanonicalJsonFingerprint,
   computeReviewScopeId,
 } from "../core/review-gate/identity";
+import {
+  buildRequirementsSectionInventory,
+  REQUIREMENTS_HEADING_ANCHOR_VERSION,
+} from "../core/review-gate/requirements-section-inventory";
+import {
+  SEMANTIC_CONTEXT_COMPATIBILITY_PROOF_REGISTRY_DIGEST,
+  SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_DIGEST,
+} from "../core/review-gate/deterministic-validation";
+import type { SemanticContextInputsV1 } from "../core/review-gate/types";
 import type {
   DurableReviewGateEventStore,
   ReviewGateDispatchRecordV1,
@@ -130,8 +139,10 @@ import type {
 } from "./review-gate-admission-context";
 import {
   applyReviewGateAdmissionDecision,
+  planVerifiedSemanticContextTransition,
   type ReviewGateAdmissionHandlers,
 } from "./review-gate-admission-executor";
+import { runGitLiteral } from "./review-gate-query";
 
 /**
  * Task 3 — bounded wait for a scope admission lease under contention.
@@ -1160,7 +1171,7 @@ export function createReviewGateCoordinator(
    * when the journal is empty).
    */
   const appendV2JournalEvents = async (
-    session: MutableSessionState,
+    session: Pick<MutableSessionState, "gateId" | "writerId" | "epochId">,
     operationId: string,
     buildDrafts: (journal: ReviewGateV2Journal) => readonly V2EventDraft[],
   ): Promise<void> => {
@@ -1171,7 +1182,7 @@ export function createReviewGateCoordinator(
   };
 
   const appendV2JournalBatch = async (
-    session: MutableSessionState,
+    session: Pick<MutableSessionState, "gateId" | "writerId" | "epochId">,
     operationId: string,
     drafts: readonly V2EventDraft[],
     preImageFrontierHash: string,
@@ -2425,25 +2436,218 @@ export function createReviewGateCoordinator(
               gateId: admittedDecision.gateId,
             })),
             STAY_SUSPENDED: () => Promise.resolve(blockUnsupported("The admitted Gate is suspended and cannot be resumed by this request.")),
-            REVALIDATE_OR_BLOCK: (admittedDecision) => {
-              const snapshot = observation?.snapshot;
-              if (snapshot === undefined) {
-                return Promise.resolve(blockUnsupported("Same-generation revalidation observation is unavailable."));
-              }
+            REVALIDATE_OR_BLOCK: async (admittedDecision) => {
+              const admissionObservation = observation;
+              const snapshot = admissionObservation?.snapshot;
               const tip = findAdmittedTip(admittedDecision.gateId, admittedDecision.generationId);
+              if (snapshot === undefined || admissionObservation === null || tip === undefined || tip.status === "completed") {
+                return blockUnsupported("Same-generation revalidation observation or unfinished Gate tip is unavailable.");
+              }
               if (
-                tip === undefined ||
-                tip.status === "completed" ||
                 !admittedDecision.predecessorProofRefs.includes(tip.lastVerifiedBinding.admission.gateCreatedEventId) ||
-                !admittedDecision.predecessorProofRefs.includes(tip.lastVerifiedBinding.effective.authorityEventId)
+                !admittedDecision.predecessorProofRefs.includes(tip.lastVerifiedBinding.effective.authorityEventId) ||
+                computeCanonicalJsonFingerprint(admittedDecision.effectiveBinding) !==
+                  computeCanonicalJsonFingerprint(tip.lastVerifiedBinding.effective) ||
+                computeCanonicalJsonFingerprint(admittedDecision.current) !==
+                  computeCanonicalJsonFingerprint(snapshot.current) ||
+                admittedDecision.triggeringAuthorityEventId !== admittedDecision.current.requirements.observationEvidenceId ||
+                admittedDecision.phase !== (tip.lastVerifiedBinding.ownDesignClear === null ? "design" : "plan") ||
+                admittedDecision.roundCountersBefore.design !== tip.rounds.design ||
+                admittedDecision.roundCountersBefore.plan !== tip.rounds.plan ||
+                admittedDecision.roundCountersAfter.design !== tip.rounds.design ||
+                admittedDecision.roundCountersAfter.plan !== tip.rounds.plan
               ) {
-                return Promise.resolve(blockUnsupported("Same-generation invalidation lacks matching authenticated predecessor proofs."));
+                return blockUnsupported("Same-generation revalidation decision does not match its verified current binding.");
               }
               owned.assertOwnedScope(snapshot.scopeId);
               owned.assertOwnedGate(admittedDecision.gateId);
-              return Promise.resolve(blockUnsupported(
-                "Same-generation revalidation lacks a verified semantic-context transition proof; stale authority cannot be resumed.",
-              ));
+
+              const frontier = await owned.readVerifiedFrontier();
+              if (
+                frontier.globalFrontierHash !== admittedDecision.witnessFrontierHash ||
+                snapshot.verifiedFrontierHash !== admittedDecision.witnessFrontierHash
+              ) {
+                return blockUnsupported("Same-generation revalidation frontier changed before semantic proof validation.");
+              }
+
+              const oldRequirements = admittedDecision.effectiveBinding.currentRequirements;
+              const currentRequirements = admittedDecision.current.requirements;
+              if (
+                !/^[a-f0-9]{40,64}$/u.test(oldRequirements.gitBlobOid) ||
+                !/^[a-f0-9]{40,64}$/u.test(currentRequirements.gitBlobOid) ||
+                oldRequirements.selectedByEventId !== admittedDecision.effectiveBinding.currentRequirementsAuthorityEventId ||
+                currentRequirements.workspaceIdentity !== snapshot.workspaceIdentity
+              ) {
+                return blockUnsupported("Same-generation revalidation lacks complete verified Requirements bindings.");
+              }
+
+              const [oldBlob, currentBytes] = await Promise.all([
+                runGitLiteral(workspaceRoot, ["cat-file", "blob", oldRequirements.gitBlobOid]),
+                reader.readWorkspaceFile(currentRequirements.canonicalPath),
+              ]);
+              if (oldBlob.code !== 0 || currentBytes === null) {
+                return blockUnsupported("Same-generation semantic compatibility source is unavailable.");
+              }
+              if (
+                computeArtifactDigest(oldBlob.stdout) !== oldRequirements.digest ||
+                computeArtifactDigest(currentBytes) !== currentRequirements.digest
+              ) {
+                return blockUnsupported("Same-generation semantic compatibility bytes do not match their verified artifact bindings.");
+              }
+
+              const decoder = new TextDecoder("utf-8", { fatal: true });
+              let oldSourceText: string;
+              let currentSourceText: string;
+              try {
+                oldSourceText = decoder.decode(oldBlob.stdout);
+                currentSourceText = decoder.decode(currentBytes);
+              } catch (error: unknown) {
+                if (error instanceof TypeError) {
+                  return blockUnsupported("Same-generation semantic compatibility source is not valid UTF-8.");
+                }
+                throw error;
+              }
+
+              const oldInventory = buildRequirementsSectionInventory(
+                Buffer.from(oldSourceText, "utf8"),
+                oldRequirements.gitBlobOid,
+                REQUIREMENTS_HEADING_ANCHOR_VERSION,
+              );
+              const currentInventory = buildRequirementsSectionInventory(
+                Buffer.from(currentSourceText, "utf8"),
+                currentRequirements.gitBlobOid,
+                REQUIREMENTS_HEADING_ANCHOR_VERSION,
+              );
+              const oldBinding = admittedDecision.effectiveBinding;
+              const oldContext = oldBinding.context;
+              const designClear = tip.lastVerifiedBinding.ownDesignClear;
+              const upstreamApproved = admittedDecision.phase === "plan" && designClear !== null
+                ? Object.freeze({
+                    bindingDigest: computeCanonicalJsonFingerprint({
+                      design: designClear.approvedDesign,
+                      designProtocolFingerprint: designClear.designProtocolFingerprint,
+                      approvedContextEventId: designClear.approvedContextEventId,
+                    }),
+                    authorityEventId: designClear.approvedContextEventId,
+                  })
+                : null;
+              const phaseFingerprint = (phase: ReviewGatePhase, context: typeof oldContext): string =>
+                phase === "design" ? context.designProtocolFingerprint : context.planProtocolFingerprint;
+              const oldPhaseFingerprint = phaseFingerprint(admittedDecision.phase, oldContext);
+              const newPolicyVersion = String(
+                admittedDecision.phase === "design"
+                  ? protocol.descriptor.designPhase.phasePolicyVersion
+                  : protocol.descriptor.planPhase.phasePolicyVersion,
+              );
+              const newPhaseFingerprint = phaseFingerprint(admittedDecision.phase, {
+                ...oldContext,
+                globalProtocolFingerprint: admittedDecision.current.globalProtocolFingerprint,
+                designProtocolFingerprint: admittedDecision.current.designProtocolFingerprint,
+                planProtocolFingerprint: admittedDecision.current.planProtocolFingerprint,
+              });
+              const oldInputs: SemanticContextInputsV1 = Object.freeze({
+                workspaceIdentity: oldRequirements.workspaceIdentity,
+                gateId: admittedDecision.gateId,
+                generationId: admittedDecision.generationId,
+                phase: admittedDecision.phase,
+                phaseBaselineId: oldBinding.authorityEventId,
+                comparisonSegmentId: oldBinding.operationId,
+                requirements: Object.freeze({
+                  source: oldRequirements.source,
+                  canonicalPath: oldRequirements.canonicalPath,
+                  gitBlobOid: oldRequirements.gitBlobOid,
+                  gitMode: oldRequirements.gitMode,
+                  authorityEventId: oldRequirements.selectedByEventId,
+                  governingReferenceManifestDigest: computeCanonicalJsonFingerprint(
+                    oldInventory.sections.map((section) => section.sectionKey),
+                  ),
+                }),
+                upstreamApproved,
+                policy: Object.freeze({
+                  contractId: "review-gate-phase-semantic-policy",
+                  version: "1",
+                  semanticFingerprint: oldPhaseFingerprint,
+                  lineageFingerprint: oldContext.globalProtocolFingerprint,
+                  nc1Fingerprint: oldContext.globalProtocolFingerprint,
+                  validatorRegistryDigest: SEMANTIC_CONTEXT_COMPATIBILITY_PROOF_REGISTRY_DIGEST,
+                }),
+              });
+              const newInputs: SemanticContextInputsV1 = Object.freeze({
+                workspaceIdentity: currentRequirements.workspaceIdentity,
+                gateId: admittedDecision.gateId,
+                generationId: admittedDecision.generationId,
+                phase: admittedDecision.phase,
+                phaseBaselineId: oldBinding.authorityEventId,
+                comparisonSegmentId: oldBinding.operationId,
+                requirements: Object.freeze({
+                  source: currentRequirements.source,
+                  canonicalPath: currentRequirements.canonicalPath,
+                  gitBlobOid: currentRequirements.gitBlobOid,
+                  gitMode: currentRequirements.gitMode,
+                  authorityEventId: admittedDecision.triggeringAuthorityEventId,
+                  governingReferenceManifestDigest: computeCanonicalJsonFingerprint(
+                    currentInventory.sections.map((section) => section.sectionKey),
+                  ),
+                }),
+                upstreamApproved: admittedDecision.phase === "plan" && designClear !== null
+                  ? Object.freeze({
+                      bindingDigest: computeCanonicalJsonFingerprint({
+                        design: admittedDecision.current.design,
+                        designProtocolFingerprint: admittedDecision.current.designProtocolFingerprint,
+                        approvedContextEventId: designClear.approvedContextEventId,
+                      }),
+                      authorityEventId: designClear.approvedContextEventId,
+                    })
+                  : null,
+                policy: Object.freeze({
+                  contractId: "review-gate-phase-semantic-policy",
+                  version: newPolicyVersion,
+                  semanticFingerprint: newPhaseFingerprint,
+                  lineageFingerprint: admittedDecision.current.globalProtocolFingerprint,
+                  nc1Fingerprint: admittedDecision.current.globalProtocolFingerprint,
+                  validatorRegistryDigest: SEMANTIC_CONTEXT_COMPATIBILITY_PROOF_REGISTRY_DIGEST,
+                }),
+              });
+              const operationId = newId();
+              const planned = planVerifiedSemanticContextTransition({
+                oldInputs,
+                newInputs,
+                oldSourceText,
+                newSourceText: currentSourceText,
+                oldAuthorityEventId: oldBinding.authorityEventId,
+                newAuthorityEventId: admittedDecision.triggeringAuthorityEventId,
+                triggeringAuthorityEventId: admittedDecision.triggeringAuthorityEventId,
+                verifiedFrontierHash: admittedDecision.witnessFrontierHash,
+                roundCountersBefore: admittedDecision.roundCountersBefore,
+                roundCountersAfter: admittedDecision.roundCountersAfter,
+                operationId,
+                validationEventId: newId(),
+                executableDigest: protocol.releaseDescriptorDigest,
+                registeredPolicyDigest: SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_DIGEST,
+                governingReferenceSectionKeys: currentInventory.sections.map((section) => section.sectionKey),
+              });
+              if (planned.kind === "BLOCK") return blockUnsupported(planned.reason);
+              if (planned.decision.kind === "PREPARE_INCOMPATIBLE_SEGMENT") {
+                const journal = await eventStore.readV2Journal(admittedDecision.gateId);
+                const tailEvent = journal.events.at(-1);
+                if (
+                  tailEvent === undefined ||
+                  !(("schemaVersion" in tailEvent) && tailEvent.schemaVersion === 2) ||
+                  tailEvent.generationId !== admittedDecision.generationId
+                ) {
+                  return blockUnsupported("Same-generation semantic transition cannot be anchored to its verified Gate journal.");
+                }
+                await appendV2JournalEvents({
+                  gateId: admittedDecision.gateId as GateId,
+                  writerId: tailEvent.writerId as WriterId,
+                  epochId: tailEvent.epochId as EpochId,
+                }, operationId, () => [{
+                  eventType: "SEMANTIC_CONTEXT_TRANSITION",
+                  payload: planned.input,
+                }]);
+              }
+              resumeDecisionNeedsRevalidation = true;
+              return Object.freeze({ kind: "RESUME_ADMITTED", gateId: admittedDecision.gateId });
             },
             UPSTREAM_PRECEDENCE_REQUIRED: (admittedDecision) => {
               const precedence = matchingPrecedence(
