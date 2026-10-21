@@ -164,6 +164,7 @@ export type ReviewGateJournalRecovery = Readonly<{
 }>;
 
 export type ReviewGateEventStore = Readonly<{
+  readonly writerId?: string;
   readonly appendEvents: (gateId: string, events: readonly ReviewGateEvent[]) => Promise<void>;
   readonly readEvents: (gateId: string) => Promise<readonly ReviewGateEvent[]>;
   readonly readVerifiedEvents: (gateId: string) => Promise<readonly VerifiedReviewGateEvent[]>;
@@ -290,7 +291,9 @@ export type VerifiedReviewGateEventStore = Readonly<{
 }>;
 
 /** Full authority store: the legacy surface plus the Task 6 verified surface. */
-export type DurableReviewGateEventStore = ReviewGateEventStore & VerifiedReviewGateEventStore;
+export type DurableReviewGateEventStore = ReviewGateEventStore &
+  VerifiedReviewGateEventStore &
+  Readonly<{ readonly writerId: string }>;
 
 type JournalRead = Readonly<{
   readonly events: readonly VerifiedReviewGateEvent[];
@@ -1511,6 +1514,7 @@ export function createReviewGateEventStore(
   };
 
   const store: DurableReviewGateEventStore = {
+    writerId,
     appendEvents: (gateId, events) =>
       serialize(async () => {
         assertOpen();

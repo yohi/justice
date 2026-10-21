@@ -310,7 +310,7 @@ describe("Task 18 production coordinator end-to-end authority path", () => {
     // process state — decides.
     first.coordinator.releaseSession(sessionId);
     const restartedSessionId = "task18-restart-session-2";
-    const second = harness.buildCoordinator();
+    const second = harness.buildCoordinator({ idPrefix: "task18-restart-2" });
     const resumed = await second.coordinator.startOrResume(restartedSessionId, {
       source: "command",
       designPath: DESIGN_PATH,
@@ -339,7 +339,7 @@ describe("Task 18 production coordinator end-to-end authority path", () => {
       operationId: rePrepared.operationId,
       reason: null,
     });
-    expect(outcome.kind).toBe("executed");
+    expect(outcome.kind, outcome.guidance ?? undefined).toBe("executed");
 
     const journalAfterRestart = await second.eventStore.readV2Journal(gateId);
     expect(journalAfterRestart.eventCount).toBe(4);

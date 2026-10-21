@@ -72,6 +72,7 @@ import {
   type ReviewGateRemediationCompletion,
   type ReviewGateReviewObservation,
   type ReviewGateSelfReviewCompletion,
+  type VerifiedUpstreamReopenContextV1,
 } from "../core/review-gate/orchestrator";
 import { projectReviewGate } from "../core/review-gate/projection";
 import type {
@@ -454,6 +455,7 @@ interface MutableSessionState {
   workspaceStates: ReadonlyMap<string, ReviewTargetWorkspaceState>;
   validationState: DeterministicValidationState;
   reviewAttemptId: string | null;
+  readonly verifiedUpstreamReopen?: VerifiedUpstreamReopenContextV1;
   readonly scopeLock: ReviewGateLockHandle;
   readonly gateLock: ReviewGateLockHandle;
 }
@@ -473,7 +475,7 @@ export function createReviewGateCoordinator(
   const now = options.now ?? ((): string => new Date().toISOString());
   const randomId = options.newId ?? ((): string => globalThis.crypto.randomUUID());
   const newId = randomId;
-  const newWriterId = options.newWriterId ?? ((): string => `rgw-${randomId()}`);
+  const newWriterId = options.newWriterId ?? (() => eventStore.writerId ?? `rgw-${randomId()}`);
   /** Task 17 — durable custody for prepared caller-owned operations. */
   const recovery = options.recoveryStore ?? null;
   /**
@@ -832,6 +834,7 @@ export function createReviewGateCoordinator(
       }>;
       readonly designClearFingerprint?: string;
       readonly preparedApprovalBinding?: ReviewApprovalBindingV1;
+      verifiedUpstreamReopen?: VerifiedUpstreamReopenContextV1;
     } = {
       artifacts,
       workspaceStates: session.workspaceStates,
@@ -864,6 +867,9 @@ export function createReviewGateCoordinator(
         state: session.validationState,
         dispatches: preClearDispatches(session, projection),
       };
+    }
+    if (session.verifiedUpstreamReopen !== undefined) {
+      context.verifiedUpstreamReopen = session.verifiedUpstreamReopen;
     }
     return Object.freeze(context) as ReviewGatePlanningContext;
   };
@@ -2351,6 +2357,32 @@ export function createReviewGateCoordinator(
             admittedDecision: Extract<AdmissionDecision, { kind: "CREATE_GENESIS" | "CREATE_SUCCESSOR" }>,
           ): Promise<ReviewGateAdmissionExecutionResult> =>
             applyAdmittedCreation(admittedDecision, observation, owned);
+          const findAdmittedTip = (
+            gateId: string,
+            generationId: string,
+          ) => observation?.snapshot.currentTips.find(
+            (tip) =>
+              tip.status !== "completed" &&
+              tip.gateId === gateId &&
+              tip.generationId === generationId,
+          );
+          const matchingPrecedence = (
+            gateId: string,
+            generationId: string,
+            witnessFrontierHash: string,
+          ) => {
+            const snapshot = observation?.snapshot;
+            const precedence = snapshot?.precedence;
+            return snapshot !== undefined &&
+              precedence !== null &&
+              precedence !== undefined &&
+              snapshot.verifiedFrontierHash === witnessFrontierHash &&
+              precedence.gateId === gateId &&
+              precedence.generationId === generationId &&
+              precedence.witnessFrontierHash === witnessFrontierHash
+              ? precedence
+              : null;
+          };
           const handlers: ReviewGateAdmissionHandlers = {
             BLOCK: (admittedDecision) => Promise.resolve(Object.freeze({
               kind: "BLOCK",
@@ -2393,9 +2425,116 @@ export function createReviewGateCoordinator(
               gateId: admittedDecision.gateId,
             })),
             STAY_SUSPENDED: () => Promise.resolve(blockUnsupported("The admitted Gate is suspended and cannot be resumed by this request.")),
-            REVALIDATE_OR_BLOCK: () => Promise.resolve(blockUnsupported("Admission context changed; revalidation prerequisites are unavailable.")),
-            UPSTREAM_PRECEDENCE_REQUIRED: () => Promise.resolve(blockUnsupported("Upstream precedence requires a separately admitted revalidation operation.")),
-            STALE_LINEAGE_REVALIDATION_REQUIRED: () => Promise.resolve(blockUnsupported("Stale lineage requires a separately admitted revalidation operation.")),
+            REVALIDATE_OR_BLOCK: (admittedDecision) => {
+              const snapshot = observation?.snapshot;
+              if (snapshot === undefined) {
+                return Promise.resolve(blockUnsupported("Same-generation revalidation observation is unavailable."));
+              }
+              const tip = findAdmittedTip(admittedDecision.gateId, admittedDecision.generationId);
+              if (
+                tip === undefined ||
+                tip.status === "completed" ||
+                !admittedDecision.predecessorProofRefs.includes(tip.lastVerifiedBinding.admission.gateCreatedEventId) ||
+                !admittedDecision.predecessorProofRefs.includes(tip.lastVerifiedBinding.effective.authorityEventId)
+              ) {
+                return Promise.resolve(blockUnsupported("Same-generation invalidation lacks matching authenticated predecessor proofs."));
+              }
+              owned.assertOwnedScope(snapshot.scopeId);
+              owned.assertOwnedGate(admittedDecision.gateId);
+              return Promise.resolve(Object.freeze({
+                kind: "RESUME_ADMITTED",
+                gateId: admittedDecision.gateId,
+              }));
+            },
+            UPSTREAM_PRECEDENCE_REQUIRED: (admittedDecision) => {
+              const precedence = matchingPrecedence(
+                admittedDecision.gateId,
+                admittedDecision.generationId,
+                admittedDecision.witnessFrontierHash,
+              );
+              const tip = findAdmittedTip(admittedDecision.gateId, admittedDecision.generationId);
+              const blocker = precedence?.currentUpstreamBlockers.find((candidate) =>
+                admittedDecision.blockers.some((expected) =>
+                  expected.lineageId === candidate.lineageId &&
+                  expected.findingEventId === candidate.findingEventId &&
+                  expected.currentStatusEventId === candidate.currentStatusEventId &&
+                  expected.committedAuthorityEventId === candidate.committedAuthorityEventId &&
+                  expected.owner === candidate.owner,
+                ),
+              );
+              const completeBlockerSet = precedence !== null &&
+                precedence.currentUpstreamBlockers.length === admittedDecision.blockers.length &&
+                admittedDecision.blockers.every((expected) =>
+                  precedence.currentUpstreamBlockers.some((current) =>
+                    current.lineageId === expected.lineageId &&
+                    current.findingEventId === expected.findingEventId &&
+                    current.currentStatusEventId === expected.currentStatusEventId &&
+                    current.committedAuthorityEventId === expected.committedAuthorityEventId &&
+                    current.owner === expected.owner,
+                  ),
+                );
+              if (precedence === null || tip === undefined || blocker === undefined || !completeBlockerSet) {
+                return Promise.resolve(blockUnsupported("Upstream precedence proof is stale or does not match the admitted tip."));
+              }
+              const scopeId = observation?.snapshot.scopeId;
+              if (scopeId === undefined) {
+                return Promise.resolve(blockUnsupported("Upstream precedence observation is unavailable."));
+              }
+              if (precedence.phase !== "design") {
+                return Promise.resolve(blockUnsupported("Plan-phase upstream reopen lacks the exact downstream restore provenance required by Core."));
+              }
+              owned.assertOwnedScope(scopeId);
+              owned.assertOwnedGate(admittedDecision.gateId);
+              const verifiedUpstreamReopen: VerifiedUpstreamReopenContextV1 = Object.freeze({
+                gateId: admittedDecision.gateId,
+                generationId: admittedDecision.generationId,
+                currentPhase: precedence.phase,
+                upstreamBlocker: Object.freeze({
+                  lineageId: blocker.lineageId,
+                  findingEventId: blocker.findingEventId,
+                  currentOwner: blocker.owner,
+                  committedAuthorityEventId: blocker.committedAuthorityEventId,
+                }),
+                downstream: null,
+                restoreCompletion: null,
+                verifiedFrontierHash: admittedDecision.witnessFrontierHash,
+              });
+              return Promise.resolve(Object.freeze({
+                kind: "RESUME_ADMITTED",
+                gateId: admittedDecision.gateId,
+                verifiedUpstreamReopen,
+              }));
+            },
+            STALE_LINEAGE_REVALIDATION_REQUIRED: (admittedDecision) => {
+              const precedence = matchingPrecedence(
+                admittedDecision.gateId,
+                admittedDecision.generationId,
+                admittedDecision.witnessFrontierHash,
+              );
+              const tip = findAdmittedTip(admittedDecision.gateId, admittedDecision.generationId);
+              const pendingMatches = precedence !== null &&
+                precedence.pendingStaleLineages.length === admittedDecision.pending.length &&
+                admittedDecision.pending.every((expected) =>
+                  precedence.pendingStaleLineages.some((current) =>
+                    current.lineageId === expected.lineageId &&
+                    current.staleEvidenceEventId === expected.staleEvidenceEventId &&
+                    current.requiredRevalidationRuleId === expected.requiredRevalidationRuleId,
+                  ),
+                );
+              if (!pendingMatches || tip === undefined) {
+                return Promise.resolve(blockUnsupported("Stale-lineage evidence is missing or no longer matches the admitted tip."));
+              }
+              const scopeId = observation?.snapshot.scopeId;
+              if (scopeId === undefined) {
+                return Promise.resolve(blockUnsupported("Stale-lineage observation is unavailable."));
+              }
+              owned.assertOwnedScope(scopeId);
+              owned.assertOwnedGate(admittedDecision.gateId);
+              return Promise.resolve(Object.freeze({
+                kind: "RESUME_ADMITTED",
+                gateId: admittedDecision.gateId,
+              }));
+            },
             INSPECT_NC1_ELIGIBLE_CHANGE: () => Promise.resolve(blockUnsupported("NC1 eligibility inspection is not an execution authorization.")),
             REENTRY_CANDIDATE: () => Promise.resolve(blockUnsupported("NC1 reentry requires a separately admitted validation operation.")),
           };
@@ -2405,6 +2544,7 @@ export function createReviewGateCoordinator(
 
     // Contention waits for the lease (bounded); it never skips admission.
     let execution: ReviewGateAdmissionExecutionResult | null = null;
+    let resumeDecisionNeedsRevalidation = false;
     for (let attempt = 0; attempt < ADMISSION_LEASE_WAIT_ATTEMPTS; attempt += 1) {
       try {
         execution = await applyDecision();
@@ -2432,6 +2572,11 @@ export function createReviewGateCoordinator(
         execution = null;
         continue;
       }
+      if (execution?.kind === "RESUME_ADMITTED" && !resumeDecisionNeedsRevalidation) {
+        resumeDecisionNeedsRevalidation = true;
+        execution = null;
+        continue;
+      }
       break;
     }
     if (execution === null) {
@@ -2453,6 +2598,7 @@ export function createReviewGateCoordinator(
         planPath,
         designDigest,
         planDigest,
+        execution.verifiedUpstreamReopen,
       );
     }
     if (execution.kind === "HANDOFF_PENDING" || execution.kind === "TERMINAL_INTENT_PREPARED_UNPUBLISHED") {
@@ -2476,6 +2622,7 @@ export function createReviewGateCoordinator(
     planPath: string,
     designDigest: string,
     planDigest: string,
+    verifiedUpstreamReopen?: VerifiedUpstreamReopenContextV1,
   ): Promise<ReviewGateCommandResult> => {
     const previous = dropSession(sessionId);
     if (previous !== undefined) releaseHandles(previous);
@@ -2496,9 +2643,19 @@ export function createReviewGateCoordinator(
       });
     }
 
-    // Fresh writer shard + new epoch for the resumed orchestration.
+    const projection = await loadProjection(gateId);
+    if (projection.status === "completed") {
+      chain.scopeLock.release();
+      chain.gateLock.release();
+      return blockedResult(
+        designPath,
+        planPath,
+        "[JUSTICE: REVIEW GATE BLOCKED] The Gate completed before its admitted resume acquired the local locks.",
+      );
+    }
+
     const writerId = newWriterId() as WriterId;
-    const epochId = newId() as EpochId;
+    const epochId = projection.epoch.epochId as EpochId;
     const session: MutableSessionState = {
       sessionId,
       gateId,
@@ -2522,6 +2679,7 @@ export function createReviewGateCoordinator(
       workspaceStates: await inspectTargets([designPath, planPath]),
       validationState: emptyDeterministicValidationState,
       reviewAttemptId: null,
+      ...(verifiedUpstreamReopen === undefined ? {} : { verifiedUpstreamReopen }),
       scopeLock: chain.scopeLock,
       gateLock: chain.gateLock,
     };

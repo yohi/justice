@@ -22,6 +22,7 @@ import type {
   VerifiedScopeFrontier,
   VerifiedTargetWriterHandoffContinuationV1,
 } from "../core/review-gate/types.js";
+import type { VerifiedUpstreamReopenContextV1 } from "../core/review-gate/orchestrator.js";
 import type {
   VerifiedAdmissionSnapshot,
   VerifiedObservedRequirementsCandidate,
@@ -143,7 +144,11 @@ export type ReviewGateAdmissionExecutionResult =
       publicationId: string;
       terminalTransitionOperationId: string;
     }>
-  | Readonly<{ kind: "RESUME_ADMITTED"; gateId: string }>
+  | Readonly<{
+      kind: "RESUME_ADMITTED";
+      gateId: string;
+      verifiedUpstreamReopen?: VerifiedUpstreamReopenContextV1;
+    }>
   | Readonly<{ kind: "MUTABLE_APPLICATION_YIELDED" }>;
 
 /**

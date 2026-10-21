@@ -38,6 +38,7 @@ type InMemoryGateData = {
 };
 
 export type InMemoryReviewGateEventStore = ReviewGateEventStore & Pick<DurableReviewGateEventStore, "prepareAdmittedGenerationPublication"> & {
+  readonly writerId: string;
   readonly gates: () => ReadonlyMap<string, InMemoryGateData>;
   readonly commitPreparedPublicationCAS: (input: PublicationCommitInput) => Promise<PublicationCommitResult>;
 };
@@ -53,6 +54,7 @@ export function createInMemoryReviewGateEventStore(): InMemoryReviewGateEventSto
   const committedPublications = new Set<string>();
 
   const store: InMemoryReviewGateEventStore = {
+    writerId: "test-writer-authority",
     gates: () => gates,
     appendEvents: async (gateId, events) => {
       const data = gates.get(gateId) ?? { events: [], v2Events: [], dispatches: [] };

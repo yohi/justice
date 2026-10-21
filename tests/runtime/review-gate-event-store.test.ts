@@ -503,6 +503,7 @@ describe("ReviewGateEventStore — durable events", () => {
       ctx.root,
       eventStoreOptions(ctx.root, ctx.writerId, ctx.witness),
     );
+    expect(store.writerId).toBe(ctx.writerId);
     await seedGate(ctx, store, "gate-a", [gateCreatedEvent("gate-a")]);
 
     await expect(store.readEvents("gate-unseen")).rejects.toThrow(

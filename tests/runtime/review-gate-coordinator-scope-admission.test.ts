@@ -98,7 +98,6 @@ function createTestCoordinator(
 ) {
   testCounter += 1;
   let idSequence = 0;
-  let writerSequence = 0;
   const eventStore = createInMemoryReviewGateEventStore();
   const resolvedScopeAdmission = typeof scopeAdmission === "function" ? scopeAdmission(eventStore) : scopeAdmission;
   const protocol = createReviewGateProtocolDescriptor();
@@ -121,7 +120,6 @@ function createTestCoordinator(
       new Map(paths.map((path) => [path, "clean_committed" as const])),
     now: () => "2026-10-13T00:00:00.000Z",
     newId: () => `test-id-${++idSequence}`,
-    newWriterId: () => `test-writer-${testCounter}-${++writerSequence}`,
   });
   return { coordinator, eventStore };
 }
@@ -219,6 +217,134 @@ describe("coordinator startOrResume routes through scope admission", () => {
     expect(await eventStore.listGateIds()).toEqual([]);
   });
 
+  it.each([
+    {
+      kind: "REVALIDATE_OR_BLOCK",
+      gateId: "gate-revalidation",
+      generationId: "generation-1",
+      dimension: "design",
+      reason: "design changed",
+      predecessorProofRefs: [],
+      witnessFrontierHash: "frontier-1",
+    },
+    {
+      kind: "UPSTREAM_PRECEDENCE_REQUIRED",
+      gateId: "gate-upstream",
+      generationId: "generation-1",
+      blockers: [],
+      witnessFrontierHash: "frontier-1",
+    },
+    {
+      kind: "STALE_LINEAGE_REVALIDATION_REQUIRED",
+      gateId: "gate-stale",
+      generationId: "generation-1",
+      pending: [],
+      witnessFrontierHash: "frontier-1",
+    },
+  ] satisfies readonly AdmissionDecision[])("blocks $kind when verified current proof is absent", async (decision) => {
+    const { coordinator, eventStore } = createTestCoordinator(
+      createMockScopeAdmission(decision),
+    );
+
+    const result = await coordinator.startOrResume(`missing-proof-${decision.kind}`, {
+      source: "command",
+      designPath: DESIGN_PATH,
+      planPath: PLAN_PATH,
+    });
+
+    expect(result.dispatched).toBe(false);
+    expect(result.guidance).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
+    expect(await eventStore.listGateIds()).toEqual([]);
+  });
+
+  it("re-admits before resuming and preserves the crash epoch and spent rounds", async () => {
+    let admissionCalls = 0;
+    const scopeAdmission = (
+      eventStore: ReturnType<typeof createInMemoryReviewGateEventStore>,
+    ): ReviewGateScopeAdmission => ({
+      withAdmissionLease: async (_request, run) => {
+        admissionCalls += 1;
+        if (admissionCalls === 1) {
+          return run(
+            {
+              kind: "CREATE_GENESIS",
+              workspaceIdentity: "test-workspace-identity",
+              scopeId: SCOPE_ID,
+              installationId: "installation-1",
+              enrollmentAuthorizationEventId: "enrollment-1",
+              verifiedWorkspaceFrontierHash: "frontier-1",
+              completeRelationClosureDigest: "closure-1",
+            },
+            createGenesisObservation(),
+            mockOwnedWitness(eventStore),
+          );
+        }
+
+        const gateId = await eventStore.readScopeIndex(SCOPE_ID);
+        if (gateId === null) throw new Error("test_admitted_gate_missing");
+        if (admissionCalls === 2) {
+          const genesis = (await eventStore.readV2Journal(gateId)).events[0];
+          if (genesis === undefined || genesis.eventType !== "GATE_CREATED") {
+            throw new Error("test_admitted_genesis_missing");
+          }
+          const identity = {
+            gateId: genesis.gateId as import("../../src/core/review-gate-types").GateId,
+            writerId: genesis.writerId as import("../../src/core/review-gate-types").WriterId,
+            epochId: genesis.epochId as import("../../src/core/review-gate-types").EpochId,
+            emittedAt: genesis.emittedAt,
+          };
+          await eventStore.appendEvents(gateId, [
+            {
+              ...identity,
+              eventType: "FINDING_DISCOVERED",
+              payload: {
+                lineageId: "crash-lineage" as import("../../src/core/review-gate-types").LineageId,
+                findingId: "crash-finding" as import("../../src/core/review-gate-types").FindingId,
+                observedPhase: "design",
+                ownerScope: "design",
+                descriptionDigest: "crash-description" as import("../../src/core/review-gate-types").ArtifactDigest,
+              },
+            },
+            {
+              ...identity,
+              eventType: "FINDING_REMEDIATED",
+              payload: {
+                lineageId: "crash-lineage" as import("../../src/core/review-gate-types").LineageId,
+                findingId: "crash-finding" as import("../../src/core/review-gate-types").FindingId,
+                remediationRound: { phase: "design", ordinal: 1 },
+              },
+            },
+          ]);
+        }
+        return run(
+          { kind: "RESUME", gateId, generationId: gateId, witnessFrontierHash: "frontier-1" },
+          null,
+          mockOwnedWitness(eventStore),
+        );
+      },
+    });
+    const { coordinator, eventStore } = createTestCoordinator(scopeAdmission);
+
+    const result = await coordinator.startOrResume("crash-resume", {
+      source: "command",
+      designPath: DESIGN_PATH,
+      planPath: PLAN_PATH,
+    });
+
+    expect(admissionCalls).toBe(3);
+    const gateId = result.gateId;
+    if (gateId === null) throw new Error("test_resumed_gate_missing");
+    const genesis = (await eventStore.readV2Journal(gateId)).events[0];
+    if (genesis === undefined || genesis.eventType !== "GATE_CREATED") {
+      throw new Error("test_admitted_genesis_missing");
+    }
+    const events = await eventStore.readEvents(gateId);
+    const resumed = events.find((event) => event.eventType === "ORCHESTRATION_RESUMED");
+    expect(resumed?.epochId).toBe(genesis.epochId);
+    expect(resumed?.writerId).toBe(genesis.writerId);
+    expect(events.filter((event) => event.eventType === "FINDING_REMEDIATED")).toHaveLength(1);
+  });
+
   it("waits for the lease and applies the decision when the lease frees", async () => {
     let attempts = 0;
     const scopeAdmission = (eventStore: ReturnType<typeof createInMemoryReviewGateEventStore>): ReviewGateScopeAdmission => ({
@@ -257,7 +383,7 @@ describe("coordinator startOrResume routes through scope admission", () => {
       planPath: PLAN_PATH,
     });
 
-    expect(attempts).toBe(4);
+    expect(attempts).toBe(5);
     // The decision is applied through the callback, not skipped.
     expect(result.dispatched).toBe(true);
     expect(result.gateId).not.toBeNull();
