@@ -25,9 +25,13 @@ import type {
 import type { VerifiedUpstreamReopenContextV1 } from "../core/review-gate/orchestrator.js";
 import type {
   VerifiedAdmissionSnapshot,
+  VerifiedNC1EligibleChangeV1,
+  VerifiedNC1StopV1,
   VerifiedObservedRequirementsCandidate,
+  VerifiedGateTip,
   VerifiedWorkspaceContinuityV1,
 } from "../core/review-gate/admission.js";
+import type { VerifiedNonConvergenceReentryValidationV1 } from "../core/review-gate/reentry.js";
 import {
   canonicalizeArtifactPath,
   computeCanonicalJsonFingerprint,
@@ -158,8 +162,20 @@ export type ReviewGateAdmissionExecutionResult =
  * through the admission decision.
  */
 export type ReviewGateAdmissionObservation = Readonly<{
-  readonly snapshot: VerifiedEnrollmentAdmissionSnapshot;
+  readonly snapshot: RuntimeVerifiedAdmissionSnapshot;
   readonly requirementsResolution: RequirementsResolutionV2;
+  readonly lastVerifiedBinding: Extract<VerifiedGateTip, { readonly status: "active" | "suspended" }>["lastVerifiedBinding"] | null;
+  readonly nc1Evidence: VerifiedNC1EvidenceBundleV1 | null;
+}>;
+
+export type RuntimeVerifiedAdmissionSnapshot = VerifiedEnrollmentAdmissionSnapshot &
+  Readonly<{ readonly nc1Evidence: VerifiedNC1EvidenceBundleV1 | null }>;
+
+export type VerifiedNC1EvidenceBundleV1 = Readonly<{
+  readonly stop: VerifiedNC1StopV1;
+  readonly change: VerifiedNC1EligibleChangeV1 | null;
+  readonly validationOutcome: VerifiedNonConvergenceReentryValidationV1 | null;
+  readonly frontierHash: string;
 }>;
 
 /**
@@ -258,7 +274,7 @@ export async function observeVerifiedAdmissionSnapshotOwned(
     } = options;
 
     if (authority.firstEnrollment === null) {
-      return observeVerifiedAdmissionSnapshotObservation({
+      const observed = await observeVerifiedAdmissionSnapshotObservation({
         workspaceRoot,
         scopeId,
         protocol,
@@ -267,6 +283,9 @@ export async function observeVerifiedAdmissionSnapshotOwned(
         owned,
         request,
       });
+      return observed === null
+        ? null
+        : buildAdmissionObservation(observed.snapshot, observed.requirementsResolution);
     }
 
     const designPath = canonicalizeArtifactPath(request.designPath);
@@ -389,9 +408,40 @@ export async function observeVerifiedAdmissionSnapshotOwned(
       current,
     });
 
-    return Object.freeze({ snapshot, requirementsResolution });
+    return buildAdmissionObservation(snapshot, requirementsResolution);
   } catch (error) {
     if (error instanceof Error) return null;
     throw error;
   }
+}
+
+function buildAdmissionObservation(
+  snapshot: VerifiedAdmissionSnapshot,
+  requirementsResolution: RequirementsResolutionV2,
+): ReviewGateAdmissionObservation {
+  const unfinishedTip = snapshot.currentTips.find(
+    (tip): tip is Extract<VerifiedGateTip, { readonly status: "active" | "suspended" }> =>
+      tip.status === "active" || tip.status === "suspended",
+  );
+  const nc1Evidence =
+    unfinishedTip?.status === "suspended" &&
+    unfinishedTip.suspensionReason === "review_non_convergent" &&
+    unfinishedTip.nc1Stop !== null
+      ? Object.freeze({
+          stop: unfinishedTip.nc1Stop,
+          change: snapshot.nc1Candidate,
+          validationOutcome: null,
+          frontierHash: snapshot.verifiedFrontierHash,
+        })
+      : null;
+  const runtimeSnapshot: RuntimeVerifiedAdmissionSnapshot = Object.freeze({
+    ...snapshot,
+    nc1Evidence,
+  });
+  return Object.freeze({
+    snapshot: runtimeSnapshot,
+    requirementsResolution,
+    lastVerifiedBinding: unfinishedTip?.lastVerifiedBinding ?? null,
+    nc1Evidence,
+  });
 }

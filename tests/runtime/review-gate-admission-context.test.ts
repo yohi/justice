@@ -248,6 +248,9 @@ owned: testOwnedWitness(frontier),
     );
     expect(snapshot.current.design.canonicalPath).toBe(DESIGN_PATH);
     expect(snapshot.current.plan.canonicalPath).toBe(PLAN_PATH);
+    expect(snapshot.nc1Evidence).toBeNull();
+    expect(observation?.lastVerifiedBinding).toBeNull();
+    expect(observation?.nc1Evidence).toBeNull();
 
     eventStore.close();
     closeFixture(fixture);

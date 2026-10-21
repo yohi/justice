@@ -821,7 +821,21 @@ export function createReviewGateScopeAdmission(
         observation: currentObservation,
       };
     }
-    return { decision: secondDecision, observation: currentObservation };
+    const stop = currentObservation.nc1Evidence?.stop;
+    const nc1Evidence = stop === undefined
+      ? null
+      : Object.freeze({
+          stop,
+          change: inspected.candidate,
+          validationOutcome: currentObservation.nc1Evidence?.validationOutcome ?? null,
+          frontierHash: currentObservation.snapshot.verifiedFrontierHash,
+        });
+    const secondObservation: ReviewGateAdmissionObservation = Object.freeze({
+      ...currentObservation,
+      snapshot: Object.freeze({ ...secondSnapshot, nc1Evidence }),
+      nc1Evidence,
+    });
+    return { decision: secondDecision, observation: secondObservation };
   };
 
   const withAdmissionLease = async <T>(
