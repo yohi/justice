@@ -1,0 +1,15 @@
+﻿finding_id,proposal_response,design_anchor,needed_future_proof,evidence_class,disposition
+B1B2-FI-001,B1: actor child/shell/native access,"2 §2, §8",OS boundary/effective permission negative proof,DESIGN_PROPOSAL,OPEN_NOT_CLOSED
+B1B2-FI-002,B1: all authoritative reader/writer/CI paths,"1 §3; 2 §1-2,6",Reader/writer census & denial tests,DESIGN_PROPOSAL,OPEN_NOT_CLOSED
+B1B2-FI-003,B2: ACCEPT bytes/head/seq same commit,"2 §3,5",Crash/atomicity implementation and DB config proof,DESIGN_PROPOSAL,OPEN_NOT_CLOSED
+B1B2-FI-004,S3 retention ambiguity avoided by initial no-CAS choice,1 §4,"If CAS adopted, reopen versionId+lock+GC evidence",DESIGN_PROPOSAL,OPEN_NOT_CLOSED
+B1B2-FI-005,Avoid nontransactional native sequence,"2 §3,5",SQL counter/terminal-event invariants and negative test,DESIGN_PROPOSAL,OPEN_NOT_CLOSED
+B1B2-FI-006,Independent signer/clock/revocation,"2 §2,4,7",Issuer independence and serialized revocation receipt,DESIGN_PROPOSAL,OPEN_NOT_CLOSED
+B1B2-FI-007,HA limited to single-primary/no automatic failover,1 §5; 2 §7,Failure-mode policy; future failover fencing proof,DESIGN_PROPOSAL,OPEN_NOT_CLOSED
+B1B2-FI-008,Reject FS+ledger as authority,1 §4-5; 2 §6-7,Prove no consumers treat FS/JSONL as accepted,DESIGN_PROPOSAL,OPEN_NOT_CLOSED
+B1B2-FI-009,A1 H0 source origin stays open,"2 §4,8",Upstream A1 immutable attempt evidence,DESIGN_PROPOSAL,OPEN_NOT_CLOSED
+B1B2-FI-010,Do not run untrusted actor as privileged devcontainer user,2 §2,OS confinement and mount/FD denial proof,DESIGN_PROPOSAL,OPEN_NOT_CLOSED
+B1B2-FI-011,Lost ACK/opId recovery,"2 §5,7",Recovery negative controls and exactly-one operation record,DESIGN_PROPOSAL,OPEN_NOT_CLOSED
+B1B2-FI-012,Normative adoption and stage grants remain independent,"0; 1 §1,6",Fresh review + exact human decision on approved baseline,DESIGN_PROPOSAL,OPEN_NOT_CLOSED
+B1B2-FI-013,Fresh reads no replica/cache escape,2 §6-7,Consumer read path mapping & monotonicity controls,DESIGN_PROPOSAL,OPEN_NOT_CLOSED
+B1B2-FI-014,Bounded time is not PostgreSQL now(),2 §4-5,Time/commit boundary formal proof and expiry crossing controls,DESIGN_PROPOSAL,OPEN_NOT_CLOSED
