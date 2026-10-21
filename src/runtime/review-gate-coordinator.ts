@@ -2441,10 +2441,9 @@ export function createReviewGateCoordinator(
               }
               owned.assertOwnedScope(snapshot.scopeId);
               owned.assertOwnedGate(admittedDecision.gateId);
-              return Promise.resolve(Object.freeze({
-                kind: "RESUME_ADMITTED",
-                gateId: admittedDecision.gateId,
-              }));
+              return Promise.resolve(blockUnsupported(
+                "Same-generation revalidation lacks a verified semantic-context transition proof; stale authority cannot be resumed.",
+              ));
             },
             UPSTREAM_PRECEDENCE_REQUIRED: (admittedDecision) => {
               const precedence = matchingPrecedence(
@@ -2480,9 +2479,6 @@ export function createReviewGateCoordinator(
               if (scopeId === undefined) {
                 return Promise.resolve(blockUnsupported("Upstream precedence observation is unavailable."));
               }
-              if (precedence.phase !== "design") {
-                return Promise.resolve(blockUnsupported("Plan-phase upstream reopen lacks the exact downstream restore provenance required by Core."));
-              }
               owned.assertOwnedScope(scopeId);
               owned.assertOwnedGate(admittedDecision.gateId);
               const verifiedUpstreamReopen: VerifiedUpstreamReopenContextV1 = Object.freeze({
@@ -2499,13 +2495,19 @@ export function createReviewGateCoordinator(
                 restoreCompletion: null,
                 verifiedFrontierHash: admittedDecision.witnessFrontierHash,
               });
-              return Promise.resolve(Object.freeze({
-                kind: "RESUME_ADMITTED",
-                gateId: admittedDecision.gateId,
-                verifiedUpstreamReopen,
-              }));
+              return owned.readVerifiedFrontier().then((frontier) => {
+                if (frontier.globalFrontierHash !== admittedDecision.witnessFrontierHash) {
+                  return blockUnsupported("Upstream reopen frontier changed before Core planning.");
+                }
+                return Object.freeze({
+                  kind: "RESUME_ADMITTED",
+                  gateId: admittedDecision.gateId,
+                  verifiedUpstreamReopen,
+                });
+              });
             },
             STALE_LINEAGE_REVALIDATION_REQUIRED: (admittedDecision) => {
+              const snapshot = observation?.snapshot;
               const precedence = matchingPrecedence(
                 admittedDecision.gateId,
                 admittedDecision.generationId,
@@ -2530,10 +2532,20 @@ export function createReviewGateCoordinator(
               }
               owned.assertOwnedScope(scopeId);
               owned.assertOwnedGate(admittedDecision.gateId);
-              return Promise.resolve(Object.freeze({
-                kind: "RESUME_ADMITTED",
-                gateId: admittedDecision.gateId,
-              }));
+              return Promise.all([
+                owned.readVerifiedFrontier(),
+                eventStore.readV2Journal(admittedDecision.gateId),
+              ]).then(([frontier, journal]) => {
+                if (
+                  frontier.globalFrontierHash !== admittedDecision.witnessFrontierHash ||
+                  snapshot === undefined ||
+                  snapshot.verifiedFrontierHash !== admittedDecision.witnessFrontierHash ||
+                  journal.eventCount === 0
+                ) {
+                  return blockUnsupported("Stale-lineage frontier or durable Gate journal is unavailable or stale.");
+                }
+                return Object.freeze({ kind: "RESUME_ADMITTED", gateId: admittedDecision.gateId });
+              });
             },
             INSPECT_NC1_ELIGIBLE_CHANGE: () => Promise.resolve(blockUnsupported("NC1 eligibility inspection is not an execution authorization.")),
             REENTRY_CANDIDATE: () => Promise.resolve(blockUnsupported("NC1 reentry requires a separately admitted validation operation.")),

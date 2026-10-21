@@ -9,7 +9,18 @@ import type {
 import { applyReviewGateAdmissionDecision } from "../../src/runtime/review-gate-admission-executor";
 
 const result: ReviewGateAdmissionExecutionResult = {
-  kind: "MUTABLE_APPLICATION_YIELDED",
+  kind: "RESULT",
+  result: {
+    dispatched: true,
+    gateId: "gate",
+    guidance: "review started",
+    designPath: "docs/design.md",
+    planPath: "docs/plan.md",
+    designDigest: "design-digest",
+    planDigest: "plan-digest",
+    lockPhase: "reviewing",
+    completedReuse: false,
+  },
 };
 
 const decisions = [
