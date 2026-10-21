@@ -2613,7 +2613,13 @@ export function createReviewGateCoordinator(
                   validatorRegistryDigest: SEMANTIC_CONTEXT_COMPATIBILITY_PROOF_REGISTRY_DIGEST,
                 }),
               });
-              const operationId = newId();
+              const operationId = computeCanonicalJsonFingerprint({
+                gateId: admittedDecision.gateId,
+                generationId: admittedDecision.generationId,
+                triggeringAuthorityEventId: admittedDecision.triggeringAuthorityEventId,
+                witnessFrontierHash: admittedDecision.witnessFrontierHash,
+                kind: "semantic-context-transition",
+              });
               const planned = planVerifiedSemanticContextTransition({
                 oldInputs,
                 newInputs,
@@ -2626,7 +2632,10 @@ export function createReviewGateCoordinator(
                 roundCountersBefore: admittedDecision.roundCountersBefore,
                 roundCountersAfter: admittedDecision.roundCountersAfter,
                 operationId,
-                validationEventId: newId(),
+                validationEventId: computeCanonicalJsonFingerprint({
+                  operationId,
+                  kind: "semantic-context-validation",
+                }),
                 executableDigest: protocol.releaseDescriptorDigest,
                 registeredPolicyDigest: SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_DIGEST,
                 governingReferenceSectionKeys: currentInventory.sections.map((section) => section.sectionKey),
@@ -2642,14 +2651,63 @@ export function createReviewGateCoordinator(
                 ) {
                   return blockUnsupported("Same-generation semantic transition cannot be anchored to its verified Gate journal.");
                 }
-                await appendV2JournalEvents({
-                  gateId: admittedDecision.gateId as GateId,
-                  writerId: tailEvent.writerId as WriterId,
-                  epochId: tailEvent.epochId as EpochId,
-                }, operationId, () => [{
+                const scopeId = observation?.snapshot.scopeId;
+                if (scopeId === undefined) return blockUnsupported("Semantic transition scope is unavailable.");
+                if (!("prepareAdmittedOperationPublication" in eventStore) ||
+                  typeof eventStore.prepareAdmittedOperationPublication !== "function" ||
+                  !("readVerifiedScopeOwned" in eventStore) ||
+                  typeof eventStore.readVerifiedScopeOwned !== "function")
+                  return blockUnsupported("Protected operation publication is unavailable.");
+                const transitionEvent = validateReviewGateEventRecord({
+                  schemaVersion: 2,
+                  eventId: computeCanonicalJsonFingerprint({ operationId, kind: "semantic-transition-event" }),
+                  parentEventId: journal.tailEventId ?? admittedDecision.gateId,
+                  emittedAt: now(),
+                  gateId: admittedDecision.gateId,
+                  epochId: tailEvent.epochId,
+                  generationId: admittedDecision.generationId,
+                  writerId: tailEvent.writerId,
                   eventType: "SEMANTIC_CONTEXT_TRANSITION",
                   payload: planned.input,
-                }]);
+                });
+                const committedScope = await eventStore.readVerifiedScopeOwned(owned, scopeId);
+                const priorOperationEvent = committedScope.eventsByGate.get(admittedDecision.gateId)?.find(
+                  (event) => "schemaVersion" in event && event.schemaVersion === 2 &&
+                    event.eventType === "SEMANTIC_CONTEXT_TRANSITION" &&
+                    event.payload.operationId === operationId,
+                );
+                if (priorOperationEvent !== undefined) {
+                  if (computeCanonicalJsonFingerprint(priorOperationEvent.payload) !==
+                    computeCanonicalJsonFingerprint(planned.input))
+                    return blockUnsupported("Semantic transition operation was already committed with different evidence.");
+                  await eventStore.appendV2Events(admittedDecision.gateId, [priorOperationEvent]);
+                  resumeDecisionNeedsRevalidation = true;
+                  return Object.freeze({ kind: "RESUME_ADMITTED", gateId: admittedDecision.gateId });
+                }
+                const frontier = await owned.readVerifiedFrontier();
+                if (frontier.globalFrontierHash !== admittedDecision.witnessFrontierHash)
+                  return blockUnsupported("Semantic transition frontier changed before protected publication.");
+                const writerHead = frontier.writerHeads.find((head) =>
+                  head.scopeId === scopeId && head.gateId === admittedDecision.gateId && head.writerId === tailEvent.writerId,
+                );
+                const publication = await eventStore.prepareAdmittedOperationPublication({
+                  scopeId,
+                  gateId: admittedDecision.gateId,
+                  writerId: tailEvent.writerId,
+                  operationId,
+                  canonicalEvents: [transitionEvent],
+                  ...(writerHead === undefined ? {} : { expectedWriterHead: writerHead.hash }),
+                }, owned);
+                const committed = await owned.commitPreparedPublicationCAS({
+                  publicationId: publication.publicationId,
+                  expectedGlobalFrontier: publication.expectedGlobalFrontier,
+                  expectedWriterHash: publication.expectedWriterHash,
+                });
+                const recovered = committed === "blocked"
+                  ? await owned.recoverPreparedPublication(publication.publicationId)
+                  : committed;
+                if (recovered === "blocked") return blockUnsupported("Semantic transition protected publication did not commit.");
+                await eventStore.appendV2Events(admittedDecision.gateId, [transitionEvent]);
               }
               resumeDecisionNeedsRevalidation = true;
               return Object.freeze({ kind: "RESUME_ADMITTED", gateId: admittedDecision.gateId });
@@ -2765,9 +2823,84 @@ export function createReviewGateCoordinator(
                 case "STAY_SUSPENDED":
                   return Promise.resolve(blockUnsupported("The verified NC1 outcome does not authorize reentry."));
                 case "REENTER_SAME_GENERATION":
-                  return Promise.resolve(blockUnsupported(
-                    "NC1 validation is verified, but no protected once-only reentry publication is available.",
-                  ));
+                  return (async () => {
+                    const scopeId = admittedObservation?.snapshot.scopeId;
+                    const frontier = await owned.readVerifiedFrontier();
+                    if (scopeId === undefined || frontier.globalFrontierHash !== admittedDecision.witnessFrontierHash)
+                      return blockUnsupported("NC1 reentry scope or frontier is stale.");
+                    const verifiedChange = reentry.input.verifiedChange;
+                    if (verifiedChange === null)
+                      return blockUnsupported("NC1 reentry has no verified material change.");
+                    if (!("prepareAdmittedOperationPublication" in eventStore) ||
+                      typeof eventStore.prepareAdmittedOperationPublication !== "function" ||
+                      !("readVerifiedScopeOwned" in eventStore) ||
+                      typeof eventStore.readVerifiedScopeOwned !== "function")
+                      return blockUnsupported("Protected operation publication is unavailable.");
+                    const journal = await eventStore.readV2Journal(admittedDecision.gateId);
+                    const tailEvent = journal.events.at(-1);
+                    if (tailEvent === undefined || !("schemaVersion" in tailEvent) || tailEvent.schemaVersion !== 2 ||
+                      tailEvent.generationId !== reentry.generationId || tailEvent.epochId !== reentry.epochId)
+                      return blockUnsupported("NC1 reentry cannot be anchored to the stopped generation and epoch.");
+                    const operationId = computeCanonicalJsonFingerprint({
+                      gateId: reentry.gateId,
+                      generationId: reentry.generationId,
+                      validationEventId: reentry.validationEventId,
+                      changeObservedEventId: verifiedChange.changeObservedEventId,
+                    });
+                    const event = validateReviewGateEventRecord({
+                      schemaVersion: 2,
+                      eventId: computeCanonicalJsonFingerprint({ operationId, kind: "nc1-reentry-event" }),
+                      parentEventId: journal.tailEventId ?? reentry.gateId,
+                      emittedAt: now(),
+                      gateId: reentry.gateId,
+                      epochId: reentry.epochId,
+                      generationId: reentry.generationId,
+                      writerId: tailEvent.writerId,
+                      eventType: "NC1_REENTRY_OUTCOME_APPLIED",
+                      payload: {
+                        operationId,
+                        validationEventId: reentry.validationEventId,
+                        nc1EvidenceEventId: reentry.input.nc1EvidenceEventId,
+                        changeObservedEventId: verifiedChange.changeObservedEventId,
+                        remainingRounds: reentry.input.remainingRounds,
+                      },
+                    });
+                    const committedScope = await eventStore.readVerifiedScopeOwned(owned, scopeId);
+                    const priorOperationEvent = committedScope.eventsByGate.get(reentry.gateId)?.find(
+                      (candidate) => "schemaVersion" in candidate && candidate.schemaVersion === 2 &&
+                        candidate.eventType === "NC1_REENTRY_OUTCOME_APPLIED" &&
+                        candidate.payload.operationId === operationId,
+                    );
+                    if (priorOperationEvent !== undefined) {
+                      if (computeCanonicalJsonFingerprint(priorOperationEvent.payload) !==
+                        computeCanonicalJsonFingerprint(event.payload))
+                        return blockUnsupported("NC1 reentry operation was already committed with different evidence.");
+                      await eventStore.appendV2Events(reentry.gateId, [priorOperationEvent]);
+                      return Object.freeze({ kind: "RESUME_ADMITTED", gateId: reentry.gateId });
+                    }
+                    const writerHead = frontier.writerHeads.find((head) =>
+                      head.scopeId === scopeId && head.gateId === reentry.gateId && head.writerId === tailEvent.writerId,
+                    );
+                    const publication = await eventStore.prepareAdmittedOperationPublication({
+                      scopeId,
+                      gateId: reentry.gateId,
+                      writerId: tailEvent.writerId,
+                      operationId,
+                      canonicalEvents: [event],
+                      ...(writerHead === undefined ? {} : { expectedWriterHead: writerHead.hash }),
+                    }, owned);
+                    const committed = await owned.commitPreparedPublicationCAS({
+                      publicationId: publication.publicationId,
+                      expectedGlobalFrontier: publication.expectedGlobalFrontier,
+                      expectedWriterHash: publication.expectedWriterHash,
+                    });
+                    const recovered = committed === "blocked"
+                      ? await owned.recoverPreparedPublication(publication.publicationId)
+                      : committed;
+                    if (recovered === "blocked") return blockUnsupported("NC1 reentry protected publication did not commit.");
+                    await eventStore.appendV2Events(reentry.gateId, [event]);
+                    return Object.freeze({ kind: "RESUME_ADMITTED", gateId: reentry.gateId });
+                  })();
                 default:
                   return assertNever(reentry);
               }

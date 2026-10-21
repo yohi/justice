@@ -273,6 +273,18 @@ export type VerifiedReviewGateEventStore = Readonly<{
     }>,
     owned: AdmissionOwnedWitness,
   ) => Promise<PreparedWitnessPublicationV1>;
+  readonly prepareAdmittedOperationPublication: (
+    input: Readonly<{
+      readonly scopeId: string;
+      readonly gateId: string;
+      readonly writerId: string;
+      readonly operationId: string;
+      readonly canonicalEvents: readonly VerifiedReviewGateEvent[];
+      readonly expectedWriterHead?: string;
+      readonly firstEnrollmentAuthorizationId?: string;
+    }>,
+    owned: AdmissionOwnedWitness,
+  ) => Promise<PreparedWitnessPublicationV1>;
   readonly publishPreparedEvent: (
     input: PreparedWitnessPublicationV1,
   ) => Promise<VerifiedEventPublicationOutcome>;
@@ -1897,6 +1909,52 @@ export function createReviewGateEventStore(
         membership.writerHead.sequence !== publication.newWriterSequence ||
         membership.writerHead.hash !== publication.newWriterHash
       ) throw new Error("review_gate_admitted_genesis_writer_head_invalid");
+      await prepareAndSyncShard(publication, bytes, owned);
+      return publication;
+    })(),
+
+    prepareAdmittedOperationPublication: async (input, owned) => (async () => {
+      assertOpen();
+      assertAdmissionOwnedWitnessLive(owned);
+      assertStorageId(input.scopeId);
+      assertStorageId(input.gateId);
+      assertStorageId(input.writerId);
+      assertStorageId(input.operationId);
+      const events = validateJournalBatch(input.gateId, input.writerId, input.canonicalEvents);
+      if (events.some((event) => !(("schemaVersion" in event) && event.schemaVersion === 2)))
+        throw new Error("review_gate_event_v2_required");
+      if (events.some((event) => event.eventType === "GATE_CREATED"))
+        throw new Error("review_gate_operation_publication_cannot_create_generation");
+      owned.assertOwnedScope(input.scopeId);
+      owned.assertOwnedGate(input.gateId);
+      const frontier = await owned.readVerifiedFrontier();
+      if (frontier.workspaceIdentity !== workspaceIdentity)
+        throw new Error("review_gate_admitted_frontier_invalid");
+      const scope = findScope(frontier, input.scopeId);
+      const gate = scope === null ? null : findGate(scope, input.gateId);
+      if (scope === null || gate === null || !gate.writerIds.includes(input.writerId))
+        throw new Error("review_gate_operation_membership_missing");
+      const head = findHead(frontier, input.scopeId, input.gateId, input.writerId);
+      const expectedHead = input.expectedWriterHead;
+      if (expectedHead !== undefined && (head?.hash ?? EMPTY_SHARD_HASH) !== expectedHead)
+        throw new Error("review_gate_operation_writer_head_conflict");
+      const history = await readGateVerifiedEvents(input.scopeId, gate);
+      const alreadyUsed = history.some((event) => {
+        if (!("schemaVersion" in event) || event.schemaVersion !== 2) return false;
+        return "operationId" in event.payload && event.payload.operationId === input.operationId;
+      });
+      if (alreadyUsed) throw new Error("review_gate_operation_id_conflict");
+      if (input.firstEnrollmentAuthorizationId !== undefined)
+        throw new Error("review_gate_operation_enrollment_forbidden");
+      const { publication, bytes } = await buildPublication({
+        scopeId: input.scopeId,
+        gateId: input.gateId,
+        writerId: input.writerId,
+        operationId: input.operationId,
+        canonicalEvents: events,
+        firstEnrollment: null,
+        owned,
+      }, frontier);
       await prepareAndSyncShard(publication, bytes, owned);
       return publication;
     })(),

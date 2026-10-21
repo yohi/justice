@@ -1394,6 +1394,69 @@ describe("ReviewGateEventStore — V1/V2 codec journal (Task 6)", () => {
 
 describe("ReviewGateEventStore — tamper and crash recovery (Task 6)", () => {
   describe("admitted V2 publication foundation (Task 4a)", () => {
+    it("publishes one admitted operation and rejects its duplicate operation id", async () => {
+      const ctx = await freshContext("admitted-operation-once");
+      const store = createReviewGateEventStore(
+        ctx.root,
+        eventStoreOptions(ctx.root, ctx.writerId, ctx.witness),
+      );
+      await seedGate(ctx, store, "gate-a", [gateCreatedEvent("gate-a")]);
+      const frontier = await ctx.witness.readWorkspaceScopeFrontier();
+      const scopeId = "scope-gate-a";
+      const operationId = "nc1-reentry-operation";
+      const event = validateReviewGateEventRecord({
+        schemaVersion: 2,
+        eventId: "nc1-reentry-event",
+        parentEventId: "gate-a",
+        emittedAt: "2026-10-16T00:00:01.000Z",
+        gateId: "gate-a",
+        epochId: "epoch-a",
+        generationId: "gate-a",
+        writerId: ctx.writerId,
+        eventType: "NC1_REENTRY_OUTCOME_APPLIED",
+        payload: {
+          operationId,
+          validationEventId: "validation-a",
+          nc1EvidenceEventId: "stop-a",
+          changeObservedEventId: "change-a",
+          remainingRounds: 0,
+        },
+      });
+
+      const publication = await ctx.witness.withAdmissionWitnessTransaction(
+        { workspaceIdentity: frontier.workspaceIdentity, designPath: DESIGN_PATH, planPath: PLAN_PATH },
+        async (owned) => {
+          const current = await owned.readVerifiedFrontier();
+          const head = current.writerHeads.find((candidate) =>
+            candidate.scopeId === scopeId && candidate.gateId === "gate-a" && candidate.writerId === ctx.writerId,
+          );
+          return store.prepareAdmittedOperationPublication({
+            scopeId,
+            gateId: "gate-a",
+            writerId: ctx.writerId,
+            operationId,
+            canonicalEvents: [event],
+            ...(head === undefined ? {} : { expectedWriterHead: head.hash }),
+          }, owned);
+        },
+      );
+      expect(await store.recoverPreparedPublication(publication.publicationId)).toBe("committed");
+      expect(await store.recoverPreparedPublication(publication.publicationId)).toBe("already_committed");
+      await expect(ctx.witness.withAdmissionWitnessTransaction(
+        { workspaceIdentity: frontier.workspaceIdentity, designPath: DESIGN_PATH, planPath: PLAN_PATH },
+        (owned) => store.prepareAdmittedOperationPublication({
+          scopeId,
+          gateId: "gate-a",
+          writerId: ctx.writerId,
+          operationId,
+          canonicalEvents: [event],
+        }, owned),
+      )).rejects.toThrow("review_gate_operation_id_conflict");
+
+      store.close();
+      closeWitnessFixture(ctx);
+    });
+
     it("creates one witnessed V2 genesis from authorized pending enrollment", async () => {
       const ctx = await freshContext("admitted-genesis");
       const store = createReviewGateEventStore(

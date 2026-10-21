@@ -765,6 +765,20 @@ export function projectVerifiedGateTip(
         operationId = event.payload.operationId;
         break;
       }
+      case "NC1_REENTRY_OUTCOME_APPLIED": {
+        if (
+          nc1Reason === "review_non_convergent" &&
+          nc1Stop !== null &&
+          event.epochId === nc1Stop.epochId &&
+          event.payload.nc1EvidenceEventId === nc1Stop.stopEventId
+        ) {
+          nc1Reason = null;
+          nc1Stop = null;
+          suspensionReason = executionSuspended ? "execution_suspended" : null;
+          suspensionEpochId = suspensionReason === null ? null : suspensionEpochId;
+        }
+        break;
+      }
       case "DESIGN_CLEAR": {
         const payload = event.payload as unknown as DesignClearV2;
         ownDesignClear = Object.freeze({
