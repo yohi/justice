@@ -64,6 +64,21 @@ import { resolveRequirementsForAdmission } from "./review-gate-requirements.js";
  * rejects use after the callback exit, and the assert methods reject scope/
  * Gate ids outside the owned lock set.
  */
+export type AdmittedMembershipAuthorizationPayload = Readonly<{
+  readonly installationId: string;
+  readonly workspaceIdentity: string;
+  readonly operationId: string;
+  readonly expectedWorkspaceFrontier: string;
+  readonly scope: ScopeEnrollmentV1;
+}>;
+
+/**
+ * Non-serializable owned capability held by the admission coordinator while
+ * `withAdmissionWitnessTransaction` owns the installation/scope/Gate guards.
+ * The live instance is produced only by that entry point; every method
+ * rejects use after the callback exit, and the assert methods reject scope/
+ * Gate ids outside the owned lock set.
+ */
 export type AdmissionOwnedWitness = Readonly<{
   readonly read: () => Promise<WitnessTransaction>;
   readonly readVerifiedFrontier: () => Promise<VerifiedScopeFrontier>;
@@ -83,6 +98,9 @@ export type AdmissionOwnedWitness = Readonly<{
   readonly recoverPreparedPublication: (
     publicationId: string,
   ) => Promise<PublicationCommitResult>;
+  readonly signAdmittedMembership: (
+    payload: AdmittedMembershipAuthorizationPayload,
+  ) => Promise<string>;
 }>;
 
 /**

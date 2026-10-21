@@ -74,9 +74,10 @@ import {
   type ReviewGateSelfReviewCompletion,
 } from "../core/review-gate/orchestrator";
 import { projectReviewGate } from "../core/review-gate/projection";
-  import type {
+import type {
   ReviewGateProjection,
   ReviewTargetWorkspaceState,
+  ScopeEnrollmentV1,
 } from "../core/review-gate/types";
 import {
   createDefaultDeterministicValidatorRegistry,
@@ -95,6 +96,7 @@ import {
   computeReviewScopeId,
 } from "../core/review-gate/identity";
 import type {
+  DurableReviewGateEventStore,
   ReviewGateDispatchRecordV1,
   ReviewGateEventStore,
   ReviewGateV2Journal,
@@ -114,8 +116,17 @@ import {
   type ReviewGateLockManager,
 } from "./review-gate-lock-manager";
 import type { ReviewGateProtocolDescriptor } from "./review-gate-protocol";
-import { ScopeAdmissionBlocked, type ReviewGateScopeAdmission } from "./review-gate-scope-admission";
-import type { ReviewGateAdmissionExecutionResult } from "./review-gate-admission-context";
+import {
+  ScopeAdmissionBlocked,
+  type ReviewGateScopeAdmission,
+} from "./review-gate-scope-admission";
+import type { AdmissionDecision } from "../core/review-gate/admission";
+import type {
+  AdmissionOwnedWitness,
+  AdmittedMembershipAuthorizationPayload,
+  ReviewGateAdmissionExecutionResult,
+  ReviewGateAdmissionObservation,
+} from "./review-gate-admission-context";
 
 /**
  * Task 3 — bounded wait for a scope admission lease under contention.
@@ -220,7 +231,13 @@ export interface ReviewGateMutationSubstrate {
 }
 
 export interface ReviewGateCoordinatorOptions {
-  readonly eventStore: ReviewGateEventStore;
+  /**
+   * Task 4d — authority store surface required to stage and commit admitted
+   * generation publications. When `scopeAdmission` is provided this must also
+   * expose `prepareAdmittedGenerationPublication`; otherwise the coordinator
+   * operates on the legacy `ReviewGateEventStore` surface only.
+   */
+  readonly eventStore: ReviewGateEventStore & Partial<DurableReviewGateEventStore>;
   readonly lockManager: ReviewGateLockManager;
   readonly protocol: ReviewGateProtocolDescriptor;
   readonly workspaceReader: ReviewGateWorkspaceReader;
@@ -2100,6 +2117,208 @@ export function createReviewGateCoordinator(
       return runStartOrResume();
     }
 
+    /**
+     * Task 4d — durable V2 Gate creation under the admission lease. The witness
+     * owns the scope/Gate locks, so the publication is prepared and committed
+     * before the lease returns; the outer driver then resumes the new Gate.
+     */
+    const applyAdmittedCreation = async (
+      decision: Extract<
+        AdmissionDecision,
+        { kind: "CREATE_GENESIS" | "CREATE_SUCCESSOR" }
+      >,
+      observation: ReviewGateAdmissionObservation | null,
+      owned: AdmissionOwnedWitness,
+    ): Promise<ReviewGateAdmissionExecutionResult> => {
+      if (observation === null) {
+        throw new Error("review_gate_admitted_creation_observation_missing");
+      }
+      if (eventStore.prepareAdmittedGenerationPublication === undefined) {
+        throw new Error("review_gate_admitted_generation_store_surface_missing");
+      }
+
+      const installation = await owned.readInstallation();
+      const frontier = await owned.readVerifiedFrontier();
+      const scopeId = decision.scopeId;
+      const gateId = newId() as GateId;
+      const writerId = newWriterId() as WriterId;
+      const operationId = newId();
+      const generationId = newId();
+      const epochId = installation.epoch as EpochId;
+      const eventId = newId();
+      const parentEventId = newId();
+
+      const designArtifact = observation.snapshot.current.design;
+      const planArtifact = observation.snapshot.current.plan;
+      const requirementsResolution = observation.requirementsResolution;
+
+      const pathPairDigest = computeCanonicalJsonFingerprint({
+        canonicalDesignPath: designArtifact.canonicalPath,
+        canonicalPlanPath: planArtifact.canonicalPath,
+      });
+
+      let scopeEnrollment: ScopeEnrollmentV1;
+      let supersedesGateId: string | null;
+
+      if (decision.kind === "CREATE_GENESIS") {
+        const authority = await owned.readFirstEnrollmentAuthority();
+        if (authority === null) {
+          throw new Error("review_gate_admitted_creation_first_enrollment_missing");
+        }
+        supersedesGateId = null;
+        scopeEnrollment = {
+          scopeId,
+          workflowContinuityId: newId(),
+          canonicalDesignPath: designArtifact.canonicalPath,
+          canonicalPlanPath: planArtifact.canonicalPath,
+          pathPairDigest,
+          provenance: {
+            kind: "verified_genesis",
+            evidenceDigest: computeCanonicalJsonFingerprint(authority),
+            priorScopeId: null,
+            priorGateId: null,
+          },
+          gateMembership: [],
+        };
+      } else {
+        const predecessor = observation.snapshot.currentTips.find(
+          (tip) =>
+            tip.status === "completed" &&
+            tip.scopeId === decision.predecessorScopeId &&
+            tip.gateId === decision.predecessorGateId &&
+            tip.completedApproval.approvalEventId === decision.predecessorApprovalEventId,
+        );
+        if (predecessor === undefined || predecessor.status !== "completed") {
+          throw new Error("review_gate_admitted_creation_predecessor_missing");
+        }
+        supersedesGateId = decision.predecessorGateId;
+        const provisionalEnrollment: ScopeEnrollmentV1 = {
+          scopeId,
+          workflowContinuityId: newId(),
+          canonicalDesignPath: designArtifact.canonicalPath,
+          canonicalPlanPath: planArtifact.canonicalPath,
+          pathPairDigest,
+          provenance: {
+            kind: "verified_completed_successor",
+            evidenceDigest: "", // computed below after the scope is fully formed
+            priorScopeId: decision.predecessorScopeId,
+            priorGateId: decision.predecessorGateId,
+          },
+          gateMembership: [],
+        };
+        const evidenceDigest = computeCanonicalJsonFingerprint({
+          installationId: installation.installationId,
+          operationId,
+          expectedWorkspaceFrontier: frontier.globalFrontierHash,
+          scope: {
+            ...provisionalEnrollment,
+            provenance: {
+              kind: "verified_completed_successor",
+              evidenceDigest: "",
+              priorScopeId: decision.predecessorScopeId,
+              priorGateId: decision.predecessorGateId,
+            },
+          },
+        });
+        scopeEnrollment = {
+          ...provisionalEnrollment,
+          provenance: {
+            ...provisionalEnrollment.provenance,
+            evidenceDigest,
+          },
+        };
+      }
+
+      const scopeEnrollmentWithGate: ScopeEnrollmentV1 = {
+        ...scopeEnrollment,
+        gateMembership: [
+          ...scopeEnrollment.gateMembership,
+          {
+            gateId,
+            generationId,
+            supersedesGateId,
+            admissionEventId: eventId,
+            writerIds: [writerId],
+          },
+        ],
+      };
+
+      const gateEvent = validateReviewGateEventRecord({
+        schemaVersion: 2,
+        eventId,
+        parentEventId,
+        emittedAt: now(),
+        gateId,
+        epochId,
+        generationId,
+        writerId,
+        eventType: "GATE_CREATED",
+        payload: {
+          reviewScopeId: scopeId,
+          supersedesGateId,
+          requirementsResolution,
+          designArtifact,
+          planArtifact,
+          reviewProtocolFingerprint: observation.snapshot.current.globalProtocolFingerprint,
+          designProtocolFingerprint: observation.snapshot.current.designProtocolFingerprint,
+          planProtocolFingerprint: observation.snapshot.current.planProtocolFingerprint,
+        },
+      });
+
+      const writerHeadHash = computeArtifactDigest(
+        Buffer.from(`${encodeReviewGateEventRecord(gateEvent)}\n`),
+      );
+
+      const membershipPayload: AdmittedMembershipAuthorizationPayload = {
+        installationId: installation.installationId,
+        workspaceIdentity: frontier.workspaceIdentity,
+        operationId,
+        expectedWorkspaceFrontier: frontier.globalFrontierHash,
+        scope: scopeEnrollmentWithGate,
+      };
+
+      const membership = {
+        gateId,
+        generationId,
+        operationId,
+        writerId,
+        writerHead: { sequence: 1, hash: writerHeadHash },
+        supersedesGateId,
+        authorization: {
+          ...membershipPayload,
+          signature: await owned.signAdmittedMembership(membershipPayload),
+        },
+      };
+
+      const publication = await eventStore.prepareAdmittedGenerationPublication(
+        {
+          scopeId,
+          gateId,
+          writerId,
+          operationId,
+          canonicalEvents: [gateEvent],
+          decision,
+          observation,
+          membership,
+        },
+        owned,
+      );
+
+      const commitResult = await owned.commitPreparedPublicationCAS({
+        publicationId: publication.publicationId,
+        expectedGlobalFrontier: publication.expectedGlobalFrontier,
+        expectedWriterHash: publication.expectedWriterHash,
+      });
+
+      if (commitResult !== "advanced" && commitResult !== "already_committed") {
+        throw new Error("review_gate_admitted_creation_commit_blocked");
+      }
+
+      await eventStore.writeScopeIndex(scopeId, gateId);
+
+      return Object.freeze({ kind: "MUTABLE_APPLICATION_YIELDED" });
+    };
+
     // Admission authority spans decision application: the callback returns the
     // internal execution result while the lease is held, and only the outer
     // driver converts RESULT/BLOCK to the public command result.
@@ -2114,8 +2333,6 @@ export function createReviewGateCoordinator(
           protocol,
         },
         async (decision, observation, owned) => {
-          void observation;
-          void owned;
           if (decision.kind === "BLOCK") {
             return Object.freeze({
               kind: "BLOCK",
@@ -2153,6 +2370,12 @@ export function createReviewGateCoordinator(
                 completedReuse: true,
               }),
             });
+          }
+          if (
+            decision.kind === "CREATE_GENESIS" ||
+            decision.kind === "CREATE_SUCCESSOR"
+          ) {
+            return applyAdmittedCreation(decision, observation, owned);
           }
           // Mutable application yields the admission lease before the wider
           // session guard chain; runStartOrResume revalidates the scope index

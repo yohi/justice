@@ -1,4 +1,4 @@
-import type { KeyObject } from "node:crypto";
+import { createPublicKey, type KeyObject } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { relative, isAbsolute, resolve, sep } from "node:path";
 import { observeGitWorkspace } from "./review-gate-scope-admission.js";
@@ -15,6 +15,7 @@ import {
 } from "./review-gate-witness-registry.js";
 import type { TrustedWitnessInstallationV1 } from "./review-gate-witness-contracts.js";
 import { verifyScopeFrontierMembership } from "./review-gate-witness-verification.js";
+import { hostProofValid } from "./review-gate-witness-installation.js";
 import {
   assertWitnessAdmissionOrder,
   createReviewGateLockManager,
@@ -42,6 +43,12 @@ export type WitnessOptions = Readonly<{
   witnessDirectory?: string;
   hostTrustRoot?: KeyObject;
   lockManager?: ReviewGateLockManager;
+  /**
+   * Task 4d — signer for admitted membership authorizations. The witness
+   * verifies the signature with its trusted installation root before the
+   * registry records the scope authorization.
+   */
+  authorizeAdmittedMembership?: (payload: unknown) => Promise<string>;
 }>;
 export type WitnessContext = Readonly<{
   options: WitnessOptions;
@@ -132,6 +139,7 @@ export async function withAdmissionWitnessTransaction<T>(
     readonly workspaceIdentity: string;
     readonly designPath: string;
     readonly planPath: string;
+    readonly authorizeAdmittedMembership?: (payload: unknown) => Promise<string>;
   }>,
   run: (owned: AdmissionOwnedWitness) => Promise<T>,
 ): Promise<T> {
@@ -281,8 +289,9 @@ export async function withAdmissionWitnessTransaction<T>(
           if (
             !scopeIds.has(prepared.input.scopeId) ||
             (!gateIds.has(prepared.input.gateId) && prepared.input.firstEnrollmentAuthorizationId === null)
-          )
+          ) {
             throw new Error("review_gate_admission_owned_publication_foreign");
+          }
           if (current.data.committed[publicationId] === undefined) {
             const prior = await context.provider?.readWriterShard(
               prepared.input.scopeId,
@@ -303,6 +312,20 @@ export async function withAdmissionWitnessTransaction<T>(
             expectedGlobalFrontier: prepared.input.expectedGlobalFrontier,
             expectedWriterHash: prepared.input.expectedWriterHash,
           });
+        },
+        signAdmittedMembership: async (payload) => {
+          assertLive();
+          owned.assertOwnedScope(payload.scope.scopeId);
+          const signer = context.options.authorizeAdmittedMembership;
+          if (signer === undefined) {
+            throw new WitnessBlocked("membership_authority_unavailable");
+          }
+          const signature = await signer(payload);
+          const hostKey = createPublicKey(installation.hostTrustRootPem);
+          if (!hostProofValid(hostKey, payload, signature)) {
+            throw new WitnessBlocked("membership_authentication");
+          }
+          return signature;
         },
       });
       markAdmissionOwnedWitnessLive(owned);

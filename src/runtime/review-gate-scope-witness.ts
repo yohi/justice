@@ -77,6 +77,7 @@ export function createReviewGateScopeWitness(options: ReviewGateScopeWitnessOpti
         readonly workspaceIdentity: string;
         readonly designPath: string;
         readonly planPath: string;
+        readonly authorizeAdmittedMembership?: (payload: unknown) => Promise<string>;
       }>,
       run: (owned: AdmissionOwnedWitness) => Promise<T>,
     ): Promise<T> => withAdmissionWitnessTransaction(context, request, run),

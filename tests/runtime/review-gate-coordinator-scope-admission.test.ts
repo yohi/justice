@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 import { createReviewGateCoordinator } from "../../src/runtime/review-gate-coordinator";
 import { createReviewGateLockManager } from "../../src/runtime/review-gate-lock-manager";
 import { createReviewGateProtocolDescriptor } from "../../src/runtime/review-gate-protocol";
+import { computeArtifactDigest, computeReviewScopeId } from "../../src/core/review-gate/identity";
 import {
   createReviewGateScopeAdmission,
   ScopeAdmissionBlocked,
   type ReviewGateScopeAdmission,
 } from "../../src/runtime/review-gate-scope-admission";
-import type { AdmissionOwnedWitness } from "../../src/runtime/review-gate-admission-context";
+import type { AdmissionOwnedWitness, ReviewGateAdmissionObservation } from "../../src/runtime/review-gate-admission-context";
+import type { AdmissionDecision } from "../../src/core/review-gate/admission";
 import { resolveRequirementsForAdmission } from "../../src/runtime/review-gate-requirements";
 import {
   createInMemoryReviewGateEventStore,
@@ -18,36 +20,66 @@ const DESIGN_PATH = "docs/design.md";
 const PLAN_PATH = "docs/plan.md";
 const DESIGN_CONTENT = "# Design\n";
 const PLAN_CONTENT = "## Plan\n- [ ] task\n";
+const SCOPE_ID = computeReviewScopeId(DESIGN_PATH, PLAN_PATH) as import("../../src/core/review-gate-types").ReviewScopeId;
 
 function createMockScopeAdmission(
   decision: AdmissionDecision,
-): ReviewGateScopeAdmission {
+  observation: ReviewGateAdmissionObservation | null = null,
+): (eventStore: ReturnType<typeof createInMemoryReviewGateEventStore>) => ReviewGateScopeAdmission {
+  return (eventStore) => ({
+    withAdmissionLease: async (_request, run) => run(decision, observation, mockOwnedWitness(eventStore)),
+  });
+}
+
+function mockOwnedWitness(eventStore: ReturnType<typeof createInMemoryReviewGateEventStore>): AdmissionOwnedWitness {
+  const firstEnrollment = { installationId: "installation-1", workspaceIdentity: "test-workspace-identity", canonicalDesignPath: DESIGN_PATH, canonicalPlanPath: PLAN_PATH, authorizationOperationId: "enrollment-1", authenticatedProvisionerDigest: "digest-1", verifiedAbsentPriorEnrollmentFrontierHash: "frontier-1", authorizationEventId: "enrollment-event-1" };
   return {
-    withAdmissionLease: async (_request, run) => run(decision, null, mockOwnedWitness()),
+    read: async () => { throw new Error("mock_owned_unused"); },
+    readVerifiedFrontier: async () => {
+      return { workspaceIdentity: "test-workspace-identity", workspaceEnrollmentId: "enrollment-1", scopes: [], writerHeads: [], globalFrontierHash: "frontier-1" };
+    },
+    readFirstEnrollmentAuthority: async () => firstEnrollment,
+    consumeFirstEnrollmentAuthority: async () => undefined,
+    readInstallation: async () => {
+      return { installationId: "installation-1", epoch: "epoch-1", provisionerPublicKeyPem: "", hostTrustRootPem: "", authenticatedProvisionerDigest: "digest-1", ownerUid: 0, authorizationSignature: "", directoryIdentityDigest: "" };
+    },
+    signAdmittedMembership: async () => "test-signature",
+    preparePublication: async () => "prepared",
+    publishPreparedJournal: async () => undefined,
+    commitPreparedPublicationCAS: (input) => eventStore.commitPreparedPublicationCAS(input),
+    recoverPreparedPublication: async () => "advanced",
+    assertOwnedScope: () => undefined,
+    assertOwnedGate: () => undefined,
   };
 }
 
-function mockOwnedWitness(): AdmissionOwnedWitness {
+function createGenesisObservation(protocol = createReviewGateProtocolDescriptor()): ReviewGateAdmissionObservation {
+  const design = { canonicalPath: DESIGN_PATH, digest: computeArtifactDigest(new TextEncoder().encode(DESIGN_CONTENT)), gitMode: "100644" as const };
+  const plan = { canonicalPath: PLAN_PATH, digest: computeArtifactDigest(new TextEncoder().encode(PLAN_CONTENT)), gitMode: "100644" as const };
+  const requirementsResolution = { schemaVersion: 2 as const, source: "design_declared_reference" as const, canonicalPath: DESIGN_PATH, digest: design.digest, gitMode: "100644" as const, requirementsGitBlobOid: "a".repeat(40), committedBaselineOid: "b".repeat(40), workspaceIdentity: "test-workspace-identity", selectionEvidence: {} };
+  const authority = { installationId: "installation-1", workspaceIdentity: "test-workspace-identity", canonicalDesignPath: DESIGN_PATH, canonicalPlanPath: PLAN_PATH, authorizationOperationId: "enrollment-1", authenticatedProvisionerDigest: "digest-1", verifiedAbsentPriorEnrollmentFrontierHash: "frontier-1", authorizationEventId: "enrollment-1" };
+  const enrollment = { scopeId: SCOPE_ID, workflowContinuityId: "workflow-1", canonicalDesignPath: DESIGN_PATH, canonicalPlanPath: PLAN_PATH, pathPairDigest: "pair-1", provenance: { kind: "verified_genesis" as const, evidenceDigest: "evidence-1", priorScopeId: null, priorGateId: null }, gateMembership: [] };
   return {
-    readVerifiedFrontier: async () => {
-      throw new Error("mock_owned_unused");
+    requirementsResolution,
+    snapshot: {
+      workspaceIdentity: "test-workspace-identity", scopeId: SCOPE_ID, verifiedFrontierHash: "frontier-1",
+      workspaceContinuity: { installationId: "installation-1", workspaceIdentity: "test-workspace-identity", protectedInstallationFrontierHash: "frontier-1", workspaceEnrollmentFrontierHash: "frontier-1", registryVerificationEventId: "registry-1", allEnrollments: [enrollment], relatedScopeTips: [], relatedGateHistoryFrontierHash: "frontier-1", authorizedFirstEnrollment: authority, verifiedIndependentWorkflow: null, verifiedCrossScopePredecessor: null, relationClosureProofDigest: "closure-1", coverage: "COMPLETE" },
+      currentTips: [], nc1Observation: "NOT_INSPECTED", nc1Candidate: null, precedence: null,
+      current: { requirements: { source: "design_declared_reference", workspaceIdentity: "test-workspace-identity", canonicalPath: DESIGN_PATH, digest: design.digest, gitMode: "100644", gitBlobOid: "a".repeat(40), observedCommitOid: "b".repeat(40), observationEvidenceId: "requirements-observation" }, design, plan, globalProtocolFingerprint: protocol.reviewProtocolFingerprint, designProtocolFingerprint: protocol.designProtocolFingerprint, planProtocolFingerprint: protocol.planProtocolFingerprint },
     },
-    readFirstEnrollmentAuthority: async () => null,
-    readInstallation: async () => {
-      throw new Error("mock_owned_unused");
-    },
-    assertOwnedScope: () => undefined,
-    assertOwnedGate: () => undefined,
   };
 }
 
 let testCounter = 0;
 
 function createTestCoordinator(
-  scopeAdmission: ReviewGateScopeAdmission | null,
+  scopeAdmission: ReviewGateScopeAdmission | ((eventStore: ReturnType<typeof createInMemoryReviewGateEventStore>) => ReviewGateScopeAdmission) | null,
 ) {
   testCounter += 1;
+  let idSequence = 0;
+  let writerSequence = 0;
   const eventStore = createInMemoryReviewGateEventStore();
+  const resolvedScopeAdmission = typeof scopeAdmission === "function" ? scopeAdmission(eventStore) : scopeAdmission;
   const protocol = createReviewGateProtocolDescriptor();
   const files = new Map([
     [DESIGN_PATH, DESIGN_CONTENT],
@@ -63,12 +95,12 @@ function createTestCoordinator(
     workspaceRoot: `/nonexistent-test-root-${testCounter}`,
     workspaceIdentity: "test-workspace-identity",
     mutationSubstrate: null,
-    scopeAdmission,
+    scopeAdmission: resolvedScopeAdmission,
     inspectTargets: async (paths) =>
       new Map(paths.map((path) => [path, "clean_committed" as const])),
     now: () => "2026-10-13T00:00:00.000Z",
-    newId: () => "test-id",
-    newWriterId: () => "test-writer",
+    newId: () => `test-id-${++idSequence}`,
+    newWriterId: () => `test-writer-${testCounter}-${++writerSequence}`,
   });
   return { coordinator, eventStore };
 }
@@ -122,7 +154,7 @@ describe("coordinator startOrResume routes through scope admission", () => {
 
   it("waits for the lease and applies the decision when the lease frees", async () => {
     let attempts = 0;
-    const scopeAdmission: ReviewGateScopeAdmission = {
+    const scopeAdmission = (eventStore: ReturnType<typeof createInMemoryReviewGateEventStore>): ReviewGateScopeAdmission => ({
       withAdmissionLease: async (_request, run) => {
         attempts += 1;
         if (attempts < 3) throw new ScopeAdmissionBlocked("scope_lease_occupied");
@@ -130,17 +162,17 @@ describe("coordinator startOrResume routes through scope admission", () => {
           {
             kind: "CREATE_GENESIS",
             workspaceIdentity: "test-workspace-identity",
-            scopeId: "scope-1" as import("../../src/core/review-gate-types").ReviewScopeId,
+            scopeId: SCOPE_ID,
             installationId: "installation-1",
             enrollmentAuthorizationEventId: "enrollment-1",
             verifiedWorkspaceFrontierHash: "frontier-1",
             completeRelationClosureDigest: "closure-1",
           },
-          null,
-          mockOwnedWitness(),
+          createGenesisObservation(),
+          mockOwnedWitness(eventStore),
         );
       },
-    };
+    });
     const { coordinator, eventStore } = createTestCoordinator(scopeAdmission);
 
     const result = await coordinator.startOrResume("session-1", {
@@ -197,17 +229,17 @@ describe("coordinator startOrResume routes through scope admission", () => {
     expect(result.guidance).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
   });
 
-  it("creates a new gate via legacy path when scope admission returns CREATE_GENESIS", async () => {
-    const { coordinator } = createTestCoordinator(
+  it("creates a V2 gate through admitted CREATE_GENESIS", async () => {
+    const { coordinator, eventStore } = createTestCoordinator(
       createMockScopeAdmission({
         kind: "CREATE_GENESIS",
         workspaceIdentity: "test-workspace-identity",
-        scopeId: "scope-1" as import("../../src/core/review-gate-types").ReviewScopeId,
+        scopeId: SCOPE_ID,
         installationId: "installation-1",
         enrollmentAuthorizationEventId: "enrollment-1",
         verifiedWorkspaceFrontierHash: "frontier-1",
         completeRelationClosureDigest: "closure-1",
-      }),
+      }, createGenesisObservation()),
     );
 
     const result = await coordinator.startOrResume("session-2", {
@@ -219,6 +251,12 @@ describe("coordinator startOrResume routes through scope admission", () => {
     expect(result.dispatched).toBe(true);
     expect(result.gateId).not.toBeNull();
     expect(result.guidance).toContain("[JUSTICE: REVIEW GATE OPERATION PAYLOAD]");
+    const gateId = result.gateId;
+    expect(gateId).not.toBeNull();
+    expect(await eventStore.listGateIds()).toContain(gateId);
+    const journal = await eventStore.readV2Journal(gateId ?? "");
+    expect(journal.events.some((event) => "schemaVersion" in event && event.schemaVersion === 2 && event.eventType === "GATE_CREATED")).toBe(true);
+    expect(await eventStore.readScopeIndex(SCOPE_ID)).toBe(gateId);
   });
 });
 

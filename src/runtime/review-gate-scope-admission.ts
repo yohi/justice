@@ -251,18 +251,23 @@ export interface ReviewGateScopeWorkspaceReader {
 }
 
 export interface ReviewGateScopeAdmissionOptions {
-  /**
-   * The one protected workspace scope witness of the shared runtime graph.
-   * A `null` witness means the trusted installation is unavailable; admission
-   * fail-closed with `ScopeAdmissionBlocked("witness_unavailable")`.
-   */
-  readonly witness: ReviewGateScopeWitness | null;
-  readonly eventStore: DurableReviewGateEventStore;
-  readonly lockManager: ReviewGateLockManager;
-  readonly workspaceReader: ReviewGateScopeWorkspaceReader;
-  readonly requirementsResolver: typeof resolveRequirementsForAdmission;
-  /** Verified protocol release authority for NC1 protocol-kind candidates. */
+/**
+* The one protected workspace scope witness of the shared runtime graph.
+* A `null` witness means the trusted installation is unavailable; admission
+* fail-closed with `ScopeAdmissionBlocked("witness_unavailable")`.
+*/
+readonly witness: ReviewGateScopeWitness | null;
+readonly eventStore: DurableReviewGateEventStore;
+readonly lockManager: ReviewGateLockManager;
+readonly workspaceReader: ReviewGateScopeWorkspaceReader;
+readonly requirementsResolver: typeof resolveRequirementsForAdmission;
+/** Verified protocol release authority for NC1 protocol-kind candidates. */
   readonly protocolRelease?: ProtocolReleaseProviderAuthority | null;
+  /**
+   * Task 4d — signer for admitted membership authorizations. The witness
+   * verifies the produced signature against the trusted installation root.
+   */
+  readonly authorizeAdmittedMembership?: (payload: unknown) => Promise<string>;
 }
 
 
@@ -853,7 +858,8 @@ export function createReviewGateScopeAdmission(
           workspaceIdentity: request.workspaceIdentity,
           designPath: request.designPath,
           planPath: request.planPath,
-        },
+          authorizeAdmittedMembership: options.authorizeAdmittedMembership,
+        } as const,
         async (owned) => {
           const outcome = await decide(request, scopeId, owned);
           return run(outcome.decision, outcome.observation, owned);
