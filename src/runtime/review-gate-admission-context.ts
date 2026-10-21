@@ -143,6 +143,7 @@ export type ReviewGateAdmissionExecutionResult =
       publicationId: string;
       terminalTransitionOperationId: string;
     }>
+  | Readonly<{ kind: "RESUME_ADMITTED"; gateId: string }>
   | Readonly<{ kind: "MUTABLE_APPLICATION_YIELDED" }>;
 
 /**

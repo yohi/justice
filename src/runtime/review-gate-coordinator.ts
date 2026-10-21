@@ -127,6 +127,10 @@ import type {
   ReviewGateAdmissionExecutionResult,
   ReviewGateAdmissionObservation,
 } from "./review-gate-admission-context";
+import {
+  applyReviewGateAdmissionDecision,
+  type ReviewGateAdmissionHandlers,
+} from "./review-gate-admission-executor";
 
 /**
  * Task 3 — bounded wait for a scope admission lease under contention.
@@ -2000,7 +2004,7 @@ export function createReviewGateCoordinator(
   // startOrResume
   // ---------------------------------------------------------------------------
 
-  const startOrResume = async (
+  const driveReviewGateAdmission = async (
     sessionId: string,
     request: ReviewGateRequest,
   ): Promise<ReviewGateCommandResult> => {
@@ -2033,7 +2037,7 @@ export function createReviewGateCoordinator(
     const planDigest = computeArtifactDigest(planBytes);
     const reviewScopeId: ReviewScopeId = computeReviewScopeId(designPath, planPath);
 
-    const runStartOrResume = async (): Promise<ReviewGateCommandResult> => {
+    const runLegacyMissingAdmissionFallback = async (): Promise<ReviewGateCommandResult> => {
       const existingGateIdRaw = await eventStore.readScopeIndex(reviewScopeId);
       if (existingGateIdRaw !== null) {
         const existingGateId = existingGateIdRaw as GateId;
@@ -2114,7 +2118,7 @@ export function createReviewGateCoordinator(
     };
 
     if (scopeAdmission === null || workspaceRoot === null || workspaceIdentity === null) {
-      return runStartOrResume();
+      return runLegacyMissingAdmissionFallback();
     }
 
     /**
@@ -2332,55 +2336,70 @@ export function createReviewGateCoordinator(
           explicitRequirementsPath: request.requirementsPath,
           protocol,
         },
-        async (decision, observation, owned) => {
-          if (decision.kind === "BLOCK") {
-            return Object.freeze({
+        (decision, observation, owned) => {
+          const blockUnsupported = (reason: string): ReviewGateAdmissionExecutionResult =>
+            Object.freeze({
               kind: "BLOCK",
-              reason: decision.reason,
+              reason,
+              result: blockedResult(
+                designPath,
+                planPath,
+                `[JUSTICE: REVIEW GATE BLOCKED] ${reason}`,
+              ),
+            });
+          const applyCreation = (
+            admittedDecision: Extract<AdmissionDecision, { kind: "CREATE_GENESIS" | "CREATE_SUCCESSOR" }>,
+          ): Promise<ReviewGateAdmissionExecutionResult> =>
+            applyAdmittedCreation(admittedDecision, observation, owned);
+          const handlers: ReviewGateAdmissionHandlers = {
+            BLOCK: (admittedDecision) => Promise.resolve(Object.freeze({
+              kind: "BLOCK",
+              reason: admittedDecision.reason,
               result: blockedResult(
                 request.designPath,
                 planPath,
-                `[JUSTICE: REVIEW GATE BLOCKED] Scope admission blocked: ${decision.detail}`,
+                `[JUSTICE: REVIEW GATE BLOCKED] Scope admission blocked: ${admittedDecision.detail}`,
               ),
-            });
-          }
-          if (decision.kind === "REUSE_COMPLETED") {
-            // Scope admission already verified the completed binding against the
-            // current workspace; reuse read-only without re-acquiring locks.
-            const previous = dropSession(sessionId);
-            if (previous !== undefined) releaseHandles(previous);
-            return Object.freeze({
-              kind: "RESULT",
-              result: Object.freeze({
-                dispatched: false,
-                gateId: decision.gateId as GateId,
-                guidance: [
-                  "---",
-                  "[JUSTICE: REVIEW GATE CLEAR]",
-                  "",
-                  "An exactly matching completed Review Gate was reused read-only (verified by scope admission). Implementation authorization still requires the explicit user command:",
-                  `/justice-implement --plan ${planPath} --approved`,
-                  "---",
-                ].join("\n"),
-                designPath,
-                planPath,
-                designDigest,
-                planDigest,
-                lockPhase: "awaiting_implementation_authorization",
-                completedReuse: true,
-              }),
-            });
-          }
-          if (
-            decision.kind === "CREATE_GENESIS" ||
-            decision.kind === "CREATE_SUCCESSOR"
-          ) {
-            return applyAdmittedCreation(decision, observation, owned);
-          }
-          // Mutable application yields the admission lease before the wider
-          // session guard chain; runStartOrResume revalidates the scope index
-          // and bindings on return. No continuation carries the decision.
-          return Object.freeze({ kind: "MUTABLE_APPLICATION_YIELDED" });
+            })),
+            REUSE_COMPLETED: (admittedDecision) => {
+              const previous = dropSession(sessionId);
+              if (previous !== undefined) releaseHandles(previous);
+              return Promise.resolve(Object.freeze({
+                kind: "RESULT",
+                result: Object.freeze({
+                  dispatched: false,
+                  gateId: admittedDecision.gateId as GateId,
+                  guidance: [
+                    "---",
+                    "[JUSTICE: REVIEW GATE CLEAR]",
+                    "",
+                    "An exactly matching completed Review Gate was reused read-only (verified by scope admission). Implementation authorization still requires the explicit user command:",
+                    `/justice-implement --plan ${planPath} --approved`,
+                    "---",
+                  ].join("\n"),
+                  designPath,
+                  planPath,
+                  designDigest,
+                  planDigest,
+                  lockPhase: "awaiting_implementation_authorization",
+                  completedReuse: true,
+                }),
+              }));
+            },
+            CREATE_GENESIS: (admittedDecision) => applyCreation(admittedDecision),
+            CREATE_SUCCESSOR: (admittedDecision) => applyCreation(admittedDecision),
+            RESUME: (admittedDecision) => Promise.resolve(Object.freeze({
+              kind: "RESUME_ADMITTED",
+              gateId: admittedDecision.gateId,
+            })),
+            STAY_SUSPENDED: () => Promise.resolve(blockUnsupported("The admitted Gate is suspended and cannot be resumed by this request.")),
+            REVALIDATE_OR_BLOCK: () => Promise.resolve(blockUnsupported("Admission context changed; revalidation prerequisites are unavailable.")),
+            UPSTREAM_PRECEDENCE_REQUIRED: () => Promise.resolve(blockUnsupported("Upstream precedence requires a separately admitted revalidation operation.")),
+            STALE_LINEAGE_REVALIDATION_REQUIRED: () => Promise.resolve(blockUnsupported("Stale lineage requires a separately admitted revalidation operation.")),
+            INSPECT_NC1_ELIGIBLE_CHANGE: () => Promise.resolve(blockUnsupported("NC1 eligibility inspection is not an execution authorization.")),
+            REENTRY_CANDIDATE: () => Promise.resolve(blockUnsupported("NC1 reentry requires a separately admitted validation operation.")),
+          };
+          return applyReviewGateAdmissionDecision({ decision, observation, owned }, handlers);
         },
       );
 
@@ -2389,7 +2408,6 @@ export function createReviewGateCoordinator(
     for (let attempt = 0; attempt < ADMISSION_LEASE_WAIT_ATTEMPTS; attempt += 1) {
       try {
         execution = await applyDecision();
-        break;
       } catch (err) {
         if (
           err instanceof ScopeAdmissionBlocked &&
@@ -2410,6 +2428,11 @@ export function createReviewGateCoordinator(
         }
         throw err;
       }
+      if (execution?.kind === "MUTABLE_APPLICATION_YIELDED") {
+        execution = null;
+        continue;
+      }
+      break;
     }
     if (execution === null) {
       return blockedResult(
@@ -2421,11 +2444,27 @@ export function createReviewGateCoordinator(
     if (execution.kind === "RESULT" || execution.kind === "BLOCK") {
       return execution.result;
     }
-    if (execution.kind === "MUTABLE_APPLICATION_YIELDED") {
-      return runStartOrResume();
+    if (execution.kind === "RESUME_ADMITTED") {
+      return resumeExistingGate(
+        sessionId,
+        execution.gateId as GateId,
+        reviewScopeId,
+        designPath,
+        planPath,
+        designDigest,
+        planDigest,
+      );
     }
-    // HANDOFF_PENDING / TERMINAL_INTENT_PREPARED_UNPUBLISHED are Task 5
-    // executor continuations; no production path produces them yet.
+    if (execution.kind === "HANDOFF_PENDING" || execution.kind === "TERMINAL_INTENT_PREPARED_UNPUBLISHED") {
+      return blockedResult(
+        designPath,
+        planPath,
+        "[JUSTICE: REVIEW GATE BLOCKED] Admission produced an authenticated continuation that this coordinator cannot complete.",
+      );
+    }
+    if (execution.kind === "MUTABLE_APPLICATION_YIELDED") {
+      return blockedResult(designPath, planPath, "[JUSTICE: REVIEW GATE BLOCKED] Mutable admission continuation is unavailable.");
+    }
     throw new Error("review_gate_admission_execution_unsupported");
   };
 
@@ -3172,7 +3211,7 @@ export function createReviewGateCoordinator(
   };
 
   return Object.freeze({
-    startOrResume,
+    startOrResume: driveReviewGateAdmission,
     preToolUse,
     postToolUse,
     classifyToolUse,

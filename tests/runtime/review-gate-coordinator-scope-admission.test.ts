@@ -26,9 +26,30 @@ function createMockScopeAdmission(
   decision: AdmissionDecision,
   observation: ReviewGateAdmissionObservation | null = null,
 ): (eventStore: ReturnType<typeof createInMemoryReviewGateEventStore>) => ReviewGateScopeAdmission {
-  return (eventStore) => ({
-    withAdmissionLease: async (_request, run) => run(decision, observation, mockOwnedWitness(eventStore)),
-  });
+  return (eventStore) => {
+    let creationApplied = false;
+    return {
+      withAdmissionLease: async (_request, run) => {
+        if (
+          creationApplied &&
+          (decision.kind === "CREATE_GENESIS" || decision.kind === "CREATE_SUCCESSOR")
+        ) {
+          const gateId = await eventStore.readScopeIndex(SCOPE_ID);
+          if (gateId === null) throw new Error("test_admitted_gate_missing");
+          return run(
+            { kind: "RESUME", gateId, generationId: gateId, witnessFrontierHash: "frontier-1" },
+            observation,
+            mockOwnedWitness(eventStore),
+          );
+        }
+        const result = await run(decision, observation, mockOwnedWitness(eventStore));
+        if (decision.kind === "CREATE_GENESIS" || decision.kind === "CREATE_SUCCESSOR") {
+          creationApplied = true;
+        }
+        return result;
+      },
+    };
+  };
 }
 
 function mockOwnedWitness(eventStore: ReturnType<typeof createInMemoryReviewGateEventStore>): AdmissionOwnedWitness {
@@ -152,12 +173,67 @@ describe("coordinator startOrResume routes through scope admission", () => {
     expect(result.planPath).toBe(PLAN_PATH);
   });
 
+  it("does not allocate a successor when changed unfinished input needs revalidation", async () => {
+    const { coordinator, eventStore } = createTestCoordinator(
+      createMockScopeAdmission({
+        kind: "REVALIDATE_OR_BLOCK",
+        gateId: "unfinished-gate",
+        generationId: "generation-1",
+        dimension: "design",
+        reason: "design changed",
+        predecessorProofRefs: ["created", "effective"],
+        witnessFrontierHash: "frontier-1",
+      }),
+    );
+
+    const result = await coordinator.startOrResume("changed-unfinished", {
+      source: "command",
+      designPath: DESIGN_PATH,
+      planPath: PLAN_PATH,
+    });
+
+    expect(result.dispatched).toBe(false);
+    expect(result.guidance).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
+    expect(await eventStore.listGateIds()).toEqual([]);
+  });
+
+  it("does not generically resume a suspended admission tip", async () => {
+    const { coordinator, eventStore } = createTestCoordinator(
+      createMockScopeAdmission({
+        kind: "STAY_SUSPENDED",
+        gateId: "suspended-gate",
+        generationId: "generation-1",
+        nc1StopEventId: "stop-1",
+        witnessFrontierHash: "frontier-1",
+      }),
+    );
+
+    const result = await coordinator.startOrResume("suspended-tip", {
+      source: "command",
+      designPath: DESIGN_PATH,
+      planPath: PLAN_PATH,
+    });
+
+    expect(result.dispatched).toBe(false);
+    expect(result.guidance).toContain("suspended");
+    expect(await eventStore.listGateIds()).toEqual([]);
+  });
+
   it("waits for the lease and applies the decision when the lease frees", async () => {
     let attempts = 0;
     const scopeAdmission = (eventStore: ReturnType<typeof createInMemoryReviewGateEventStore>): ReviewGateScopeAdmission => ({
       withAdmissionLease: async (_request, run) => {
         attempts += 1;
         if (attempts < 3) throw new ScopeAdmissionBlocked("scope_lease_occupied");
+        if (attempts > 3) {
+          const gateId = await eventStore.readScopeIndex(SCOPE_ID);
+          if (gateId === null) throw new Error("test_admitted_gate_missing");
+          return run(
+            { kind: "RESUME", gateId, generationId: gateId, witnessFrontierHash: "frontier-1" },
+            null,
+            mockOwnedWitness(eventStore),
+          );
+        }
         return run(
           {
             kind: "CREATE_GENESIS",
@@ -181,7 +257,7 @@ describe("coordinator startOrResume routes through scope admission", () => {
       planPath: PLAN_PATH,
     });
 
-    expect(attempts).toBe(3);
+    expect(attempts).toBe(4);
     // The decision is applied through the callback, not skipped.
     expect(result.dispatched).toBe(true);
     expect(result.gateId).not.toBeNull();
