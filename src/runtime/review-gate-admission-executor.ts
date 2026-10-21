@@ -15,6 +15,11 @@ import {
   type VerifiedSectionInventory,
 } from "../core/review-gate/requirements-section-inventory";
 import { planSemanticContextTransition, type SemanticContextTransitionDecision } from "../core/review-gate/cycle-evidence";
+import {
+  planNonConvergenceReentry,
+  type VerifiedReentryInput,
+  type ReentryDecision,
+} from "../core/review-gate/reentry";
 import type {
   SemanticContextInputsV1,
   VerifiedSemanticContextTransitionInput,
@@ -46,6 +51,90 @@ export type VerifiedSemanticContextTransitionResult = Readonly<{
   readonly input: VerifiedSemanticContextTransitionInput;
   readonly decision: Exclude<SemanticContextTransitionDecision, { readonly kind: "BLOCK" }>;
 }> | Readonly<{ readonly kind: "BLOCK"; readonly reason: string }>;
+
+export type VerifiedAdmissionNC1ReentryResult =
+  | Readonly<{
+      readonly kind: "REENTER_SAME_GENERATION";
+      readonly gateId: string;
+      readonly generationId: string;
+      readonly epochId: string;
+      readonly validationEventId: string;
+      readonly input: VerifiedReentryInput;
+    }>
+  | Readonly<{
+      readonly kind: "STAY_SUSPENDED";
+      readonly gateId: string;
+      readonly generationId: string;
+    }>
+  | Readonly<{ readonly kind: "BLOCK"; readonly reason: string }>;
+
+export function planAdmissionNC1Reentry(
+  decision: Extract<AdmissionDecision, { readonly kind: "REENTRY_CANDIDATE" }>,
+  observation: ReviewGateAdmissionObservation | null,
+): VerifiedAdmissionNC1ReentryResult {
+  const evidence = observation?.nc1Evidence;
+  const snapshot = observation?.snapshot;
+  const change = evidence?.change;
+  if (
+    evidence === null ||
+    evidence === undefined ||
+    snapshot === undefined ||
+    change === null ||
+    change === undefined ||
+    snapshot.nc1Evidence !== evidence ||
+    evidence.stop.stopEventId !== decision.nc1StopEventId ||
+    evidence.stop.epochId.length === 0 ||
+    evidence.stop.phase !== change.phase ||
+    evidence.stop.stopEventId !== change.nc1StopEventId ||
+    change.gateId !== decision.gateId ||
+    change.generationId !== decision.generationId ||
+    change.changeObservedEventId !== decision.changeObservedEventId ||
+    change.changeObservedEventId !== decision.nc1EvidenceEventId ||
+    evidence.frontierHash !== decision.witnessFrontierHash ||
+    snapshot.verifiedFrontierHash !== decision.witnessFrontierHash ||
+    change.witnessFrontierAtObservation !== decision.witnessFrontierHash
+  ) {
+    return Object.freeze({ kind: "BLOCK", reason: "nc1_admission_evidence_binding_mismatch" });
+  }
+
+  const input: VerifiedReentryInput = Object.freeze({
+    gateId: decision.gateId,
+    generationId: decision.generationId,
+    epochId: evidence.stop.epochId,
+    phase: evidence.stop.phase,
+    remainingRounds: evidence.stop.remainingRounds,
+    nc1EvidenceEventId: evidence.stop.stopEventId,
+    verifiedChange: change,
+    validation: evidence.validationOutcome,
+  });
+  const planned: ReentryDecision = planNonConvergenceReentry(input);
+  switch (planned) {
+    case "BLOCK":
+      return Object.freeze({ kind: "BLOCK", reason: "nc1_reentry_core_blocked" });
+    case "STAY_SUSPENDED":
+      return Object.freeze({
+        kind: "STAY_SUSPENDED",
+        gateId: decision.gateId,
+        generationId: decision.generationId,
+      });
+    case "REENTER_SAME_GENERATION": {
+      const validation = input.validation;
+      if (validation === null) {
+        return Object.freeze({ kind: "BLOCK", reason: "nc1_reentry_validation_missing" });
+      }
+      return Object.freeze({
+        kind: "REENTER_SAME_GENERATION",
+        gateId: decision.gateId,
+        generationId: decision.generationId,
+        epochId: input.epochId,
+        validationEventId: validation.validationEventId,
+        input,
+      });
+    }
+    default:
+      return assertNever(planned);
+  }
+}
 
 export type VerifiedSemanticContextTransitionPlanningInput = Readonly<{
   readonly oldInputs: SemanticContextInputsV1;

@@ -139,6 +139,7 @@ import type {
 } from "./review-gate-admission-context";
 import {
   applyReviewGateAdmissionDecision,
+  planAdmissionNC1Reentry,
   planVerifiedSemanticContextTransition,
   type ReviewGateAdmissionHandlers,
 } from "./review-gate-admission-executor";
@@ -388,6 +389,10 @@ const NON_PREPARABLE_OPERATION_KINDS: ReadonlySet<string> = new Set<string>([
 
 /** Drive-loop sentinel: the operation executed in place and the loop continues. */
 const DRIVE_CONTINUE: unique symbol = Symbol("review_gate_drive_continue");
+
+function assertNever(value: never): never {
+  throw new Error(`review_gate_admission_result_unhandled: ${JSON.stringify(value)}`);
+}
 
 const isPlainObjectRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -2752,7 +2757,21 @@ export function createReviewGateCoordinator(
               });
             },
             INSPECT_NC1_ELIGIBLE_CHANGE: () => Promise.resolve(blockUnsupported("NC1 eligibility inspection is not an execution authorization.")),
-            REENTRY_CANDIDATE: () => Promise.resolve(blockUnsupported("NC1 reentry requires a separately admitted validation operation.")),
+            REENTRY_CANDIDATE: (admittedDecision, admittedObservation) => {
+              const reentry = planAdmissionNC1Reentry(admittedDecision, admittedObservation);
+              switch (reentry.kind) {
+                case "BLOCK":
+                  return Promise.resolve(blockUnsupported(reentry.reason));
+                case "STAY_SUSPENDED":
+                  return Promise.resolve(blockUnsupported("The verified NC1 outcome does not authorize reentry."));
+                case "REENTER_SAME_GENERATION":
+                  return Promise.resolve(blockUnsupported(
+                    "NC1 validation is verified, but no protected once-only reentry publication is available.",
+                  ));
+                default:
+                  return assertNever(reentry);
+              }
+            },
           };
           return applyReviewGateAdmissionDecision({ decision, observation, owned }, handlers);
         },

@@ -4,12 +4,18 @@ import type { ReviewScopeId } from "../../src/core/review-gate-types";
 import { SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_DIGEST } from "../../src/core/review-gate/deterministic-validation";
 import type { SemanticContextInputsV1 } from "../../src/core/review-gate/types";
 import type {
+  VerifiedNC1EligibleChangeV1,
+  VerifiedNC1StopV1,
+} from "../../src/core/review-gate/admission";
+import type {
   AdmissionOwnedWitness,
   ReviewGateAdmissionExecutionResult,
   ReviewGateAdmissionObservation,
+  VerifiedNC1EvidenceBundleV1,
 } from "../../src/runtime/review-gate-admission-context";
 import {
   applyReviewGateAdmissionDecision,
+  planAdmissionNC1Reentry,
   planVerifiedSemanticContextTransition,
 } from "../../src/runtime/review-gate-admission-executor";
 
@@ -233,5 +239,153 @@ describe("planVerifiedSemanticContextTransition", () => {
     expect(result.kind).toBe("BLOCK");
     if (result.kind !== "BLOCK") throw new Error("transition_should_block_without_proof");
     expect(result.reason).toBe("semantic_compatibility_indeterminate");
+  });
+});
+
+const nc1Stop: VerifiedNC1StopV1 = {
+  stopEventId: "nc1-stop",
+  phase: "design",
+  epochId: "epoch",
+  stoppedWriterId: "writer",
+  stoppedContextDigest: "before-context",
+  remainingRounds: 2,
+  witnessFrontierAtStop: "stop-frontier",
+  protocolRelease: {
+    stopEventId: "nc1-stop",
+    historicalReleaseId: null,
+    historicalReleaseProofDigest: null,
+    historicalPublisherTrustPolicyVersion: null,
+  },
+};
+
+const nc1Change: VerifiedNC1EligibleChangeV1 = {
+  kind: "artifact",
+  artifactKind: "design",
+  gateId: "gate",
+  generationId: "generation",
+  phase: "design",
+  nc1StopEventId: "nc1-stop",
+  beforeContextDigest: "before-context",
+  afterContextDigest: "after-context",
+  changeObservedEventId: "change-event",
+  observationOperationId: "change-operation",
+  witnessFrontierAtObservation: "frontier",
+  beforeArtifactDigest: "old-design",
+  afterArtifactDigest: "new-design",
+  committedGitOid: "commit",
+  verifiedGitParentOid: "parent",
+  beforeGitBlobOid: "a".repeat(40),
+  afterGitBlobOid: "b".repeat(40),
+  verifiedTargetClean: true,
+};
+
+const reentryBundle = (
+  overrides: Partial<VerifiedNC1EvidenceBundleV1> = {},
+): VerifiedNC1EvidenceBundleV1 => ({
+  stop: nc1Stop,
+  change: nc1Change,
+  validationOutcome: {
+    outcome: "MATERIAL_PROGRESS",
+    validationEventId: "validation-event",
+    boundNc1EvidenceEventId: "nc1-stop",
+    boundChangeProofEventId: "change-event",
+  },
+  frontierHash: "frontier",
+  ...overrides,
+});
+
+const reentryDecision = decisions.find(
+  (decision): decision is Extract<AdmissionDecision, { kind: "REENTRY_CANDIDATE" }> =>
+    decision.kind === "REENTRY_CANDIDATE",
+);
+
+describe("planAdmissionNC1Reentry", () => {
+  it("reenters only for matching independently verified material progress", () => {
+    if (reentryDecision === undefined) throw new Error("reentry_decision_fixture_missing");
+    const evidence = reentryBundle();
+    const candidateDecision = {
+      ...reentryDecision,
+      nc1StopEventId: nc1Stop.stopEventId,
+      changeObservedEventId: nc1Change.changeObservedEventId,
+      nc1EvidenceEventId: nc1Change.changeObservedEventId,
+    };
+    const admissionObservation: ReviewGateAdmissionObservation = {
+      ...observation,
+      snapshot: {
+        ...observation.snapshot,
+        verifiedFrontierHash: "frontier",
+        nc1Evidence: evidence,
+      },
+      nc1Evidence: evidence,
+    };
+
+    expect(planAdmissionNC1Reentry(candidateDecision, admissionObservation)).toEqual({
+      kind: "REENTER_SAME_GENERATION",
+      gateId: "gate",
+      generationId: "generation",
+      epochId: "epoch",
+      validationEventId: "validation-event",
+      input: expect.objectContaining({
+        nc1EvidenceEventId: "nc1-stop",
+        verifiedChange: nc1Change,
+        validation: {
+          outcome: "MATERIAL_PROGRESS",
+          validationEventId: "validation-event",
+          boundNc1EvidenceEventId: "nc1-stop",
+          boundChangeProofEventId: "change-event",
+        },
+      }),
+    });
+  });
+
+  it("blocks a candidate whose evidence frontier is stale", () => {
+    if (reentryDecision === undefined) throw new Error("reentry_decision_fixture_missing");
+    const staleBundle = reentryBundle({ frontierHash: "stale-frontier" });
+    const candidateDecision = {
+      ...reentryDecision,
+      nc1StopEventId: nc1Stop.stopEventId,
+      changeObservedEventId: nc1Change.changeObservedEventId,
+      nc1EvidenceEventId: nc1Change.changeObservedEventId,
+    };
+    const admissionObservation: ReviewGateAdmissionObservation = {
+      ...observation,
+      snapshot: {
+        ...observation.snapshot,
+        verifiedFrontierHash: "frontier",
+        nc1Evidence: staleBundle,
+      },
+      nc1Evidence: staleBundle,
+    };
+
+    expect(planAdmissionNC1Reentry(candidateDecision, admissionObservation)).toEqual({
+      kind: "BLOCK",
+      reason: "nc1_admission_evidence_binding_mismatch",
+    });
+  });
+
+  it("stays suspended when no independent validation outcome is present", () => {
+    if (reentryDecision === undefined) throw new Error("reentry_decision_fixture_missing");
+    const pendingBundle = reentryBundle({ validationOutcome: null });
+    const candidateDecision = {
+      ...reentryDecision,
+      nc1StopEventId: nc1Stop.stopEventId,
+      changeObservedEventId: nc1Change.changeObservedEventId,
+      nc1EvidenceEventId: nc1Change.changeObservedEventId,
+    };
+    const admissionObservation: ReviewGateAdmissionObservation = {
+      ...observation,
+      snapshot: {
+        ...observation.snapshot,
+        verifiedFrontierHash: "frontier",
+        nc1Evidence: pendingBundle,
+      },
+      nc1Evidence: pendingBundle,
+    };
+
+    expect(planAdmissionNC1Reentry(candidateDecision, admissionObservation)).toEqual({
+      kind: "STAY_SUSPENDED",
+      gateId: "gate",
+      generationId: "generation",
+    });
   });
 });
