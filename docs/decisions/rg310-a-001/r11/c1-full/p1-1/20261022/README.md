@@ -11,7 +11,7 @@ Original supplied ZIP: `Justice_RG310_C1_FULL_P1_1_Independent_Static_Result_202
 - Census: 74 preserved + 8 appended N-47..54 = 82. Reconciliation includes the separate doctor CLI and source-defined-but-not-exported Justice tool definitions.
 - Status remains a **bounded** source investigation and is NOT automatically promoted by our later retrieval.
 
-**Original ZIP bytes:** the independent result remains available as the user-provided conversation attachment. **Not yet committed as a binary GitHub artifact.** Do not mistake this README or independent source evidence for the original ZIP bytes.
+**Original ZIP bytes:** [byte-identical independent result ZIP](archives/Justice_RG310_C1_FULL_P1_1_Independent_Static_Result_20261022.zip) is archived in this PR. Verified Git blob SHA-1: `69ee4e20d4de1869e8444105dd54cc34d8f30357`; SHA-256: `6a1b5915a3d2e6e90f9287b9d8f116e04aa36d54adef365eed4816bbb3003613`. The original ZIP includes six unmodified reports, SHA256SUMS, and MANIFEST; archival alone does not elevate their evidence status.
 
 ## NEW, subsequent coordinator read-only verification — NOT part of the independent P1.1 report
 
