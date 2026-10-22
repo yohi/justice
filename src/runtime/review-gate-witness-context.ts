@@ -22,7 +22,11 @@ import {
   withWitnessScopeGateLocks,
   type ReviewGateLockManager,
 } from "./review-gate-lock-manager.js";
-import { computeArtifactDigest, computeReviewScopeId } from "../core/review-gate/identity.js";
+import {
+  canonicalizeArtifactPath,
+  computeArtifactDigest,
+  computeReviewScopeId,
+} from "../core/review-gate/identity.js";
 import { validateFirstEnrollmentUnderAdmission } from "./review-gate-witness-enrollment.js";
 import {
   commitPublicationUnlocked,
@@ -31,6 +35,7 @@ import {
   readPreparedPublication,
 } from "./review-gate-publication-record.js";
 import { publicationSchema } from "./review-gate-witness-registry.js";
+import { runGitLiteral } from "./review-gate-query.js";
 import type { VerifiedScopeFrontier } from "../core/review-gate/types.js";
 import {
   type AdmissionOwnedWitness,
@@ -239,6 +244,64 @@ export async function withAdmissionWitnessTransaction<T>(
         readInstallation: async () => {
           assertLive();
           return installation;
+        },
+        readVerifiedDesignBinding: async ({ gateId, designPath }) => {
+          assertLive();
+          if (!gateIds.has(gateId)) {
+            throw new Error("review_gate_admission_owned_gate_foreign");
+          }
+          const canonicalPath = canonicalizeArtifactPath(designPath);
+          if (canonicalPath === null) return null;
+          const snapshot = await owned.read();
+          const workspace = workspaceFrom(snapshot, request.workspaceIdentity);
+          const enrolledScope = workspace.frontier.scopes.find((scope) =>
+            scope.gateMembership.some((membership) => membership.gateId === gateId),
+          );
+          if (enrolledScope?.canonicalDesignPath !== canonicalPath) return null;
+
+          const headResult = await runGitLiteral(context.options.workspaceRoot, [
+            "rev-parse",
+            "--verify",
+            "HEAD",
+          ]);
+          if (headResult.code !== 0) return null;
+          const headSha = headResult.stdout.toString("utf8").trim();
+          if (!/^[0-9a-f]{40,64}$/u.test(headSha)) return null;
+          const treeResult = await runGitLiteral(context.options.workspaceRoot, [
+            "rev-parse",
+            "--verify",
+            `${headSha}^{tree}`,
+          ]);
+          if (treeResult.code !== 0) return null;
+          const treeSha = treeResult.stdout.toString("utf8").trim();
+          if (!/^[0-9a-f]{40,64}$/u.test(treeSha)) return null;
+          const entryResult = await runGitLiteral(context.options.workspaceRoot, [
+            "ls-tree",
+            "-z",
+            treeSha,
+            "--",
+            canonicalPath,
+          ]);
+          if (entryResult.code !== 0) return null;
+          const entry = entryResult.stdout.toString("utf8").replace(/\0$/u, "");
+          const match = /^(100644|100755) blob ([0-9a-f]{40,64})\t(.+)$/u.exec(entry);
+          if (match === null || match[3] !== canonicalPath) return null;
+          const blobSha = match[2];
+          const rawGitMode = match[1];
+          if (
+            blobSha === undefined ||
+            (rawGitMode !== "100644" && rawGitMode !== "100755")
+          ) return null;
+          const gitMode = rawGitMode;
+          const sizeResult = await runGitLiteral(context.options.workspaceRoot, [
+            "cat-file",
+            "-s",
+            blobSha,
+          ]);
+          if (sizeResult.code !== 0) return null;
+          const objectSize = Number(sizeResult.stdout.toString("utf8").trim());
+          if (!Number.isSafeInteger(objectSize) || objectSize < 0) return null;
+          return Object.freeze({ treeSha, blobSha, gitMode, objectSize });
         },
         assertOwnedScope: (scopeId: string) => {
           assertLive();

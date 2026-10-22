@@ -90,6 +90,15 @@ export type AdmissionOwnedWitness = Readonly<{
   readonly readFirstEnrollmentAuthority: () => Promise<VerifiedFirstEnrollmentAuthorityV1 | null>;
   readonly consumeFirstEnrollmentAuthority: (authorizationEventId: string) => Promise<void>;
   readonly readInstallation: () => Promise<TrustedWitnessInstallationV1>;
+  readonly readVerifiedDesignBinding: (input: {
+    readonly gateId: string;
+    readonly designPath: string;
+  }) => Promise<Readonly<{
+    readonly treeSha: string;
+    readonly blobSha: string;
+    readonly gitMode: "100644" | "100755";
+    readonly objectSize: number;
+  }> | null>;
   readonly assertOwnedScope: (scopeId: string) => void;
   readonly assertOwnedGate: (gateId: string) => void;
   readonly preparePublication: (

@@ -34,6 +34,7 @@ import type {
   ScopedReviewToolUse,
 } from "../runtime/review-gate-coordinator";
 import type { ReviewGateApprovalLookup } from "../runtime/review-gate-approval";
+import type { ReviewGatePhase } from "../core/review-gate-types";
 import {
   buildReviewQueryScope,
   classifyReviewModelTool,
@@ -189,6 +190,8 @@ export interface ReviewGateLockSnapshot {
   readonly parentSessionId: string;
   readonly gateId: string;
   readonly phase: ReviewGateCoordinatorLockPhase;
+  readonly reviewPhase: ReviewGatePhase | null;
+  readonly operationId: string | null;
   readonly designPath: string | null;
   readonly planPath: string | null;
   readonly designDigest: string | null;
@@ -822,6 +825,8 @@ export class PlanBridge {
       parentSessionId: sessionId,
       gateId: result.gateId,
       phase: result.lockPhase ?? "remediation",
+      reviewPhase: null,
+      operationId: null,
       designPath: result.designPath,
       planPath: result.planPath,
       designDigest: result.designDigest,
