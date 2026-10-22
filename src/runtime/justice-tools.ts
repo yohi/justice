@@ -96,6 +96,12 @@ export function defineJusticeGateTool(adapter: OpenCodeAdapter): ToolDefinition 
 
 export type JusticeReviewToolArgs = {
   readonly scope?: string;
+  readonly query?:
+    | { readonly kind: "artifact_read"; readonly path: string }
+    | { readonly kind: "artifact_search"; readonly path: string; readonly literal: string }
+    | { readonly kind: "show"; readonly path: string }
+    | { readonly kind: "status" }
+    | { readonly kind: "diff"; readonly staged: boolean };
   readonly resolve?: {
     readonly itemKeys: readonly string[];
     readonly artifactRef: string;
@@ -268,6 +274,13 @@ export function defineJusticeReviewTool(adapter: OpenCodeAdapter): ToolDefinitio
     description: "Review Summary Artifact を表示・解決します",
     args: {
       scope: tool.schema.string().optional(),
+      query: tool.schema.union([
+        tool.schema.object({ kind: tool.schema.literal("artifact_read"), path: tool.schema.string() }),
+        tool.schema.object({ kind: tool.schema.literal("artifact_search"), path: tool.schema.string(), literal: tool.schema.string() }),
+        tool.schema.object({ kind: tool.schema.literal("show"), path: tool.schema.string() }),
+        tool.schema.object({ kind: tool.schema.literal("status") }),
+        tool.schema.object({ kind: tool.schema.literal("diff"), staged: tool.schema.boolean() }),
+      ]).optional(),
       resolve: tool.schema
         .object({
           itemKeys: tool.schema.array(tool.schema.string()),
@@ -283,6 +296,11 @@ export function defineJusticeReviewTool(adapter: OpenCodeAdapter): ToolDefinitio
         await adapter.ensureInitialized();
         const justice = adapter.getJustice();
         if (justice === null) return formatError("Justice not initialized");
+
+        if (args.query !== undefined) {
+          const ownerSessionId = adapter.resolveLockOwnerSession(context.sessionID) ?? context.sessionID;
+          return await justice.getPlanBridge().executeReviewerScopedQuery(ownerSessionId, args.query);
+        }
 
         const observationHandler = justice.getObservationHandler();
         return await executeJusticeReviewTool({

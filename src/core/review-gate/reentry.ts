@@ -48,17 +48,19 @@ export type VerifiedReentryInput = Readonly<{
   readonly remainingRounds: number;
   readonly nc1EvidenceEventId: string;
   readonly verifiedChange: VerifiedNC1EligibleChangeV1 | null;
-  readonly validation: Readonly<{
-    readonly outcome:
-      | "MATERIAL_PROGRESS"
-      | "NO_MATERIAL_PROGRESS"
-      | "DESIGN_REOPEN_REQUIRED"
-      | "REQUIREMENTS_REOPEN_REQUIRED"
-      | "INDETERMINATE";
-    readonly validationEventId: string;
-    readonly boundNc1EvidenceEventId: string;
-    readonly boundChangeProofEventId: string;
-  }> | null;
+  readonly validation: VerifiedNonConvergenceReentryValidationV1 | null;
+}>;
+
+export type VerifiedNonConvergenceReentryValidationV1 = Readonly<{
+  readonly outcome:
+    | "MATERIAL_PROGRESS"
+    | "NO_MATERIAL_PROGRESS"
+    | "DESIGN_REOPEN_REQUIRED"
+    | "REQUIREMENTS_REOPEN_REQUIRED"
+    | "INDETERMINATE";
+  readonly validationEventId: string;
+  readonly boundNc1EvidenceEventId: string;
+  readonly boundChangeProofEventId: string;
 }>;
 
 /**

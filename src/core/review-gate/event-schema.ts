@@ -172,6 +172,13 @@ const transition: z.ZodType<VerifiedSemanticContextTransitionInput> = z.strictOb
   && value.triggeringAuthorityEventId === value.proof.triggeringAuthorityEventId
   && value.roundCountersBefore.design === value.roundCountersAfter.design
   && value.roundCountersBefore.plan === value.roundCountersAfter.plan);
+const nc1ReentryApplied = z.strictObject({
+  operationId: id,
+  validationEventId: id,
+  nc1EvidenceEventId: id,
+  changeObservedEventId: id,
+  remainingRounds: z.number().int().nonnegative(),
+});
 
 const requirementsV2 = z.strictObject({
   schemaVersion: z.literal(2),
@@ -305,6 +312,7 @@ const v2Schema = z.union([
   versioned("TARGET_WRITER_HANDOFF_RESUMED", continuation),
   versioned("TARGET_WRITER_TERMINAL_REVOKED", revoke),
   versioned("SEMANTIC_CONTEXT_TRANSITION", transition),
+  versioned("NC1_REENTRY_OUTCOME_APPLIED", nc1ReentryApplied),
 ])
 .refine((value) => {
   if (value.eventId === value.parentEventId) return false;
@@ -322,6 +330,11 @@ const v2Schema = z.union([
         && value.payload.oldInputs.generationId === value.generationId
         && value.payload.triggeringAuthorityEventId !== value.eventId
         && value.payload.proof.validationEventId !== value.eventId;
+    case "NC1_REENTRY_OUTCOME_APPLIED":
+      return value.payload.operationId !== value.eventId
+        && value.payload.validationEventId !== value.eventId
+        && value.payload.nc1EvidenceEventId !== value.eventId
+        && value.payload.changeObservedEventId !== value.eventId;
     case "DESIGN_CLEAR":
     case "PLAN_CLEAR":
       return true;

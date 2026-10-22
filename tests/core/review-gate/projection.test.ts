@@ -949,6 +949,54 @@ describe("projectVerifiedGateTip", () => {
     });
   });
 
+  it("clears a verified NC1 stop only for same-epoch applied reentry", () => {
+    const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+    const applied = validateReviewGateEventRecord({
+      schemaVersion: 2,
+      eventId: "event-nc1-applied",
+      parentEventId: "event-genesis",
+      emittedAt: "2026-10-11T00:00:02.000Z",
+      gateId: "gate-1",
+      epochId: "epoch-1",
+      generationId: "generation-1",
+      writerId: "writer-1",
+      eventType: "NC1_REENTRY_OUTCOME_APPLIED",
+      payload: {
+        operationId: "operation-nc1",
+        validationEventId: "validation-1",
+        nc1EvidenceEventId: "synthetic-v1-stop",
+        changeObservedEventId: "change-1",
+        remainingRounds: 5,
+      },
+    });
+    const stopped = validateReviewGateEventRecord({
+      eventType: "REVIEW_NON_CONVERGENT",
+      gateId: "gate-1" as GateId,
+      writerId: "writer-1" as WriterId,
+      epochId: "epoch-1" as EpochId,
+      emittedAt: "2026-10-11T00:00:01.000Z",
+      payload: { phase: "design", lineageIds: ["lineage-1" as LineageId] },
+    });
+    const tip = projectVerifiedGateTip({
+      gateId: "gate-1",
+      scopeId: "scope-1",
+      events: [genesis, stopped, applied],
+      frontier: frontier() as VerifiedScopeFrontier,
+    });
+
+    expect(tip.status).toBe("active");
+    if (tip.status !== "active") throw new Error("expected_nc1_reentry_active_tip");
+    expect(tip).toMatchObject({
+      status: "active",
+      gateId: "gate-1",
+      generationId: "generation-1",
+      suspensionReason: null,
+      suspensionEpochId: null,
+      rounds: { design: 0, plan: 0 },
+      nc1Stop: null,
+    });
+  });
+
   it("rejects a history without a V2 GATE_CREATED event", () => {
     const event = validateReviewGateEventRecord(v2Dispatch("design", "event-dispatch", "event-before-dispatch"));
 

@@ -89,11 +89,17 @@ import type {
 } from "../core/review-gate/types";
 import type { ReviewGateEvent, ReviewGatePhase } from "../core/review-gate-types";
 import type { ReviewGateOperationKind } from "../core/review-gate/agent-protocol";
+import type { AdmissionDecision } from "../core/review-gate/admission.js";
+import { projectVerifiedGateTip } from "../core/review-gate/projection.js";
+import type { AdmissionOwnedWitness, ReviewGateAdmissionObservation } from "./review-gate-admission-context.js";
 import type {
   PreparedWitnessPublicationV1,
   ReviewGateScopeWitness,
   TrustedFirstEnrollmentV1,
 } from "./review-gate-scope-witness";
+import type { AdmittedMembership } from "./review-gate-witness-contracts.js";
+import { admittedMembershipSchema } from "./review-gate-witness-registry.js";
+import { assertAdmissionOwnedWitnessLive } from "./review-gate-admission-context";
 
 const REVIEW_GATES_DIR = ".justice/review-gates";
 const EVENTS_DIR = `${REVIEW_GATES_DIR}/events`;
@@ -158,6 +164,7 @@ export type ReviewGateJournalRecovery = Readonly<{
 }>;
 
 export type ReviewGateEventStore = Readonly<{
+  readonly writerId?: string;
   readonly appendEvents: (gateId: string, events: readonly ReviewGateEvent[]) => Promise<void>;
   readonly readEvents: (gateId: string) => Promise<readonly ReviewGateEvent[]>;
   readonly readVerifiedEvents: (gateId: string) => Promise<readonly VerifiedReviewGateEvent[]>;
@@ -251,8 +258,32 @@ export type SealedTerminalIntentInput = Readonly<{
 /** The Task 6 authority surface added on top of the legacy store shape. */
 export type VerifiedReviewGateEventStore = Readonly<{
   readonly readVerifiedScope: (scopeId: string) => Promise<VerifiedScopeRead>;
+  readonly readVerifiedScopeOwned: (
+    owned: import("./review-gate-admission-context.js").AdmissionOwnedWitness,
+    scopeId: string,
+  ) => Promise<VerifiedScopeRead>;
   readonly prepareVerifiedEventPublication: (
     input: VerifiedEventPublicationInput,
+  ) => Promise<PreparedWitnessPublicationV1>;
+  readonly prepareAdmittedGenerationPublication: (
+    input: Omit<VerifiedEventPublicationInput, "firstEnrollment"> & Readonly<{
+      readonly decision: Extract<AdmissionDecision, { readonly kind: "CREATE_GENESIS" | "CREATE_SUCCESSOR" }>;
+      readonly observation: ReviewGateAdmissionObservation;
+      readonly membership: AdmittedMembership;
+    }>,
+    owned: AdmissionOwnedWitness,
+  ) => Promise<PreparedWitnessPublicationV1>;
+  readonly prepareAdmittedOperationPublication: (
+    input: Readonly<{
+      readonly scopeId: string;
+      readonly gateId: string;
+      readonly writerId: string;
+      readonly operationId: string;
+      readonly canonicalEvents: readonly VerifiedReviewGateEvent[];
+      readonly expectedWriterHead?: string;
+      readonly firstEnrollmentAuthorizationId?: string;
+    }>,
+    owned: AdmissionOwnedWitness,
   ) => Promise<PreparedWitnessPublicationV1>;
   readonly publishPreparedEvent: (
     input: PreparedWitnessPublicationV1,
@@ -272,7 +303,9 @@ export type VerifiedReviewGateEventStore = Readonly<{
 }>;
 
 /** Full authority store: the legacy surface plus the Task 6 verified surface. */
-export type DurableReviewGateEventStore = ReviewGateEventStore & VerifiedReviewGateEventStore;
+export type DurableReviewGateEventStore = ReviewGateEventStore &
+  VerifiedReviewGateEventStore &
+  Readonly<{ readonly writerId: string }>;
 
 type JournalRead = Readonly<{
   readonly events: readonly VerifiedReviewGateEvent[];
@@ -1117,6 +1150,22 @@ export function createReviewGateEventStore(
   ): ScopeEnrollmentV1 | null =>
     frontier.scopes.find((scope) => scope.scopeId === scopeId) ?? null;
 
+  const assembleVerifiedScopeRead = async (
+    frontier: VerifiedScopeFrontier,
+    scopeId: string,
+  ): Promise<VerifiedScopeRead> => {
+    const scope = findScope(frontier, scopeId);
+    if (scope === null) throw new Error("review_gate_scope_membership_missing");
+    const gateIds = Object.freeze(
+      scope.gateMembership.map((gate) => gate.gateId).sort((left, right) => left.localeCompare(right)),
+    );
+    const eventsByGate = new Map<string, readonly VerifiedReviewGateEvent[]>();
+    for (const gate of scope.gateMembership) {
+      eventsByGate.set(gate.gateId, await readGateVerifiedEvents(scopeId, gate));
+    }
+    return Object.freeze({ frontier, gateIds, eventsByGate });
+  };
+
   const findGate = (scope: ScopeEnrollmentV1, gateId: string): GateMembership | null =>
     scope.gateMembership.find((gate) => gate.gateId === gateId) ?? null;
 
@@ -1306,6 +1355,8 @@ export function createReviewGateEventStore(
       operationId: string;
       canonicalEvents: readonly VerifiedReviewGateEvent[];
       firstEnrollment: VerifiedFirstEnrollment | null;
+      admittedScope?: ScopeEnrollmentV1;
+      owned?: AdmissionOwnedWitness;
     }>,
     frontier?: VerifiedScopeFrontier,
   ): Promise<PublicationDraft> => {
@@ -1342,7 +1393,9 @@ export function createReviewGateEventStore(
       ) {
         throw new Error("review_gate_genesis_event_invalid");
       }
-      scopes = [buildGenesisScope(input, input.firstEnrollment)];
+      scopes = input.admittedScope === undefined
+        ? [buildGenesisScope(input, input.firstEnrollment)]
+        : [input.admittedScope];
     } else {
       const scope = findScope(observed, input.scopeId);
       const gate = scope === null ? null : findGate(scope, input.gateId);
@@ -1398,7 +1451,9 @@ export function createReviewGateEventStore(
       operationId: input.operationId,
       newTailDigest,
     });
-    const installation = await witness.readInstallation();
+    const installation = input.owned === undefined
+      ? await witness.readInstallation()
+      : await input.owned.readInstallation();
     const publication: PreparedWitnessPublicationV1 = Object.freeze({
       installationId: installation.installationId,
       workspaceIdentity: observed.workspaceIdentity,
@@ -1407,7 +1462,9 @@ export function createReviewGateEventStore(
       writerId: input.writerId,
       operationId: input.operationId,
       publicationId,
-      expectedInstallationFrontier: await witness.readInstallationFrontierHash(),
+      expectedInstallationFrontier: input.owned === undefined
+        ? await witness.readInstallationFrontierHash()
+        : (await input.owned.read()).hash,
       expectedGlobalFrontier: observed.globalFrontierHash,
       expectedWriterSequence,
       expectedWriterHash: priorHead?.hash ?? EMPTY_SHARD_HASH,
@@ -1435,7 +1492,13 @@ export function createReviewGateEventStore(
   const prepareAndSyncShard = async (
     publication: PreparedWitnessPublicationV1,
     bytes: Buffer,
+    owned?: AdmissionOwnedWitness,
   ): Promise<void> => {
+    if (owned !== undefined) {
+      await owned.preparePublication(publication, bytes);
+      await owned.publishPreparedJournal(publication.publicationId);
+      return;
+    }
     const outcome = await witness.preparePublication(publication, bytes);
     if (outcome !== "prepared" && outcome !== "already_prepared") {
       throw new Error("review_gate_publication_cas_conflict");
@@ -1463,6 +1526,7 @@ export function createReviewGateEventStore(
   };
 
   const store: DurableReviewGateEventStore = {
+    writerId,
     appendEvents: (gateId, events) =>
       serialize(async () => {
         assertOpen();
@@ -1663,17 +1727,237 @@ export function createReviewGateEventStore(
         assertOpen();
         assertStorageId(scopeId);
         const frontier = await observeFrontier();
-        const scope = findScope(frontier, scopeId);
-        if (scope === null) throw new Error("review_gate_scope_membership_missing");
-        const gateIds = Object.freeze(
-          scope.gateMembership.map((gate) => gate.gateId).sort((left, right) => left.localeCompare(right)),
-        );
-        const eventsByGate = new Map<string, readonly VerifiedReviewGateEvent[]>();
-        for (const gate of scope.gateMembership) {
-          eventsByGate.set(gate.gateId, await readGateVerifiedEvents(scopeId, gate));
-        }
-        return Object.freeze({ frontier, gateIds, eventsByGate });
+        return assembleVerifiedScopeRead(frontier, scopeId);
       }),
+
+    /**
+     * Task 3 owned verified scope read. Deliberately OUTSIDE the public
+     * `serialize` queue and free of any guard-taking witness re-entry: the
+     * caller holds the installation/scope/Gate guards via the live owned
+     * capability, and a queued public operation could wait for that same
+     * installation ownership. The frontier is verified by the owned witness
+     * itself (registry CAS check + journal verification) and the scope
+     * assembly reuses the shared unguarded assembler.
+     */
+    readVerifiedScopeOwned: (owned, scopeId) =>
+      (async () => {
+        assertOpen();
+        assertStorageId(scopeId);
+        assertAdmissionOwnedWitnessLive(owned);
+        const frontier = await owned.readVerifiedFrontier();
+        if (frontier.workspaceIdentity !== workspaceIdentity) {
+          throw new Error("review_gate_workspace_identity_mismatch");
+        }
+        return assembleVerifiedScopeRead(frontier, scopeId);
+      })(),
+
+    prepareAdmittedGenerationPublication: async (
+      input,
+      owned,
+    ): Promise<PreparedWitnessPublicationV1> => (async () => {
+      assertOpen();
+      assertAdmissionOwnedWitnessLive(owned);
+      const decision = input.decision;
+      const membership = admittedMembershipSchema.parse(input.membership);
+      const current = await owned.read();
+      const frontier = await owned.readVerifiedFrontier();
+      if (frontier.workspaceIdentity !== workspaceIdentity)
+        throw new Error("review_gate_admitted_frontier_invalid");
+      if (decision.kind === "CREATE_SUCCESSOR") {
+        const scope = frontier.scopes.find((value) => value.scopeId === decision.predecessorScopeId);
+        const predecessor = scope?.gateMembership.find(
+          (gate) => gate.gateId === decision.predecessorGateId,
+        );
+        if (
+          scope === undefined || predecessor === undefined ||
+          scope.scopeId !== input.scopeId ||
+          membership.supersedesGateId !== decision.predecessorGateId ||
+          membership.authorization.scope.scopeId !== input.scopeId ||
+          membership.authorization.scope.provenance.kind !== "verified_completed_successor" ||
+          membership.authorization.scope.provenance.priorScopeId !== decision.predecessorScopeId ||
+          membership.authorization.scope.provenance.priorGateId !== decision.predecessorGateId ||
+          membership.authorization.expectedWorkspaceFrontier !== frontier.globalFrontierHash ||
+          membership.authorization.operationId !== membership.operationId
+        ) throw new Error("review_gate_admitted_successor_membership_invalid");
+        const tip = projectVerifiedGateTip({
+          gateId: predecessor.gateId,
+          scopeId: scope.scopeId,
+          events: await readGateVerifiedEvents(scope.scopeId, predecessor),
+          frontier,
+        });
+        if (tip.status !== "completed" ||
+          tip.completedApproval.approvalEventId !== decision.predecessorApprovalEventId)
+          throw new Error("review_gate_admitted_successor_predecessor_invalid");
+        const continuityPredecessor =
+          input.observation.snapshot.workspaceContinuity.verifiedCrossScopePredecessor;
+        if (
+          decision.scopeId !== input.scopeId ||
+          decision.verifiedWorkspaceFrontierHash !== frontier.globalFrontierHash ||
+          decision.predecessorRelationProofDigest !==
+            input.observation.snapshot.workspaceContinuity.relationClosureProofDigest ||
+          continuityPredecessor === null ||
+          continuityPredecessor.priorScopeId !== decision.predecessorScopeId ||
+          continuityPredecessor.priorGateId !== decision.predecessorGateId ||
+          continuityPredecessor.completedApprovalEventId !== decision.predecessorApprovalEventId ||
+          continuityPredecessor.relationshipProofDigest !== decision.predecessorRelationProofDigest ||
+          input.observation.snapshot.scopeId !== input.scopeId ||
+          input.observation.snapshot.workspaceIdentity !== workspaceIdentity ||
+          input.observation.snapshot.verifiedFrontierHash !== frontier.globalFrontierHash ||
+          membership.authorization.installationId !== current.installation.installationId ||
+          membership.authorization.workspaceIdentity !== workspaceIdentity ||
+          membership.gateId !== input.gateId || membership.writerId !== input.writerId ||
+          membership.operationId !== input.operationId
+        ) throw new Error("review_gate_admitted_successor_decision_invalid");
+        const event = input.canonicalEvents[0];
+        if (
+          event === undefined || event.eventType !== "GATE_CREATED" ||
+          !("schemaVersion" in event) || event.schemaVersion !== 2 ||
+          event.gateId !== membership.gateId || event.writerId !== membership.writerId ||
+          !("generationId" in event) ||
+          event.generationId !== membership.generationId ||
+          event.payload.reviewScopeId !== input.scopeId ||
+          event.payload.supersedesGateId !== decision.predecessorGateId ||
+          event.payload.supersedesGateId !== membership.supersedesGateId
+        ) throw new Error("review_gate_admitted_successor_event_invalid");
+        owned.assertOwnedScope(input.scopeId);
+        owned.assertOwnedGate(decision.predecessorGateId);
+        const { publication, bytes } = await buildPublication({
+          scopeId: input.scopeId, gateId: input.gateId, writerId: input.writerId,
+          operationId: input.operationId,
+          canonicalEvents: validateJournalBatch(input.gateId, input.writerId, input.canonicalEvents),
+          firstEnrollment: null, admittedScope: membership.authorization.scope, owned,
+        }, frontier);
+        if (
+          membership.writerHead.sequence !== publication.newWriterSequence ||
+          membership.writerHead.hash !== publication.newWriterHash
+        ) throw new Error("review_gate_admitted_successor_writer_head_invalid");
+        await prepareAndSyncShard(publication, bytes, owned);
+        return publication;
+      }
+      const authority = await owned.readFirstEnrollmentAuthority();
+      if (authority === null) throw new Error("review_gate_first_enrollment_missing");
+      if (frontier.scopes.length !== 0)
+        throw new Error("review_gate_admitted_genesis_frontier_invalid");
+      if (
+        decision.workspaceIdentity !== workspaceIdentity ||
+        decision.scopeId !== input.scopeId ||
+        decision.installationId !== frontier.workspaceEnrollmentId ||
+        decision.enrollmentAuthorizationEventId !== authority.authorizationEventId ||
+        decision.verifiedWorkspaceFrontierHash !== frontier.globalFrontierHash ||
+        decision.completeRelationClosureDigest !==
+          input.observation.snapshot.workspaceContinuity.relationClosureProofDigest
+      ) throw new Error("review_gate_admitted_genesis_decision_invalid");
+      if (
+        input.observation.snapshot.scopeId !== input.scopeId ||
+        input.observation.snapshot.workspaceIdentity !== workspaceIdentity ||
+        input.observation.snapshot.verifiedFrontierHash !== frontier.globalFrontierHash ||
+        computeCanonicalJsonFingerprint(
+          input.observation.snapshot.workspaceContinuity.authorizedFirstEnrollment,
+        ) !== computeCanonicalJsonFingerprint(authority)
+      ) throw new Error("review_gate_admitted_genesis_observation_invalid");
+      if (
+        membership.authorization.workspaceIdentity !== workspaceIdentity ||
+        membership.authorization.installationId !== current.installation.installationId ||
+        membership.authorization.expectedWorkspaceFrontier !== frontier.globalFrontierHash ||
+        membership.authorization.scope.scopeId !== input.scopeId ||
+        membership.gateId !== input.gateId ||
+        membership.writerId !== input.writerId ||
+        membership.operationId !== input.operationId
+      ) throw new Error("review_gate_admitted_genesis_membership_invalid");
+      owned.assertOwnedScope(input.scopeId);
+      if (
+        membership.authorization.scope.canonicalDesignPath !== authority.canonicalDesignPath ||
+        membership.authorization.scope.canonicalPlanPath !== authority.canonicalPlanPath ||
+        membership.authorization.scope.provenance.kind !== "verified_genesis" ||
+        membership.authorization.scope.provenance.evidenceDigest !== computeCanonicalJsonFingerprint(authority)
+      )
+        throw new Error("review_gate_admitted_genesis_membership_invalid");
+      const event = input.canonicalEvents[0];
+      if (
+        event === undefined ||
+        event.eventType !== "GATE_CREATED" ||
+        !("schemaVersion" in event) ||
+        event.schemaVersion !== 2 ||
+        event.gateId !== input.gateId ||
+        event.writerId !== input.writerId ||
+        event.generationId !== membership.generationId ||
+        event.payload.reviewScopeId !== input.scopeId ||
+        event.payload.supersedesGateId !== null ||
+        event.payload.designArtifact.canonicalPath !== membership.authorization.scope.canonicalDesignPath ||
+        event.payload.planArtifact.canonicalPath !== membership.authorization.scope.canonicalPlanPath
+      )
+        throw new Error("review_gate_admitted_genesis_event_invalid");
+      const trustedEnrollment = current.data.workspaces[workspaceIdentity]?.authorization;
+      if (trustedEnrollment === undefined)
+        throw new Error("review_gate_first_enrollment_missing");
+      await owned.consumeFirstEnrollmentAuthority(authority.authorizationEventId);
+      const { publication, bytes } = await buildPublication({
+        scopeId: input.scopeId,
+        gateId: input.gateId,
+        writerId: input.writerId,
+        operationId: input.operationId,
+        canonicalEvents: validateJournalBatch(input.gateId, input.writerId, input.canonicalEvents),
+        firstEnrollment: {
+          authorization: trustedEnrollment,
+          generationId: membership.generationId,
+          workflowContinuityId: membership.authorization.scope.workflowContinuityId,
+        },
+        admittedScope: membership.authorization.scope,
+        owned,
+      }, frontier);
+      if (
+        membership.writerHead.sequence !== publication.newWriterSequence ||
+        membership.writerHead.hash !== publication.newWriterHash
+      ) throw new Error("review_gate_admitted_genesis_writer_head_invalid");
+      await prepareAndSyncShard(publication, bytes, owned);
+      return publication;
+    })(),
+
+    prepareAdmittedOperationPublication: async (input, owned) => (async () => {
+      assertOpen();
+      assertAdmissionOwnedWitnessLive(owned);
+      assertStorageId(input.scopeId);
+      assertStorageId(input.gateId);
+      assertStorageId(input.writerId);
+      assertStorageId(input.operationId);
+      const events = validateJournalBatch(input.gateId, input.writerId, input.canonicalEvents);
+      if (events.some((event) => !(("schemaVersion" in event) && event.schemaVersion === 2)))
+        throw new Error("review_gate_event_v2_required");
+      if (events.some((event) => event.eventType === "GATE_CREATED"))
+        throw new Error("review_gate_operation_publication_cannot_create_generation");
+      owned.assertOwnedScope(input.scopeId);
+      owned.assertOwnedGate(input.gateId);
+      const frontier = await owned.readVerifiedFrontier();
+      if (frontier.workspaceIdentity !== workspaceIdentity)
+        throw new Error("review_gate_admitted_frontier_invalid");
+      const scope = findScope(frontier, input.scopeId);
+      const gate = scope === null ? null : findGate(scope, input.gateId);
+      if (scope === null || gate === null || !gate.writerIds.includes(input.writerId))
+        throw new Error("review_gate_operation_membership_missing");
+      const head = findHead(frontier, input.scopeId, input.gateId, input.writerId);
+      const expectedHead = input.expectedWriterHead;
+      if (expectedHead !== undefined && (head?.hash ?? EMPTY_SHARD_HASH) !== expectedHead)
+        throw new Error("review_gate_operation_writer_head_conflict");
+      const history = await readGateVerifiedEvents(input.scopeId, gate);
+      const alreadyUsed = history.some((event) => {
+        if (!("schemaVersion" in event) || event.schemaVersion !== 2) return false;
+        return "operationId" in event.payload && event.payload.operationId === input.operationId;
+      });
+      if (alreadyUsed) throw new Error("review_gate_operation_id_conflict");
+      if (input.firstEnrollmentAuthorizationId !== undefined)
+        throw new Error("review_gate_operation_enrollment_forbidden");
+      const { publication, bytes } = await buildPublication({
+        scopeId: input.scopeId,
+        gateId: input.gateId,
+        writerId: input.writerId,
+        operationId: input.operationId,
+        canonicalEvents: events,
+        firstEnrollment: null,
+        owned,
+      }, frontier);
+      await prepareAndSyncShard(publication, bytes, owned);
+      return publication;
+    })(),
 
     /**
      * FDR-011 publication owner: create the exact encoded bytes/length/digest

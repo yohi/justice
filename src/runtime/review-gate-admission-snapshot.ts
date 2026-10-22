@@ -19,9 +19,10 @@
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import type {
-  ReviewArtifactBinding,
-  ReviewScopeId,
-  VerifiedTrackedArtifactIdentity,
+  RequirementsResolutionV2,
+ReviewArtifactBinding,
+ReviewScopeId,
+VerifiedTrackedArtifactIdentity,
 } from "../core/review-gate-types";
 import type {
   ScopeEnrollmentV1,
@@ -45,23 +46,35 @@ import {
 } from "../core/review-gate/identity";
 import { gitModeFromOwnerExecBits } from "../core/review-gate/capabilities";
 import type {
-  DurableReviewGateEventStore,
-  VerifiedScopeRead,
+DurableReviewGateEventStore,
+VerifiedScopeRead,
 } from "./review-gate-event-store";
+import type {
+  AdmissionOwnedWitness,
+  ReviewGateAdmissionObservationRequest,
+} from "./review-gate-admission-context";
 import type { ReviewGateProtocolDescriptor } from "./review-gate-protocol";
 import type { ReviewGateWorkspaceReader } from "./review-gate-coordinator";
 import { resolveRequirementsForAdmission } from "./review-gate-requirements";
 import { runGitLiteral } from "./review-gate-query";
 
 export type VerifiedAdmissionSnapshotOptions = Readonly<{
-  /** Absolute workspace root; only hashed identities and relative paths persist. */
-  readonly workspaceRoot: string;
-  /** The requested Review Gate scope id under admission. */
-  readonly scopeId: ReviewScopeId;
-  readonly protocol: ReviewGateProtocolDescriptor;
-  readonly eventStore: DurableReviewGateEventStore;
-  /** Workspace byte reader seam of the approval lookup. */
+/** Absolute workspace root; only hashed identities and relative paths persist. */
+readonly workspaceRoot: string;
+/** The requested Review Gate scope id under admission. */
+readonly scopeId: ReviewScopeId;
+readonly protocol: ReviewGateProtocolDescriptor;
+readonly eventStore: DurableReviewGateEventStore;
+/** Workspace byte reader seam of the approval lookup. */
   readonly workspaceReader: ReviewGateWorkspaceReader;
+  /** Non-serializable owned witness when the caller already holds the lock. */
+  readonly owned?: AdmissionOwnedWitness;
+  /**
+   * Canonical request paths under admission. The explicit Requirements
+   * selector is forwarded to the §10.2.3 resolution; omitted for the
+   * history-derived read-only mode.
+   */
+  readonly request?: ReviewGateAdmissionObservationRequest;
 }>;
 
 /**
@@ -72,20 +85,44 @@ export async function observeVerifiedAdmissionSnapshot(
   options: VerifiedAdmissionSnapshotOptions,
 ): Promise<VerifiedAdmissionSnapshot | null> {
   try {
-    const snapshot = await observeSnapshot(options);
-    return snapshot === null ? null : Object.freeze(snapshot);
+    const observation = await observeSnapshot(options);
+    return observation === null ? null : Object.freeze(observation.snapshot);
   } catch (error) {
     if (error instanceof Error) return null;
     throw error;
   }
 }
 
+/**
+ * The verified admission snapshot plus the Requirements resolution used to
+ * build it. The caller (e.g. the admission coordinator) needs the resolution
+ * object to keep authority through the admission decision.
+ */
+export async function observeVerifiedAdmissionSnapshotObservation(
+  options: VerifiedAdmissionSnapshotOptions,
+): Promise<Readonly<{ snapshot: VerifiedAdmissionSnapshot; requirementsResolution: RequirementsResolutionV2 }> | null> {
+  try {
+    const observation = await observeSnapshot(options);
+    return observation === null ? null : Object.freeze(observation);
+  } catch (error) {
+    if (error instanceof Error) return null;
+    throw error;
+  }
+}
+
+
 async function observeSnapshot(
   options: VerifiedAdmissionSnapshotOptions,
-): Promise<VerifiedAdmissionSnapshot | null> {
-  const { workspaceRoot, scopeId, protocol, eventStore, workspaceReader } = options;
+): Promise<Readonly<{ snapshot: VerifiedAdmissionSnapshot; requirementsResolution: RequirementsResolutionV2 }> | null> {
+  const { workspaceRoot, scopeId, protocol, eventStore, workspaceReader, owned } = options;
+  // With an owned capability every read — the requested scope AND every
+  // related scope — goes through the store's owned reader, which bypasses
+  // the public serialize queue and never re-enters a witness guard.
+  const readScope = owned
+    ? (id: string) => eventStore.readVerifiedScopeOwned(owned, id)
+    : (id: string) => eventStore.readVerifiedScope(id);
 
-  const scope = await eventStore.readVerifiedScope(scopeId);
+  const scope = await readScope(scopeId);
   const enrollment =
     scope.frontier.scopes.find((entry) => entry.scopeId === scopeId) ?? null;
   if (enrollment === null) return null;
@@ -96,7 +133,7 @@ async function observeSnapshot(
   const relatedTips: VerifiedGateTip[] = [...targetTips];
   for (const relatedEnrollment of scope.frontier.scopes) {
     if (relatedEnrollment.scopeId === scopeId) continue;
-    const relatedRead = await eventStore.readVerifiedScope(relatedEnrollment.scopeId);
+    const relatedRead = await readScope(relatedEnrollment.scopeId);
     relatedTips.push(
       ...projectScopeTips(scope.frontier, relatedEnrollment.scopeId, relatedRead),
     );
@@ -162,6 +199,7 @@ async function observeSnapshot(
     design: design.identity,
     plan: plan.identity,
     designBytes,
+    explicitPath: options.request?.explicitRequirementsPath,
   });
 
   const current = Object.freeze({
@@ -215,7 +253,7 @@ async function observeSnapshot(
     coverage: "COMPLETE",
   });
 
-  return {
+  const snapshot = Object.freeze({
     workspaceIdentity: scope.frontier.workspaceIdentity,
     scopeId,
     verifiedFrontierHash: scope.frontier.globalFrontierHash,
@@ -225,7 +263,9 @@ async function observeSnapshot(
     nc1Candidate: null,
     precedence: null,
     current,
-  };
+  });
+
+  return Object.freeze({ snapshot, requirementsResolution });
 }
 
 function projectScopeTips(
@@ -393,3 +433,11 @@ async function gitOutput(
   if (result.code !== 0) throw new Error(failureCode);
   return result.stdout;
 }
+
+export {
+  buildAuthorizedFirstEnrollment,
+  findV2GateCreated,
+  pinTrackedArtifact,
+  projectScopeTips,
+  relationClosureProofDigest,
+};

@@ -1,3 +1,7 @@
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EventSessionDeleted } from "@opencode-ai/sdk";
 import { OpenCodeAdapter } from "../../src/runtime/opencode-adapter";
@@ -47,6 +51,32 @@ describe("OpenCodeAdapter v2 — tool forwarding", () => {
     expect(args).not.toHaveProperty("subagent_type");
     expect(args.run_in_background).toBe(false);
     expect(args.prompt).toContain("REVIEW GATE CLAIM BLOCKED");
+  });
+
+  it("cancels generic content reads before the tool can execute during a Review Gate lock", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const bridge = (adapter.getJustice() as JusticePlugin).getPlanBridge();
+    vi.spyOn(bridge, "hasAnyReviewGateLock").mockReturnValue(true);
+    vi.spyOn(bridge, "getReviewGateLock").mockReturnValue({
+      parentSessionId: "review-child",
+      gateId: "gate-current",
+      phase: "reviewing",
+      reviewPhase: "plan",
+      operationId: "op-current",
+      designPath: "docs/specs/design.md",
+      planPath: "docs/plans/plan.md",
+      designDigest: "d".repeat(64),
+      planDigest: "p".repeat(64),
+    });
+
+    const response = await adapter.onToolExecuteBefore(
+      { tool: "read", sessionID: "review-child", callID: "generic-read" },
+      { args: { filePath: "docs/specs/design.md" } },
+    );
+
+    expect(response).toMatchObject({ action: "skip", reason: "review_scope_violation" });
+    expect(response).toHaveProperty("guidance");
   });
 
   it("fails a marked Review Gate task closed when Justice validation throws", async () => {
@@ -1734,5 +1764,70 @@ describe("JusticePlugin.handleEvent — v2 routing guards", () => {
 
     expect(observedTaskIds).toEqual(["task-1"]);
     expect(plugin.getSessionStateProvider().getActiveTaskId("call-1")).toBeUndefined();
+  });
+});
+
+describe("OpenCodeAdapter v2 — Review Gate authority wiring", () => {
+  const temporaryRoots = new Set<string>();
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete process.env.JUSTICE_REVIEW_GATE_ROOT;
+    delete process.env.JUSTICE_REVIEW_GATE_WITNESS_DIR;
+    for (const root of temporaryRoots) rmSync(root, { recursive: true, force: true });
+    temporaryRoots.clear();
+  });
+
+  function createWorkspaceAndGraph(): { readonly workspaceRoot: string; readonly graphRoot: string } {
+    const graphRoot = mkdtempSync(join(tmpdir(), "justice-adapter-graph-"));
+    const workspaceRoot = mkdtempSync(join(tmpdir(), "justice-adapter-workspace-"));
+    temporaryRoots.add(graphRoot);
+    temporaryRoots.add(workspaceRoot);
+    process.env.JUSTICE_REVIEW_GATE_ROOT = graphRoot;
+    const designPath = join(workspaceRoot, "docs", "design.md");
+    const planPath = join(workspaceRoot, "docs", "plan.md");
+    mkdirSync(join(workspaceRoot, "docs"), { recursive: true });
+    writeFileSync(designPath, "# Design\n");
+    writeFileSync(planPath, "## Plan\n- [ ] Task\n");
+    execFileSync("git", ["init", "-q"], { cwd: workspaceRoot });
+    execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: workspaceRoot });
+    execFileSync("git", ["config", "user.name", "Justice Test"], { cwd: workspaceRoot });
+    execFileSync("git", ["add", "."], { cwd: workspaceRoot });
+    execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-q", "-m", "baseline"], {
+      cwd: workspaceRoot,
+    });
+    return { workspaceRoot, graphRoot };
+  }
+
+  async function runReviewGate(adapter: OpenCodeAdapter): Promise<string> {
+    const output: { parts: Array<{ type?: string; text?: string }> } = { parts: [] };
+    await adapter.onCommandExecuteBefore(
+      {
+        command: "justice-review-gate",
+        sessionID: "authority-session",
+        arguments: "--design docs/design.md --plan docs/plan.md",
+      },
+      output as Parameters<OpenCodeAdapter["onCommandExecuteBefore"]>[1],
+    );
+    const part = output.parts[0];
+    if (part === undefined || typeof part.text !== "string") {
+      throw new Error("Review Gate command did not return guidance");
+    }
+    return part.text;
+  }
+
+  it("blocks review gate when trusted witness is unavailable", async () => {
+    const { workspaceRoot, graphRoot } = createWorkspaceAndGraph();
+    const adapter = new OpenCodeAdapter(
+      fakeInit({ project: { root: workspaceRoot }, directory: workspaceRoot, worktree: workspaceRoot }),
+    );
+    await adapter.ensureInitialized();
+
+    const guidance = await runReviewGate(adapter);
+
+    expect(guidance).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
+    expect(guidance).not.toContain("[JUSTICE: REVIEW GATE OPERATION PAYLOAD]");
+    expect(adapter.getJustice()?.getPlanBridge().getReviewGateLock("authority-session")).toBeUndefined();
+    expect(existsSync(join(graphRoot, ".justice", "review-gates"))).toBe(false);
   });
 });

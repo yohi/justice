@@ -34,6 +34,8 @@ import type {
   ScopedReviewToolUse,
 } from "../runtime/review-gate-coordinator";
 import type { ReviewGateApprovalLookup } from "../runtime/review-gate-approval";
+import type { ReviewGateQueryService } from "../runtime/review-gate-query";
+import type { ReviewGatePhase } from "../core/review-gate-types";
 import {
   buildReviewQueryScope,
   classifyReviewModelTool,
@@ -189,6 +191,8 @@ export interface ReviewGateLockSnapshot {
   readonly parentSessionId: string;
   readonly gateId: string;
   readonly phase: ReviewGateCoordinatorLockPhase;
+  readonly reviewPhase: ReviewGatePhase | null;
+  readonly operationId: string | null;
   readonly designPath: string | null;
   readonly planPath: string | null;
   readonly designDigest: string | null;
@@ -278,6 +282,7 @@ export class PlanBridge {
   private readonly reviewGateLocks = new Map<string, ReviewGateLockSnapshot>();
   private reviewGateCoordinator: ReviewGateCoordinator | null = null;
   private reviewGateApprovedDesignAuthority: ReviewGateApprovedDesignAuthority | null = null;
+  private reviewGateQueryService: ReviewGateQueryService | null = null;
   private readonly lastCompletionInputs: Map<
     string,
     Pick<PlanCompletionInput, "prompt" | "category" | "skillName"> & { readonly taskId?: string }
@@ -553,6 +558,10 @@ export class PlanBridge {
     this.reviewGateApprovedDesignAuthority = authority;
   }
 
+  setReviewGateQueryService(query: ReviewGateQueryService): void {
+    this.reviewGateQueryService = query;
+  }
+
   getReviewGateLock(sessionId: string): ReviewGateLockSnapshot | undefined {
     const lock = this.reviewGateLocks.get(sessionId);
     return lock === undefined ? undefined : Object.freeze({ ...lock });
@@ -699,6 +708,51 @@ export class PlanBridge {
     return { kind: "denied", reason: "review_scope_violation" };
   }
 
+  async executeReviewerScopedQuery(
+    sessionId: string,
+    query:
+      | { readonly kind: "artifact_read" | "show"; readonly path: string }
+      | { readonly kind: "artifact_search"; readonly path: string; readonly literal: string }
+      | { readonly kind: "status" }
+      | { readonly kind: "diff"; readonly staged: boolean },
+  ): Promise<string> {
+    const service = this.reviewGateQueryService;
+    const lock = this.reviewGateLocks.get(sessionId);
+    if (service === null || lock === undefined) {
+      return JSON.stringify({ status: "ERROR", reason: "review_operation_not_permitted" });
+    }
+    if (query.kind === "artifact_read" || query.kind === "show" || query.kind === "artifact_search") {
+      const decision = await this.mediateReviewerArtifactRead(sessionId, {
+        toolName: query.kind === "artifact_search" ? "grep" : "read",
+        path: query.path,
+        ...(query.kind === "artifact_search" ? { pattern: query.literal } : {}),
+      });
+      if (decision?.kind === "approved_read") {
+        return JSON.stringify({ status: "OK", authority: "approved_D0", content: decision.bytes.toString("utf8") });
+      }
+      if (decision?.kind === "approved_search") {
+        return JSON.stringify({ status: "OK", authority: "approved_D0", matches: decision.matches });
+      }
+      if (decision?.kind === "unmediated_scoped") {
+        return JSON.stringify({ status: "OK", authority: "unapproved_D1_diagnostic", path: decision.canonicalPath });
+      }
+      return JSON.stringify({ status: "ERROR", reason: decision?.kind === "denied" ? decision.reason : "review_operation_not_permitted" });
+    }
+    const scope = await this.buildPlanReviewerQueryScope(sessionId);
+    if (scope === null) return JSON.stringify({ status: "ERROR", reason: "review_operation_not_permitted" });
+    try {
+      if (query.kind === "status") {
+        return JSON.stringify({ status: "OK", authority: "unapproved_D1_diagnostic", result: await service.getScopedStatus(scope) });
+      }
+      if (query.kind === "diff") {
+        return JSON.stringify({ status: "OK", authority: "unapproved_D1_diagnostic", result: await service.getScopedDiff(scope, { base: null, staged: query.staged }) });
+      }
+      return JSON.stringify({ status: "ERROR", reason: "review_operation_not_permitted" });
+    } catch {
+      return JSON.stringify({ status: "ERROR", reason: "review_operation_not_permitted" });
+    }
+  }
+
   /**
    * Clear all internal state for a specific session.
    */
@@ -822,6 +876,8 @@ export class PlanBridge {
       parentSessionId: sessionId,
       gateId: result.gateId,
       phase: result.lockPhase ?? "remediation",
+      reviewPhase: null,
+      operationId: null,
       designPath: result.designPath,
       planPath: result.planPath,
       designDigest: result.designDigest,

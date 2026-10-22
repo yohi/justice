@@ -1,4 +1,4 @@
-import type { KeyObject } from "node:crypto";
+import { createPublicKey, type KeyObject } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { relative, isAbsolute, resolve, sep } from "node:path";
 import { observeGitWorkspace } from "./review-gate-scope-admission.js";
@@ -14,14 +14,33 @@ import {
   type ScopeWorkspace,
 } from "./review-gate-witness-registry.js";
 import type { TrustedWitnessInstallationV1 } from "./review-gate-witness-contracts.js";
-import { computeArtifactDigest } from "../core/review-gate/identity.js";
 import { verifyScopeFrontierMembership } from "./review-gate-witness-verification.js";
+import { hostProofValid } from "./review-gate-witness-installation.js";
 import {
   assertWitnessAdmissionOrder,
   createReviewGateLockManager,
   withWitnessScopeGateLocks,
   type ReviewGateLockManager,
 } from "./review-gate-lock-manager.js";
+import {
+  canonicalizeArtifactPath,
+  computeArtifactDigest,
+  computeReviewScopeId,
+} from "../core/review-gate/identity.js";
+import { validateFirstEnrollmentUnderAdmission } from "./review-gate-witness-enrollment.js";
+import {
+  commitPublicationUnlocked,
+  preparePublicationUnlocked,
+  publishPreparedJournalUnlocked,
+  readPreparedPublication,
+} from "./review-gate-publication-record.js";
+import { publicationSchema } from "./review-gate-witness-registry.js";
+import { runGitLiteral } from "./review-gate-query.js";
+import type { VerifiedScopeFrontier } from "../core/review-gate/types.js";
+import {
+  type AdmissionOwnedWitness,
+  markAdmissionOwnedWitnessLive,
+} from "./review-gate-admission-context.js";
 
 export type WitnessOptions = Readonly<{
   workspaceRoot: string;
@@ -29,6 +48,12 @@ export type WitnessOptions = Readonly<{
   witnessDirectory?: string;
   hostTrustRoot?: KeyObject;
   lockManager?: ReviewGateLockManager;
+  /**
+   * Task 4d — signer for admitted membership authorizations. The witness
+   * verifies the signature with its trusted installation root before the
+   * registry records the scope authorization.
+   */
+  authorizeAdmittedMembership?: (payload: unknown) => Promise<string>;
 }>;
 export type WitnessContext = Readonly<{
   options: WitnessOptions;
@@ -95,6 +120,303 @@ export async function withWitnessTransaction<T>(
       );
     });
   } catch (error: unknown) {
+    if (error instanceof WitnessBlocked) throw error;
+    if (error instanceof Error && error.message === "review_gate_witness_busy_retryable")
+      throw new WitnessBlocked("busy_retryable");
+    throw new WitnessBlocked("host_io");
+  }
+}
+
+/**
+ * Owned admission transaction (Task 3).
+ *
+ * Acquires the installation guard once, authenticates the installation/
+ * repository/registry, discovers the related scope/Gate lock set from the
+ * authenticated registry (plus the tentative requested scope), and runs the
+ * callback with the non-serializable `AdmissionOwnedWitness` while every
+ * guard is held: sorted scopes, then sorted Gates, release in reverse in
+ * `finally`. The owned capability is unusable after the callback exit and
+ * rejects scope/Gate ids outside the owned lock set.
+ */
+export async function withAdmissionWitnessTransaction<T>(
+  context: WitnessContext,
+  request: Readonly<{
+    readonly workspaceIdentity: string;
+    readonly designPath: string;
+    readonly planPath: string;
+    readonly authorizeAdmittedMembership?: (payload: unknown) => Promise<string>;
+  }>,
+  run: (owned: AdmissionOwnedWitness) => Promise<T>,
+): Promise<T> {
+  assertWitnessAdmissionOrder(context.lockManager);
+  let runFailed = false;
+  try {
+    return await context.store.withGuard("installation", async () => {
+      const installation = await readTrustedWitnessInstallation(
+        context.store,
+        context.options.hostTrustRoot,
+      );
+      const observed = await observeGitWorkspace(context.options.workspaceRoot);
+      if (observed.workspaceIdentity !== context.options.workspaceIdentity)
+        throw new WitnessBlocked("workspace_identity");
+      const current = await context.store.read("scope", scopeRegistrySchema);
+      if (current.data.installationId !== installation.installationId)
+        throw new WitnessBlocked("registry_invalid");
+
+      // Discover the owned lock set from the authenticated registry: the
+      // requested scope (tentative under installation ownership before any
+      // enrollment) plus every enrolled related scope and their Gates.
+      const scopeIds = new Set<string>([
+        computeReviewScopeId(request.designPath, request.planPath),
+      ]);
+      const gateIds = new Set<string>();
+      const workspace = current.data.workspaces[request.workspaceIdentity];
+      if (workspace !== undefined && workspace.repositoryIdentity === observed.repositoryIdentity) {
+        for (const scope of workspace.frontier.scopes) {
+          scopeIds.add(scope.scopeId);
+          for (const gate of scope.gateMembership) gateIds.add(gate.gateId);
+        }
+      }
+
+      let released = false;
+      const assertLive = (): void => {
+        if (released) throw new Error("review_gate_admission_owned_witness_released");
+      };
+      const readOwnedFrontier = async (): Promise<VerifiedScopeFrontier> => {
+        assertLive();
+        const owned = await context.store.read("scope", scopeRegistrySchema);
+        if (owned.data.installationId !== installation.installationId)
+          throw new WitnessBlocked("registry_invalid");
+        const ownedWorkspace = workspaceFrom(
+          { ...owned, installation, repositoryIdentity: observed.repositoryIdentity },
+          request.workspaceIdentity,
+        );
+        await verifyWitnessJournals(context, ownedWorkspace);
+        return ownedWorkspace.frontier;
+      };
+      const owned: AdmissionOwnedWitness = Object.freeze({
+        read: async () => {
+          assertLive();
+          const snapshot = await context.store.read("scope", scopeRegistrySchema);
+          if (snapshot.data.installationId !== installation.installationId)
+            throw new WitnessBlocked("registry_invalid");
+          return { ...snapshot, installation, repositoryIdentity: observed.repositoryIdentity };
+        },
+        readVerifiedFrontier: readOwnedFrontier,
+        readFirstEnrollmentAuthority: async () => {
+          assertLive();
+          const snapshot = await context.store.read("scope", scopeRegistrySchema);
+          if (snapshot.data.installationId !== installation.installationId)
+            throw new WitnessBlocked("registry_invalid");
+          const snapshotWorkspace = snapshot.data.workspaces[request.workspaceIdentity];
+          if (snapshotWorkspace === undefined || snapshotWorkspace.enrollmentState !== "pending") {
+            return null;
+          }
+          return snapshotWorkspace.authorization.authority;
+        },
+        consumeFirstEnrollmentAuthority: async (authorizationEventId) => {
+          assertLive();
+          const snapshot = await context.store.read("scope", scopeRegistrySchema);
+          const workspace = snapshot.data.workspaces[request.workspaceIdentity];
+          if (
+            workspace === undefined ||
+            workspace.enrollmentState !== "pending" ||
+            workspace.authorization.authority.authorizationEventId !== authorizationEventId
+          ) throw new WitnessBlocked("nonce_consumed");
+          const transaction = {
+            ...snapshot,
+            installation,
+            repositoryIdentity: observed.repositoryIdentity,
+          };
+          await validateFirstEnrollmentUnderAdmission(context, transaction, workspace.authorization);
+          await context.store.advance("scope", transaction, {
+            ...transaction.data,
+            workspaces: {
+              ...transaction.data.workspaces,
+              [request.workspaceIdentity]: { ...workspace, enrollmentState: "consumed" },
+            },
+            nonces: {
+              ...transaction.data.nonces,
+              [workspace.authorization.workflowNonce]: "consumed",
+            },
+          });
+        },
+        readInstallation: async () => {
+          assertLive();
+          return installation;
+        },
+        readVerifiedDesignBinding: async ({ gateId, designPath }) => {
+          assertLive();
+          if (!gateIds.has(gateId)) {
+            throw new Error("review_gate_admission_owned_gate_foreign");
+          }
+          const canonicalPath = canonicalizeArtifactPath(designPath);
+          if (canonicalPath === null) return null;
+          const snapshot = await owned.read();
+          const workspace = workspaceFrom(snapshot, request.workspaceIdentity);
+          const enrolledScope = workspace.frontier.scopes.find((scope) =>
+            scope.gateMembership.some((membership) => membership.gateId === gateId),
+          );
+          if (enrolledScope?.canonicalDesignPath !== canonicalPath) return null;
+
+          const headResult = await runGitLiteral(context.options.workspaceRoot, [
+            "rev-parse",
+            "--verify",
+            "HEAD",
+          ]);
+          if (headResult.code !== 0) return null;
+          const headSha = headResult.stdout.toString("utf8").trim();
+          if (!/^[0-9a-f]{40,64}$/u.test(headSha)) return null;
+          const treeResult = await runGitLiteral(context.options.workspaceRoot, [
+            "rev-parse",
+            "--verify",
+            `${headSha}^{tree}`,
+          ]);
+          if (treeResult.code !== 0) return null;
+          const treeSha = treeResult.stdout.toString("utf8").trim();
+          if (!/^[0-9a-f]{40,64}$/u.test(treeSha)) return null;
+          const entryResult = await runGitLiteral(context.options.workspaceRoot, [
+            "ls-tree",
+            "-z",
+            treeSha,
+            "--",
+            canonicalPath,
+          ]);
+          if (entryResult.code !== 0) return null;
+          const entry = entryResult.stdout.toString("utf8").replace(/\0$/u, "");
+          const match = /^(100644|100755) blob ([0-9a-f]{40,64})\t(.+)$/u.exec(entry);
+          if (match === null || match[3] !== canonicalPath) return null;
+          const blobSha = match[2];
+          const rawGitMode = match[1];
+          if (
+            blobSha === undefined ||
+            (rawGitMode !== "100644" && rawGitMode !== "100755")
+          ) return null;
+          const gitMode = rawGitMode;
+          const sizeResult = await runGitLiteral(context.options.workspaceRoot, [
+            "cat-file",
+            "-s",
+            blobSha,
+          ]);
+          if (sizeResult.code !== 0) return null;
+          const objectSize = Number(sizeResult.stdout.toString("utf8").trim());
+          if (!Number.isSafeInteger(objectSize) || objectSize < 0) return null;
+          return Object.freeze({ treeSha, blobSha, gitMode, objectSize });
+        },
+        assertOwnedScope: (scopeId: string) => {
+          assertLive();
+          if (!scopeIds.has(scopeId)) {
+            throw new Error("review_gate_admission_owned_scope_foreign");
+          }
+        },
+        assertOwnedGate: (gateId: string) => {
+          assertLive();
+          if (!gateIds.has(gateId)) {
+            throw new Error("review_gate_admission_owned_gate_foreign");
+          }
+        },
+        preparePublication: async (untrusted, bytes) => {
+          assertLive();
+          const input = publicationSchema.parse(untrusted);
+          if (!scopeIds.has(input.scopeId) ||
+            (!gateIds.has(input.gateId) && input.firstEnrollmentAuthorizationId === null))
+            throw new Error("review_gate_admission_owned_publication_foreign");
+          const current = await owned.read();
+          return preparePublicationUnlocked(context, current, input, Buffer.from(bytes));
+        },
+        publishPreparedJournal: async (publicationId) => {
+          assertLive();
+          const prepared = await readPreparedPublication(context, await owned.read(), publicationId);
+          if (
+            !scopeIds.has(prepared.input.scopeId) ||
+            (!gateIds.has(prepared.input.gateId) && prepared.input.firstEnrollmentAuthorizationId === null)
+          )
+            throw new Error("review_gate_admission_owned_publication_foreign");
+          return publishPreparedJournalUnlocked(context, await owned.read(), publicationId);
+        },
+        commitPreparedPublicationCAS: async (input) => {
+          assertLive();
+          const current = await owned.read();
+          const prepared = await readPreparedPublication(context, current, input.publicationId);
+          if (
+            !scopeIds.has(prepared.input.scopeId) ||
+            (!gateIds.has(prepared.input.gateId) && prepared.input.firstEnrollmentAuthorizationId === null)
+          )
+            throw new Error("review_gate_admission_owned_publication_foreign");
+          return commitPublicationUnlocked(context, current, input);
+        },
+        recoverPreparedPublication: async (publicationId) => {
+          assertLive();
+          let current = await owned.read();
+          const prepared = await readPreparedPublication(context, current, publicationId);
+          if (
+            !scopeIds.has(prepared.input.scopeId) ||
+            (!gateIds.has(prepared.input.gateId) && prepared.input.firstEnrollmentAuthorizationId === null)
+          ) {
+            throw new Error("review_gate_admission_owned_publication_foreign");
+          }
+          if (current.data.committed[publicationId] === undefined) {
+            const prior = await context.provider?.readWriterShard(
+              prepared.input.scopeId,
+              prepared.input.gateId,
+              prepared.input.writerId,
+            );
+            if (prior?.equals(prepared.bytes) !== true) {
+              const priorHash = prior === null || prior === undefined
+                ? "0".repeat(64)
+                : computeArtifactDigest(prior);
+              if (priorHash !== prepared.input.expectedWriterHash) return "blocked";
+              await publishPreparedJournalUnlocked(context, current, publicationId);
+              current = await owned.read();
+            }
+          }
+          return commitPublicationUnlocked(context, current, {
+            publicationId,
+            expectedGlobalFrontier: prepared.input.expectedGlobalFrontier,
+            expectedWriterHash: prepared.input.expectedWriterHash,
+          });
+        },
+        signAdmittedMembership: async (payload) => {
+          assertLive();
+          owned.assertOwnedScope(payload.scope.scopeId);
+          const signer = context.options.authorizeAdmittedMembership;
+          if (signer === undefined) {
+            throw new WitnessBlocked("membership_authority_unavailable");
+          }
+          const signature = await signer(payload);
+          const hostKey = createPublicKey(installation.hostTrustRootPem);
+          if (!hostProofValid(hostKey, payload, signature)) {
+            throw new WitnessBlocked("membership_authentication");
+          }
+          return signature;
+        },
+      });
+      markAdmissionOwnedWitnessLive(owned);
+
+      try {
+        return await withWitnessScopeGateLocks(
+          context.lockManager,
+          { scopeIds: [...scopeIds], gateIds: [...gateIds] },
+          async () => {
+            try {
+              return await run(owned);
+            } catch (error) {
+              // The callback's own failure propagates as-is after every
+              // guard releases; only the guard/registry phases map to
+              // WitnessBlocked codes.
+              runFailed = true;
+              throw error;
+            } finally {
+              released = true;
+            }
+          },
+        );
+      } finally {
+        released = true;
+      }
+    });
+  } catch (error: unknown) {
+    if (runFailed) throw error;
     if (error instanceof WitnessBlocked) throw error;
     if (error instanceof Error && error.message === "review_gate_witness_busy_retryable")
       throw new WitnessBlocked("busy_retryable");

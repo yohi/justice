@@ -333,6 +333,7 @@ export type VerifiedAdmissionAuthorityDecisionV1 =
       readonly nc1StopEventId: string;
       readonly changeObservedEventId: string;
       readonly witnessFrontierHash: string;
+      readonly nc1EvidenceEventId: string;
     }>;
 
 export type AdmissionDecision =
@@ -365,6 +366,12 @@ export type AdmissionDecision =
       readonly reason: string;
       readonly predecessorProofRefs: ReadonlyArray<string>;
       readonly witnessFrontierHash: string;
+      readonly phase: ReviewGatePhase;
+      readonly effectiveBinding: VerifiedUnfinishedBindingSnapshot["effective"];
+      readonly current: VerifiedAdmissionSnapshot["current"];
+      readonly triggeringAuthorityEventId: string;
+      readonly roundCountersBefore: Readonly<{ readonly design: number; readonly plan: number }>;
+      readonly roundCountersAfter: Readonly<{ readonly design: number; readonly plan: number }>;
     }>
   | Readonly<{
       readonly kind: "BLOCK";
@@ -627,6 +634,7 @@ function evaluateNc1Candidate(
     nc1StopEventId: stop.stopEventId,
     changeObservedEventId: candidate.changeObservedEventId,
     witnessFrontierHash: input.verifiedFrontierHash,
+    nc1EvidenceEventId: candidate.changeObservedEventId,
   });
 }
 
@@ -712,6 +720,12 @@ function evaluateExistingUnfinishedTip(
       reason: "Effective binding material identity differs from the current observed context.",
       predecessorProofRefs: [binding.admission.gateCreatedEventId, binding.effective.authorityEventId],
       witnessFrontierHash: input.verifiedFrontierHash,
+      phase: binding.ownDesignClear === null ? "design" : "plan",
+      effectiveBinding: binding.effective,
+      current: input.current,
+      triggeringAuthorityEventId: input.current.requirements.observationEvidenceId,
+      roundCountersBefore: tip.rounds,
+      roundCountersAfter: tip.rounds,
     });
   }
 
