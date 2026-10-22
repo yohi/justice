@@ -64,6 +64,7 @@ function mockOwnedWitness(eventStore: ReturnType<typeof createInMemoryReviewGate
     readInstallation: async () => {
       return { installationId: "installation-1", epoch: "epoch-1", provisionerPublicKeyPem: "", hostTrustRootPem: "", authenticatedProvisionerDigest: "digest-1", ownerUid: 0, authorizationSignature: "", directoryIdentityDigest: "" };
     },
+    readVerifiedDesignBinding: async () => null,
     signAdmittedMembership: async () => "test-signature",
     preparePublication: async () => "prepared",
     publishPreparedJournal: async () => undefined,

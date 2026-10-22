@@ -144,6 +144,10 @@ import {
   type ReviewGateAdmissionHandlers,
 } from "./review-gate-admission-executor";
 import { runGitLiteral } from "./review-gate-query";
+import {
+  buildApprovedDesignOperationReadBinding,
+  type ApprovedDesignOperationReadBinding,
+} from "./review-gate-approved-design-authority";
 
 /**
  * Task 3 — bounded wait for a scope admission lease under contention.
@@ -220,6 +224,7 @@ export type PreparedReviewGateOperationRecordV1 = Readonly<{
   readonly gateId: string;
   readonly operationId: string;
   readonly operation: ReviewGateNextOperation;
+  readonly approvedDesignBinding?: ApprovedDesignOperationReadBinding;
 }>;
 
 /** Handle returned by `prepareCallerOperation` for the caller's routing decision. */
@@ -400,6 +405,21 @@ const isPlainObjectRecord = (value: unknown): value is Record<string, unknown> =
 const isNonEmptyString = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0;
 
+const isDigest = (value: unknown): value is string =>
+  typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+
+const isApprovedDesignOperationReadBinding = (
+  value: unknown,
+): value is ApprovedDesignOperationReadBinding => {
+  if (!isPlainObjectRecord(value)) return false;
+  return typeof value.gateId === "string" && value.gateId.length > 0 &&
+    typeof value.operationId === "string" && value.operationId.length > 0 &&
+    typeof value.canonicalPath === "string" && isDigest(value.treeSha) &&
+    isDigest(value.blobSha) &&
+    (value.gitMode === "100644" || value.gitMode === "100755") &&
+    typeof value.objectSize === "number" && Number.isSafeInteger(value.objectSize) && value.objectSize >= 0;
+};
+
 /**
  * Strictly decode one recovery-store object as a prepared-operation record.
  * `null` marks an unrelated recovery record (Task 10 commit/restore records
@@ -432,12 +452,18 @@ function parsePreparedOperationRecord(
   ) {
     throw new Error("review_gate_prepared_operation_corrupt");
   }
+  const approvedDesignBinding = parsed.approvedDesignBinding;
+  if (approvedDesignBinding !== undefined &&
+      (!isApprovedDesignOperationReadBinding(approvedDesignBinding) || approvedDesignBinding.gateId !== gateId)) {
+    throw new Error("review_gate_prepared_operation_corrupt");
+  }
   return Object.freeze({
     recordKind: PREPARED_OPERATION_RECORD_KIND,
     schemaVersion: 1,
     gateId,
     operationId,
     operation: operation as unknown as ReviewGateNextOperation,
+    ...(approvedDesignBinding === undefined ? {} : { approvedDesignBinding }),
   });
 }
 
@@ -471,6 +497,8 @@ interface MutableSessionState {
   workspaceStates: ReadonlyMap<string, ReviewTargetWorkspaceState>;
   validationState: DeterministicValidationState;
   reviewAttemptId: string | null;
+  approvedDesignBinding: ApprovedDesignOperationReadBinding | null;
+  approvedDesignInputBindingDigest: string | null;
   readonly verifiedUpstreamReopen?: VerifiedUpstreamReopenContextV1;
   readonly scopeLock: ReviewGateLockHandle;
   readonly gateLock: ReviewGateLockHandle;
@@ -1016,6 +1044,12 @@ export function createReviewGateCoordinator(
           prompt: packet.workerPrompt,
           load_skills: [],
           run_in_background: false,
+          ...(session.approvedDesignBinding === null
+            ? {}
+            : {
+                approved_design_binding: session.approvedDesignBinding,
+                approved_design_input_binding_digest: session.approvedDesignInputBindingDigest,
+              }),
         },
       },
     };
@@ -1762,12 +1796,45 @@ export function createReviewGateCoordinator(
       throw new Error(`review_gate_operation_not_preparable: ${String(operation.kind)}`);
     }
     const operationId = newId();
+    let approvedDesignBinding: ApprovedDesignOperationReadBinding | undefined;
+    const operationPhase = "phase" in operation ? operation.phase : null;
+    if (operationPhase === "plan") {
+      if (scopeAdmission === null || workspaceRoot === null || workspaceIdentity === null) {
+        throw new Error("review_gate_approved_design_proof_unavailable");
+      }
+      const result = await scopeAdmission.withAdmissionLease(
+        {
+          workspaceRoot,
+          workspaceIdentity,
+          designPath: session.designPath,
+          planPath: session.planPath,
+          protocol,
+        },
+        async (decision, _observation, owned) => {
+          if (decision.kind === "BLOCK") return null;
+          const events = await eventStore.readVerifiedEvents(session.gateId);
+          const clear = events.find((event) => event.eventType === "DESIGN_CLEAR");
+          if (clear === undefined || !("eventId" in clear)) return null;
+          return buildApprovedDesignOperationReadBinding(
+            owned,
+            {
+              gateId: session.gateId,
+              operationId: clear.eventId,
+              designPath: session.designPath,
+            },
+          );
+        },
+      );
+      if (result === null) throw new Error("review_gate_approved_design_proof_unavailable");
+      approvedDesignBinding = result;
+    }
     const record: PreparedReviewGateOperationRecordV1 = Object.freeze({
       recordKind: PREPARED_OPERATION_RECORD_KIND,
       schemaVersion: 1,
       gateId: session.gateId,
       operationId,
       operation,
+      ...(approvedDesignBinding === undefined ? {} : { approvedDesignBinding }),
     });
     const bytes = Buffer.from(JSON.stringify(record), "utf8");
     const digest = computeArtifactDigest(bytes);
@@ -1934,6 +2001,20 @@ export function createReviewGateCoordinator(
         "review_gate_prepared_operation_mismatch",
       );
     }
+    if (
+      "phase" in prepared.operation && prepared.operation.phase === "plan" &&
+      prepared.approvedDesignBinding === undefined
+    ) {
+      return preparedDecisionOutcome(
+        "blocked",
+        operationId,
+        "review_gate_approved_design_proof_unavailable",
+      );
+    }
+    session.approvedDesignBinding = prepared.approvedDesignBinding ?? null;
+    session.approvedDesignInputBindingDigest = prepared.approvedDesignBinding === undefined
+      ? null
+      : computeArtifactDigest(Buffer.from(JSON.stringify(prepared), "utf8"));
     const projection = await loadProjection(session.gateId);
     let planned: ReviewGateNextOperation;
     try {
@@ -3047,6 +3128,8 @@ export function createReviewGateCoordinator(
       workspaceStates: await inspectTargets([designPath, planPath]),
       validationState: emptyDeterministicValidationState,
       reviewAttemptId: null,
+      approvedDesignBinding: null,
+      approvedDesignInputBindingDigest: null,
       ...(verifiedUpstreamReopen === undefined ? {} : { verifiedUpstreamReopen }),
       scopeLock: chain.scopeLock,
       gateLock: chain.gateLock,
@@ -3261,6 +3344,8 @@ export function createReviewGateCoordinator(
       workspaceStates,
       validationState: emptyDeterministicValidationState,
       reviewAttemptId: null,
+      approvedDesignBinding: null,
+      approvedDesignInputBindingDigest: null,
       scopeLock: chain.scopeLock,
       gateLock: chain.gateLock,
     };
