@@ -53,6 +53,32 @@ describe("OpenCodeAdapter v2 — tool forwarding", () => {
     expect(args.prompt).toContain("REVIEW GATE CLAIM BLOCKED");
   });
 
+  it("cancels generic content reads before the tool can execute during a Review Gate lock", async () => {
+    const adapter = new OpenCodeAdapter(fakeInit());
+    await adapter.ensureInitialized();
+    const bridge = (adapter.getJustice() as JusticePlugin).getPlanBridge();
+    vi.spyOn(bridge, "hasAnyReviewGateLock").mockReturnValue(true);
+    vi.spyOn(bridge, "getReviewGateLock").mockReturnValue({
+      parentSessionId: "review-child",
+      gateId: "gate-current",
+      phase: "reviewing",
+      reviewPhase: "plan",
+      operationId: "op-current",
+      designPath: "docs/specs/design.md",
+      planPath: "docs/plans/plan.md",
+      designDigest: "d".repeat(64),
+      planDigest: "p".repeat(64),
+    });
+
+    const response = await adapter.onToolExecuteBefore(
+      { tool: "read", sessionID: "review-child", callID: "generic-read" },
+      { args: { filePath: "docs/specs/design.md" } },
+    );
+
+    expect(response).toMatchObject({ action: "skip", reason: "review_scope_violation" });
+    expect(response).toHaveProperty("guidance");
+  });
+
   it("fails a marked Review Gate task closed when Justice validation throws", async () => {
     const adapter = new OpenCodeAdapter(fakeInit());
     await adapter.ensureInitialized();

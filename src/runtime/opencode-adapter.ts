@@ -57,6 +57,8 @@ import {
   type ReviewGateHistoryService,
 } from "./review-gate-history";
 import { createReviewGateLockManager } from "./review-gate-lock-manager";
+import { createReviewGateQueryService, type ReviewGateQueryService } from "./review-gate-query";
+import { createReviewGateApprovedDesignAuthority } from "./review-gate-approved-design-authority";
 import { createReviewGateRecoveryStore } from "./review-gate-recovery-store";
 import { createReviewGateProtocolDescriptor } from "./review-gate-protocol";
 import { createReviewGateScopeAdmission } from "./review-gate-scope-admission";
@@ -75,6 +77,7 @@ import { OpenCodeNotifier } from "./opencode-notifier";
 import { allocateWriterId, generateWriterId } from "./writer-id";
 import { extractReviewGateToolPaths } from "./review-gate-tool-paths";
 import type { DelegatedExecutionRelationObserved } from "../core/types";
+import type { ReviewGateApprovedDesignAuthority } from "../hooks/plan-bridge";
 
 const PROCEED: HookResponse = { action: "proceed" };
 
@@ -146,6 +149,8 @@ interface SharedReviewGateRuntimeGraph {
   readonly coordinator: ReviewGateCoordinator;
   readonly history: ReviewGateHistoryService;
   readonly approval: ReviewGateApprovalLookup;
+  readonly query: ReviewGateQueryService;
+  readonly approvedDesignAuthority: ReviewGateApprovedDesignAuthority;
 }
 
 export type ReplayRuntimeEvent =
@@ -418,6 +423,8 @@ export class OpenCodeAdapter {
       if (reviewGateRuntimeGraph !== null) {
         justice.getPlanBridge().setReviewGateCoordinator(reviewGateRuntimeGraph.coordinator);
         justice.getPlanBridge().setReviewGateApprovalLookup(reviewGateRuntimeGraph.approval);
+        justice.getPlanBridge().setReviewGateQueryService(reviewGateRuntimeGraph.query);
+        justice.getPlanBridge().setReviewGateApprovedDesignAuthority(reviewGateRuntimeGraph.approvedDesignAuthority);
         this.#reviewGateRuntimeGraph = reviewGateRuntimeGraph;
       }
       this.#justice = justice;
@@ -852,6 +859,15 @@ export class OpenCodeAdapter {
         lockOwnerSessionId === null
           ? justice.getPlanBridge().hasAnyReviewGateLock()
           : justice.getPlanBridge().getReviewGateLock(lockOwnerSessionId) !== undefined;
+      const genericContentTool = /^(read|grep|search|glob|find|cat|show|git_show|git-show|bash|shell|terminal|exec)$/iu.test(input.tool) ||
+        /(?:^|[._-])(read|grep|search|show|shell|terminal)(?:$|[._-])/iu.test(input.tool);
+      if (reviewGateLockActive && input.tool !== "justice_review" && genericContentTool) {
+        return {
+          action: "skip",
+          reason: "review_scope_violation",
+          guidance: "Review Gate 中の成果物照会は justice_review の query だけを使用してください。D0 は artifact_read / artifact_search、D1 の変更診断は status / diff で確認できます。",
+        };
+      }
       const isPendingReviewGateTask =
         isTask &&
         lockOwnerSessionId !== null &&
@@ -1887,7 +1903,31 @@ readVerifiedPhaseProtocolDelta: async () => "BLOCK",
     });
     const history = createReviewGateHistoryService({ rootDir: root, eventStore });
     const approval = createReviewGateApprovalLookup({ eventStore, workspaceReader, protocol, workspaceRoot: root });
-    return Object.freeze({ root, eventStore, witness, coordinator, history, approval });
+    const query = createReviewGateQueryService({ rootDir: root, workspaceReader });
+    const approvedDesignAuthority: ReviewGateApprovedDesignAuthority = Object.freeze({
+      getApprovedDesignBinding: async ({ gateId, designPath }: Parameters<ReviewGateApprovedDesignAuthority["getApprovedDesignBinding"]>[0]) => {
+        const events = await eventStore.readVerifiedEvents(gateId);
+        const genesis = events[0];
+        if (genesis?.eventType !== "GATE_CREATED" || genesis.payload.designArtifact.canonicalPath !== designPath) return null;
+        const authority = createReviewGateApprovedDesignAuthority({
+          admission: scopeAdmission,
+          eventStore,
+          git: reviewGateGit,
+          query,
+          admissionRequest: {
+            workspaceRoot: root,
+            workspaceIdentity,
+            designPath,
+            planPath: genesis.payload.planArtifact.canonicalPath,
+            protocol,
+          },
+        });
+        return await authority.getApprovedDesignBinding({ gateId, designPath });
+      },
+      readApprovedDesignArtifact: (input: Parameters<ReviewGateApprovedDesignAuthority["readApprovedDesignArtifact"]>[0]) => query.readApprovedDesignArtifact(input),
+      searchApprovedDesignArtifact: (input: Parameters<ReviewGateApprovedDesignAuthority["searchApprovedDesignArtifact"]>[0]) => query.searchApprovedDesignArtifact(input),
+    });
+    return Object.freeze({ root, eventStore, witness, coordinator, history, approval, query, approvedDesignAuthority });
   } catch (err) {
     warn("[Justice] Review Gate runtime graph construction failed; coordinator not configured", err);
     return null;

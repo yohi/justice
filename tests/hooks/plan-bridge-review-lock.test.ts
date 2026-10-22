@@ -502,6 +502,25 @@ describe("PlanBridge FDR-014 approved Design read boundary", () => {
     expect(bridge.getReviewGateLock("parent")?.phase).toBe("reviewing");
   });
 
+  it("returns scoped status and diff as unapproved D1 diagnostics", async () => {
+    const { bridge } = createLockHarness(false);
+    bridge.setReviewGateApprovedDesignAuthority(fakeAuthority());
+    bridge.setReviewGateQueryService({
+      getScopedStatus: async (_scope: import("../../src/core/review-gate/capabilities").ReviewQueryScope) => ({ entries: [{ canonicalPath: PLAN_PATH, indexState: " ", workingTreeState: "M" }] }),
+      getScopedDiff: async (_scope: import("../../src/core/review-gate/capabilities").ReviewQueryScope, request: { readonly staged: boolean }) => ({ base: null, staged: request.staged, patch: "D1 patch" }),
+    } as unknown as import("../../src/runtime/review-gate-query").ReviewGateQueryService);
+    await bridge.handleReviewGateStart("parent", {
+      source: "command",
+      designPath: DESIGN_PATH,
+      planPath: PLAN_PATH,
+    });
+
+    const status = JSON.parse(await bridge.executeReviewerScopedQuery("parent", { kind: "status" })) as Record<string, unknown>;
+    const diff = JSON.parse(await bridge.executeReviewerScopedQuery("parent", { kind: "diff", staged: true })) as Record<string, unknown>;
+    expect(status).toMatchObject({ status: "OK", authority: "unapproved_D1_diagnostic" });
+    expect(diff).toMatchObject({ status: "OK", authority: "unapproved_D1_diagnostic", result: { staged: true } });
+  });
+
   it("builds the plan reviewer scope through the validated approved design proof", async () => {
     const { bridge } = createLockHarness(false);
     bridge.setReviewGateApprovedDesignAuthority(fakeAuthority());
