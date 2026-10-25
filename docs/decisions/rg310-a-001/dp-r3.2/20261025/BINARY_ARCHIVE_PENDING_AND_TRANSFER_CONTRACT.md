@@ -81,3 +81,21 @@ The commit/push steps intentionally remain **commented** in the example. Upload 
 `R11 UNAPPROVED; R'/D'/P' NOT_ADOPTED; DS-01..06/O-01..07 PENDING; Task1 31/32 Case A BLOCKED; H0..H3 NOT_PROVEN; historical 22 Findings OPEN; NC37 NOT_EXECUTED; P2–P4 INTERFACE_FREEZE_STOP; Tasks2–14 NOT_AUTHORIZED; COMPLETE_MEDIATION_NOT_PROVEN`.
 
 A document-only draft PR, an archival ZIP upload or a hash MATCH does **not** change any of these facts.
+
+## 6. Follow-up static archival receipt — 2026-10-25
+
+The pending state above describes the earlier transfer attempt. This receipt records the later byte-preserving archival on the same draft PR; it does not alter the authority or execution boundary.
+
+- Repository: `yohi/justice`; PR: [#342](https://github.com/yohi/justice/pull/342).
+- Archive commit: `ed41c4ca4e7cf58f0a15b608fdcacc45880a5e5e` on `docs/rg310-dpr32-readiness-20261025`; parent was the previously observed head `17c9e9d3073a75355a3d1e32f887a50b09860793`.
+- Retrieved from GitHub branch `docs/rg310-dpr32-readiness-20261025` at `2026-10-25T13:28:59Z`; both retrieved byte streams were checked for size, SHA-256 and ZIP CRC.
+
+| Archived path | Size | Git blob SHA-1 | Retrieved SHA-256 | ZIP CRC |
+|---|---:|---|---|---|
+| `docs/decisions/rg310-a-001/dp-r3.2/20261025/archives/DP_R3_2_Handoff.zip` | 1,310,442 bytes | `e90a88063f074c9d3bad210739e7fc7bb46fd8b0` | `27169796ffbe0304853f9ba822ebdbd7959be68c37fb2033eff186a7d85a859a` | PASS (47 members) |
+| `docs/decisions/rg310-a-001/dp-r3.2/20261025/archives/DP_R3_2_Closure.zip` | 1,319,031 bytes | `8071798a0600239f2cb50ca2ff3a6b9f1d3a8cea` | `d8927d47bfdeadcec09968b36b0066a8453af311ec8be107e638125c7e002b0d` | PASS (6 members) |
+
+- The archive commit changes only the two ZIP paths above. The PR remains `OPEN / DRAFT / UNMERGED` with the same non-master base `docs/rg310-dpr32-review-base-20261025`.
+- Static path, duplicate-entry, CRC and common credential-pattern checks found no issues in the outer or nested ZIP members. These checks are bounded and are not an exhaustive secrets audit.
+- The six repository GitHub Actions workflows were inspected: their configured push/PR base filters target `master`; no matching check runs were present after the push. External GitHub Apps, webhooks or integrations were not inspected and cannot be ruled out.
+- No source, test, workflow, release, provider, Host, policy or Gate action was performed. No tests or embedded archive content were executed.
