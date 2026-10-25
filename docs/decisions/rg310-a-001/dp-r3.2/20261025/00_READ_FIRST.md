@@ -1,0 +1,9 @@
+# Justice RG-310-A-001 — C1-FULL DP-R3.2 limited design/implementation-plan correction
+
+**AUTHOR_DRAFT_COMPLETE_FOR_REVIEW / FRESH_INDEPENDENT_STATIC_RE_REVIEW_REQUIRED / UNSIGNED / DOCUMENT_QUALITY_ONLY / NO_EXECUTION_GRANT**
+
+The 2026-10-25 fresh independent DP-R3.1 reviewer awarded **historical 11 YES / 1 PARTIAL / 0 NO** and identified one new bounded document defect **FND-DPR31-NEW-001**. Earlier R3 A–D and receipt metadata/editorial defects are historical corrected items, **not implemented guarantees**. DP-R3.2 proposes a document-only lexical and authenticated identity correction for all 19 nonnegative integer epoch/term/sequence fields inside `04A` and the `04`/`04B` semantic contract. There is **no independent DP-R3.2 approval**.
+
+Review primary files: `04_EIGHT_INTERFACE_CONTRACTS_CANDIDATE.json`, `04A_TYPED_ENVELOPE_CANDIDATE_SCHEMA.json`, `04B_INDEPENDENT_PROOF_VERIFIER_CANDIDATE_R3_2.md`, `04E_R3_2_UNSIGNED_INTEGER_PRECISION_PAPER_ORACLES.csv`, `23_R3_1_TO_R3_2_AUTHOR_ADJUDICATION.md`, `24_JAPANESE_DP_R3_2_LIMITED_CORRECTION_SUMMARY.md`, and `08_INDEPENDENT_DESIGN_PLAN_REVIEW_REQUEST.md`. `25_R3_1_TO_R3_2_TEXT_DIFF.patch` records changes to retained paths. Reference original R3.1 ZIP and original independently supplied R3.1 Markdown are embedded byte-identically.
+
+**Immutable historical anchors:** approved v5 R/D/P fixed HEAD `8a2e4f1536e9cad499ee7e9d996ff163df132fd4`, Task1 fixed HEAD `c428041dfb5779b6b6dc8db7bf14928225a00373`. R11 UNAPPROVED; R'/D'/P' NOT_ADOPTED; DS01..06/O01..07 PENDING; original 22 OPEN, NC37 NOT_EXECUTED; Task1 historical 31/32 and BLOCKED; H0..H3 NOT_PROVEN; 27 effects, 34 paper tests remain proposal-only; provider first-effect NOT_ESTABLISHED; P2..P4 INTERFACE_FREEZE_STOP; Tasks2..14 NOT_AUTHORIZED. NO code, tests, CI, Host, provider writes, credential usage, signatures, freeze or formal Gate.
