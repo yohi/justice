@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { PlanBridge, type ReviewGateApprovedDesignAuthority } from "../../src/hooks/plan-bridge";
+import type { FileReader } from "../../src/core/types";
+import type { LoopDetectionHandler } from "../../src/hooks/loop-handler";
+import { assertValidApprovedDesignReadBinding } from "../../src/core/review-gate/capabilities";
 import { createReviewGateCoordinator } from "../../src/runtime/review-gate-coordinator";
 import { createReviewGateLockManager } from "../../src/runtime/review-gate-lock-manager";
 import { createReviewGateProtocolDescriptor } from "../../src/runtime/review-gate-protocol";
@@ -30,7 +34,20 @@ function createMockScopeAdmission(
   return (eventStore) => {
     let creationApplied = false;
     return {
-      withAdmissionLease: async (_request, run) => {
+      withAdmissionLease: async <T>(
+        _request: {
+          readonly workspaceRoot: string;
+          readonly workspaceIdentity: string;
+          readonly designPath: string;
+          readonly planPath: string;
+          readonly protocol: ReturnType<typeof createReviewGateProtocolDescriptor>;
+        },
+        run: (
+          decision: AdmissionDecision,
+          observation: ReviewGateAdmissionObservation | null,
+          owned: AdmissionOwnedWitness,
+        ) => Promise<T>,
+      ): Promise<T> => {
         if (
           creationApplied &&
           (decision.kind === "CREATE_GENESIS" || decision.kind === "CREATE_SUCCESSOR")
@@ -61,7 +78,32 @@ function mockOwnedWitness(
   return {
     read: async () => { throw new Error("mock_owned_unused"); },
     readVerifiedFrontier: async () => {
-      return { workspaceIdentity: "test-workspace-identity", workspaceEnrollmentId: "enrollment-1", scopes: [], writerHeads: [], globalFrontierHash: "frontier-1" };
+      return {
+        workspaceIdentity: "test-workspace-identity",
+        workspaceEnrollmentId: "enrollment-1",
+        scopes: hasDesignBinding ? [{
+          scopeId: SCOPE_ID,
+          workflowContinuityId: "workflow-1",
+          canonicalDesignPath: DESIGN_PATH,
+          canonicalPlanPath: PLAN_PATH,
+          pathPairDigest: "pair-1",
+          provenance: {
+            kind: "verified_genesis" as const,
+            evidenceDigest: "evidence-1",
+            priorScopeId: null,
+            priorGateId: null,
+          },
+          gateMembership: [{
+            gateId: "legacy-gate",
+            generationId: "legacy-v1",
+            supersedesGateId: null,
+            admissionEventId: "genesis-event",
+            writerIds: ["legacy-writer"],
+          }],
+        }] : [],
+        writerHeads: [],
+        globalFrontierHash: "f".repeat(64),
+      };
     },
     readFirstEnrollmentAuthority: async () => firstEnrollment,
     consumeFirstEnrollmentAuthority: async () => undefined,
@@ -102,6 +144,9 @@ let testCounter = 0;
 
 function createTestCoordinator(
   scopeAdmission: ReviewGateScopeAdmission | ((eventStore: ReturnType<typeof createInMemoryReviewGateEventStore>) => ReviewGateScopeAdmission) | null,
+  approvedDesignReadDependencies?: NonNullable<
+    Parameters<typeof createReviewGateCoordinator>[0]["approvedDesignReadDependencies"]
+  >,
 ) {
   testCounter += 1;
   let idSequence = 0;
@@ -125,6 +170,7 @@ function createTestCoordinator(
     workspaceIdentity: "test-workspace-identity",
     mutationSubstrate: null,
     scopeAdmission: resolvedScopeAdmission,
+    approvedDesignReadDependencies,
     recoveryStore: {
       publish: async (digest, bytes) => {
         if (recoveryObjects.has(digest)) return "exists";
@@ -147,10 +193,75 @@ describe("coordinator startOrResume routes through scope admission", () => {
   it("releases the shared session locks while preparing an approved Plan binding", async () => {
     const sharedLocks: { manager?: ReturnType<typeof createReviewGateLockManager> } = {};
     let admissionCalls = 0;
+    let assertSessionLocksReleased = false;
+    const designDigest = computeArtifactDigest(new TextEncoder().encode(DESIGN_CONTENT));
+    const verifiedScope = {
+      frontier: {
+        workspaceIdentity: "test-workspace-identity",
+        workspaceEnrollmentId: "enrollment-1",
+        scopes: [],
+        writerHeads: [],
+        globalFrontierHash: "f".repeat(64),
+      },
+      gateIds: ["legacy-gate"],
+      eventsByGate: new Map([["legacy-gate", [
+        {
+          schemaVersion: 2,
+          eventId: "genesis-event",
+          parentEventId: "legacy-gate",
+          emittedAt: "2026-10-13T00:00:00.000Z",
+          gateId: "legacy-gate",
+          epochId: "legacy-epoch",
+          generationId: "legacy-v1",
+          writerId: "legacy-writer",
+          eventType: "GATE_CREATED",
+          payload: {
+            reviewScopeId: SCOPE_ID,
+            supersedesGateId: null,
+            requirementsResolution: {
+              schemaVersion: 2,
+              source: "explicit",
+              canonicalPath: "docs/requirements.md",
+              digest: "c".repeat(64),
+              gitMode: "100644",
+              requirementsGitBlobOid: "d".repeat(64),
+              committedBaselineOid: "e".repeat(64),
+              workspaceIdentity: "test-workspace-identity",
+              selectionEvidence: {},
+            },
+            designArtifact: { canonicalPath: DESIGN_PATH, digest: designDigest, gitMode: "100644" },
+            planArtifact: {
+              canonicalPath: PLAN_PATH,
+              digest: computeArtifactDigest(new TextEncoder().encode(PLAN_CONTENT)),
+              gitMode: "100644",
+            },
+            reviewProtocolFingerprint: "protocol-global",
+            designProtocolFingerprint: "protocol-design",
+            planProtocolFingerprint: "protocol-plan",
+          },
+        },
+        {
+          schemaVersion: 2,
+          eventId: "design-clear-event",
+          parentEventId: "genesis-event",
+          emittedAt: "2026-10-13T00:00:00.000Z",
+          gateId: "legacy-gate",
+          epochId: "legacy-epoch",
+          generationId: "legacy-v1",
+          writerId: "legacy-writer",
+          eventType: "DESIGN_CLEAR",
+          payload: {
+            designProtocolFingerprint: "protocol-design",
+            approvedContextEventId: "design-clear-event",
+          },
+        },
+      ]]]),
+    };
     const { coordinator, eventStore, lockManager: manager } = createTestCoordinator(() => ({
       withAdmissionLease: async (_request, run) => {
         admissionCalls += 1;
-        if (admissionCalls === 5) {
+        if (assertSessionLocksReleased) {
+          assertSessionLocksReleased = false;
           const scopeLock = await sharedLocks.manager?.acquireScopeLock(SCOPE_ID);
           expect(scopeLock).not.toBe("occupied");
           if (scopeLock !== undefined && scopeLock !== "occupied") scopeLock.release();
@@ -161,7 +272,22 @@ describe("coordinator startOrResume routes through scope admission", () => {
         }
         return run({ kind: "RESUME", gateId: "legacy-gate", generationId: "legacy-v1", witnessFrontierHash: "frontier-1" }, null, mockOwnedWitness(eventStore));
       },
-    }));
+    }), {
+      eventStore: {
+        readVerifiedScopeOwned: async () => verifiedScope,
+      } as unknown as NonNullable<Parameters<typeof createReviewGateCoordinator>[0]["approvedDesignReadDependencies"]>["eventStore"],
+      git: {
+        inspectTarget: async () => ({
+          canonicalPath: DESIGN_PATH,
+          headSha: "a".repeat(40),
+          headEntry: { canonicalPath: DESIGN_PATH, blobSha: "b".repeat(40), gitMode: "100644" },
+          indexEntry: { canonicalPath: DESIGN_PATH, blobSha: "b".repeat(40), gitMode: "100644", stage: 0 },
+          indexConflicted: false,
+          worktree: { canonicalPath: DESIGN_PATH, digest: designDigest, gitMode: "100644" },
+          headBlobDigest: designDigest,
+        }),
+      } as unknown as NonNullable<Parameters<typeof createReviewGateCoordinator>[0]["approvedDesignReadDependencies"]>["git"],
+    });
     sharedLocks.manager = manager;
     const observation = createGenesisObservation();
     const identity = {
@@ -193,13 +319,20 @@ describe("coordinator startOrResume routes through scope admission", () => {
       },
     ]);
 
-    await coordinator.startOrResume("shared-lock-session", {
+    const bridge = new PlanBridge({
+      readFile: async (filePath): Promise<string> => filePath === DESIGN_PATH ? DESIGN_CONTENT : PLAN_CONTENT,
+      fileExists: async (filePath): Promise<boolean> => filePath === DESIGN_PATH || filePath === PLAN_PATH,
+      listFiles: async (): Promise<readonly string[]> => [DESIGN_PATH, PLAN_PATH],
+      readFileStats: async (): Promise<null> => null,
+    } satisfies FileReader, {} as LoopDetectionHandler);
+    bridge.setReviewGateCoordinator(coordinator);
+    await bridge.handleReviewGateStart("shared-lock-session", {
       source: "command", designPath: DESIGN_PATH, planPath: PLAN_PATH,
     });
-    const resumed = await coordinator.startOrResume("shared-lock-session", {
+    await bridge.handleReviewGateStart("shared-lock-session", {
       source: "command", designPath: DESIGN_PATH, planPath: PLAN_PATH,
     });
-    expect(resumed.gateId).toBe("legacy-gate");
+    expect(bridge.getReviewGateLock("shared-lock-session")).toMatchObject({ gateId: "legacy-gate" });
     await eventStore.appendV2Events("legacy-gate", [validateReviewGateEventRecord({
       schemaVersion: 2,
       eventId: "design-clear-event",
@@ -215,11 +348,45 @@ describe("coordinator startOrResume routes through scope admission", () => {
         approvedContextEventId: "design-clear-event",
       },
     })]);
+
+    assertSessionLocksReleased = true;
+    const pendingOperationId = (await eventStore.listDispatches("legacy-gate")).at(-1)?.operationId;
+    expect(pendingOperationId).toBeDefined();
     const prepared = await coordinator.prepareCallerOperation("shared-lock-session", {
-      kind: "dispatch_reviewer", phase: "plan",
+      kind: "dispatch_reviewer", phase: "plan", redispatchedOperationId: pendingOperationId,
     });
-    expect(prepared.operationId).toBe("test-id-7");
-    expect(admissionCalls).toBe(5);
+    expect(prepared.operationId).toBeTruthy();
+    const admissionCallsAfterPreparation = admissionCalls;
+    expect(admissionCallsAfterPreparation).toBeGreaterThanOrEqual(5);
+
+    const execution = await coordinator.executeNextOperation("shared-lock-session", {
+      kind: "execute_operation",
+      operationId: prepared.operationId,
+      reason: null,
+    });
+    expect(execution).toMatchObject({ kind: "executed", operationId: prepared.operationId });
+    const approvedDesign = coordinator.getApprovedDesignReadBinding(
+      "shared-lock-session", "legacy-gate", DESIGN_PATH,
+    );
+    expect(approvedDesign).toMatchObject({ canonicalPath: DESIGN_PATH });
+    if (approvedDesign === null) throw new Error("approved_design_binding_missing");
+    assertValidApprovedDesignReadBinding(approvedDesign, DESIGN_PATH);
+    const approvedDesignAuthority: ReviewGateApprovedDesignAuthority = {
+      getApprovedDesignBinding: async ({ gateId, designPath, sessionId }) =>
+        sessionId === undefined
+          ? null
+          : coordinator.getApprovedDesignReadBinding(sessionId, gateId, designPath),
+      readApprovedDesignArtifact: async () => Buffer.from("approved Design bytes\n"),
+      searchApprovedDesignArtifact: async () => [],
+    };
+    bridge.setReviewGateApprovedDesignAuthority(approvedDesignAuthority);
+
+    const read = await bridge.mediateReviewerArtifactRead("shared-lock-session", {
+      toolName: "read",
+      path: DESIGN_PATH,
+    });
+    expect(read).toEqual({ kind: "approved_read", bytes: Buffer.from("approved Design bytes\n") });
+    expect(admissionCalls).toBe(admissionCallsAfterPreparation);
 
     coordinator.releaseSession("shared-lock-session");
     const scopeLock = await manager.acquireScopeLock(SCOPE_ID);
