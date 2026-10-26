@@ -542,8 +542,8 @@ function findCompletedTip(
   return tip && isCompletedTip(tip) ? tip : undefined;
 }
 
-function hasRelatedUnfinishedScope(continuity: VerifiedWorkspaceContinuityV1): boolean {
-  return continuity.relatedScopeTips.some((tip) => isUnfinishedTip(tip));
+function hasRelatedUnfinishedScope(continuity: VerifiedWorkspaceContinuityV1, requestedScopeId: string): boolean {
+  return continuity.relatedScopeTips.some((tip) => tip.scopeId !== requestedScopeId && isUnfinishedTip(tip));
 }
 
 function continuityCheck(
@@ -562,7 +562,7 @@ function continuityCheck(
   if (continuity.relatedGateHistoryFrontierHash !== input.verifiedFrontierHash) {
     return block("frontier_mismatch", "Workspace continuity frontier does not match the verified admission frontier.");
   }
-  if (hasRelatedUnfinishedScope(continuity)) {
+  if (hasRelatedUnfinishedScope(continuity, input.scopeId)) {
     return block("related_unfinished_scope", "A related scope has an unfinished Gate tip.");
   }
   return null;

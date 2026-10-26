@@ -22,7 +22,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { appendFile, chmod, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -416,10 +416,8 @@ async function initTask19GitWorkspace(): Promise<string> {
   runGitFixture(root, ["commit", "-q", "--no-gpg-sign", "-m", "genesis"]);
   return root;
 }
-
 const v2JournalPath = (rootDir: string, gateId: string): string =>
   join(rootDir, ".justice", "review-gates", gateId, "events-v2.jsonl");
-
 const asV2BypassRecord = (record: unknown): VerifiedReviewGateEvent =>
   record as VerifiedReviewGateEvent;
 
@@ -768,6 +766,7 @@ describe("Task 19 production-path negative matrix", () => {
       };
 
       const journalLockPath = `${v2JournalPath(harness.rootDir, gateId)}.lock`;
+      mkdirSync(dirname(journalLockPath), { recursive: true });
       mkdirSync(journalLockPath);
       await expect(
         firstStore.appendV2Events(gateId, [asV2BypassRecord(firstRecord)]),

@@ -105,6 +105,7 @@ const REVIEW_GATES_DIR = ".justice/review-gates";
 const EVENTS_DIR = `${REVIEW_GATES_DIR}/events`;
 const SCOPE_INDEX_FILE = `${REVIEW_GATES_DIR}/locks/scope-index.json`;
 const DISPATCH_JOURNALS_DIR = ".justice/review-gate-dispatches";
+const REVIEW_GATES_V2_DIR = ".justice/review-gates-v2";
 
 /** Task 18 — durable V2 journal file inside the Gate namespace. */
 const V2_JOURNAL_FILENAME = "events-v2.jsonl";
@@ -504,7 +505,7 @@ function createLocalDispatchJournal(rootDir: string) {
 }
 
 /** Runtime guard for the Task 18 V2 envelope over the codec union. */
-type V2CodedEvent = VerifiedReviewGateEvent & {
+export type V2CodedEvent = VerifiedReviewGateEvent & {
   readonly schemaVersion: 2;
   readonly eventId: string;
   readonly parentEventId: string;
@@ -526,11 +527,11 @@ const asV2CodedEvent = (event: VerifiedReviewGateEvent): V2CodedEvent => {
  * journal is owned by the append-only codec path and never read directly by
  * the legacy V1 state-machine projection.
  */
-function createLocalV2Journal(rootDir: string) {
+function createLocalV2Journal(rootDir: string, journalDir = REVIEW_GATES_DIR) {
   const eventsByGate = new Map<string, readonly V2CodedEvent[]>();
 
   const journalFile = (gateId: string): string =>
-    join(rootDir, REVIEW_GATES_DIR, gateId, V2_JOURNAL_FILENAME);
+    join(rootDir, journalDir, gateId, V2_JOURNAL_FILENAME);
 
   const assertStorageId = (id: string): void => {
     if (!validateStorageGateId(id)) {
@@ -1071,7 +1072,7 @@ export function createReviewGateEventStore(
   const dispatchJournal = createLocalDispatchJournal(rootDir);
   const scopeIndexCache = createLocalScopeIndexCache(rootDir);
   /** Task 18 — durable V2 journal custody shared by the Task 18 coordinator. */
-  const v2Journal = createLocalV2Journal(rootDir);
+  const v2Journal = createLocalV2Journal(rootDir, REVIEW_GATES_V2_DIR);
 
   let opChain: Promise<unknown> = Promise.resolve();
 

@@ -32,6 +32,7 @@ import type {
 import type { VerifiedReviewGateEvent } from "../core/review-gate/event-schema";
 import { projectVerifiedGateTip } from "../core/review-gate/projection";
 import type {
+  VerifiedAdmissionPrecedenceV1,
   VerifiedAdmissionSnapshot,
   VerifiedGateTip,
   VerifiedObservedRequirementsCandidate,
@@ -122,16 +123,20 @@ async function observeSnapshot(
     ? (id: string) => eventStore.readVerifiedScopeOwned(owned, id)
     : (id: string) => eventStore.readVerifiedScope(id);
 
-  const scope = await readScope(scopeId);
+  const frontier = await owned?.readVerifiedFrontier();
+  const scope: VerifiedScopeRead = frontier !== undefined &&
+    !frontier.scopes.some((entry) => entry.scopeId === scopeId)
+    ? { frontier, gateIds: [], eventsByGate: new Map() }
+    : await readScope(scopeId);
   const enrollment =
     scope.frontier.scopes.find((entry) => entry.scopeId === scopeId) ?? null;
-  if (enrollment === null) return null;
+  if (scope.frontier.workspaceEnrollmentId.length === 0) return null;
 
-  const targetTips = projectScopeTips(scope.frontier, scopeId, scope);
+  const targetTips = enrollment === null ? [] : projectScopeTips(scope.frontier, scopeId, scope);
   // Workspace continuity coverage is COMPLETE only when every enrolled
   // scope's tips participate: an unfinished related scope must block.
   const relatedTips: VerifiedGateTip[] = [...targetTips];
-  for (const relatedEnrollment of scope.frontier.scopes) {
+  for (const relatedEnrollment of enrollment === null ? [] : scope.frontier.scopes) {
     if (relatedEnrollment.scopeId === scopeId) continue;
     const relatedRead = await readScope(relatedEnrollment.scopeId);
     relatedTips.push(
@@ -140,12 +145,12 @@ async function observeSnapshot(
   }
 
   const gateCreated = findV2GateCreated(scope);
-  if (gateCreated === null) return null;
+  if (gateCreated === null && options.request === undefined) return null;
   const designPath = canonicalizeArtifactPath(
-    gateCreated.payload.designArtifact.canonicalPath,
+    gateCreated?.payload.designArtifact.canonicalPath ?? options.request?.designPath ?? "",
   );
   const planPath = canonicalizeArtifactPath(
-    gateCreated.payload.planArtifact.canonicalPath,
+    gateCreated?.payload.planArtifact.canonicalPath ?? options.request?.planPath ?? "",
   );
   if (designPath === null || planPath === null) return null;
   const designBytes = await workspaceReader.readWorkspaceFile(designPath);
@@ -243,7 +248,9 @@ async function observeSnapshot(
     allEnrollments: scope.frontier.scopes,
     relatedScopeTips: relatedTips,
     relatedGateHistoryFrontierHash: scope.frontier.globalFrontierHash,
-    authorizedFirstEnrollment: buildAuthorizedFirstEnrollment(
+    authorizedFirstEnrollment: enrollment === null
+      ? await owned?.readFirstEnrollmentAuthority() ?? null
+      : buildAuthorizedFirstEnrollment(
       scope.frontier,
       enrollment,
     ),
@@ -261,11 +268,32 @@ async function observeSnapshot(
     currentTips: targetTips,
     nc1Observation: "NOT_INSPECTED",
     nc1Candidate: null,
-    precedence: null,
+    precedence: buildPrecedence(targetTips, scope.frontier.globalFrontierHash),
     current,
   });
 
   return Object.freeze({ snapshot, requirementsResolution });
+}
+
+function buildPrecedence(
+  targetTips: readonly VerifiedGateTip[],
+  witnessFrontierHash: string,
+): VerifiedAdmissionPrecedenceV1 | null {
+  const tip = targetTips.find((t): t is Extract<VerifiedGateTip, { status: "active" | "suspended" }> =>
+    t.status === "active" || t.status === "suspended");
+  if (tip === undefined) return null;
+  return Object.freeze({
+    gateId: tip.gateId,
+    generationId: tip.generationId,
+    phase: tip.lastVerifiedBinding.ownDesignClear === null ? "design" : "plan",
+    verifiedLineageFrontierHash: witnessFrontierHash,
+    witnessFrontierHash,
+    completeLineageSetDigest: computeCanonicalJsonFingerprint([]),
+    currentStateProjectionEventId: tip.lastVerifiedBinding.admission.gateCreatedEventId,
+    currentUpstreamBlockers: Object.freeze([]),
+    pendingStaleLineages: Object.freeze([]),
+    relationCompleteness: "COMPLETE",
+  });
 }
 
 function projectScopeTips(

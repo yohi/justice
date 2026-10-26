@@ -12,10 +12,12 @@
 
 import { realpath } from "node:fs/promises";
 import type {
+  GateId,
   RequirementsResolutionV2,
-ReviewArtifactBinding,
-ReviewScopeId,
+  ReviewArtifactBinding,
+  ReviewScopeId,
 } from "../core/review-gate-types.js";
+import type { VerifiedReviewGateEvent } from "../core/review-gate/event-schema.js";
 import type {
   ScopeEnrollmentV1,
   VerifiedFirstEnrollmentAuthorityV1,
@@ -162,7 +164,7 @@ export type ReviewGateAdmissionExecutionResult =
       gateId: string;
       verifiedUpstreamReopen?: VerifiedUpstreamReopenContextV1;
     }>
-  | Readonly<{ kind: "MUTABLE_APPLICATION_YIELDED" }>;
+  | Readonly<{ kind: "MUTABLE_APPLICATION_YIELDED"; gateId: GateId; gateEvent: VerifiedReviewGateEvent }>;
 
 /**
  * Immutable product returned by the owned admission observer. The snapshot is

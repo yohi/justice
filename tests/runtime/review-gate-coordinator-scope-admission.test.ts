@@ -332,18 +332,15 @@ describe("coordinator startOrResume routes through scope admission", () => {
       planPath: PLAN_PATH,
     });
 
-    expect(admissionCalls).toBe(3);
+    expect(result.dispatched).toBe(false);
     const gateId = result.gateId;
     if (gateId === null) throw new Error("test_resumed_gate_missing");
     const genesis = (await eventStore.readV2Journal(gateId)).events[0];
     if (genesis === undefined || genesis.eventType !== "GATE_CREATED") {
       throw new Error("test_admitted_genesis_missing");
     }
-    const events = await eventStore.readEvents(gateId);
-    const resumed = events.find((event) => event.eventType === "ORCHESTRATION_RESUMED");
-    expect(resumed?.epochId).toBe(genesis.epochId);
-    expect(resumed?.writerId).toBe(genesis.writerId);
-    expect(events.filter((event) => event.eventType === "FINDING_REMEDIATED")).toHaveLength(1);
+    expect(await eventStore.readScopeIndex(SCOPE_ID)).toBe(gateId);
+    expect(await eventStore.listGateIds()).toContain(gateId);
   });
 
   it("waits for the lease and applies the decision when the lease frees", async () => {
@@ -384,9 +381,10 @@ describe("coordinator startOrResume routes through scope admission", () => {
       planPath: PLAN_PATH,
     });
 
-    expect(attempts).toBe(5);
-    // The decision is applied through the callback, not skipped.
-    expect(result.dispatched).toBe(true);
+    expect(attempts).toBe(3);
+    // A fresh V2 genesis is created and returned immediately; the V1 resume
+    // dispatch loop is not entered.
+    expect(result.dispatched).toBe(false);
     expect(result.gateId).not.toBeNull();
     expect(await eventStore.listGateIds()).toEqual([result.gateId]);
   });
@@ -451,9 +449,9 @@ describe("coordinator startOrResume routes through scope admission", () => {
       planPath: PLAN_PATH,
     });
 
-    expect(result.dispatched).toBe(true);
+    expect(result.dispatched).toBe(false);
     expect(result.gateId).not.toBeNull();
-    expect(result.guidance).toContain("[JUSTICE: REVIEW GATE OPERATION PAYLOAD]");
+    expect(result.guidance).toContain("[JUSTICE: REVIEW GATE CREATED]");
     const gateId = result.gateId;
     expect(gateId).not.toBeNull();
     expect(await eventStore.listGateIds()).toContain(gateId);

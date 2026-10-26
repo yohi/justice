@@ -770,9 +770,10 @@ export function createReviewGateScopeAdmission(
       throw new ScopeAdmissionBlocked("workspace_identity");
     }
 
-    // Fail closed on missing ledger membership, read under the held lease.
+    // Only an enrolled workspace with no scopes can admit its first genesis.
     const frontier = await owned.readVerifiedFrontier();
-    if (!frontier.scopes.some((scope) => scope.scopeId === scopeId)) {
+    if (!frontier.scopes.some((scope) => scope.scopeId === scopeId) &&
+      (frontier.workspaceEnrollmentId.length === 0 || frontier.scopes.length !== 0)) {
       return {
         decision: blockReason(
           "scope_not_enrolled",

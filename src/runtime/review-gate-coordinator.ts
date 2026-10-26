@@ -110,6 +110,7 @@ import type {
   ReviewGateDispatchRecordV1,
   ReviewGateEventStore,
   ReviewGateV2Journal,
+  V2CodedEvent,
 } from "./review-gate-event-store";
 import type { ReviewGateRecoveryStore } from "./review-gate-recovery-store";
 import type {
@@ -192,6 +193,18 @@ export type ReviewGateCommandResult = Readonly<{
   /** True when an exactly-matching completed gate was reused read-only. */
   readonly completedReuse: boolean;
 }>;
+
+/** Narrow a verified event to the V2 envelope that carries eventId/parentEventId. */
+function isV2CodedEvent(
+  event: VerifiedReviewGateEvent,
+): event is V2CodedEvent {
+  return (
+    "schemaVersion" in event &&
+    event.schemaVersion === 2 &&
+    "eventId" in event &&
+    typeof event.eventId === "string"
+  );
+}
 
 
 /**
@@ -2259,10 +2272,10 @@ export function createReviewGateCoordinator(
       const planArtifact = observation.snapshot.current.plan;
       const requirementsResolution = observation.requirementsResolution;
 
-      const pathPairDigest = computeCanonicalJsonFingerprint({
-        canonicalDesignPath: designArtifact.canonicalPath,
-        canonicalPlanPath: planArtifact.canonicalPath,
-      });
+      const pathPairDigest = computeCanonicalJsonFingerprint([
+        designArtifact.canonicalPath,
+        planArtifact.canonicalPath,
+      ]);
 
       let scopeEnrollment: ScopeEnrollmentV1;
       let supersedesGateId: string | null;
@@ -2416,14 +2429,11 @@ export function createReviewGateCoordinator(
         expectedGlobalFrontier: publication.expectedGlobalFrontier,
         expectedWriterHash: publication.expectedWriterHash,
       });
-
       if (commitResult !== "advanced" && commitResult !== "already_committed") {
         throw new Error("review_gate_admitted_creation_commit_blocked");
       }
-
       await eventStore.writeScopeIndex(scopeId, gateId);
-
-      return Object.freeze({ kind: "MUTABLE_APPLICATION_YIELDED" });
+      return Object.freeze({ kind: "MUTABLE_APPLICATION_YIELDED", gateId, gateEvent });
     };
 
     // Admission authority spans decision application: the callback returns the
@@ -3017,9 +3027,31 @@ export function createReviewGateCoordinator(
         }
         throw err;
       }
-      if (execution?.kind === "MUTABLE_APPLICATION_YIELDED") {
-        execution = null;
-        continue;
+      if (execution?.kind === "MUTABLE_APPLICATION_YIELDED" && isV2CodedEvent(execution.gateEvent)) {
+        const yieldedGateEvent = execution.gateEvent;
+        const journal = await eventStore.readV2Journal(execution.gateId);
+        const alreadyCreated = journal.events.some(
+          (event) => isV2CodedEvent(event) && event.eventId === yieldedGateEvent.eventId,
+        );
+        if (!alreadyCreated) {
+          await eventStore.appendV2Events(execution.gateId, [yieldedGateEvent]);
+        }
+        return Object.freeze({
+          dispatched: false,
+          gateId: execution.gateId,
+          guidance: [
+            "---",
+            "[JUSTICE: REVIEW GATE CREATED]",
+            "A new Review Gate was created. A reviewer dispatch will follow.",
+            "---",
+          ].join("\n"),
+          designPath,
+          planPath,
+          designDigest,
+          planDigest,
+          lockPhase: "reviewing",
+          completedReuse: false,
+        });
       }
       if (execution?.kind === "RESUME_ADMITTED" && !resumeDecisionNeedsRevalidation) {
         resumeDecisionNeedsRevalidation = true;
