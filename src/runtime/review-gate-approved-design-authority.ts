@@ -200,7 +200,9 @@ export function createReviewGateApprovedDesignAuthority(input: Readonly<{
   readonly eventStore: ReviewGateEventStore & Pick<DurableReviewGateEventStore, "readVerifiedScopeOwned">;
   readonly git: ReviewGateGit;
   readonly query: ReviewGateQueryService;
-  readonly admissionRequest?: ScopeAdmissionRequest;
+  readonly admissionRequest?: Omit<ScopeAdmissionRequest, "planPath"> & {
+    readonly planPath?: string;
+  };
 }>): ReviewGateApprovedDesignAuthority {
   const readBinding = async (request: {
     readonly gateId: string;
@@ -211,12 +213,24 @@ export function createReviewGateApprovedDesignAuthority(input: Readonly<{
     const gateEvents = await input.eventStore.readVerifiedEvents(request.gateId);
     const genesis = gateEvents[0] as ReadableEvent | undefined;
     const payload = genesis?.payload;
-    if (typeof payload !== "object" || payload === null || !("reviewScopeId" in payload)) return null;
+    if (
+      genesis?.eventType !== "GATE_CREATED" ||
+      genesis.gateId !== request.gateId ||
+      typeof payload !== "object" || payload === null || !("reviewScopeId" in payload)
+    ) return null;
+    const artifacts = payload.designArtifact;
+    const planArtifact = payload.planArtifact;
+    if (
+      typeof artifacts !== "object" || artifacts === null || !("canonicalPath" in artifacts) ||
+      typeof planArtifact !== "object" || planArtifact === null || !("canonicalPath" in planArtifact) ||
+      typeof planArtifact.canonicalPath !== "string"
+    ) return null;
+    const planPath = admissionRequest.planPath ?? planArtifact.canonicalPath;
     const clear = gateEvents.find((event) => (event as ReadableEvent).eventType === "DESIGN_CLEAR") as ReadableEvent | undefined;
     const operationId = clear?.payload?.approvedContextEventId;
     if (clear?.eventId === undefined || typeof operationId !== "string") return null;
     return await input.admission.withAdmissionLease(
-      { ...admissionRequest, designPath: request.designPath },
+      { ...admissionRequest, designPath: request.designPath, planPath },
       async (decision, _observation, owned) => {
         if (decision.kind === "BLOCK") return null;
         const operationBinding = await buildApprovedDesignOperationReadBinding(

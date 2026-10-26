@@ -101,31 +101,113 @@ function createTestCoordinator(
   let idSequence = 0;
   const eventStore = createInMemoryReviewGateEventStore();
   const resolvedScopeAdmission = typeof scopeAdmission === "function" ? scopeAdmission(eventStore) : scopeAdmission;
+  const lockManager = createReviewGateLockManager(`/nonexistent-test-root-${testCounter}`, {
+    provider: null,
+  });
   const protocol = createReviewGateProtocolDescriptor();
   const files = new Map([
     [DESIGN_PATH, DESIGN_CONTENT],
     [PLAN_PATH, PLAN_CONTENT],
   ]);
+  const recoveryObjects = new Map<string, Buffer>();
   const coordinator = createReviewGateCoordinator({
     eventStore,
-    lockManager: createReviewGateLockManager(`/nonexistent-test-root-${testCounter}`, {
-      provider: null,
-    }),
+    lockManager,
     protocol,
     workspaceReader: createMapReviewWorkspaceReader(files),
     workspaceRoot: `/nonexistent-test-root-${testCounter}`,
     workspaceIdentity: "test-workspace-identity",
     mutationSubstrate: null,
     scopeAdmission: resolvedScopeAdmission,
+    recoveryStore: {
+      publish: async (digest, bytes) => {
+        if (recoveryObjects.has(digest)) return "exists";
+        recoveryObjects.set(digest, Buffer.from(bytes));
+        return "created";
+      },
+      read: async (digest) => recoveryObjects.get(digest) ?? null,
+      list: async () => [...recoveryObjects.keys()],
+      close: () => undefined,
+    },
     inspectTargets: async (paths) =>
       new Map(paths.map((path) => [path, "clean_committed" as const])),
     now: () => "2026-10-13T00:00:00.000Z",
     newId: () => `test-id-${++idSequence}`,
   });
-  return { coordinator, eventStore };
+  return { coordinator, eventStore, lockManager };
 }
 
 describe("coordinator startOrResume routes through scope admission", () => {
+  it("releases the shared session locks while preparing an approved Plan binding", async () => {
+    const sharedLocks: { manager?: ReturnType<typeof createReviewGateLockManager> } = {};
+    let admissionCalls = 0;
+    const { coordinator, eventStore, lockManager: manager } = createTestCoordinator(() => ({
+      withAdmissionLease: async (_request, run) => {
+        admissionCalls += 1;
+        if (admissionCalls === 5) {
+          const scopeLock = await sharedLocks.manager?.acquireScopeLock(SCOPE_ID);
+          expect(scopeLock).not.toBe("occupied");
+          if (scopeLock !== undefined && scopeLock !== "occupied") scopeLock.release();
+          const gateLock = await sharedLocks.manager?.acquireGateLock("legacy-gate");
+          expect(gateLock).not.toBe("occupied");
+          if (gateLock !== undefined && gateLock !== "occupied") gateLock.release();
+          return run({ kind: "BLOCK", reason: "scope_not_enrolled", detail: "blocked" }, null, mockOwnedWitness(eventStore));
+        }
+        return run({ kind: "RESUME", gateId: "legacy-gate", generationId: "legacy-v1", witnessFrontierHash: "frontier-1" }, null, mockOwnedWitness(eventStore));
+      },
+    }));
+    sharedLocks.manager = manager;
+    const observation = createGenesisObservation();
+    const identity = {
+      gateId: "legacy-gate" as import("../../src/core/review-gate-types").GateId,
+      writerId: "legacy-writer" as import("../../src/core/review-gate-types").WriterId,
+      epochId: "legacy-epoch" as import("../../src/core/review-gate-types").EpochId,
+      emittedAt: "2026-10-13T00:00:00.000Z",
+    };
+    await eventStore.appendEvents("legacy-gate", [
+      {
+        ...identity,
+        eventType: "GATE_CREATED",
+        payload: {
+          reviewScopeId: SCOPE_ID,
+          designArtifact: observation.snapshot.current.design,
+          planArtifact: observation.snapshot.current.plan,
+          requirementsResolution: {
+            source: "auto_design_reference",
+            canonicalPath: DESIGN_PATH,
+            digest: observation.snapshot.current.design.digest,
+          },
+          reviewProtocolFingerprint: observation.snapshot.current.globalProtocolFingerprint,
+        },
+      },
+      {
+        ...identity,
+        eventType: "DESIGN_CLEAR",
+        payload: { designProtocolFingerprint: observation.snapshot.current.designProtocolFingerprint },
+      },
+    ]);
+
+    await coordinator.startOrResume("shared-lock-session", {
+      source: "command", designPath: DESIGN_PATH, planPath: PLAN_PATH,
+    });
+    const resumed = await coordinator.startOrResume("shared-lock-session", {
+      source: "command", designPath: DESIGN_PATH, planPath: PLAN_PATH,
+    });
+    expect(resumed.gateId).toBe("legacy-gate");
+    await expect(coordinator.prepareCallerOperation("shared-lock-session", {
+      kind: "dispatch_reviewer", phase: "plan",
+    })).rejects.toThrow("review_gate_approved_design_proof_unavailable");
+    expect(admissionCalls).toBe(5);
+
+    coordinator.releaseSession("shared-lock-session");
+    const scopeLock = await manager.acquireScopeLock(SCOPE_ID);
+    expect(scopeLock).not.toBe("occupied");
+    if (scopeLock !== "occupied") scopeLock?.release();
+    const gateLock = await manager.acquireGateLock("legacy-gate");
+    expect(gateLock).not.toBe("occupied");
+    if (gateLock !== "occupied") gateLock?.release();
+  });
+
   it("returns a blocked result when scope admission blocks", async () => {
     const { coordinator } = createTestCoordinator(
       createMockScopeAdmission({

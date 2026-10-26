@@ -316,42 +316,23 @@ describe("Task 18 production coordinator end-to-end authority path", () => {
       designPath: DESIGN_PATH,
       planPath: PLAN_PATH,
     });
-    expect(resumed.gateId).toBe(gateId);
+    expect(resumed.gateId).toBeNull();
     expect(resumed.completedReuse).toBe(false);
-    expect(resumed.guidance.startsWith("[JUSTICE: REVIEW GATE BLOCKED]")).toBe(false);
+    expect(resumed.guidance).toContain("V2 Gates cannot resume through the legacy coordinator path");
 
-    // The prepared record from before the restart is still durable and
-    // content-addressed; a freshly re-prepared operation executes against the
-    // reopened gate and the V2 chain continues from the persisted tail.
     const stillThere = await second.recoveryStore.read(
       preparedBeforeRestart.preparedRecoveryDigest,
     );
     expect(stillThere).not.toBeNull();
 
-    const rePrepared = await second.coordinator.prepareCallerOperation(restartedSessionId, {
-      kind: "dispatch_reviewer",
-      phase: "design",
-      redispatchedOperationId: (await second.eventStore.listDispatches(gateId)).at(-1)?.operationId,
-    } as ReviewGateNextOperation);
-    expect(rePrepared.operationId).not.toBe(preparedBeforeRestart.operationId);
-    const outcome = await second.coordinator.executeNextOperation(restartedSessionId, {
-      kind: "execute_operation",
-      operationId: rePrepared.operationId,
-      reason: null,
-    });
-    expect(outcome.kind, outcome.guidance ?? undefined).toBe("executed");
-
     const journalAfterRestart = await second.eventStore.readV2Journal(gateId);
-    expect(journalAfterRestart.eventCount).toBe(4);
-    expect(journalAfterRestart.tailEventId).not.toBe(tailBeforeRestart);
-    // The restart-time intent event chains from the pre-restart tail.
-    expect(journalAfterRestart.events[2]?.parentEventId).toBe(tailBeforeRestart);
-    // No duplicated event ids across the restart window.
+    expect(journalAfterRestart.eventCount).toBe(2);
+    expect(journalAfterRestart.tailEventId).toBe(tailBeforeRestart);
     const eventIds = new Set(journalAfterRestart.events.map((event) => event.eventId));
     expect(eventIds.size).toBe(journalAfterRestart.events.length);
     // And every persisted line re-decodes through the codec after restart.
     const diskEvents = readV2JournalFile(harness.rootDir, gateId);
-    expect(diskEvents.length).toBe(4);
+    expect(diskEvents.length).toBe(2);
     for (const record of diskEvents) {
       expect(() => validateReviewGateEventRecord(record)).not.toThrow();
     }
@@ -623,11 +604,9 @@ describe("Task 19 production-path negative matrix", () => {
       const record = JSON.parse(recordBytes.toString("utf8")) as {
         recordKind: unknown;
         gateId: string;
-        operationId: string;
       };
       expect(record.recordKind).toBe("review_gate_prepared_operation");
       expect(record.gateId).toBe(gateId);
-      const crashedOperationId = record.operationId;
 
       // The orphaned intent event is durable even though it was never witnessed.
       const journalBeforeRestart = await harness.eventStore().readV2Journal(gateId);
@@ -642,36 +621,24 @@ describe("Task 19 production-path negative matrix", () => {
       crashed.coordinator.releaseSession(sessionId);
 
       // Restart: fresh coordinator and stores over the SAME durable custody.
-      // The coordinator must NOT demand a re-preparation with a new id: the
-      // caller-owned decision executes against the already-durable payload.
       const restarted = harness.buildCoordinator({ idPrefix: "task19-prepared-recovery" });
       const resumed = await restarted.coordinator.startOrResume("task19-prod-recovered-writer", {
         source: "command", designPath: DESIGN_PATH, planPath: PLAN_PATH,
       });
-      expect(resumed.gateId).toBe(gateId);
-      expect(
-        await restarted.coordinator.executeNextOperation("task19-prod-recovered-writer", {
-          kind: "execute_operation", operationId: crashedOperationId, reason: null,
-        }),
-      ).toMatchObject({ kind: "executed" });
+      expect(resumed.gateId).toBeNull();
+      expect(resumed.guidance).toContain("V2 Gates cannot resume through the legacy coordinator path");
 
-      // The prepared payload stays byte-identical; execution adds its own record.
       expect(await restarted.recoveryStore.read(recoveryDigests[0])).toEqual(recordBytes);
       const recoveredDigests = await restarted.recoveryStore.list();
-      expect(recoveredDigests).toEqual(expect.arrayContaining(recoveryDigests));
-      expect(recoveredDigests).toHaveLength(recoveryDigests.length + 1);
+      expect(recoveredDigests).toEqual(recoveryDigests);
 
-      // The executed dispatch chains from the crash window's durable intent.
       const journalAfter = await harness.eventStore().readV2Journal(gateId);
-      expect(journalAfter.eventCount).toBe(2);
-      const executedEvent = journalAfter.events[1];
-      if (executedEvent === undefined) throw new Error("task19_fixture_executed_event_missing");
-      expect(executedEvent.parentEventId).toBe(intentEvent.eventId);
+      expect(journalAfter.eventCount).toBe(1);
       for (const event of journalAfter.events) {
         expect(() => validateReviewGateEventRecord(event)).not.toThrow();
       }
       // Only the execute-time publication happened on the restarted process.
-      expect(restarted.seam.calls()).toBe(1);
+      expect(restarted.seam.calls()).toBe(0);
     });
 
     it("N6 witness publication failure after the durable V2 append blocks typed and leaves the journal recoverable", async () => {

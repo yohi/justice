@@ -1884,6 +1884,7 @@ readVerifiedPhaseProtocolDelta: async () => "BLOCK",
       workspaceIdentity,
       mutationSubstrate,
       scopeAdmission,
+      approvedDesignReadDependencies: { eventStore, git: reviewGateGit },
       // Task 17 — durable custody for caller-owned routing decisions.
       recoveryStore,
       inspectTargets: async (paths) =>
@@ -1905,10 +1906,10 @@ readVerifiedPhaseProtocolDelta: async () => "BLOCK",
     const approval = createReviewGateApprovalLookup({ eventStore, workspaceReader, protocol, workspaceRoot: root });
     const query = createReviewGateQueryService({ rootDir: root, workspaceReader });
     const approvedDesignAuthority: ReviewGateApprovedDesignAuthority = Object.freeze({
-      getApprovedDesignBinding: async ({ gateId, designPath }: Parameters<ReviewGateApprovedDesignAuthority["getApprovedDesignBinding"]>[0]) => {
-        const events = await eventStore.readVerifiedEvents(gateId);
-        const genesis = events[0];
-        if (genesis?.eventType !== "GATE_CREATED" || genesis.payload.designArtifact.canonicalPath !== designPath) return null;
+      getApprovedDesignBinding: async ({ gateId, designPath, sessionId }: Parameters<ReviewGateApprovedDesignAuthority["getApprovedDesignBinding"]>[0]) => {
+        if (sessionId !== undefined) {
+          return coordinator.getApprovedDesignReadBinding(sessionId, gateId, designPath);
+        }
         const authority = createReviewGateApprovedDesignAuthority({
           admission: scopeAdmission,
           eventStore,
@@ -1918,7 +1919,6 @@ readVerifiedPhaseProtocolDelta: async () => "BLOCK",
             workspaceRoot: root,
             workspaceIdentity,
             designPath,
-            planPath: genesis.payload.planArtifact.canonicalPath,
             protocol,
           },
         });

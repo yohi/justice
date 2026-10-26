@@ -292,7 +292,7 @@ function buildPrecedence(
     currentStateProjectionEventId: tip.lastVerifiedBinding.admission.gateCreatedEventId,
     currentUpstreamBlockers: Object.freeze([]),
     pendingStaleLineages: Object.freeze([]),
-    relationCompleteness: "COMPLETE",
+    relationCompleteness: "INDETERMINATE",
   });
 }
 

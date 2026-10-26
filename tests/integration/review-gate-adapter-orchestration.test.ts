@@ -125,4 +125,29 @@ it("blocks history and approved-Design reads when the trusted witness is unavail
   expect(started.gateId).toBeUndefined();
   expect(started.guidance).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
   expect(planBridge.getReviewGateLock("main")).toBeUndefined();
+
+  const historyOutput: Parameters<OpenCodeAdapter["onCommandExecuteBefore"]>[1] = {
+    parts: [{ type: "text", text: "history request" }],
+  };
+  await adapter.onCommandExecuteBefore(
+    {
+      command: "justice-review-history",
+      sessionID: "main",
+      arguments: "--gate unavailable-gate",
+    },
+    historyOutput,
+  );
+  const historyPart = historyOutput.parts[0];
+  expect(historyPart).toHaveProperty("text");
+  if (historyPart === undefined || !("text" in historyPart)) throw new Error("missing history result");
+  expect(historyPart.text).toContain("[JUSTICE: REVIEW HISTORY UNAVAILABLE]");
+
+  const readResult = await planBridge.executeReviewerScopedQuery("main", {
+    kind: "artifact_read",
+    path: DESIGN_PATH,
   });
+  expect(JSON.parse(readResult)).toEqual({
+    status: "ERROR",
+    reason: "review_operation_not_permitted",
+  });
+});

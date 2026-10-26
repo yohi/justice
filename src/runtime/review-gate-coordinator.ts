@@ -37,6 +37,7 @@ import type {
 } from "../core/review-gate-types";
 import type { HookEvent, HookResponse } from "../core/types";
 import type { ReviewGateRequest } from "../core/review-gate-command";
+import type { VerifiedApprovedDesignReadBindingV1 } from "../core/review-gate/capabilities";
 import {
   PACKET_PAYLOAD_MARKER,
   parseReviewGateOperationResult,
@@ -113,6 +114,7 @@ import type {
   V2CodedEvent,
 } from "./review-gate-event-store";
 import type { ReviewGateRecoveryStore } from "./review-gate-recovery-store";
+import type { ReviewGateGit } from "./review-gate-git";
 import type {
   ReviewGateWitnessPublicationSeamV1,
 } from "./review-gate-witness-contracts";
@@ -288,6 +290,10 @@ export interface ReviewGateCoordinatorOptions {
   readonly newId?: () => string;
   readonly newWriterId?: () => string;
   readonly scopeAdmission?: ReviewGateScopeAdmission | null;
+  readonly approvedDesignReadDependencies?: Readonly<{
+    readonly eventStore: ReviewGateEventStore & Pick<DurableReviewGateEventStore, "readVerifiedScopeOwned">;
+    readonly git: ReviewGateGit;
+  }>;
   /**
    * Task 17 — durable custody for prepared caller-owned operations. `null`
    * selects caller-routing-unavailable mode: `execute_operation` decisions
@@ -319,6 +325,11 @@ export interface ReviewGateCoordinator {
     use: ScopedReviewToolUse,
   ) => ReviewCapabilityDecision | undefined;
   readonly releaseSession: (sessionId: string) => void;
+  readonly getApprovedDesignReadBinding: (
+    sessionId: string,
+    gateId: string,
+    designPath: string,
+  ) => VerifiedApprovedDesignReadBindingV1 | null;
   
   /**
    * Task 17 — register a caller-provided planned operation as a durable
@@ -419,9 +430,9 @@ const isNonEmptyString = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0;
 
 const isDigest = (value: unknown): value is string =>
-  typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+  typeof value === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(value);
 
-const isApprovedDesignOperationReadBinding = (
+export const isApprovedDesignOperationReadBinding = (
   value: unknown,
 ): value is ApprovedDesignOperationReadBinding => {
   if (!isPlainObjectRecord(value)) return false;
@@ -1815,29 +1826,53 @@ export function createReviewGateCoordinator(
       if (scopeAdmission === null || workspaceRoot === null || workspaceIdentity === null) {
         throw new Error("review_gate_approved_design_proof_unavailable");
       }
-      const result = await scopeAdmission.withAdmissionLease(
-        {
-          workspaceRoot,
-          workspaceIdentity,
-          designPath: session.designPath,
-          planPath: session.planPath,
-          protocol,
-        },
-        async (decision, _observation, owned) => {
-          if (decision.kind === "BLOCK") return null;
-          const events = await eventStore.readVerifiedEvents(session.gateId);
-          const clear = events.find((event) => event.eventType === "DESIGN_CLEAR");
-          if (clear === undefined || !("eventId" in clear)) return null;
-          return buildApprovedDesignOperationReadBinding(
-            owned,
-            {
-              gateId: session.gateId,
-              operationId: clear.eventId,
-              designPath: session.designPath,
-            },
-          );
-        },
+      const activeSession = dropSession(sessionId);
+      if (activeSession !== session) throw new Error("review_gate_session_not_active");
+      releaseHandles(session);
+      let result: ApprovedDesignOperationReadBinding | null = null;
+      let admissionError: unknown;
+      try {
+        result = await scopeAdmission.withAdmissionLease(
+          {
+            workspaceRoot,
+            workspaceIdentity,
+            designPath: session.designPath,
+            planPath: session.planPath,
+            protocol,
+          },
+          async (decision, _observation, owned) => {
+            if (decision.kind === "BLOCK") return null;
+            const events = await eventStore.readVerifiedEvents(session.gateId);
+            const clear = events.find((event) => event.eventType === "DESIGN_CLEAR");
+            if (clear === undefined || !("eventId" in clear)) return null;
+            return buildApprovedDesignOperationReadBinding(
+              owned,
+              {
+                gateId: session.gateId,
+                operationId: clear.eventId,
+                designPath: session.designPath,
+              },
+              options.approvedDesignReadDependencies,
+            );
+          },
+        );
+      } catch (error: unknown) {
+        admissionError = error;
+      }
+      const reacquired = await acquireGateLockChain(
+        lockManager,
+        computeReviewScopeId(session.designPath, session.planPath),
+        session.gateId,
       );
+      if (reacquired.kind === "occupied") {
+        throw new Error("review_gate_session_lock_reacquisition_blocked");
+      }
+      registerSession({
+        ...session,
+        scopeLock: reacquired.scopeLock,
+        gateLock: reacquired.gateLock,
+      });
+      if (admissionError !== undefined) throw admissionError;
       if (result === null) throw new Error("review_gate_approved_design_proof_unavailable");
       approvedDesignBinding = result;
     }
@@ -3004,15 +3039,21 @@ export function createReviewGateCoordinator(
     // Contention waits for the lease (bounded); it never skips admission.
     let execution: ReviewGateAdmissionExecutionResult | null = null;
     let resumeDecisionNeedsRevalidation = false;
-    for (let attempt = 0; attempt < ADMISSION_LEASE_WAIT_ATTEMPTS; attempt += 1) {
+    let leaseWaitAttempts = 0;
+    let resumeRevalidationAttempts = 0;
+    while (
+      leaseWaitAttempts < ADMISSION_LEASE_WAIT_ATTEMPTS &&
+      resumeRevalidationAttempts < 2
+    ) {
       try {
         execution = await applyDecision();
       } catch (err) {
         if (
           err instanceof ScopeAdmissionBlocked &&
           err.code === "scope_lease_occupied" &&
-          attempt + 1 < ADMISSION_LEASE_WAIT_ATTEMPTS
+          leaseWaitAttempts + 1 < ADMISSION_LEASE_WAIT_ATTEMPTS
         ) {
+          leaseWaitAttempts += 1;
           await new Promise<void>((resolve) => {
             setTimeout(resolve, ADMISSION_LEASE_WAIT_MS);
           });
@@ -3054,6 +3095,7 @@ export function createReviewGateCoordinator(
         });
       }
       if (execution?.kind === "RESUME_ADMITTED" && !resumeDecisionNeedsRevalidation) {
+        resumeRevalidationAttempts += 1;
         resumeDecisionNeedsRevalidation = true;
         execution = null;
         continue;
@@ -3122,6 +3164,17 @@ export function createReviewGateCoordinator(
         lockPhase: "remediation",
         completedReuse: false,
       });
+    }
+
+    const v2Journal = await eventStore.readV2Journal(gateId);
+    if (v2Journal.eventCount > 0) {
+      chain.scopeLock.release();
+      chain.gateLock.release();
+      return blockedResult(
+        designPath,
+        planPath,
+        "[JUSTICE: REVIEW GATE BLOCKED] V2 Gates cannot resume through the legacy coordinator path.",
+      );
     }
 
     const projection = await loadProjection(gateId);
@@ -3853,12 +3906,27 @@ export function createReviewGateCoordinator(
     releaseHandles(state);
   };
 
+  const getApprovedDesignReadBinding = (
+    sessionId: string,
+    gateId: string,
+    designPath: string,
+  ): VerifiedApprovedDesignReadBindingV1 | null => {
+    const session = sessions.get(sessionId);
+    const binding = session?.approvedDesignBinding;
+    if (
+      binding === null || binding === undefined ||
+      binding.gateId !== gateId || binding.canonicalPath !== designPath
+    ) return null;
+    return binding.approvedDesign ?? null;
+  };
+
   return Object.freeze({
     startOrResume: driveReviewGateAdmission,
     preToolUse,
     postToolUse,
     classifyToolUse,
     releaseSession,
+    getApprovedDesignReadBinding,
     prepareCallerOperation,
     executeNextOperation,
   });

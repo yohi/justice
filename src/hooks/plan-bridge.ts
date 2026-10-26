@@ -209,6 +209,7 @@ export interface ReviewGateApprovedDesignAuthority {
   readonly getApprovedDesignBinding: (input: {
     readonly gateId: string;
     readonly designPath: string;
+    readonly sessionId?: string;
   }) => Promise<VerifiedApprovedDesignReadBindingV1 | null>;
   readonly readApprovedDesignArtifact: (input: {
     readonly approvedDesign: VerifiedApprovedDesignReadBindingV1;
@@ -600,6 +601,7 @@ export class PlanBridge {
       const approvedDesign = await authority.getApprovedDesignBinding({
         gateId: lock.gateId,
         designPath: lock.designPath,
+        sessionId,
       });
       if (approvedDesign === null) return null;
       return buildReviewQueryScope("plan", {
@@ -669,6 +671,7 @@ export class PlanBridge {
         const binding = await authority.getApprovedDesignBinding({
           gateId: lock.gateId,
           designPath: lock.designPath,
+          sessionId,
         });
         if (binding === null || lock.planPath === null) {
           return { kind: "denied", reason: "review_operation_not_permitted" };

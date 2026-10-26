@@ -39,8 +39,12 @@ describe("approved Design query facade integration", () => {
       phaseProtocolFingerprint: "protocol-current",
       witnessFrontierHash: "f".repeat(64),
     };
+    let authoritySessionId: string | undefined;
     const authority: ReviewGateApprovedDesignAuthority = {
-      getApprovedDesignBinding: async () => binding,
+      getApprovedDesignBinding: async ({ sessionId }) => {
+        authoritySessionId = sessionId;
+        return binding;
+      },
       readApprovedDesignArtifact: async () => APPROVED_D0,
       searchApprovedDesignArtifact: async ({ pattern }) =>
         APPROVED_D0.toString("utf8").includes(pattern) ? [{ line: 1, text: "approved D0 bytes" }] : [],
@@ -57,6 +61,7 @@ describe("approved Design query facade integration", () => {
     const status = JSON.parse(await bridge.executeReviewerScopedQuery("root", { kind: "status" })) as Record<string, unknown>;
     const diff = JSON.parse(await bridge.executeReviewerScopedQuery("root", { kind: "diff", staged: true })) as Record<string, unknown>;
     expect(read).toEqual({ status: "OK", authority: "approved_D0", content: "approved D0 bytes\n" });
+    expect(authoritySessionId).toBe("root");
     expect(status).toMatchObject({ authority: "unapproved_D1_diagnostic", result: statusValue });
     expect(diff).toMatchObject({ authority: "unapproved_D1_diagnostic", result: { staged: true, patch: "D1 staged patch" } });
   });

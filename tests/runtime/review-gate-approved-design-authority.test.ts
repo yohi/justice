@@ -163,4 +163,54 @@ describe("approved Design authority", () => {
     expect(eventStore.readVerifiedEvents).not.toHaveBeenCalled();
   });
 
+  it("resolves the omitted Plan path from the single verified Gate history read", async () => {
+    const events = [
+      {
+        eventType: "GATE_CREATED",
+        gateId: "gate-1",
+        payload: {
+          reviewScopeId: "scope-1",
+          designArtifact: { canonicalPath: binding.canonicalPath },
+          planArtifact: { canonicalPath: "docs/plan.md" },
+        },
+      },
+      {
+        eventType: "DESIGN_CLEAR",
+        eventId: binding.designClearEventId,
+        gateId: "gate-1",
+        payload: { approvedContextEventId: "operation-1" },
+      },
+    ];
+    const eventStore = {
+      readVerifiedEvents: vi.fn(async () => events),
+    } as unknown as DurableReviewGateEventStore;
+    let observedPlanPath: string | undefined;
+    const admission = {
+      withAdmissionLease: async (request: { readonly planPath: string }, run: (decision: never) => Promise<null>) => {
+        observedPlanPath = request.planPath;
+        return run({ kind: "BLOCK", reason: "scope_not_enrolled", detail: "blocked" } as never);
+      },
+    } as unknown as ReviewGateScopeAdmission;
+    const authority = createReviewGateApprovedDesignAuthority({
+      admission,
+      eventStore,
+      git: {} as ReviewGateGit,
+      query: {} as ReviewGateQueryService,
+      admissionRequest: {
+        workspaceRoot: "/workspace",
+        workspaceIdentity: "workspace-identity",
+        designPath: binding.canonicalPath,
+        protocol: {} as never,
+      },
+    });
+
+    await expect(authority.getApprovedDesignBinding({
+      gateId: "gate-1",
+      designPath: binding.canonicalPath,
+    })).resolves.toBeNull();
+
+    expect(observedPlanPath).toBe("docs/plan.md");
+    expect(eventStore.readVerifiedEvents).toHaveBeenCalledTimes(1);
+  });
+
 });
