@@ -5,6 +5,7 @@ import type { DurableReviewGateEventStore, VerifiedScopeRead } from "../../src/r
 import type { ReviewGateGit } from "../../src/runtime/review-gate-git.js";
 import type { ReviewGateQueryService } from "../../src/runtime/review-gate-query.js";
 import type { ReviewGateScopeAdmission } from "../../src/runtime/review-gate-scope-admission.js";
+import { createReviewGateLockManager } from "../../src/runtime/review-gate-lock-manager.js";
 import {
   buildApprovedDesignOperationReadBinding,
   createReviewGateApprovedDesignAuthority,
@@ -103,11 +104,28 @@ describe("approved Design authority", () => {
         headBlobDigest: binding.digest,
       })),
     } as unknown as ReviewGateGit;
-    const result = await buildApprovedDesignOperationReadBinding(owned, {
-      gateId: "gate-1",
-      operationId: "operation-1",
-      designPath: binding.canonicalPath,
-    }, { eventStore, git });
+    const lockManager = createReviewGateLockManager("approved-design-owned-read", { provider: null });
+    const scopeLock = await lockManager.acquireScopeLock("scope-1");
+    const gateLock = await lockManager.acquireGateLock("gate-1");
+    expect(scopeLock).not.toBe("occupied");
+    expect(gateLock).not.toBe("occupied");
+    if (scopeLock === "occupied") throw new Error("shared scope lock must be acquired for owned read");
+    if (gateLock === "occupied") {
+      scopeLock.release();
+      throw new Error("shared Gate lock must be acquired for owned read");
+    }
+    let result: Awaited<ReturnType<typeof buildApprovedDesignOperationReadBinding>>;
+    try {
+      result = await buildApprovedDesignOperationReadBinding(owned, {
+        gateId: "gate-1",
+        operationId: "operation-1",
+        designPath: binding.canonicalPath,
+      }, { eventStore, git });
+    } finally {
+      gateLock.release();
+      scopeLock.release();
+      lockManager.close();
+    }
 
     expect(result).toEqual({
       gateId: "gate-1",
