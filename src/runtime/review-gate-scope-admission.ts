@@ -770,6 +770,31 @@ export function createReviewGateScopeAdmission(
       throw new ScopeAdmissionBlocked("workspace_identity");
     }
 
+    const transaction = await owned.read();
+    const workspace = transaction.data.workspaces[request.workspaceIdentity];
+    const authorizationEventId = workspace?.authorization.authority.authorizationEventId;
+    if (
+      (workspace?.enrollmentState === "pending" ||
+        workspace?.enrollmentState === "consumed") &&
+      authorizationEventId !== undefined
+    ) {
+      const preparedGenesis = Object.values(transaction.data.pending).find((record) =>
+        record.input.workspaceIdentity === request.workspaceIdentity &&
+        record.input.firstEnrollmentAuthorizationId === authorizationEventId &&
+        record.input.nextFrontier.scopes.some((scope) =>
+          scope.scopeId === scopeId && scope.provenance.kind === "verified_genesis",
+        ),
+      );
+      if (preparedGenesis !== undefined) {
+        const recovered = await owned.recoverPreparedPublication(
+          preparedGenesis.input.publicationId,
+        );
+        if (recovered === "blocked") {
+          throw new ScopeAdmissionBlocked("protected_frontier");
+        }
+      }
+    }
+
     // Only an enrolled workspace with no scopes can admit its first genesis.
     const frontier = await owned.readVerifiedFrontier();
     if (!frontier.scopes.some((scope) => scope.scopeId === scopeId) &&

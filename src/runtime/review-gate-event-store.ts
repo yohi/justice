@@ -1891,7 +1891,6 @@ export function createReviewGateEventStore(
       const trustedEnrollment = current.data.workspaces[workspaceIdentity]?.authorization;
       if (trustedEnrollment === undefined)
         throw new Error("review_gate_first_enrollment_missing");
-      await owned.consumeFirstEnrollmentAuthority(authority.authorizationEventId);
       const { publication, bytes } = await buildPublication({
         scopeId: input.scopeId,
         gateId: input.gateId,

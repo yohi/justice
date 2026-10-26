@@ -1457,7 +1457,7 @@ describe("ReviewGateEventStore — tamper and crash recovery (Task 6)", () => {
       closeWitnessFixture(ctx);
     });
 
-    it("creates one witnessed V2 genesis from authorized pending enrollment", async () => {
+    it("recovers a prepared V2 genesis before consuming its authority", async () => {
       const ctx = await freshContext("admitted-genesis");
       const store = createReviewGateEventStore(
         ctx.root,
@@ -1588,24 +1588,24 @@ describe("ReviewGateEventStore — tamper and crash recovery (Task 6)", () => {
           expect(prepared.gateId).toBe(membership.gateId);
           expect(prepared.operationId).toBe(membership.operationId);
           expect(prepared.newWriterSequence).toBe(1);
-          expect(prepared.firstEnrollmentAuthorizationId).toBe(firstEnrollment.authority.authorizationEventId);
-          await expect(store.prepareAdmittedGenerationPublication(input, owned)).rejects.toThrow();
-          return { publication: prepared, gateEvent };
+          expect(prepared.firstEnrollmentAuthorizationId).toBe(
+            firstEnrollment.authority.authorizationEventId,
+          );
+          expect(await owned.readFirstEnrollmentAuthority()).toBeNull();
+          const stagedRegistry = await owned.read();
+          expect(
+            stagedRegistry.data.workspaces[frontier.workspaceIdentity]?.enrollmentState,
+          ).toBe("consumed");
+          expect(stagedRegistry.data.pending[prepared.publicationId]?.input.gateId).toBe(
+            membership.gateId,
+          );
+          expect(await owned.recoverPreparedPublication(prepared.publicationId)).toBe("advanced");
+          return gateEvent;
         },
       );
-      const publication = preparedResult.publication;
-      const staged = await ctx.witness.readPreparedPublication(publication.publicationId);
-      expect(staged.bytes.toString("utf8")).toBe(
-        `${encodeReviewGateEventRecord(preparedResult.gateEvent)}\n`,
-      );
-      expect(publication.newWriterHash).toBe(computeArtifactDigest(staged.bytes));
-      expect(publication.publicationId).toBe(computeCanonicalJsonFingerprint({
-        scopeId,
-        gateId: publication.gateId,
-        writerId: publication.writerId,
-        operationId: publication.operationId,
-        newTailDigest: publication.newTailDigest,
-      }));
+      expect(preparedResult.eventType).toBe("GATE_CREATED");
+      const committedFrontier = await ctx.witness.readWorkspaceScopeFrontier();
+      expect(committedFrontier.scopes.some((scope) => scope.scopeId === scopeId)).toBe(true);
       store.close();
       closeWitnessFixture(ctx);
     });

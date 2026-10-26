@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PlanBridge } from "../../src/hooks/plan-bridge";
 import type {
   ReviewGateApprovedDesignAuthority,
@@ -521,15 +521,21 @@ describe("PlanBridge FDR-014 approved Design read boundary", () => {
     expect(diff).toMatchObject({ status: "OK", authority: "unapproved_D1_diagnostic", result: { staged: true } });
   });
 
-  it("builds the plan reviewer scope through the validated approved design proof", async () => {
+  it("builds the plan reviewer scope through the session-owned approved design proof", async () => {
     const { bridge } = createLockHarness(false);
-    bridge.setReviewGateApprovedDesignAuthority(fakeAuthority());
+    const getApprovedDesignBinding = vi.fn(async () => APPROVED_DESIGN_BINDING);
+    bridge.setReviewGateApprovedDesignAuthority(fakeAuthority({ getApprovedDesignBinding }));
     await bridge.handleReviewGateStart("parent", {
       source: "command",
       designPath: DESIGN_PATH,
       planPath: PLAN_PATH,
     });
     const scope = await bridge.buildPlanReviewerQueryScope("parent");
+    expect(getApprovedDesignBinding).toHaveBeenCalledWith({
+      gateId: bridge.getReviewGateLock("parent")?.gateId,
+      designPath: DESIGN_PATH,
+      sessionId: "parent",
+    });
     expect(scope?.phase).toBe("plan");
     expect(scope?.approvedDesign?.canonicalPath).toBe(DESIGN_PATH);
     expect(scope?.approvedDesign?.blobOid).toBe("b".repeat(64));

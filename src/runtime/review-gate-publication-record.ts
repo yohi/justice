@@ -103,6 +103,16 @@ export async function preparePublicationUnlocked(
     )
   )
     throw new WitnessBlocked("publication_busy");
+  const workspace = current.data.workspaces[input.workspaceIdentity];
+  if (
+    input.firstEnrollmentAuthorizationId !== null &&
+    (workspace === undefined ||
+      workspace.authorization.authority.authorizationEventId !==
+        input.firstEnrollmentAuthorizationId ||
+      (workspace.enrollmentState !== "pending" && workspace.enrollmentState !== "consumed"))
+  ) {
+    throw new WitnessBlocked("nonce_consumed");
+  }
   await validatePublication(context, current, input, bytes);
   await context.store.writeBytes(`stage-${input.newWriterHash}.bin`, Buffer.from(bytes), true);
   await context.store.advance("scope", current, {
@@ -116,6 +126,18 @@ export async function preparePublicationUnlocked(
         preparedRevision: current.revision + 1,
       },
     },
+    ...(input.firstEnrollmentAuthorizationId !== null && workspace?.enrollmentState === "pending"
+      ? {
+          workspaces: {
+            ...current.data.workspaces,
+            [input.workspaceIdentity]: { ...workspace, enrollmentState: "consumed" as const },
+          },
+          nonces: {
+            ...current.data.nonces,
+            [workspace.authorization.workflowNonce]: "consumed" as const,
+          },
+        }
+      : {}),
   });
   return "prepared";
 }
@@ -204,6 +226,12 @@ export async function commitPublicationUnlocked(
         enrollmentState: "committed",
       },
     },
+    nonces: workspace.enrollmentState === "pending"
+      ? {
+          ...current.data.nonces,
+          [workspace.authorization.workflowNonce]: "consumed",
+        }
+      : current.data.nonces,
   });
   const retainedPublicationFiles = new Set<string>();
   for (const record of Object.values(pending)) {
