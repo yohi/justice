@@ -1,6 +1,4 @@
 import { createPrivateKey, createPublicKey, randomUUID, sign } from "node:crypto";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import {
   canonicalizeArtifactPath,
   computeCanonicalJsonFingerprint,
@@ -15,6 +13,8 @@ import {
 } from "./review-gate-witness-context.js";
 import { firstEnrollmentSchema } from "./review-gate-witness-registry.js";
 import { hostProofValid } from "./review-gate-witness-installation.js";
+import { runGitLiteral } from "./review-gate-query.js";
+import { parseBlobTreeEntry } from "./review-gate-head-artifact.js";
 import {
   verifyProvisionerSignature,
   scopeInstallationIdSchema,
@@ -168,37 +168,34 @@ export async function validateFirstEnrollmentUnderAdmission(
       throw new WitnessBlocked("enrollment_snapshot_mismatch");
   }
 
-  const git = promisify(execFile);
-  const env = Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
-  );
-  const prefix = [
+  const headTree = await runGitLiteral(context.options.workspaceRoot, [
+    "ls-tree",
+    "-z",
+    "-r",
+    "HEAD",
+    "--",
+    designPath,
+    planPath,
+  ]);
+  if (
+    headTree.code !== 0 ||
+    parseBlobTreeEntry(headTree.stdout, designPath) === null ||
+    parseBlobTreeEntry(headTree.stdout, planPath) === null
+  ) {
+    throw new WitnessBlocked("target_dirty");
+  }
+  const diff = await runGitLiteral(context.options.workspaceRoot, [
     "-c",
     "core.fsmonitor=false",
     "-c",
     "core.untrackedCache=false",
-    "-C",
-    context.options.workspaceRoot,
-  ];
-  await git("git", [...prefix, "rev-parse", "--verify", "HEAD"], {
-    env,
-    timeout: 10_000,
-  });
-  let clean: boolean;
-  try {
-    await git("git", [...prefix, "diff", "--quiet", "HEAD", "--", designPath, planPath], {
-      env,
-      timeout: 10_000,
-    });
-    clean = true;
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === 1) {
-      clean = false;
-    } else {
-      throw error;
-    }
-  }
-  if (!clean) throw new WitnessBlocked("target_dirty");
+    "diff",
+    "--quiet",
+    "HEAD",
+    "--",
+    designPath,
+  ]);
+  if (diff.code !== 0) throw new WitnessBlocked("target_dirty");
 }
 
 export async function consumeFirstEnrollment(

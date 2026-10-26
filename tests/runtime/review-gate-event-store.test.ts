@@ -129,6 +129,10 @@ async function freshRoot(prefix: string): Promise<string> {
   await mkdir(currentRoot, { recursive: true });
   tempRoots.push(currentRoot);
   execFileSync("git", ["init", "-q", currentRoot]);
+  await mkdir(path.join(currentRoot, "docs"), { recursive: true });
+  await writeFile(path.join(currentRoot, "docs/design.md"), "# Design\n");
+  await writeFile(path.join(currentRoot, "docs/plan.md"), "# Plan\n");
+  execFileSync("git", ["-C", currentRoot, "add", "docs/design.md", "docs/plan.md"]);
   execFileSync("git", [
     "-C",
     currentRoot,

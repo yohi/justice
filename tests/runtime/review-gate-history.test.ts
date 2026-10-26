@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { appendFile, mkdir, rm } from "node:fs/promises";
+import { appendFile, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -116,6 +116,20 @@ async function freshRoot(): Promise<string> {
   await mkdir(root, { recursive: true });
   tempRoots.push(root);
   execFileSync("git", ["init", "-q", root]);
+  await mkdir(path.join(root, "docs"), { recursive: true });
+  await writeFile(path.join(root, DESIGN_PATH), "# Design\n");
+  await writeFile(path.join(root, PLAN_PATH), "# Plan\n");
+  await writeFile(path.join(root, "docs/throwaway-design.md"), "# Throwaway Design\n");
+  await writeFile(path.join(root, "docs/throwaway-plan.md"), "# Throwaway Plan\n");
+  execFileSync("git", [
+    "-C",
+    root,
+    "add",
+    DESIGN_PATH,
+    PLAN_PATH,
+    "docs/throwaway-design.md",
+    "docs/throwaway-plan.md",
+  ]);
   execFileSync("git", [
     "-C",
     root,

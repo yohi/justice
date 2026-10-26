@@ -54,6 +54,10 @@ describe("trusted workspace scope admission", () => {
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "justice-scope-admission-"));
     execFileSync("git", ["init", "-q", root]);
+    await mkdir(join(root, "docs"));
+    await writeFile(join(root, "docs/design.md"), "design\n");
+    await writeFile(join(root, "docs/plan.md"), "plan\n");
+    execFileSync("git", ["-C", root, "add", "docs/design.md", "docs/plan.md"]);
     execFileSync("git", [
       "-C",
       root,
@@ -131,6 +135,22 @@ describe("trusted workspace scope admission", () => {
     expect(await admission().readWorkspaceScopeFrontier()).toEqual(frontier);
     expect(await admission().verifyFirstWorkspaceEnrollment(request())).toEqual(authority);
     expect(JSON.stringify(authority)).not.toContain(root);
+  });
+  it("rejects first enrollment when either canonical artifact is absent from HEAD", async () => {
+    execFileSync("git", ["-C", root, "rm", "--", "docs/plan.md"]);
+    execFileSync("git", [
+      "-C",
+      root,
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "commit",
+      "-qm",
+      "remove plan",
+    ]);
+
+    await expect(admission().verifyFirstWorkspaceEnrollment(request())).rejects.toThrow("target_dirty");
   });
   it("rejects prior scope enrollment even with a signed absence assertion", async () => {
     const scope = {
@@ -334,7 +354,7 @@ describe("createReviewGateScopeAdmission withAdmissionLease", () => {
   }
 
   /** Real protected witness, store and admission factory over one seeded scope. */
-  async function leasedAdmission() {
+  async function leasedAdmission(removePlanFromHead = false) {
     const workspace = await mkdtemp(join(tmpdir(), "justice-admission-lease-"));
     roots.push(workspace);
     workspaceIdentitySeed = computeWorkspaceIdentity(workspace);
@@ -380,6 +400,20 @@ describe("createReviewGateScopeAdmission withAdmissionLease", () => {
       operationId: "lease-operation",
       authorize: approve,
     });
+    if (removePlanFromHead) {
+      execFileSync("git", ["-C", workspace, "rm", "--", "docs/plan.md"]);
+      execFileSync("git", [
+        "-C",
+        workspace,
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "-qm",
+        "remove plan",
+      ]);
+    }
     await witness.verifyFirstWorkspaceEnrollment(trusted);
     const store = createReviewGateEventStore(workspace, {
       workspaceIdentity: computeWorkspaceIdentity(workspace),
@@ -427,6 +461,10 @@ describe("createReviewGateScopeAdmission withAdmissionLease", () => {
     };
     return { admission, store, witness, request };
   }
+
+  it("rejects consumed first enrollment when either canonical artifact is absent from HEAD", async () => {
+    await expect(leasedAdmission(true)).rejects.toThrow("target_dirty");
+  });
 
   it("passes the decision observation and owned witness to the callback", async () => {
     const { admission, store, witness, request } = await leasedAdmission();

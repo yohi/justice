@@ -468,6 +468,11 @@ async function createFileStoreRoot(): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), "justice-rg-restart-"));
   tempRoots.push(root);
   execFileSync("git", ["init", "-q", root]);
+  await mkdir(path.join(root, "docs/specs"), { recursive: true });
+  await mkdir(path.join(root, "docs/plans"), { recursive: true });
+  await writeFile(path.join(root, DESIGN_PATH), DESIGN_V1);
+  await writeFile(path.join(root, PLAN_PATH), PLAN_V1);
+  execFileSync("git", ["-C", root, "add", DESIGN_PATH, PLAN_PATH]);
   execFileSync("git", [
     "-C",
     root,

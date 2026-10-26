@@ -46,6 +46,7 @@ import type { ReviewGateProtocolDescriptor } from "./review-gate-protocol.js";
 import type { VerifiedProtocolReleaseProvider as ProtocolReleaseProviderAuthority } from "./review-gate-protocol-release-authority.js";
 import type { resolveRequirementsForAdmission } from "./review-gate-requirements.js";
 import { runGitLiteral } from "./review-gate-query.js";
+import { parseBlobTreeEntry } from "./review-gate-head-artifact.js";
 import type { ReviewGateScopeWitness } from "./review-gate-scope-witness.js";
 
 /** Independently installed host capability, never exposed to workers.
@@ -205,13 +206,32 @@ export function createReviewGateScopeAdmissionVerifier(
           .trim();
         if (!HEAD_OID_PATTERN.test(head))
           throw new ScopeAdmissionBlocked("workspace_identity");
+        const headTree = await runGitLiteral(workspaceRoot, [
+          "ls-tree",
+          "-z",
+          "-r",
+          "HEAD",
+          "--",
+          request.canonicalDesignPath,
+          request.canonicalPlanPath,
+        ]);
+        if (
+          headTree.code !== 0 ||
+          parseBlobTreeEntry(headTree.stdout, request.canonicalDesignPath) === null ||
+          parseBlobTreeEntry(headTree.stdout, request.canonicalPlanPath) === null
+        ) {
+          throw new ScopeAdmissionBlocked("target_dirty");
+        }
         const diff = await runGitLiteral(workspaceRoot, [
+          "-c",
+          "core.fsmonitor=false",
+          "-c",
+          "core.untrackedCache=false",
           "diff",
           "--quiet",
           "HEAD",
           "--",
           request.canonicalDesignPath,
-          request.canonicalPlanPath,
         ]);
         if (diff.code !== 0) throw new ScopeAdmissionBlocked("target_dirty");
         return authority;
@@ -318,24 +338,6 @@ async function gitOutput(rootReal: string, args: readonly string[]): Promise<Buf
   const result = await runGitLiteral(rootReal, args);
   if (result.code !== 0) throw new Error("review_gate_scope_admission_git_unavailable");
   return result.stdout;
-}
-
-interface GitTreeEntry {
-  readonly gitMode: "100644" | "100755";
-  readonly blobSha: string;
-}
-
-function parseBlobTreeEntry(stdout: Buffer, canonicalPath: string): GitTreeEntry | null {
-  for (const record of stdout.toString("utf8").split("\0")) {
-    if (record.length === 0) continue;
-    const [meta = "", entryPath = ""] = record.split("\t", 2);
-    if (entryPath !== canonicalPath) continue;
-    const [gitMode = "", type = "", blobSha = ""] = meta.split(" ");
-    if (type !== "blob") return null;
-    if (gitMode !== "100644" && gitMode !== "100755") return null;
-    return { gitMode, blobSha };
-  }
-  return null;
 }
 
 export function isNc1ParentArtifactBindingValid(input: Readonly<{

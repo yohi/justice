@@ -52,15 +52,22 @@ describe("approved Design query facade integration", () => {
     bridge.setReviewGateApprovedDesignAuthority(authority);
     const statusValue = { entries: [{ canonicalPath: PLAN_PATH, indexState: "M", workingTreeState: "M" }] };
     bridge.setReviewGateQueryService({
+      readArtifact: async (scope: import("../../src/core/review-gate/capabilities").ReviewQueryScope, path: string) => {
+        expect(scope.phase).toBe("plan");
+        expect(path).toBe(PLAN_PATH);
+        return Buffer.from("current D1 plan bytes\n");
+      },
       getScopedStatus: async (_scope: import("../../src/core/review-gate/capabilities").ReviewQueryScope) => statusValue,
       getScopedDiff: async (_scope: import("../../src/core/review-gate/capabilities").ReviewQueryScope, request: { readonly staged: boolean }) => ({ staged: request.staged, patch: "D1 staged patch" }),
     } as unknown as import("../../src/runtime/review-gate-query").ReviewGateQueryService);
     await bridge.handleReviewGateStart("root", { source: "command", designPath: DESIGN_PATH, planPath: PLAN_PATH });
 
     const read = JSON.parse(await bridge.executeReviewerScopedQuery("root", { kind: "artifact_read", path: DESIGN_PATH })) as Record<string, unknown>;
+    const plan = JSON.parse(await bridge.executeReviewerScopedQuery("root", { kind: "artifact_read", path: PLAN_PATH })) as Record<string, unknown>;
     const status = JSON.parse(await bridge.executeReviewerScopedQuery("root", { kind: "status" })) as Record<string, unknown>;
     const diff = JSON.parse(await bridge.executeReviewerScopedQuery("root", { kind: "diff", staged: true })) as Record<string, unknown>;
     expect(read).toEqual({ status: "OK", authority: "approved_D0", content: "approved D0 bytes\n" });
+    expect(plan).toEqual({ status: "OK", authority: "current_D1", path: PLAN_PATH, content: "current D1 plan bytes\n" });
     expect(authoritySessionId).toBe("root");
     expect(status).toMatchObject({ authority: "unapproved_D1_diagnostic", result: statusValue });
     expect(diff).toMatchObject({ authority: "unapproved_D1_diagnostic", result: { staged: true, patch: "D1 staged patch" } });

@@ -737,7 +737,21 @@ export class PlanBridge {
         return JSON.stringify({ status: "OK", authority: "approved_D0", matches: decision.matches });
       }
       if (decision?.kind === "unmediated_scoped") {
-        return JSON.stringify({ status: "OK", authority: "unapproved_D1_diagnostic", path: decision.canonicalPath });
+        try {
+          const scope = await this.buildPlanReviewerQueryScope(sessionId);
+          if (scope === null) {
+            return JSON.stringify({ status: "ERROR", reason: "review_operation_not_permitted" });
+          }
+          const bytes = await service.readArtifact(scope, decision.canonicalPath);
+          return JSON.stringify({
+            status: "OK",
+            authority: "current_D1",
+            path: decision.canonicalPath,
+            content: bytes.toString("utf8"),
+          });
+        } catch {
+          return JSON.stringify({ status: "ERROR", reason: "review_operation_not_permitted" });
+        }
       }
       return JSON.stringify({ status: "ERROR", reason: decision?.kind === "denied" ? decision.reason : "review_operation_not_permitted" });
     }
