@@ -3,6 +3,7 @@ import { createReviewGateCoordinator } from "../../src/runtime/review-gate-coord
 import { createReviewGateLockManager } from "../../src/runtime/review-gate-lock-manager";
 import { createReviewGateProtocolDescriptor } from "../../src/runtime/review-gate-protocol";
 import { computeArtifactDigest, computeReviewScopeId } from "../../src/core/review-gate/identity";
+import { validateReviewGateEventRecord } from "../../src/core/review-gate/event-schema";
 import {
   createReviewGateScopeAdmission,
   ScopeAdmissionBlocked,
@@ -52,7 +53,10 @@ function createMockScopeAdmission(
   };
 }
 
-function mockOwnedWitness(eventStore: ReturnType<typeof createInMemoryReviewGateEventStore>): AdmissionOwnedWitness {
+function mockOwnedWitness(
+  eventStore: ReturnType<typeof createInMemoryReviewGateEventStore>,
+  hasDesignBinding = false,
+): AdmissionOwnedWitness {
   const firstEnrollment = { installationId: "installation-1", workspaceIdentity: "test-workspace-identity", canonicalDesignPath: DESIGN_PATH, canonicalPlanPath: PLAN_PATH, authorizationOperationId: "enrollment-1", authenticatedProvisionerDigest: "digest-1", verifiedAbsentPriorEnrollmentFrontierHash: "frontier-1", authorizationEventId: "enrollment-event-1" };
   return {
     read: async () => { throw new Error("mock_owned_unused"); },
@@ -64,7 +68,9 @@ function mockOwnedWitness(eventStore: ReturnType<typeof createInMemoryReviewGate
     readInstallation: async () => {
       return { installationId: "installation-1", epoch: "epoch-1", provisionerPublicKeyPem: "", hostTrustRootPem: "", authenticatedProvisionerDigest: "digest-1", ownerUid: 0, authorizationSignature: "", directoryIdentityDigest: "" };
     },
-    readVerifiedDesignBinding: async () => null,
+    readVerifiedDesignBinding: async () => hasDesignBinding
+      ? { treeSha: "a".repeat(40), blobSha: "b".repeat(40), gitMode: "100644", objectSize: 9 }
+      : null,
     signAdmittedMembership: async () => "test-signature",
     preparePublication: async () => "prepared",
     publishPreparedJournal: async () => undefined,
@@ -151,7 +157,7 @@ describe("coordinator startOrResume routes through scope admission", () => {
           const gateLock = await sharedLocks.manager?.acquireGateLock("legacy-gate");
           expect(gateLock).not.toBe("occupied");
           if (gateLock !== undefined && gateLock !== "occupied") gateLock.release();
-          return run({ kind: "BLOCK", reason: "scope_not_enrolled", detail: "blocked" }, null, mockOwnedWitness(eventStore));
+          return run({ kind: "RESUME", gateId: "legacy-gate", generationId: "legacy-v1", witnessFrontierHash: "frontier-1" }, null, mockOwnedWitness(eventStore, true));
         }
         return run({ kind: "RESUME", gateId: "legacy-gate", generationId: "legacy-v1", witnessFrontierHash: "frontier-1" }, null, mockOwnedWitness(eventStore));
       },
@@ -194,9 +200,25 @@ describe("coordinator startOrResume routes through scope admission", () => {
       source: "command", designPath: DESIGN_PATH, planPath: PLAN_PATH,
     });
     expect(resumed.gateId).toBe("legacy-gate");
-    await expect(coordinator.prepareCallerOperation("shared-lock-session", {
+    await eventStore.appendV2Events("legacy-gate", [validateReviewGateEventRecord({
+      schemaVersion: 2,
+      eventId: "design-clear-event",
+      parentEventId: "legacy-gate",
+      emittedAt: "2026-10-13T00:00:00.000Z",
+      gateId: "legacy-gate",
+      epochId: "legacy-epoch",
+      generationId: "legacy-v1",
+      writerId: "legacy-writer",
+      eventType: "DESIGN_CLEAR",
+      payload: {
+        designProtocolFingerprint: observation.snapshot.current.designProtocolFingerprint,
+        approvedContextEventId: "design-clear-event",
+      },
+    })]);
+    const prepared = await coordinator.prepareCallerOperation("shared-lock-session", {
       kind: "dispatch_reviewer", phase: "plan",
-    })).rejects.toThrow("review_gate_approved_design_proof_unavailable");
+    });
+    expect(prepared.operationId).toBe("test-id-7");
     expect(admissionCalls).toBe(5);
 
     coordinator.releaseSession("shared-lock-session");

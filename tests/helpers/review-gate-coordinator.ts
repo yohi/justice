@@ -108,6 +108,7 @@ export function createInMemoryReviewGateEventStore(): InMemoryReviewGateEventSto
       });
     },
     readEvents: async (gateId) => gates.get(gateId)?.events ?? [],
+    readVerifiedEvents: async (gateId) => gates.get(gateId)?.v2Events ?? [],
     recordDispatch: async (gateId, dispatch) => {
       const data = gates.get(gateId) ?? { events: [], v2Events: [], dispatches: [] };
       const existing = data.dispatches.find((record) => record.operationId === dispatch.operationId);
