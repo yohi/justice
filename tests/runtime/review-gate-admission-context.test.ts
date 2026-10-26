@@ -113,7 +113,17 @@ async function writeCommittedFile(root: string, filePath: string, content: strin
   await mkdir(path.dirname(fullPath), { recursive: true });
   await writeFile(fullPath, content, "utf8");
   execFileSync("git", ["-C", root, "add", filePath]);
-  execFileSync("git", ["-C", root, "commit", "-qm", `add ${filePath}`]);
+  execFileSync("git", [
+    "-C",
+    root,
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "commit",
+    "-qm",
+    `add ${filePath}`,
+  ]);
 }
 
 type Fixture = Readonly<{
