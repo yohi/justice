@@ -171,7 +171,6 @@ export async function validateFirstEnrollmentUnderAdmission(
   const headTree = await runGitLiteral(context.options.workspaceRoot, [
     "ls-tree",
     "-z",
-    "-r",
     "HEAD",
     "--",
     designPath,

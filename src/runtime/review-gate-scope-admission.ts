@@ -209,7 +209,6 @@ export function createReviewGateScopeAdmissionVerifier(
         const headTree = await runGitLiteral(workspaceRoot, [
           "ls-tree",
           "-z",
-          "-r",
           "HEAD",
           "--",
           request.canonicalDesignPath,
