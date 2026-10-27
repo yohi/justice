@@ -3082,22 +3082,11 @@ export function createReviewGateCoordinator(
         if (!alreadyCreated) {
           await eventStore.appendV2Events(execution.gateId, [yieldedGateEvent]);
         }
-        return Object.freeze({
-          dispatched: false,
-          gateId: execution.gateId,
-          guidance: [
-            "---",
-            "[JUSTICE: REVIEW GATE CREATED]",
-            "A new Review Gate was created. A reviewer dispatch will follow.",
-            "---",
-          ].join("\n"),
+        return blockedResult(
           designPath,
           planPath,
-          designDigest,
-          planDigest,
-          lockPhase: "reviewing",
-          completedReuse: false,
-        });
+          "[JUSTICE: REVIEW GATE BLOCKED] A V2 Gate was durably created, but this coordinator cannot dispatch or resume it. No reviewer was dispatched; inspect the durable state with /justice-review-history.",
+        );
       }
       if (execution?.kind === "RESUME_ADMITTED" && !resumeDecisionNeedsRevalidation) {
         resumeRevalidationAttempts += 1;

@@ -604,7 +604,10 @@ describe("coordinator startOrResume routes through scope admission", () => {
     });
 
     expect(result.dispatched).toBe(false);
-    const gateId = result.gateId;
+    expect(result.gateId).toBeNull();
+    expect(result.lockPhase).toBeNull();
+    expect(result.guidance).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
+    const gateId = await eventStore.readScopeIndex(SCOPE_ID);
     if (gateId === null) throw new Error("test_resumed_gate_missing");
     const genesis = (await eventStore.readV2Journal(gateId)).events[0];
     if (genesis === undefined || genesis.eventType !== "GATE_CREATED") {
@@ -653,11 +656,10 @@ describe("coordinator startOrResume routes through scope admission", () => {
     });
 
     expect(attempts).toBe(3);
-    // A fresh V2 genesis is created and returned immediately; the V1 resume
-    // dispatch loop is not entered.
     expect(result.dispatched).toBe(false);
-    expect(result.gateId).not.toBeNull();
-    expect(await eventStore.listGateIds()).toEqual([result.gateId]);
+    expect(result.gateId).toBeNull();
+    expect(result.lockPhase).toBeNull();
+    expect(await eventStore.listGateIds()).toHaveLength(1);
   });
 
   it("never routes an occupied lease through the legacy path", async () => {
@@ -701,7 +703,7 @@ describe("coordinator startOrResume routes through scope admission", () => {
     expect(result.guidance).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
   });
 
-  it("creates a V2 gate through admitted CREATE_GENESIS", async () => {
+  it("returns a blocked result without a reviewing lock after admitted V2 genesis", async () => {
     const { coordinator, eventStore } = createTestCoordinator(
       createMockScopeAdmission({
         kind: "CREATE_GENESIS",
@@ -721,12 +723,14 @@ describe("coordinator startOrResume routes through scope admission", () => {
     });
 
     expect(result.dispatched).toBe(false);
-    expect(result.gateId).not.toBeNull();
-    expect(result.guidance).toContain("[JUSTICE: REVIEW GATE CREATED]");
-    const gateId = result.gateId;
-    expect(gateId).not.toBeNull();
-    expect(await eventStore.listGateIds()).toContain(gateId);
-    const journal = await eventStore.readV2Journal(gateId ?? "");
+    expect(result.gateId).toBeNull();
+    expect(result.lockPhase).toBeNull();
+    expect(result.guidance).toContain("[JUSTICE: REVIEW GATE BLOCKED]");
+    const gateIds = await eventStore.listGateIds();
+    expect(gateIds).toHaveLength(1);
+    const [gateId] = gateIds;
+    if (gateId === undefined) throw new Error("test_v2_gate_missing");
+    const journal = await eventStore.readV2Journal(gateId);
     expect(journal.events.some((event) => "schemaVersion" in event && event.schemaVersion === 2 && event.eventType === "GATE_CREATED")).toBe(true);
     expect(await eventStore.readScopeIndex(SCOPE_ID)).toBe(gateId);
   });

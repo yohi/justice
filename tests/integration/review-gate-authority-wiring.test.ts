@@ -175,9 +175,13 @@ describe("production Review Gate authority wiring", () => {
         planPath: PLAN_PATH,
         requirementsPath: REQUIREMENTS_PATH,
       });
-      const gateId = result.gateId;
-      if (gateId === null) throw new Error(result.guidance);
-      expect(gateId).not.toBeNull();
+      expect(result.dispatched).toBe(false);
+      expect(result.gateId).toBeNull();
+      expect(result.lockPhase).toBeNull();
+      const gateIds = await eventStore.listGateIds();
+      expect(gateIds).toHaveLength(1);
+      const [gateId] = gateIds;
+      if (gateId === undefined) throw new Error("V2 genesis gate missing");
 
       expect(await eventStore.listGateIds()).toContain(gateId);
       const journal = await eventStore.readV2Journal(gateId);
@@ -279,8 +283,14 @@ describe("production Review Gate authority wiring", () => {
         designPath: DESIGN_PATH,
         planPath: PLAN_PATH,
       });
-      if (result.gateId === null) throw new Error(result.guidance);
-      const journal = await eventStore.readV2Journal(result.gateId);
+      expect(result.dispatched).toBe(false);
+      expect(result.gateId).toBeNull();
+      expect(result.lockPhase).toBeNull();
+      const gateIds = await eventStore.listGateIds();
+      expect(gateIds).toHaveLength(1);
+      const [gateId] = gateIds;
+      if (gateId === undefined) throw new Error("V2 genesis gate missing");
+      const journal = await eventStore.readV2Journal(gateId);
       const genesis = journal.events.find((event) => "schemaVersion" in event && event.schemaVersion === 2 && event.eventType === "GATE_CREATED");
       expect(genesis).toBeDefined();
       if (genesis === undefined || genesis.eventType !== "GATE_CREATED" || !("schemaVersion" in genesis)) {
@@ -295,7 +305,7 @@ describe("production Review Gate authority wiring", () => {
       expect(frontier.scopes).toHaveLength(1);
       expect(frontier.scopes[0]).toMatchObject({
         provenance: { kind: "verified_genesis" },
-        gateMembership: [{ gateId: result.gateId, admissionEventId: genesis.eventId }],
+        gateMembership: [{ gateId, admissionEventId: genesis.eventId }],
       });
     } finally {
       eventStore.close();
