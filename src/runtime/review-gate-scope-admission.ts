@@ -222,10 +222,6 @@ export function createReviewGateScopeAdmissionVerifier(
           throw new ScopeAdmissionBlocked("target_dirty");
         }
         const diff = await runGitLiteral(workspaceRoot, [
-          "-c",
-          "core.fsmonitor=false",
-          "-c",
-          "core.untrackedCache=false",
           "diff",
           "--quiet",
           "HEAD",

@@ -61,13 +61,28 @@ export async function runGitLiteral(
   args: readonly string[],
   input?: Readonly<{ readonly stdin: Buffer }>,
 ): Promise<GitLiteralResult> {
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
+  );
   return await new Promise<GitLiteralResult>((resolve, reject) => {
-    const child = spawn("git", ["--literal-pathspecs", ...args], {
-      shell: false,
-      cwd: rootDir,
-      timeout: DEFAULT_GIT_TIMEOUT_MS,
-      stdio: "pipe",
-    });
+    const child = spawn(
+      "git",
+      [
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.untrackedCache=false",
+        "--literal-pathspecs",
+        ...args,
+      ],
+      {
+        shell: false,
+        cwd: rootDir,
+        timeout: DEFAULT_GIT_TIMEOUT_MS,
+        stdio: "pipe",
+        env,
+      },
+    );
     let killedOverLimit = false;
     const stdoutChunks: Buffer[] = [];
     let collected = 0;

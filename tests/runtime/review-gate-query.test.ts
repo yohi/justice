@@ -116,7 +116,7 @@ const planScope: ReviewQueryScope = buildReviewQueryScope("plan", {
 });
 
 const seamCalls = (): StoredGitSpawnCall[] =>
-  spawnRecorder.calls.filter((call) => call.args[0] === "--literal-pathspecs");
+  spawnRecorder.calls.filter((call) => call.args.includes("--literal-pathspecs"));
 
 beforeEach(async () => {
   spawnRecorder.calls.length = 0;
@@ -329,13 +329,21 @@ describe("ReviewGateQueryService scoped git metadata", () => {
     const lsTreeCalls = seam.filter((call) => call.args.includes("ls-tree"));
     expect(lsTreeCalls).toHaveLength(2);
     expect(lsTreeCalls.map((call) => call.args)).toEqual([
-      ["--literal-pathspecs", "ls-tree", "-z", head2, "--", ":(glob)*.md"],
-      ["--literal-pathspecs", "ls-tree", "-z", head, "--", ":(glob)*.md"],
+      ["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "--literal-pathspecs", "ls-tree", "-z", head2, "--", ":(glob)*.md"],
+      ["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "--literal-pathspecs", "ls-tree", "-z", head, "--", ":(glob)*.md"],
     ]);
-    const catFileCalls = seam.filter((call) => call.args[1] === "cat-file");
+    const catFileCalls = seam.filter((call) => call.args.includes("cat-file"));
     expect(catFileCalls.length).toBe(2);
     for (const call of catFileCalls) {
-      expect(call.args.slice(0, 3)).toEqual(["--literal-pathspecs", "cat-file", "blob"]);
+      expect(call.args.slice(0, 7)).toEqual([
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.untrackedCache=false",
+        "--literal-pathspecs",
+        "cat-file",
+        "blob",
+      ]);
     }
     // no argv carries a <ref>:<path> revision string; the literal "(glob)*.md" argument is not one
     for (const call of seam) {
@@ -370,7 +378,13 @@ describe("ReviewGateQueryService scoped git metadata", () => {
     expect(seam.length).toBeGreaterThan(0);
     for (const call of seam) {
       expect(call.command).toBe("git");
-      expect(call.args[0]).toBe("--literal-pathspecs");
+      expect(call.args.slice(0, 5)).toEqual([
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.untrackedCache=false",
+        "--literal-pathspecs",
+      ]);
       expect(call.options?.shell).toBe(false);
       expect(call.options?.cwd).toBe(rootDir);
     }

@@ -184,10 +184,6 @@ export async function validateFirstEnrollmentUnderAdmission(
     throw new WitnessBlocked("target_dirty");
   }
   const diff = await runGitLiteral(context.options.workspaceRoot, [
-    "-c",
-    "core.fsmonitor=false",
-    "-c",
-    "core.untrackedCache=false",
     "diff",
     "--quiet",
     "HEAD",

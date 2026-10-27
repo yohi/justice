@@ -136,6 +136,19 @@ describe("trusted workspace scope admission", () => {
     expect(await admission().verifyFirstWorkspaceEnrollment(request())).toEqual(authority);
     expect(JSON.stringify(authority)).not.toContain(root);
   });
+  it("verifies first enrollment in the requested workspace despite inherited GIT_DIR", async () => {
+    const otherRoot = await mkdtemp(join(tmpdir(), "justice-other-git-workspace-"));
+    execFileSync("git", ["init", "-q", otherRoot]);
+    const previousGitDir = process.env.GIT_DIR;
+    process.env.GIT_DIR = join(otherRoot, ".git");
+    try {
+      await expect(admission().verifyFirstWorkspaceEnrollment(request())).resolves.toEqual(authority);
+    } finally {
+      if (previousGitDir === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = previousGitDir;
+      await rm(otherRoot, { recursive: true, force: true });
+    }
+  });
   it("rejects first enrollment when either canonical artifact is absent from HEAD", async () => {
     execFileSync("git", ["-C", root, "rm", "--", "docs/plan.md"]);
     execFileSync("git", [
