@@ -655,6 +655,7 @@ export function projectVerifiedGateTip(
   let suspensionEpochId: string | null = null;
   let executionSuspended = false;
   let reopenRequired = false;
+  let reopenRequiredEpochId: string | null = null;
   let nc1Reason: "round_limit_exhausted" | "review_non_convergent" | null = null;
   let nc1Stop: VerifiedNC1StopV1 | null = null;
 
@@ -663,8 +664,9 @@ export function projectVerifiedGateTip(
       switch (event.eventType) {
         case "REOPEN_REQUIRED":
           reopenRequired = true;
+          reopenRequiredEpochId = event.epochId;
           suspensionReason = "reopen_required";
-          suspensionEpochId = event.epochId;
+          suspensionEpochId = reopenRequiredEpochId;
           break;
         case "ROUND_LIMIT_EXHAUSTED": {
           const phase = event.payload.phase;
@@ -734,10 +736,12 @@ export function projectVerifiedGateTip(
           }
           executionSuspended = false;
           suspensionReason = reopenRequired ? "reopen_required" : nc1Reason;
-          if (suspensionReason === null) suspensionEpochId = null;
+          if (reopenRequired) suspensionEpochId = reopenRequiredEpochId;
+          else if (suspensionReason === null) suspensionEpochId = null;
           break;
         case "FINDING_REOPENED":
           reopenRequired = false;
+          reopenRequiredEpochId = null;
           suspensionReason = nc1Reason ?? (executionSuspended ? "execution_suspended" : null);
           suspensionEpochId = suspensionReason === "execution_suspended"
             ? suspensionEpochId
@@ -781,7 +785,8 @@ export function projectVerifiedGateTip(
             : executionSuspended
               ? "execution_suspended"
               : null;
-          if (!reopenRequired && !executionSuspended) suspensionEpochId = null;
+          if (reopenRequired) suspensionEpochId = reopenRequiredEpochId;
+          else if (!executionSuspended) suspensionEpochId = null;
         }
         break;
       }

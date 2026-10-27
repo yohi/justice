@@ -1039,7 +1039,7 @@ describe("projectVerifiedGateTip", () => {
     const beforeReopenCompletion = projectVerifiedGateTip({
       gateId: "gate-1",
       scopeId: "scope-1",
-      events: [genesis, stopped, reopen, applied],
+      events: [genesis, reopen, stopped, applied],
       frontier: frontier() as VerifiedScopeFrontier,
     });
     if (beforeReopenCompletion.status !== "suspended") {
@@ -1052,7 +1052,7 @@ describe("projectVerifiedGateTip", () => {
     const afterReopenCompletion = projectVerifiedGateTip({
       gateId: "gate-1",
       scopeId: "scope-1",
-      events: [genesis, stopped, reopen, applied, reopened],
+      events: [genesis, reopen, stopped, applied, reopened],
       frontier: frontier() as VerifiedScopeFrontier,
     });
     if (afterReopenCompletion.status !== "active") {
