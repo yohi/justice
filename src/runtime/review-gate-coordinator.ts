@@ -37,6 +37,7 @@ import type {
 } from "../core/review-gate-types";
 import type { HookEvent, HookResponse } from "../core/types";
 import type { ReviewGateRequest } from "../core/review-gate-command";
+import type { VerifiedApprovedDesignReadBindingV1 } from "../core/review-gate/capabilities";
 import {
   PACKET_PAYLOAD_MARKER,
   parseReviewGateOperationResult,
@@ -72,11 +73,13 @@ import {
   type ReviewGateRemediationCompletion,
   type ReviewGateReviewObservation,
   type ReviewGateSelfReviewCompletion,
+  type VerifiedUpstreamReopenContextV1,
 } from "../core/review-gate/orchestrator";
 import { projectReviewGate } from "../core/review-gate/projection";
-  import type {
+import type {
   ReviewGateProjection,
   ReviewTargetWorkspaceState,
+  ScopeEnrollmentV1,
 } from "../core/review-gate/types";
 import {
   createDefaultDeterministicValidatorRegistry,
@@ -94,12 +97,24 @@ import {
   computeCanonicalJsonFingerprint,
   computeReviewScopeId,
 } from "../core/review-gate/identity";
+import {
+  buildRequirementsSectionInventory,
+  REQUIREMENTS_HEADING_ANCHOR_VERSION,
+} from "../core/review-gate/requirements-section-inventory";
+import {
+  SEMANTIC_CONTEXT_COMPATIBILITY_PROOF_REGISTRY_DIGEST,
+  SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_DIGEST,
+} from "../core/review-gate/deterministic-validation";
+import type { SemanticContextInputsV1 } from "../core/review-gate/types";
 import type {
+  DurableReviewGateEventStore,
   ReviewGateDispatchRecordV1,
   ReviewGateEventStore,
   ReviewGateV2Journal,
+  V2CodedEvent,
 } from "./review-gate-event-store";
 import type { ReviewGateRecoveryStore } from "./review-gate-recovery-store";
+import type { ReviewGateGit } from "./review-gate-git";
 import type {
   ReviewGateWitnessPublicationSeamV1,
 } from "./review-gate-witness-contracts";
@@ -114,8 +129,37 @@ import {
   type ReviewGateLockManager,
 } from "./review-gate-lock-manager";
 import type { ReviewGateProtocolDescriptor } from "./review-gate-protocol";
-import { ScopeAdmissionBlocked, type ReviewGateScopeAdmission } from "./review-gate-scope-admission";
+import {
+  ScopeAdmissionBlocked,
+  type ReviewGateScopeAdmission,
+} from "./review-gate-scope-admission";
+import type { AdmissionDecision } from "../core/review-gate/admission";
+import type {
+  AdmissionOwnedWitness,
+  AdmittedMembershipAuthorizationPayload,
+  ReviewGateAdmissionExecutionResult,
+  ReviewGateAdmissionObservation,
+} from "./review-gate-admission-context";
+import {
+  applyReviewGateAdmissionDecision,
+  planAdmissionNC1Reentry,
+  planVerifiedSemanticContextTransition,
+  type ReviewGateAdmissionHandlers,
+} from "./review-gate-admission-executor";
+import { runGitLiteral } from "./review-gate-query";
+import {
+  buildApprovedDesignOperationReadBinding,
+  type ApprovedDesignOperationReadBinding,
+} from "./review-gate-approved-design-authority";
 
+/**
+ * Task 3 — bounded wait for a scope admission lease under contention.
+ * A short admission transaction frees the lock quickly; an actively
+ * reviewing session holds it longer, so the wait stays bounded and
+ * fail-closed, never bypassing admission.
+ */
+const ADMISSION_LEASE_WAIT_ATTEMPTS = 5;
+const ADMISSION_LEASE_WAIT_MS = 50;
 export type ReviewGateCoordinatorLockPhase =
   | "reviewing"
   | "remediation"
@@ -152,6 +196,18 @@ export type ReviewGateCommandResult = Readonly<{
   readonly completedReuse: boolean;
 }>;
 
+/** Narrow a verified event to the V2 envelope that carries eventId/parentEventId. */
+function isV2CodedEvent(
+  event: VerifiedReviewGateEvent,
+): event is V2CodedEvent {
+  return (
+    "schemaVersion" in event &&
+    event.schemaVersion === 2 &&
+    "eventId" in event &&
+    typeof event.eventId === "string"
+  );
+}
+
 
 /**
  * Task 17 — caller-owned routing decision for one Review Gate execution step.
@@ -183,6 +239,7 @@ export type PreparedReviewGateOperationRecordV1 = Readonly<{
   readonly gateId: string;
   readonly operationId: string;
   readonly operation: ReviewGateNextOperation;
+  readonly approvedDesignBinding?: ApprovedDesignOperationReadBinding;
 }>;
 
 /** Handle returned by `prepareCallerOperation` for the caller's routing decision. */
@@ -211,7 +268,13 @@ export interface ReviewGateMutationSubstrate {
 }
 
 export interface ReviewGateCoordinatorOptions {
-  readonly eventStore: ReviewGateEventStore;
+  /**
+   * Task 4d — authority store surface required to stage and commit admitted
+   * generation publications. When `scopeAdmission` is provided this must also
+   * expose `prepareAdmittedGenerationPublication`; otherwise the coordinator
+   * operates on the legacy `ReviewGateEventStore` surface only.
+   */
+  readonly eventStore: ReviewGateEventStore & Partial<DurableReviewGateEventStore>;
   readonly lockManager: ReviewGateLockManager;
   readonly protocol: ReviewGateProtocolDescriptor;
   readonly workspaceReader: ReviewGateWorkspaceReader;
@@ -227,6 +290,10 @@ export interface ReviewGateCoordinatorOptions {
   readonly newId?: () => string;
   readonly newWriterId?: () => string;
   readonly scopeAdmission?: ReviewGateScopeAdmission | null;
+  readonly approvedDesignReadDependencies?: Readonly<{
+    readonly eventStore: ReviewGateEventStore & Pick<DurableReviewGateEventStore, "readVerifiedScopeOwned">;
+    readonly git: ReviewGateGit;
+  }>;
   /**
    * Task 17 — durable custody for prepared caller-owned operations. `null`
    * selects caller-routing-unavailable mode: `execute_operation` decisions
@@ -258,6 +325,11 @@ export interface ReviewGateCoordinator {
     use: ScopedReviewToolUse,
   ) => ReviewCapabilityDecision | undefined;
   readonly releaseSession: (sessionId: string) => void;
+  readonly getApprovedDesignReadBinding: (
+    sessionId: string,
+    gateId: string,
+    designPath: string,
+  ) => VerifiedApprovedDesignReadBindingV1 | null;
   
   /**
    * Task 17 — register a caller-provided planned operation as a durable
@@ -347,11 +419,30 @@ const NON_PREPARABLE_OPERATION_KINDS: ReadonlySet<string> = new Set<string>([
 /** Drive-loop sentinel: the operation executed in place and the loop continues. */
 const DRIVE_CONTINUE: unique symbol = Symbol("review_gate_drive_continue");
 
+function assertNever(value: never): never {
+  throw new Error(`review_gate_admission_result_unhandled: ${JSON.stringify(value)}`);
+}
+
 const isPlainObjectRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 const isNonEmptyString = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0;
+
+const isDigest = (value: unknown): value is string =>
+  typeof value === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(value);
+
+export const isApprovedDesignOperationReadBinding = (
+  value: unknown,
+): value is ApprovedDesignOperationReadBinding => {
+  if (!isPlainObjectRecord(value)) return false;
+  return typeof value.gateId === "string" && value.gateId.length > 0 &&
+    typeof value.operationId === "string" && value.operationId.length > 0 &&
+    typeof value.canonicalPath === "string" && isDigest(value.treeSha) &&
+    isDigest(value.blobSha) &&
+    (value.gitMode === "100644" || value.gitMode === "100755") &&
+    typeof value.objectSize === "number" && Number.isSafeInteger(value.objectSize) && value.objectSize >= 0;
+};
 
 /**
  * Strictly decode one recovery-store object as a prepared-operation record.
@@ -385,12 +476,18 @@ function parsePreparedOperationRecord(
   ) {
     throw new Error("review_gate_prepared_operation_corrupt");
   }
+  const approvedDesignBinding = parsed.approvedDesignBinding;
+  if (approvedDesignBinding !== undefined &&
+      (!isApprovedDesignOperationReadBinding(approvedDesignBinding) || approvedDesignBinding.gateId !== gateId)) {
+    throw new Error("review_gate_prepared_operation_corrupt");
+  }
   return Object.freeze({
     recordKind: PREPARED_OPERATION_RECORD_KIND,
     schemaVersion: 1,
     gateId,
     operationId,
     operation: operation as unknown as ReviewGateNextOperation,
+    ...(approvedDesignBinding === undefined ? {} : { approvedDesignBinding }),
   });
 }
 
@@ -424,6 +521,9 @@ interface MutableSessionState {
   workspaceStates: ReadonlyMap<string, ReviewTargetWorkspaceState>;
   validationState: DeterministicValidationState;
   reviewAttemptId: string | null;
+  approvedDesignBinding: ApprovedDesignOperationReadBinding | null;
+  approvedDesignInputBindingDigest: string | null;
+  readonly verifiedUpstreamReopen?: VerifiedUpstreamReopenContextV1;
   readonly scopeLock: ReviewGateLockHandle;
   readonly gateLock: ReviewGateLockHandle;
 }
@@ -443,7 +543,7 @@ export function createReviewGateCoordinator(
   const now = options.now ?? ((): string => new Date().toISOString());
   const randomId = options.newId ?? ((): string => globalThis.crypto.randomUUID());
   const newId = randomId;
-  const newWriterId = options.newWriterId ?? ((): string => `rgw-${randomId()}`);
+  const newWriterId = options.newWriterId ?? (() => eventStore.writerId ?? `rgw-${randomId()}`);
   /** Task 17 — durable custody for prepared caller-owned operations. */
   const recovery = options.recoveryStore ?? null;
   /**
@@ -802,6 +902,7 @@ export function createReviewGateCoordinator(
       }>;
       readonly designClearFingerprint?: string;
       readonly preparedApprovalBinding?: ReviewApprovalBindingV1;
+      verifiedUpstreamReopen?: VerifiedUpstreamReopenContextV1;
     } = {
       artifacts,
       workspaceStates: session.workspaceStates,
@@ -834,6 +935,9 @@ export function createReviewGateCoordinator(
         state: session.validationState,
         dispatches: preClearDispatches(session, projection),
       };
+    }
+    if (session.verifiedUpstreamReopen !== undefined) {
+      context.verifiedUpstreamReopen = session.verifiedUpstreamReopen;
     }
     return Object.freeze(context) as ReviewGatePlanningContext;
   };
@@ -964,6 +1068,12 @@ export function createReviewGateCoordinator(
           prompt: packet.workerPrompt,
           load_skills: [],
           run_in_background: false,
+          ...(session.approvedDesignBinding === null
+            ? {}
+            : {
+                approved_design_binding: session.approvedDesignBinding,
+                approved_design_input_binding_digest: session.approvedDesignInputBindingDigest,
+              }),
         },
       },
     };
@@ -1124,7 +1234,7 @@ export function createReviewGateCoordinator(
    * when the journal is empty).
    */
   const appendV2JournalEvents = async (
-    session: MutableSessionState,
+    session: Pick<MutableSessionState, "gateId" | "writerId" | "epochId">,
     operationId: string,
     buildDrafts: (journal: ReviewGateV2Journal) => readonly V2EventDraft[],
   ): Promise<void> => {
@@ -1135,7 +1245,7 @@ export function createReviewGateCoordinator(
   };
 
   const appendV2JournalBatch = async (
-    session: MutableSessionState,
+    session: Pick<MutableSessionState, "gateId" | "writerId" | "epochId">,
     operationId: string,
     drafts: readonly V2EventDraft[],
     preImageFrontierHash: string,
@@ -1710,12 +1820,74 @@ export function createReviewGateCoordinator(
       throw new Error(`review_gate_operation_not_preparable: ${String(operation.kind)}`);
     }
     const operationId = newId();
+    let approvedDesignBinding: ApprovedDesignOperationReadBinding | undefined;
+    const operationPhase = "phase" in operation ? operation.phase : null;
+    if (operationPhase === "plan") {
+      if (scopeAdmission === null || workspaceRoot === null || workspaceIdentity === null) {
+        throw new Error("review_gate_approved_design_proof_unavailable");
+      }
+      const activeSession = dropSession(sessionId);
+      if (activeSession !== session) throw new Error("review_gate_session_not_active");
+      releaseHandles(session);
+      let result: ApprovedDesignOperationReadBinding | null = null;
+      let admissionError: unknown;
+      try {
+        result = await scopeAdmission.withAdmissionLease(
+          {
+            workspaceRoot,
+            workspaceIdentity,
+            designPath: session.designPath,
+            planPath: session.planPath,
+            protocol,
+          },
+          async (decision, _observation, owned) => {
+            if (decision.kind === "BLOCK") return null;
+            const events = await eventStore.readVerifiedEvents(session.gateId);
+            const clear = events.find((event) => event.eventType === "DESIGN_CLEAR");
+            if (
+              clear === undefined ||
+              !("eventId" in clear) ||
+              !("schemaVersion" in clear) ||
+              typeof clear.payload.approvedContextEventId !== "string"
+            ) return null;
+            return buildApprovedDesignOperationReadBinding(
+              owned,
+              {
+                gateId: session.gateId,
+                operationId: clear.payload.approvedContextEventId,
+                designPath: session.designPath,
+              },
+              options.approvedDesignReadDependencies,
+            );
+          },
+        );
+      } catch (error: unknown) {
+        admissionError = error;
+      }
+      const reacquired = await acquireGateLockChain(
+        lockManager,
+        computeReviewScopeId(session.designPath, session.planPath),
+        session.gateId,
+      );
+      if (reacquired.kind === "occupied") {
+        throw new Error("review_gate_session_lock_reacquisition_blocked");
+      }
+      registerSession({
+        ...session,
+        scopeLock: reacquired.scopeLock,
+        gateLock: reacquired.gateLock,
+      });
+      if (admissionError !== undefined) throw admissionError;
+      if (result === null) throw new Error("review_gate_approved_design_proof_unavailable");
+      approvedDesignBinding = result;
+    }
     const record: PreparedReviewGateOperationRecordV1 = Object.freeze({
       recordKind: PREPARED_OPERATION_RECORD_KIND,
       schemaVersion: 1,
       gateId: session.gateId,
       operationId,
       operation,
+      ...(approvedDesignBinding === undefined ? {} : { approvedDesignBinding }),
     });
     const bytes = Buffer.from(JSON.stringify(record), "utf8");
     const digest = computeArtifactDigest(bytes);
@@ -1882,6 +2054,20 @@ export function createReviewGateCoordinator(
         "review_gate_prepared_operation_mismatch",
       );
     }
+    if (
+      "phase" in prepared.operation && prepared.operation.phase === "plan" &&
+      prepared.approvedDesignBinding === undefined
+    ) {
+      return preparedDecisionOutcome(
+        "blocked",
+        operationId,
+        "review_gate_approved_design_proof_unavailable",
+      );
+    }
+    session.approvedDesignBinding = prepared.approvedDesignBinding ?? null;
+    session.approvedDesignInputBindingDigest = prepared.approvedDesignBinding === undefined
+      ? null
+      : computeArtifactDigest(Buffer.from(JSON.stringify(prepared), "utf8"));
     const projection = await loadProjection(session.gateId);
     let planned: ReviewGateNextOperation;
     try {
@@ -1974,7 +2160,7 @@ export function createReviewGateCoordinator(
   // startOrResume
   // ---------------------------------------------------------------------------
 
-  const startOrResume = async (
+  const driveReviewGateAdmission = async (
     sessionId: string,
     request: ReviewGateRequest,
   ): Promise<ReviewGateCommandResult> => {
@@ -2007,7 +2193,7 @@ export function createReviewGateCoordinator(
     const planDigest = computeArtifactDigest(planBytes);
     const reviewScopeId: ReviewScopeId = computeReviewScopeId(designPath, planPath);
 
-    const runStartOrResume = async (): Promise<ReviewGateCommandResult> => {
+    const runLegacyMissingAdmissionFallback = async (): Promise<ReviewGateCommandResult> => {
       const existingGateIdRaw = await eventStore.readScopeIndex(reviewScopeId);
       if (existingGateIdRaw !== null) {
         const existingGateId = existingGateIdRaw as GateId;
@@ -2088,11 +2274,213 @@ export function createReviewGateCoordinator(
     };
 
     if (scopeAdmission === null || workspaceRoot === null || workspaceIdentity === null) {
-      return runStartOrResume();
+      return runLegacyMissingAdmissionFallback();
     }
 
-    try {
-      return await scopeAdmission.withAdmissionLease(
+    /**
+     * Task 4d — durable V2 Gate creation under the admission lease. The witness
+     * owns the scope/Gate locks, so the publication is prepared and committed
+     * before the lease returns; the outer driver then resumes the new Gate.
+     */
+    const applyAdmittedCreation = async (
+      decision: Extract<
+        AdmissionDecision,
+        { kind: "CREATE_GENESIS" | "CREATE_SUCCESSOR" }
+      >,
+      observation: ReviewGateAdmissionObservation | null,
+      owned: AdmissionOwnedWitness,
+    ): Promise<ReviewGateAdmissionExecutionResult> => {
+      if (observation === null) {
+        throw new Error("review_gate_admitted_creation_observation_missing");
+      }
+      if (eventStore.prepareAdmittedGenerationPublication === undefined) {
+        throw new Error("review_gate_admitted_generation_store_surface_missing");
+      }
+
+      const installation = await owned.readInstallation();
+      const frontier = await owned.readVerifiedFrontier();
+      const scopeId = decision.scopeId;
+      const gateId = newId() as GateId;
+      const writerId = newWriterId() as WriterId;
+      const operationId = newId();
+      const generationId = newId();
+      const epochId = installation.epoch as EpochId;
+      const eventId = newId();
+      const parentEventId = newId();
+
+      const designArtifact = observation.snapshot.current.design;
+      const planArtifact = observation.snapshot.current.plan;
+      const requirementsResolution = observation.requirementsResolution;
+
+      const pathPairDigest = computeCanonicalJsonFingerprint([
+        designArtifact.canonicalPath,
+        planArtifact.canonicalPath,
+      ]);
+
+      let scopeEnrollment: ScopeEnrollmentV1;
+      let supersedesGateId: string | null;
+
+      if (decision.kind === "CREATE_GENESIS") {
+        const authority = await owned.readFirstEnrollmentAuthority();
+        if (authority === null) {
+          throw new Error("review_gate_admitted_creation_first_enrollment_missing");
+        }
+        supersedesGateId = null;
+        scopeEnrollment = {
+          scopeId,
+          workflowContinuityId: newId(),
+          canonicalDesignPath: designArtifact.canonicalPath,
+          canonicalPlanPath: planArtifact.canonicalPath,
+          pathPairDigest,
+          provenance: {
+            kind: "verified_genesis",
+            evidenceDigest: computeCanonicalJsonFingerprint(authority),
+            priorScopeId: null,
+            priorGateId: null,
+          },
+          gateMembership: [],
+        };
+      } else {
+        const predecessor = observation.snapshot.currentTips.find(
+          (tip) =>
+            tip.status === "completed" &&
+            tip.scopeId === decision.predecessorScopeId &&
+            tip.gateId === decision.predecessorGateId &&
+            tip.completedApproval.approvalEventId === decision.predecessorApprovalEventId,
+        );
+        if (predecessor === undefined || predecessor.status !== "completed") {
+          throw new Error("review_gate_admitted_creation_predecessor_missing");
+        }
+        supersedesGateId = decision.predecessorGateId;
+        const provisionalEnrollment: ScopeEnrollmentV1 = {
+          scopeId,
+          workflowContinuityId: newId(),
+          canonicalDesignPath: designArtifact.canonicalPath,
+          canonicalPlanPath: planArtifact.canonicalPath,
+          pathPairDigest,
+          provenance: {
+            kind: "verified_completed_successor",
+            evidenceDigest: "", // computed below after the scope is fully formed
+            priorScopeId: decision.predecessorScopeId,
+            priorGateId: decision.predecessorGateId,
+          },
+          gateMembership: [],
+        };
+        const evidenceDigest = computeCanonicalJsonFingerprint({
+          installationId: installation.installationId,
+          operationId,
+          expectedWorkspaceFrontier: frontier.globalFrontierHash,
+          scope: {
+            ...provisionalEnrollment,
+            provenance: {
+              kind: "verified_completed_successor",
+              evidenceDigest: "",
+              priorScopeId: decision.predecessorScopeId,
+              priorGateId: decision.predecessorGateId,
+            },
+          },
+        });
+        scopeEnrollment = {
+          ...provisionalEnrollment,
+          provenance: {
+            ...provisionalEnrollment.provenance,
+            evidenceDigest,
+          },
+        };
+      }
+
+      const scopeEnrollmentWithGate: ScopeEnrollmentV1 = {
+        ...scopeEnrollment,
+        gateMembership: [
+          ...scopeEnrollment.gateMembership,
+          {
+            gateId,
+            generationId,
+            supersedesGateId,
+            admissionEventId: eventId,
+            writerIds: [writerId],
+          },
+        ],
+      };
+
+      const gateEvent = validateReviewGateEventRecord({
+        schemaVersion: 2,
+        eventId,
+        parentEventId,
+        emittedAt: now(),
+        gateId,
+        epochId,
+        generationId,
+        writerId,
+        eventType: "GATE_CREATED",
+        payload: {
+          reviewScopeId: scopeId,
+          supersedesGateId,
+          requirementsResolution,
+          designArtifact,
+          planArtifact,
+          reviewProtocolFingerprint: observation.snapshot.current.globalProtocolFingerprint,
+          designProtocolFingerprint: observation.snapshot.current.designProtocolFingerprint,
+          planProtocolFingerprint: observation.snapshot.current.planProtocolFingerprint,
+        },
+      });
+
+      const writerHeadHash = computeArtifactDigest(
+        Buffer.from(`${encodeReviewGateEventRecord(gateEvent)}\n`),
+      );
+
+      const membershipPayload: AdmittedMembershipAuthorizationPayload = {
+        installationId: installation.installationId,
+        workspaceIdentity: frontier.workspaceIdentity,
+        operationId,
+        expectedWorkspaceFrontier: frontier.globalFrontierHash,
+        scope: scopeEnrollmentWithGate,
+      };
+
+      const membership = {
+        gateId,
+        generationId,
+        operationId,
+        writerId,
+        writerHead: { sequence: 1, hash: writerHeadHash },
+        supersedesGateId,
+        authorization: {
+          ...membershipPayload,
+          signature: await owned.signAdmittedMembership(membershipPayload),
+        },
+      };
+
+      const publication = await eventStore.prepareAdmittedGenerationPublication(
+        {
+          scopeId,
+          gateId,
+          writerId,
+          operationId,
+          canonicalEvents: [gateEvent],
+          decision,
+          observation,
+          membership,
+        },
+        owned,
+      );
+
+      const commitResult = await owned.commitPreparedPublicationCAS({
+        publicationId: publication.publicationId,
+        expectedGlobalFrontier: publication.expectedGlobalFrontier,
+        expectedWriterHash: publication.expectedWriterHash,
+      });
+      if (commitResult !== "advanced" && commitResult !== "already_committed") {
+        throw new Error("review_gate_admitted_creation_commit_blocked");
+      }
+      await eventStore.writeScopeIndex(scopeId, gateId);
+      return Object.freeze({ kind: "MUTABLE_APPLICATION_YIELDED", gateId, gateEvent });
+    };
+
+    // Admission authority spans decision application: the callback returns the
+    // internal execution result while the lease is held, and only the outer
+    // driver converts RESULT/BLOCK to the public command result.
+    const applyDecision = async (): Promise<ReviewGateAdmissionExecutionResult> =>
+      scopeAdmission.withAdmissionLease(
         {
           workspaceRoot,
           workspaceIdentity,
@@ -2101,56 +2489,646 @@ export function createReviewGateCoordinator(
           explicitRequirementsPath: request.requirementsPath,
           protocol,
         },
-        async (decision) => {
-          if (decision.kind === "BLOCK") {
-            return blockedResult(
-              request.designPath,
-              planPath,
-              `[JUSTICE: REVIEW GATE BLOCKED] Scope admission blocked: ${decision.detail}`,
-            );
-          }
-          if (decision.kind === "REUSE_COMPLETED") {
-            // Scope admission already verified the completed binding against the
-            // current workspace; reuse read-only without re-acquiring locks.
-            const previous = dropSession(sessionId);
-            if (previous !== undefined) releaseHandles(previous);
-            return Object.freeze({
-              dispatched: false,
-              gateId: decision.gateId as GateId,
-              guidance: [
-                "---",
-                "[JUSTICE: REVIEW GATE CLEAR]",
-                "",
-                "An exactly matching completed Review Gate was reused read-only (verified by scope admission). Implementation authorization still requires the explicit user command:",
-                `/justice-implement --plan ${planPath} --approved`,
-                "---",
-              ].join("\n"),
-              designPath,
-              planPath,
-              designDigest,
-              planDigest,
-              lockPhase: "awaiting_implementation_authorization",
-              completedReuse: true,
+        (decision, observation, owned) => {
+          const blockUnsupported = (reason: string): ReviewGateAdmissionExecutionResult =>
+            Object.freeze({
+              kind: "BLOCK",
+              reason,
+              result: blockedResult(
+                designPath,
+                planPath,
+                `[JUSTICE: REVIEW GATE BLOCKED] ${reason}`,
+              ),
             });
-          }
-          return runStartOrResume();
+          const applyCreation = (
+            admittedDecision: Extract<AdmissionDecision, { kind: "CREATE_GENESIS" | "CREATE_SUCCESSOR" }>,
+          ): Promise<ReviewGateAdmissionExecutionResult> =>
+            applyAdmittedCreation(admittedDecision, observation, owned);
+          const findAdmittedTip = (
+            gateId: string,
+            generationId: string,
+          ) => observation?.snapshot.currentTips.find(
+            (tip) =>
+              tip.status !== "completed" &&
+              tip.gateId === gateId &&
+              tip.generationId === generationId,
+          );
+          const matchingPrecedence = (
+            gateId: string,
+            generationId: string,
+            witnessFrontierHash: string,
+          ) => {
+            const snapshot = observation?.snapshot;
+            const precedence = snapshot?.precedence;
+            return snapshot !== undefined &&
+              precedence !== null &&
+              precedence !== undefined &&
+              snapshot.verifiedFrontierHash === witnessFrontierHash &&
+              precedence.gateId === gateId &&
+              precedence.generationId === generationId &&
+              precedence.witnessFrontierHash === witnessFrontierHash
+              ? precedence
+              : null;
+          };
+          const handlers: ReviewGateAdmissionHandlers = {
+            BLOCK: (admittedDecision) => Promise.resolve(Object.freeze({
+              kind: "BLOCK",
+              reason: admittedDecision.reason,
+              result: blockedResult(
+                request.designPath,
+                planPath,
+                `[JUSTICE: REVIEW GATE BLOCKED] Scope admission blocked: ${admittedDecision.detail}`,
+              ),
+            })),
+            REUSE_COMPLETED: (admittedDecision) => {
+              const previous = dropSession(sessionId);
+              if (previous !== undefined) releaseHandles(previous);
+              return Promise.resolve(Object.freeze({
+                kind: "RESULT",
+                result: Object.freeze({
+                  dispatched: false,
+                  gateId: admittedDecision.gateId as GateId,
+                  guidance: [
+                    "---",
+                    "[JUSTICE: REVIEW GATE CLEAR]",
+                    "",
+                    "An exactly matching completed Review Gate was reused read-only (verified by scope admission). Implementation authorization still requires the explicit user command:",
+                    `/justice-implement --plan ${planPath} --approved`,
+                    "---",
+                  ].join("\n"),
+                  designPath,
+                  planPath,
+                  designDigest,
+                  planDigest,
+                  lockPhase: "awaiting_implementation_authorization",
+                  completedReuse: true,
+                }),
+              }));
+            },
+            CREATE_GENESIS: (admittedDecision) => applyCreation(admittedDecision),
+            CREATE_SUCCESSOR: (admittedDecision) => applyCreation(admittedDecision),
+            RESUME: (admittedDecision) => Promise.resolve(Object.freeze({
+              kind: "RESUME_ADMITTED",
+              gateId: admittedDecision.gateId,
+            })),
+            STAY_SUSPENDED: () => Promise.resolve(blockUnsupported("The admitted Gate is suspended and cannot be resumed by this request.")),
+            REVALIDATE_OR_BLOCK: async (admittedDecision) => {
+              const admissionObservation = observation;
+              const snapshot = admissionObservation?.snapshot;
+              const tip = findAdmittedTip(admittedDecision.gateId, admittedDecision.generationId);
+              if (snapshot === undefined || admissionObservation === null || tip === undefined || tip.status === "completed") {
+                return blockUnsupported("Same-generation revalidation observation or unfinished Gate tip is unavailable.");
+              }
+              if (
+                !admittedDecision.predecessorProofRefs.includes(tip.lastVerifiedBinding.admission.gateCreatedEventId) ||
+                !admittedDecision.predecessorProofRefs.includes(tip.lastVerifiedBinding.effective.authorityEventId) ||
+                computeCanonicalJsonFingerprint(admittedDecision.effectiveBinding) !==
+                  computeCanonicalJsonFingerprint(tip.lastVerifiedBinding.effective) ||
+                computeCanonicalJsonFingerprint(admittedDecision.current) !==
+                  computeCanonicalJsonFingerprint(snapshot.current) ||
+                admittedDecision.triggeringAuthorityEventId !== admittedDecision.current.requirements.observationEvidenceId ||
+                admittedDecision.phase !== (tip.lastVerifiedBinding.ownDesignClear === null ? "design" : "plan") ||
+                admittedDecision.roundCountersBefore.design !== tip.rounds.design ||
+                admittedDecision.roundCountersBefore.plan !== tip.rounds.plan ||
+                admittedDecision.roundCountersAfter.design !== tip.rounds.design ||
+                admittedDecision.roundCountersAfter.plan !== tip.rounds.plan
+              ) {
+                return blockUnsupported("Same-generation revalidation decision does not match its verified current binding.");
+              }
+              owned.assertOwnedScope(snapshot.scopeId);
+              owned.assertOwnedGate(admittedDecision.gateId);
+
+              const frontier = await owned.readVerifiedFrontier();
+              if (
+                frontier.globalFrontierHash !== admittedDecision.witnessFrontierHash ||
+                snapshot.verifiedFrontierHash !== admittedDecision.witnessFrontierHash
+              ) {
+                return blockUnsupported("Same-generation revalidation frontier changed before semantic proof validation.");
+              }
+
+              const oldRequirements = admittedDecision.effectiveBinding.currentRequirements;
+              const currentRequirements = admittedDecision.current.requirements;
+              if (
+                !/^[a-f0-9]{40,64}$/u.test(oldRequirements.gitBlobOid) ||
+                !/^[a-f0-9]{40,64}$/u.test(currentRequirements.gitBlobOid) ||
+                oldRequirements.selectedByEventId !== admittedDecision.effectiveBinding.currentRequirementsAuthorityEventId ||
+                currentRequirements.workspaceIdentity !== snapshot.workspaceIdentity
+              ) {
+                return blockUnsupported("Same-generation revalidation lacks complete verified Requirements bindings.");
+              }
+
+              const [oldBlob, currentBytes] = await Promise.all([
+                runGitLiteral(workspaceRoot, ["cat-file", "blob", oldRequirements.gitBlobOid]),
+                reader.readWorkspaceFile(currentRequirements.canonicalPath),
+              ]);
+              if (oldBlob.code !== 0 || currentBytes === null) {
+                return blockUnsupported("Same-generation semantic compatibility source is unavailable.");
+              }
+              if (
+                computeArtifactDigest(oldBlob.stdout) !== oldRequirements.digest ||
+                computeArtifactDigest(currentBytes) !== currentRequirements.digest
+              ) {
+                return blockUnsupported("Same-generation semantic compatibility bytes do not match their verified artifact bindings.");
+              }
+
+              const decoder = new TextDecoder("utf-8", { fatal: true });
+              let oldSourceText: string;
+              let currentSourceText: string;
+              try {
+                oldSourceText = decoder.decode(oldBlob.stdout);
+                currentSourceText = decoder.decode(currentBytes);
+              } catch (error: unknown) {
+                if (error instanceof TypeError) {
+                  return blockUnsupported("Same-generation semantic compatibility source is not valid UTF-8.");
+                }
+                throw error;
+              }
+
+              const oldInventory = buildRequirementsSectionInventory(
+                Buffer.from(oldSourceText, "utf8"),
+                oldRequirements.gitBlobOid,
+                REQUIREMENTS_HEADING_ANCHOR_VERSION,
+              );
+              const currentInventory = buildRequirementsSectionInventory(
+                Buffer.from(currentSourceText, "utf8"),
+                currentRequirements.gitBlobOid,
+                REQUIREMENTS_HEADING_ANCHOR_VERSION,
+              );
+              const oldBinding = admittedDecision.effectiveBinding;
+              const oldContext = oldBinding.context;
+              const designClear = tip.lastVerifiedBinding.ownDesignClear;
+              const upstreamApproved = admittedDecision.phase === "plan" && designClear !== null
+                ? Object.freeze({
+                    bindingDigest: computeCanonicalJsonFingerprint({
+                      design: designClear.approvedDesign,
+                      designProtocolFingerprint: designClear.designProtocolFingerprint,
+                      approvedContextEventId: designClear.approvedContextEventId,
+                    }),
+                    authorityEventId: designClear.approvedContextEventId,
+                  })
+                : null;
+              const phaseFingerprint = (phase: ReviewGatePhase, context: typeof oldContext): string =>
+                phase === "design" ? context.designProtocolFingerprint : context.planProtocolFingerprint;
+              const oldPhaseFingerprint = phaseFingerprint(admittedDecision.phase, oldContext);
+              const newPolicyVersion = String(
+                admittedDecision.phase === "design"
+                  ? protocol.descriptor.designPhase.phasePolicyVersion
+                  : protocol.descriptor.planPhase.phasePolicyVersion,
+              );
+              const newPhaseFingerprint = phaseFingerprint(admittedDecision.phase, {
+                ...oldContext,
+                globalProtocolFingerprint: admittedDecision.current.globalProtocolFingerprint,
+                designProtocolFingerprint: admittedDecision.current.designProtocolFingerprint,
+                planProtocolFingerprint: admittedDecision.current.planProtocolFingerprint,
+              });
+              const oldInputs: SemanticContextInputsV1 = Object.freeze({
+                workspaceIdentity: oldRequirements.workspaceIdentity,
+                gateId: admittedDecision.gateId,
+                generationId: admittedDecision.generationId,
+                phase: admittedDecision.phase,
+                phaseBaselineId: oldBinding.authorityEventId,
+                comparisonSegmentId: oldBinding.operationId,
+                requirements: Object.freeze({
+                  source: oldRequirements.source,
+                  canonicalPath: oldRequirements.canonicalPath,
+                  gitBlobOid: oldRequirements.gitBlobOid,
+                  gitMode: oldRequirements.gitMode,
+                  authorityEventId: oldRequirements.selectedByEventId,
+                  governingReferenceManifestDigest: computeCanonicalJsonFingerprint(
+                    oldInventory.sections.map((section) => section.sectionKey),
+                  ),
+                }),
+                upstreamApproved,
+                policy: Object.freeze({
+                  contractId: "review-gate-phase-semantic-policy",
+                  version: "1",
+                  semanticFingerprint: oldPhaseFingerprint,
+                  lineageFingerprint: oldContext.globalProtocolFingerprint,
+                  nc1Fingerprint: oldContext.globalProtocolFingerprint,
+                  validatorRegistryDigest: SEMANTIC_CONTEXT_COMPATIBILITY_PROOF_REGISTRY_DIGEST,
+                }),
+              });
+              const newInputs: SemanticContextInputsV1 = Object.freeze({
+                workspaceIdentity: currentRequirements.workspaceIdentity,
+                gateId: admittedDecision.gateId,
+                generationId: admittedDecision.generationId,
+                phase: admittedDecision.phase,
+                phaseBaselineId: oldBinding.authorityEventId,
+                comparisonSegmentId: oldBinding.operationId,
+                requirements: Object.freeze({
+                  source: currentRequirements.source,
+                  canonicalPath: currentRequirements.canonicalPath,
+                  gitBlobOid: currentRequirements.gitBlobOid,
+                  gitMode: currentRequirements.gitMode,
+                  authorityEventId: admittedDecision.triggeringAuthorityEventId,
+                  governingReferenceManifestDigest: computeCanonicalJsonFingerprint(
+                    currentInventory.sections.map((section) => section.sectionKey),
+                  ),
+                }),
+                upstreamApproved: admittedDecision.phase === "plan" && designClear !== null
+                  ? Object.freeze({
+                      bindingDigest: computeCanonicalJsonFingerprint({
+                        design: admittedDecision.current.design,
+                        designProtocolFingerprint: admittedDecision.current.designProtocolFingerprint,
+                        approvedContextEventId: designClear.approvedContextEventId,
+                      }),
+                      authorityEventId: designClear.approvedContextEventId,
+                    })
+                  : null,
+                policy: Object.freeze({
+                  contractId: "review-gate-phase-semantic-policy",
+                  version: newPolicyVersion,
+                  semanticFingerprint: newPhaseFingerprint,
+                  lineageFingerprint: admittedDecision.current.globalProtocolFingerprint,
+                  nc1Fingerprint: admittedDecision.current.globalProtocolFingerprint,
+                  validatorRegistryDigest: SEMANTIC_CONTEXT_COMPATIBILITY_PROOF_REGISTRY_DIGEST,
+                }),
+              });
+              const operationId = computeCanonicalJsonFingerprint({
+                gateId: admittedDecision.gateId,
+                generationId: admittedDecision.generationId,
+                triggeringAuthorityEventId: admittedDecision.triggeringAuthorityEventId,
+                witnessFrontierHash: admittedDecision.witnessFrontierHash,
+                kind: "semantic-context-transition",
+              });
+              const planned = planVerifiedSemanticContextTransition({
+                oldInputs,
+                newInputs,
+                oldSourceText,
+                newSourceText: currentSourceText,
+                oldAuthorityEventId: oldBinding.authorityEventId,
+                newAuthorityEventId: admittedDecision.triggeringAuthorityEventId,
+                triggeringAuthorityEventId: admittedDecision.triggeringAuthorityEventId,
+                verifiedFrontierHash: admittedDecision.witnessFrontierHash,
+                roundCountersBefore: admittedDecision.roundCountersBefore,
+                roundCountersAfter: admittedDecision.roundCountersAfter,
+                operationId,
+                validationEventId: computeCanonicalJsonFingerprint({
+                  operationId,
+                  kind: "semantic-context-validation",
+                }),
+                executableDigest: protocol.releaseDescriptorDigest,
+                registeredPolicyDigest: SEMANTIC_CONTEXT_COMPATIBILITY_TABLE_DIGEST,
+                governingReferenceSectionKeys: currentInventory.sections.map((section) => section.sectionKey),
+              });
+              if (planned.kind === "BLOCK") return blockUnsupported(planned.reason);
+              if (planned.decision.kind === "PREPARE_INCOMPATIBLE_SEGMENT") {
+                const journal = await eventStore.readV2Journal(admittedDecision.gateId);
+                const tailEvent = journal.events.at(-1);
+                if (
+                  tailEvent === undefined ||
+                  !(("schemaVersion" in tailEvent) && tailEvent.schemaVersion === 2) ||
+                  tailEvent.generationId !== admittedDecision.generationId
+                ) {
+                  return blockUnsupported("Same-generation semantic transition cannot be anchored to its verified Gate journal.");
+                }
+                const scopeId = observation?.snapshot.scopeId;
+                if (scopeId === undefined) return blockUnsupported("Semantic transition scope is unavailable.");
+                if (!("prepareAdmittedOperationPublication" in eventStore) ||
+                  typeof eventStore.prepareAdmittedOperationPublication !== "function" ||
+                  !("readVerifiedScopeOwned" in eventStore) ||
+                  typeof eventStore.readVerifiedScopeOwned !== "function")
+                  return blockUnsupported("Protected operation publication is unavailable.");
+                const transitionEvent = validateReviewGateEventRecord({
+                  schemaVersion: 2,
+                  eventId: computeCanonicalJsonFingerprint({ operationId, kind: "semantic-transition-event" }),
+                  parentEventId: journal.tailEventId ?? admittedDecision.gateId,
+                  emittedAt: now(),
+                  gateId: admittedDecision.gateId,
+                  epochId: tailEvent.epochId,
+                  generationId: admittedDecision.generationId,
+                  writerId: tailEvent.writerId,
+                  eventType: "SEMANTIC_CONTEXT_TRANSITION",
+                  payload: planned.input,
+                });
+                const committedScope = await eventStore.readVerifiedScopeOwned(owned, scopeId);
+                const priorOperationEvent = committedScope.eventsByGate.get(admittedDecision.gateId)?.find(
+                  (event) => "schemaVersion" in event && event.schemaVersion === 2 &&
+                    event.eventType === "SEMANTIC_CONTEXT_TRANSITION" &&
+                    event.payload.operationId === operationId,
+                );
+                if (priorOperationEvent !== undefined) {
+                  if (computeCanonicalJsonFingerprint(priorOperationEvent.payload) !==
+                    computeCanonicalJsonFingerprint(planned.input))
+                    return blockUnsupported("Semantic transition operation was already committed with different evidence.");
+                  await eventStore.appendV2Events(admittedDecision.gateId, [priorOperationEvent]);
+                  resumeDecisionNeedsRevalidation = true;
+                  return Object.freeze({ kind: "RESUME_ADMITTED", gateId: admittedDecision.gateId });
+                }
+                const frontier = await owned.readVerifiedFrontier();
+                if (frontier.globalFrontierHash !== admittedDecision.witnessFrontierHash)
+                  return blockUnsupported("Semantic transition frontier changed before protected publication.");
+                const writerHead = frontier.writerHeads.find((head) =>
+                  head.scopeId === scopeId && head.gateId === admittedDecision.gateId && head.writerId === tailEvent.writerId,
+                );
+                const publication = await eventStore.prepareAdmittedOperationPublication({
+                  scopeId,
+                  gateId: admittedDecision.gateId,
+                  writerId: tailEvent.writerId,
+                  operationId,
+                  canonicalEvents: [transitionEvent],
+                  ...(writerHead === undefined ? {} : { expectedWriterHead: writerHead.hash }),
+                }, owned);
+                const committed = await owned.commitPreparedPublicationCAS({
+                  publicationId: publication.publicationId,
+                  expectedGlobalFrontier: publication.expectedGlobalFrontier,
+                  expectedWriterHash: publication.expectedWriterHash,
+                });
+                const recovered = committed === "blocked"
+                  ? await owned.recoverPreparedPublication(publication.publicationId)
+                  : committed;
+                if (recovered === "blocked") return blockUnsupported("Semantic transition protected publication did not commit.");
+                await eventStore.appendV2Events(admittedDecision.gateId, [transitionEvent]);
+              }
+              resumeDecisionNeedsRevalidation = true;
+              return Object.freeze({ kind: "RESUME_ADMITTED", gateId: admittedDecision.gateId });
+            },
+            UPSTREAM_PRECEDENCE_REQUIRED: (admittedDecision) => {
+              const precedence = matchingPrecedence(
+                admittedDecision.gateId,
+                admittedDecision.generationId,
+                admittedDecision.witnessFrontierHash,
+              );
+              const tip = findAdmittedTip(admittedDecision.gateId, admittedDecision.generationId);
+              const blocker = precedence?.currentUpstreamBlockers.find((candidate) =>
+                admittedDecision.blockers.some((expected) =>
+                  expected.lineageId === candidate.lineageId &&
+                  expected.findingEventId === candidate.findingEventId &&
+                  expected.currentStatusEventId === candidate.currentStatusEventId &&
+                  expected.committedAuthorityEventId === candidate.committedAuthorityEventId &&
+                  expected.owner === candidate.owner,
+                ),
+              );
+              const completeBlockerSet = precedence !== null &&
+                precedence.currentUpstreamBlockers.length === admittedDecision.blockers.length &&
+                admittedDecision.blockers.every((expected) =>
+                  precedence.currentUpstreamBlockers.some((current) =>
+                    current.lineageId === expected.lineageId &&
+                    current.findingEventId === expected.findingEventId &&
+                    current.currentStatusEventId === expected.currentStatusEventId &&
+                    current.committedAuthorityEventId === expected.committedAuthorityEventId &&
+                    current.owner === expected.owner,
+                  ),
+                );
+              if (precedence === null || tip === undefined || blocker === undefined || !completeBlockerSet) {
+                return Promise.resolve(blockUnsupported("Upstream precedence proof is stale or does not match the admitted tip."));
+              }
+              const scopeId = observation?.snapshot.scopeId;
+              if (scopeId === undefined) {
+                return Promise.resolve(blockUnsupported("Upstream precedence observation is unavailable."));
+              }
+              owned.assertOwnedScope(scopeId);
+              owned.assertOwnedGate(admittedDecision.gateId);
+              const verifiedUpstreamReopen: VerifiedUpstreamReopenContextV1 = Object.freeze({
+                gateId: admittedDecision.gateId,
+                generationId: admittedDecision.generationId,
+                currentPhase: precedence.phase,
+                upstreamBlocker: Object.freeze({
+                  lineageId: blocker.lineageId,
+                  findingEventId: blocker.findingEventId,
+                  currentOwner: blocker.owner,
+                  committedAuthorityEventId: blocker.committedAuthorityEventId,
+                }),
+                downstream: null,
+                restoreCompletion: null,
+                verifiedFrontierHash: admittedDecision.witnessFrontierHash,
+              });
+              return owned.readVerifiedFrontier().then((frontier) => {
+                if (frontier.globalFrontierHash !== admittedDecision.witnessFrontierHash) {
+                  return blockUnsupported("Upstream reopen frontier changed before Core planning.");
+                }
+                return Object.freeze({
+                  kind: "RESUME_ADMITTED",
+                  gateId: admittedDecision.gateId,
+                  verifiedUpstreamReopen,
+                });
+              });
+            },
+            STALE_LINEAGE_REVALIDATION_REQUIRED: (admittedDecision) => {
+              const snapshot = observation?.snapshot;
+              const precedence = matchingPrecedence(
+                admittedDecision.gateId,
+                admittedDecision.generationId,
+                admittedDecision.witnessFrontierHash,
+              );
+              const tip = findAdmittedTip(admittedDecision.gateId, admittedDecision.generationId);
+              const pendingMatches = precedence !== null &&
+                precedence.pendingStaleLineages.length === admittedDecision.pending.length &&
+                admittedDecision.pending.every((expected) =>
+                  precedence.pendingStaleLineages.some((current) =>
+                    current.lineageId === expected.lineageId &&
+                    current.staleEvidenceEventId === expected.staleEvidenceEventId &&
+                    current.requiredRevalidationRuleId === expected.requiredRevalidationRuleId,
+                  ),
+                );
+              if (!pendingMatches || tip === undefined) {
+                return Promise.resolve(blockUnsupported("Stale-lineage evidence is missing or no longer matches the admitted tip."));
+              }
+              const scopeId = observation?.snapshot.scopeId;
+              if (scopeId === undefined) {
+                return Promise.resolve(blockUnsupported("Stale-lineage observation is unavailable."));
+              }
+              owned.assertOwnedScope(scopeId);
+              owned.assertOwnedGate(admittedDecision.gateId);
+              return Promise.all([
+                owned.readVerifiedFrontier(),
+                eventStore.readV2Journal(admittedDecision.gateId),
+              ]).then(([frontier, journal]) => {
+                if (
+                  frontier.globalFrontierHash !== admittedDecision.witnessFrontierHash ||
+                  snapshot === undefined ||
+                  snapshot.verifiedFrontierHash !== admittedDecision.witnessFrontierHash ||
+                  journal.eventCount === 0
+                ) {
+                  return blockUnsupported("Stale-lineage frontier or durable Gate journal is unavailable or stale.");
+                }
+                return Object.freeze({ kind: "RESUME_ADMITTED", gateId: admittedDecision.gateId });
+              });
+            },
+            INSPECT_NC1_ELIGIBLE_CHANGE: () => Promise.resolve(blockUnsupported("NC1 eligibility inspection is not an execution authorization.")),
+            REENTRY_CANDIDATE: (admittedDecision, admittedObservation) => {
+              const reentry = planAdmissionNC1Reentry(admittedDecision, admittedObservation);
+              switch (reentry.kind) {
+                case "BLOCK":
+                  return Promise.resolve(blockUnsupported(reentry.reason));
+                case "STAY_SUSPENDED":
+                  return Promise.resolve(blockUnsupported("The verified NC1 outcome does not authorize reentry."));
+                case "REENTER_SAME_GENERATION":
+                  return (async () => {
+                    const scopeId = admittedObservation?.snapshot.scopeId;
+                    const frontier = await owned.readVerifiedFrontier();
+                    if (scopeId === undefined || frontier.globalFrontierHash !== admittedDecision.witnessFrontierHash)
+                      return blockUnsupported("NC1 reentry scope or frontier is stale.");
+                    const verifiedChange = reentry.input.verifiedChange;
+                    if (verifiedChange === null)
+                      return blockUnsupported("NC1 reentry has no verified material change.");
+                    if (!("prepareAdmittedOperationPublication" in eventStore) ||
+                      typeof eventStore.prepareAdmittedOperationPublication !== "function" ||
+                      !("readVerifiedScopeOwned" in eventStore) ||
+                      typeof eventStore.readVerifiedScopeOwned !== "function")
+                      return blockUnsupported("Protected operation publication is unavailable.");
+                    const journal = await eventStore.readV2Journal(admittedDecision.gateId);
+                    const tailEvent = journal.events.at(-1);
+                    if (tailEvent === undefined || !("schemaVersion" in tailEvent) || tailEvent.schemaVersion !== 2 ||
+                      tailEvent.generationId !== reentry.generationId || tailEvent.epochId !== reentry.epochId)
+                      return blockUnsupported("NC1 reentry cannot be anchored to the stopped generation and epoch.");
+                    const operationId = computeCanonicalJsonFingerprint({
+                      gateId: reentry.gateId,
+                      generationId: reentry.generationId,
+                      validationEventId: reentry.validationEventId,
+                      changeObservedEventId: verifiedChange.changeObservedEventId,
+                    });
+                    const event = validateReviewGateEventRecord({
+                      schemaVersion: 2,
+                      eventId: computeCanonicalJsonFingerprint({ operationId, kind: "nc1-reentry-event" }),
+                      parentEventId: journal.tailEventId ?? reentry.gateId,
+                      emittedAt: now(),
+                      gateId: reentry.gateId,
+                      epochId: reentry.epochId,
+                      generationId: reentry.generationId,
+                      writerId: tailEvent.writerId,
+                      eventType: "NC1_REENTRY_OUTCOME_APPLIED",
+                      payload: {
+                        operationId,
+                        validationEventId: reentry.validationEventId,
+                        nc1EvidenceEventId: reentry.input.nc1EvidenceEventId,
+                        changeObservedEventId: verifiedChange.changeObservedEventId,
+                        remainingRounds: reentry.input.remainingRounds,
+                      },
+                    });
+                    const committedScope = await eventStore.readVerifiedScopeOwned(owned, scopeId);
+                    const priorOperationEvent = committedScope.eventsByGate.get(reentry.gateId)?.find(
+                      (candidate) => "schemaVersion" in candidate && candidate.schemaVersion === 2 &&
+                        candidate.eventType === "NC1_REENTRY_OUTCOME_APPLIED" &&
+                        candidate.payload.operationId === operationId,
+                    );
+                    if (priorOperationEvent !== undefined) {
+                      if (computeCanonicalJsonFingerprint(priorOperationEvent.payload) !==
+                        computeCanonicalJsonFingerprint(event.payload))
+                        return blockUnsupported("NC1 reentry operation was already committed with different evidence.");
+                      await eventStore.appendV2Events(reentry.gateId, [priorOperationEvent]);
+                      return Object.freeze({ kind: "RESUME_ADMITTED", gateId: reentry.gateId });
+                    }
+                    const writerHead = frontier.writerHeads.find((head) =>
+                      head.scopeId === scopeId && head.gateId === reentry.gateId && head.writerId === tailEvent.writerId,
+                    );
+                    const publication = await eventStore.prepareAdmittedOperationPublication({
+                      scopeId,
+                      gateId: reentry.gateId,
+                      writerId: tailEvent.writerId,
+                      operationId,
+                      canonicalEvents: [event],
+                      ...(writerHead === undefined ? {} : { expectedWriterHead: writerHead.hash }),
+                    }, owned);
+                    const committed = await owned.commitPreparedPublicationCAS({
+                      publicationId: publication.publicationId,
+                      expectedGlobalFrontier: publication.expectedGlobalFrontier,
+                      expectedWriterHash: publication.expectedWriterHash,
+                    });
+                    const recovered = committed === "blocked"
+                      ? await owned.recoverPreparedPublication(publication.publicationId)
+                      : committed;
+                    if (recovered === "blocked") return blockUnsupported("NC1 reentry protected publication did not commit.");
+                    await eventStore.appendV2Events(reentry.gateId, [event]);
+                    return Object.freeze({ kind: "RESUME_ADMITTED", gateId: reentry.gateId });
+                  })();
+                default:
+                  return assertNever(reentry);
+              }
+            },
+          };
+          return applyReviewGateAdmissionDecision({ decision, observation, owned }, handlers);
         },
       );
-    } catch (err) {
-      if (err instanceof ScopeAdmissionBlocked) {
-        if (err.code !== "scope_lease_occupied") {
+
+    // Contention waits for the lease (bounded); it never skips admission.
+    let execution: ReviewGateAdmissionExecutionResult | null = null;
+    let resumeDecisionNeedsRevalidation = false;
+    let leaseWaitAttempts = 0;
+    let resumeRevalidationAttempts = 0;
+    while (
+      leaseWaitAttempts < ADMISSION_LEASE_WAIT_ATTEMPTS &&
+      resumeRevalidationAttempts < 2
+    ) {
+      try {
+        execution = await applyDecision();
+      } catch (err) {
+        if (
+          err instanceof ScopeAdmissionBlocked &&
+          err.code === "scope_lease_occupied" &&
+          leaseWaitAttempts + 1 < ADMISSION_LEASE_WAIT_ATTEMPTS
+        ) {
+          leaseWaitAttempts += 1;
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, ADMISSION_LEASE_WAIT_MS);
+          });
+          continue;
+        }
+        if (err instanceof ScopeAdmissionBlocked) {
           return blockedResult(
             designPath,
             planPath,
             `[JUSTICE: REVIEW GATE BLOCKED] Scope admission failed closed (${err.code}); resolve the admission issue before retrying.`,
           );
         }
-        // The scope lock is already held by an active gate managed by this
-        // coordinator; skip the admission lease and use the legacy path.
-        return runStartOrResume();
+        throw err;
       }
-      throw err;
+      if (execution?.kind === "MUTABLE_APPLICATION_YIELDED" && isV2CodedEvent(execution.gateEvent)) {
+        const yieldedGateEvent = execution.gateEvent;
+        const journal = await eventStore.readV2Journal(execution.gateId);
+        const alreadyCreated = journal.events.some(
+          (event) => isV2CodedEvent(event) && event.eventId === yieldedGateEvent.eventId,
+        );
+        if (!alreadyCreated) {
+          await eventStore.appendV2Events(execution.gateId, [yieldedGateEvent]);
+        }
+        return blockedResult(
+          designPath,
+          planPath,
+          "[JUSTICE: REVIEW GATE BLOCKED] A V2 Gate was durably created, but this coordinator cannot dispatch or resume it. No reviewer was dispatched; inspect the durable state with /justice-review-history.",
+        );
+      }
+      if (execution?.kind === "RESUME_ADMITTED" && !resumeDecisionNeedsRevalidation) {
+        resumeRevalidationAttempts += 1;
+        resumeDecisionNeedsRevalidation = true;
+        execution = null;
+        continue;
+      }
+      break;
     }
+    if (execution === null) {
+      return blockedResult(
+        designPath,
+        planPath,
+        "[JUSTICE: REVIEW GATE BLOCKED] The scope admission lease stayed occupied; retry after the active gate releases it.",
+      );
+    }
+    if (execution.kind === "RESULT" || execution.kind === "BLOCK") {
+      return execution.result;
+    }
+    if (execution.kind === "RESUME_ADMITTED") {
+      return resumeExistingGate(
+        sessionId,
+        execution.gateId as GateId,
+        reviewScopeId,
+        designPath,
+        planPath,
+        designDigest,
+        planDigest,
+        execution.verifiedUpstreamReopen,
+      );
+    }
+    if (execution.kind === "HANDOFF_PENDING" || execution.kind === "TERMINAL_INTENT_PREPARED_UNPUBLISHED") {
+      return blockedResult(
+        designPath,
+        planPath,
+        "[JUSTICE: REVIEW GATE BLOCKED] Admission produced an authenticated continuation that this coordinator cannot complete.",
+      );
+    }
+    if (execution.kind === "MUTABLE_APPLICATION_YIELDED") {
+      return blockedResult(designPath, planPath, "[JUSTICE: REVIEW GATE BLOCKED] Mutable admission continuation is unavailable.");
+    }
+    throw new Error("review_gate_admission_execution_unsupported");
   };
 
   const resumeExistingGate = async (
@@ -2161,6 +3139,7 @@ export function createReviewGateCoordinator(
     planPath: string,
     designDigest: string,
     planDigest: string,
+    verifiedUpstreamReopen?: VerifiedUpstreamReopenContextV1,
   ): Promise<ReviewGateCommandResult> => {
     const previous = dropSession(sessionId);
     if (previous !== undefined) releaseHandles(previous);
@@ -2181,9 +3160,30 @@ export function createReviewGateCoordinator(
       });
     }
 
-    // Fresh writer shard + new epoch for the resumed orchestration.
+    const v2Journal = await eventStore.readV2Journal(gateId);
+    if (v2Journal.eventCount > 0) {
+      chain.scopeLock.release();
+      chain.gateLock.release();
+      return blockedResult(
+        designPath,
+        planPath,
+        "[JUSTICE: REVIEW GATE BLOCKED] V2 Gates cannot resume through the legacy coordinator path.",
+      );
+    }
+
+    const projection = await loadProjection(gateId);
+    if (projection.status === "completed") {
+      chain.scopeLock.release();
+      chain.gateLock.release();
+      return blockedResult(
+        designPath,
+        planPath,
+        "[JUSTICE: REVIEW GATE BLOCKED] The Gate completed before its admitted resume acquired the local locks.",
+      );
+    }
+
     const writerId = newWriterId() as WriterId;
-    const epochId = newId() as EpochId;
+    const epochId = projection.epoch.epochId as EpochId;
     const session: MutableSessionState = {
       sessionId,
       gateId,
@@ -2207,6 +3207,9 @@ export function createReviewGateCoordinator(
       workspaceStates: await inspectTargets([designPath, planPath]),
       validationState: emptyDeterministicValidationState,
       reviewAttemptId: null,
+      approvedDesignBinding: null,
+      approvedDesignInputBindingDigest: null,
+      ...(verifiedUpstreamReopen === undefined ? {} : { verifiedUpstreamReopen }),
       scopeLock: chain.scopeLock,
       gateLock: chain.gateLock,
     };
@@ -2420,6 +3423,8 @@ export function createReviewGateCoordinator(
       workspaceStates,
       validationState: emptyDeterministicValidationState,
       reviewAttemptId: null,
+      approvedDesignBinding: null,
+      approvedDesignInputBindingDigest: null,
       scopeLock: chain.scopeLock,
       gateLock: chain.gateLock,
     };
@@ -2895,12 +3900,27 @@ export function createReviewGateCoordinator(
     releaseHandles(state);
   };
 
+  const getApprovedDesignReadBinding = (
+    sessionId: string,
+    gateId: string,
+    designPath: string,
+  ): VerifiedApprovedDesignReadBindingV1 | null => {
+    const session = sessions.get(sessionId);
+    const binding = session?.approvedDesignBinding;
+    if (
+      binding === null || binding === undefined ||
+      binding.gateId !== gateId || binding.canonicalPath !== designPath
+    ) return null;
+    return binding.approvedDesign ?? null;
+  };
+
   return Object.freeze({
-    startOrResume,
+    startOrResume: driveReviewGateAdmission,
     preToolUse,
     postToolUse,
     classifyToolUse,
     releaseSession,
+    getApprovedDesignReadBinding,
     prepareCallerOperation,
     executeNextOperation,
   });

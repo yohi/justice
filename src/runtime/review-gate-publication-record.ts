@@ -103,6 +103,16 @@ export async function preparePublicationUnlocked(
     )
   )
     throw new WitnessBlocked("publication_busy");
+  const workspace = current.data.workspaces[input.workspaceIdentity];
+  if (
+    input.firstEnrollmentAuthorizationId !== null &&
+    (workspace === undefined ||
+      workspace.authorization.authority.authorizationEventId !==
+        input.firstEnrollmentAuthorizationId ||
+      (workspace.enrollmentState !== "pending" && workspace.enrollmentState !== "consumed"))
+  ) {
+    throw new WitnessBlocked("nonce_consumed");
+  }
   await validatePublication(context, current, input, bytes);
   await context.store.writeBytes(`stage-${input.newWriterHash}.bin`, Buffer.from(bytes), true);
   await context.store.advance("scope", current, {
@@ -116,6 +126,18 @@ export async function preparePublicationUnlocked(
         preparedRevision: current.revision + 1,
       },
     },
+    ...(input.firstEnrollmentAuthorizationId !== null && workspace?.enrollmentState === "pending"
+      ? {
+          workspaces: {
+            ...current.data.workspaces,
+            [input.workspaceIdentity]: { ...workspace, enrollmentState: "consumed" as const },
+          },
+          nonces: {
+            ...current.data.nonces,
+            [workspace.authorization.workflowNonce]: "consumed" as const,
+          },
+        }
+      : {}),
   });
   return "prepared";
 }
@@ -204,6 +226,12 @@ export async function commitPublicationUnlocked(
         enrollmentState: "committed",
       },
     },
+    nonces: workspace.enrollmentState === "pending"
+      ? {
+          ...current.data.nonces,
+          [workspace.authorization.workflowNonce]: "consumed",
+        }
+      : current.data.nonces,
   });
   const retainedPublicationFiles = new Set<string>();
   for (const record of Object.values(pending)) {
@@ -222,6 +250,36 @@ export async function commitPublicationUnlocked(
   )) retainedPublicationFiles.add(journalFile);
   await context.store.removePublicationFiles(retainedPublicationFiles);
   return "advanced";
+}
+
+export async function publishPreparedJournalUnlocked(
+  context: WitnessContext,
+  current: WitnessTransaction,
+  publicationId: string,
+): Promise<void> {
+  const { input, bytes } = await readPreparedPublication(context, current, publicationId);
+  if (context.provider === undefined) throw new WitnessBlocked("journal_native_unavailable");
+  const previous = await context.provider.readWriterShard(input.scopeId, input.gateId, input.writerId);
+  if (previous?.equals(bytes)) return;
+  if (current.data.committed[publicationId] !== undefined)
+    throw new WitnessBlocked("journal_history_lost");
+  if (current.revision !== (current.data.pending[publicationId]?.preparedRevision ?? -1))
+    throw new WitnessBlocked("publication_frontier");
+  const events = bytes
+    .toString("utf8")
+    .trimEnd()
+    .split("\n")
+    .map((line) => validateReviewGateEventRecord(JSON.parse(line)));
+  await verifyTerminalPublication(context, current, events.slice(input.expectedWriterSequence));
+  if ((previous === null ? "0".repeat(64) : computeArtifactDigest(previous)) !== input.expectedWriterHash)
+    throw new WitnessBlocked("publication_preimage");
+  await context.provider.durableReplaceWriterShard(
+    input.scopeId,
+    input.gateId,
+    input.writerId,
+    previous === null ? null : computeArtifactDigest(previous),
+    bytes,
+  );
 }
 
 export function createPublicationRecords(context: WitnessContext) {

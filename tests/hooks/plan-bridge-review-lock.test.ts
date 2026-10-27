@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PlanBridge } from "../../src/hooks/plan-bridge";
 import type {
   ReviewGateApprovedDesignAuthority,
@@ -502,15 +502,40 @@ describe("PlanBridge FDR-014 approved Design read boundary", () => {
     expect(bridge.getReviewGateLock("parent")?.phase).toBe("reviewing");
   });
 
-  it("builds the plan reviewer scope through the validated approved design proof", async () => {
+  it("returns scoped status and diff as unapproved D1 diagnostics", async () => {
     const { bridge } = createLockHarness(false);
     bridge.setReviewGateApprovedDesignAuthority(fakeAuthority());
+    bridge.setReviewGateQueryService({
+      getScopedStatus: async (_scope: import("../../src/core/review-gate/capabilities").ReviewQueryScope) => ({ entries: [{ canonicalPath: PLAN_PATH, indexState: " ", workingTreeState: "M" }] }),
+      getScopedDiff: async (_scope: import("../../src/core/review-gate/capabilities").ReviewQueryScope, request: { readonly staged: boolean }) => ({ base: null, staged: request.staged, patch: "D1 patch" }),
+    } as unknown as import("../../src/runtime/review-gate-query").ReviewGateQueryService);
+    await bridge.handleReviewGateStart("parent", {
+      source: "command",
+      designPath: DESIGN_PATH,
+      planPath: PLAN_PATH,
+    });
+
+    const status = JSON.parse(await bridge.executeReviewerScopedQuery("parent", { kind: "status" })) as Record<string, unknown>;
+    const diff = JSON.parse(await bridge.executeReviewerScopedQuery("parent", { kind: "diff", staged: true })) as Record<string, unknown>;
+    expect(status).toMatchObject({ status: "OK", authority: "unapproved_D1_diagnostic" });
+    expect(diff).toMatchObject({ status: "OK", authority: "unapproved_D1_diagnostic", result: { staged: true } });
+  });
+
+  it("builds the plan reviewer scope through the session-owned approved design proof", async () => {
+    const { bridge } = createLockHarness(false);
+    const getApprovedDesignBinding = vi.fn(async () => APPROVED_DESIGN_BINDING);
+    bridge.setReviewGateApprovedDesignAuthority(fakeAuthority({ getApprovedDesignBinding }));
     await bridge.handleReviewGateStart("parent", {
       source: "command",
       designPath: DESIGN_PATH,
       planPath: PLAN_PATH,
     });
     const scope = await bridge.buildPlanReviewerQueryScope("parent");
+    expect(getApprovedDesignBinding).toHaveBeenCalledWith({
+      gateId: bridge.getReviewGateLock("parent")?.gateId,
+      designPath: DESIGN_PATH,
+      sessionId: "parent",
+    });
     expect(scope?.phase).toBe("plan");
     expect(scope?.approvedDesign?.canonicalPath).toBe(DESIGN_PATH);
     expect(scope?.approvedDesign?.blobOid).toBe("b".repeat(64));

@@ -626,6 +626,14 @@ describe("unfinished gate admission", () => {
     expectDecision(decision, "REVALIDATE_OR_BLOCK");
     if (decision.kind !== "REVALIDATE_OR_BLOCK") return;
     expect(decision.dimension).toBe("design");
+    expect(decision.phase).toBe("design");
+    expect(decision.effectiveBinding).toEqual(tip.lastVerifiedBinding.effective);
+    expect(decision.current).toEqual(currentContext("design-changed", "plan", "requirements"));
+    expect(decision.triggeringAuthorityEventId).toBe(
+      currentContext("design-changed", "plan", "requirements").requirements.observationEvidenceId,
+    );
+    expect(decision.roundCountersBefore).toEqual(tip.rounds);
+    expect(decision.roundCountersAfter).toEqual(tip.rounds);
   });
 
   it("revalidates when plan protocol fingerprint has drifted", () => {
@@ -879,6 +887,7 @@ describe("NC1 suspended gate admission", () => {
     expectDecision(decision, "REENTRY_CANDIDATE");
     if (decision.kind !== "REENTRY_CANDIDATE") return;
     expect(decision.changeObservedEventId).toBe(candidate.changeObservedEventId);
+    expect(decision.nc1EvidenceEventId).toBe(stop.stopEventId);
   });
 
   it("blocks an NC1 protocol candidate when historical release does not match stop authority", () => {

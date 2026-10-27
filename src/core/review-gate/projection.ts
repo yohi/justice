@@ -655,6 +655,7 @@ export function projectVerifiedGateTip(
   let suspensionEpochId: string | null = null;
   let executionSuspended = false;
   let reopenRequired = false;
+  let reopenRequiredEpochId: string | null = null;
   let nc1Reason: "round_limit_exhausted" | "review_non_convergent" | null = null;
   let nc1Stop: VerifiedNC1StopV1 | null = null;
 
@@ -663,8 +664,9 @@ export function projectVerifiedGateTip(
       switch (event.eventType) {
         case "REOPEN_REQUIRED":
           reopenRequired = true;
+          reopenRequiredEpochId = event.epochId;
           suspensionReason = "reopen_required";
-          suspensionEpochId = event.epochId;
+          suspensionEpochId = reopenRequiredEpochId;
           break;
         case "ROUND_LIMIT_EXHAUSTED": {
           const phase = event.payload.phase;
@@ -734,12 +736,16 @@ export function projectVerifiedGateTip(
           }
           executionSuspended = false;
           suspensionReason = reopenRequired ? "reopen_required" : nc1Reason;
-          if (suspensionReason === null) suspensionEpochId = null;
+          if (reopenRequired) suspensionEpochId = reopenRequiredEpochId;
+          else if (suspensionReason === null) suspensionEpochId = null;
           break;
         case "FINDING_REOPENED":
           reopenRequired = false;
+          reopenRequiredEpochId = null;
           suspensionReason = nc1Reason ?? (executionSuspended ? "execution_suspended" : null);
-          if (suspensionReason === null) suspensionEpochId = null;
+          suspensionEpochId = suspensionReason === "execution_suspended"
+            ? suspensionEpochId
+            : nc1Stop?.epochId ?? null;
           break;
         default:
           break;
@@ -763,6 +769,25 @@ export function projectVerifiedGateTip(
       case "SEMANTIC_CONTEXT_TRANSITION": {
         authorityEventId = event.eventId;
         operationId = event.payload.operationId;
+        break;
+      }
+      case "NC1_REENTRY_OUTCOME_APPLIED": {
+        if (
+          nc1Reason === "review_non_convergent" &&
+          nc1Stop !== null &&
+          event.epochId === nc1Stop.epochId &&
+          event.payload.nc1EvidenceEventId === nc1Stop.stopEventId
+        ) {
+          nc1Reason = null;
+          nc1Stop = null;
+          suspensionReason = reopenRequired
+            ? "reopen_required"
+            : executionSuspended
+              ? "execution_suspended"
+              : null;
+          if (reopenRequired) suspensionEpochId = reopenRequiredEpochId;
+          else if (!executionSuspended) suspensionEpochId = null;
+        }
         break;
       }
       case "DESIGN_CLEAR": {

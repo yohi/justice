@@ -3,7 +3,7 @@ import { createHash, type KeyObject } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { promisify } from "node:util";
 import { z } from "zod";
-import type { GateId, ReviewGateEvent, ReviewScopeId } from "../core/review-gate-types.js";
+import type { ReviewScopeId } from "../core/review-gate-types.js";
 import {
   computeVerifiedContextDigest,
   planReviewGateAdmission,
@@ -21,7 +21,6 @@ import {
   computeReviewScopeId,
   computeWorkspaceIdentity,
 } from "../core/review-gate/identity.js";
-import { projectReviewGate } from "../core/review-gate/projection.js";
 import type {
   VerifiedFirstEnrollmentAuthorityV1,
   VerifiedScopeFrontier,
@@ -36,18 +35,18 @@ import {
   verifyScopeFrontierMembership,
 } from "./review-gate-witness-verification.js";
 import {
-  observeVerifiedAdmissionSnapshot,
-  type VerifiedAdmissionSnapshotOptions,
-} from "./review-gate-admission-snapshot.js";
-import type {
-  DurableReviewGateEventStore,
-  ReviewGateEventStore,
-} from "./review-gate-event-store.js";
+  type ReviewGateAdmissionObservation,
+  type AdmissionOwnedWitness,
+  observeVerifiedAdmissionSnapshotOwned,
+} from "./review-gate-admission-context.js";
+import type { DurableReviewGateEventStore } from "./review-gate-event-store.js";
+import { WitnessBlocked } from "./review-gate-protected-store.js";
 import type { ReviewGateLockManager } from "./review-gate-lock-manager.js";
 import type { ReviewGateProtocolDescriptor } from "./review-gate-protocol.js";
 import type { VerifiedProtocolReleaseProvider as ProtocolReleaseProviderAuthority } from "./review-gate-protocol-release-authority.js";
 import type { resolveRequirementsForAdmission } from "./review-gate-requirements.js";
 import { runGitLiteral } from "./review-gate-query.js";
+import { parseBlobTreeEntry } from "./review-gate-head-artifact.js";
 import type { ReviewGateScopeWitness } from "./review-gate-scope-witness.js";
 
 /** Independently installed host capability, never exposed to workers.
@@ -200,9 +199,36 @@ export function createReviewGateScopeAdmissionVerifier(
           authority.verifiedAbsentPriorEnrollmentFrontierHash !== frontier.globalFrontierHash
         )
           throw new ScopeAdmissionBlocked("proof");
-        await git(workspaceRoot, ["rev-parse", "--verify", "HEAD"]);
-        if (await git(workspaceRoot, ["status", "--porcelain=v1", "--untracked-files=all"]))
-          throw new ScopeAdmissionBlocked("workspace_dirty");
+        const head = (
+          await runGitLiteral(workspaceRoot, ["rev-parse", "--verify", "HEAD"])
+        )
+          .stdout.toString("utf8")
+          .trim();
+        if (!HEAD_OID_PATTERN.test(head))
+          throw new ScopeAdmissionBlocked("workspace_identity");
+        const headTree = await runGitLiteral(workspaceRoot, [
+          "ls-tree",
+          "-z",
+          "HEAD",
+          "--",
+          request.canonicalDesignPath,
+          request.canonicalPlanPath,
+        ]);
+        if (
+          headTree.code !== 0 ||
+          parseBlobTreeEntry(headTree.stdout, request.canonicalDesignPath) === null ||
+          parseBlobTreeEntry(headTree.stdout, request.canonicalPlanPath) === null
+        ) {
+          throw new ScopeAdmissionBlocked("target_dirty");
+        }
+        const diff = await runGitLiteral(workspaceRoot, [
+          "diff",
+          "--quiet",
+          "HEAD",
+          "--",
+          request.canonicalDesignPath,
+        ]);
+        if (diff.code !== 0) throw new ScopeAdmissionBlocked("target_dirty");
         return authority;
       });
     },
@@ -226,7 +252,11 @@ export type ScopeAdmissionRequest = Readonly<{
 export interface ReviewGateScopeAdmission {
   withAdmissionLease<T>(
     request: ScopeAdmissionRequest,
-    run: (decision: AdmissionDecision) => Promise<T>,
+    run: (
+      decision: AdmissionDecision,
+      observation: ReviewGateAdmissionObservation | null,
+      owned: AdmissionOwnedWitness,
+    ) => Promise<T>,
   ): Promise<T>;
 }
 
@@ -236,32 +266,27 @@ export interface ReviewGateScopeWorkspaceReader {
 }
 
 export interface ReviewGateScopeAdmissionOptions {
-  /**
-   * The one protected workspace scope witness of the shared runtime graph.
-   * `null` is admitted only for non-durable (legacy) event stores; a durable
-   * store without its witness fail closed.
-   */
-  readonly witness: ReviewGateScopeWitness | null;
-  readonly eventStore: ReviewGateEventStore;
-  readonly lockManager: ReviewGateLockManager;
-  readonly workspaceReader: ReviewGateScopeWorkspaceReader;
-  readonly requirementsResolver: typeof resolveRequirementsForAdmission;
-  /** Verified protocol release authority for NC1 protocol-kind candidates. */
+/**
+* The one protected workspace scope witness of the shared runtime graph.
+* A `null` witness means the trusted installation is unavailable; admission
+* fail-closed with `ScopeAdmissionBlocked("witness_unavailable")`.
+*/
+readonly witness: ReviewGateScopeWitness | null;
+readonly eventStore: DurableReviewGateEventStore;
+readonly lockManager: ReviewGateLockManager;
+readonly workspaceReader: ReviewGateScopeWorkspaceReader;
+readonly requirementsResolver: typeof resolveRequirementsForAdmission;
+/** Verified protocol release authority for NC1 protocol-kind candidates. */
   readonly protocolRelease?: ProtocolReleaseProviderAuthority | null;
-  /** Test seam for the verified snapshot observer (production default). */
-  readonly snapshotObserver?: (
-    options: VerifiedAdmissionSnapshotOptions,
-  ) => Promise<VerifiedAdmissionSnapshot | null>;
+  /**
+   * Task 4d — signer for admitted membership authorizations. The witness
+   * verifies the produced signature against the trusted installation root.
+   */
+  readonly authorizeAdmittedMembership?: (payload: unknown) => Promise<string>;
 }
 
-const isDurableEventStore = (
-  store: ReviewGateEventStore,
-): store is DurableReviewGateEventStore =>
-  "readVerifiedScope" in store && typeof store.readVerifiedScope === "function";
 
 /** Deterministic legacy-surface generation identity for V1-only histories. */
-const LEGACY_GENERATION_ID = "legacy-v1";
-
 const freezeDecision = (value: AdmissionDecision): AdmissionDecision =>
   Object.freeze(value) as AdmissionDecision;
 
@@ -310,24 +335,6 @@ async function gitOutput(rootReal: string, args: readonly string[]): Promise<Buf
   return result.stdout;
 }
 
-interface GitTreeEntry {
-  readonly gitMode: "100644" | "100755";
-  readonly blobSha: string;
-}
-
-function parseBlobTreeEntry(stdout: Buffer, canonicalPath: string): GitTreeEntry | null {
-  for (const record of stdout.toString("utf8").split("\0")) {
-    if (record.length === 0) continue;
-    const [meta = "", entryPath = ""] = record.split("\t", 2);
-    if (entryPath !== canonicalPath) continue;
-    const [gitMode = "", type = "", blobSha = ""] = meta.split(" ");
-    if (type !== "blob") return null;
-    if (gitMode !== "100644" && gitMode !== "100755") return null;
-    return { gitMode, blobSha };
-  }
-  return null;
-}
-
 export function isNc1ParentArtifactBindingValid(input: Readonly<{
   artifactKind: "requirements" | "design" | "plan";
   parentBlobBytes: Uint8Array;
@@ -362,118 +369,9 @@ export function createReviewGateScopeAdmission(
     workspaceReader,
     requirementsResolver,
     protocolRelease,
-    snapshotObserver,
   } = options;
-  const observeSnapshot = snapshotObserver ?? observeVerifiedAdmissionSnapshot;
-  const durable = isDurableEventStore(eventStore);
   void requirementsResolver; // pinned seam: admission snapshot observation resolves through §10.2.3
 
-  const legacyFrontierHash = async (gateId: string): Promise<string> => {
-    try {
-      return await eventStore.readFrontierHash(gateId);
-    } catch {
-      return "";
-    }
-  };
-
-  /**
-   * Legacy-compatible routing for stores without the Task 6 verified surface.
-   * This reproduces the pre-Task-18 start/resume routing decision-for-decision
-   * (completed reuse / resume / successor on drift / fresh creation) without
-   * claiming any verified material: the decision carries legacy-real gate
-   * identity only, and proof-named fields stay empty.
-   */
-  const legacyDecision = async (
-    scopeId: ReviewScopeId,
-    request: ScopeAdmissionRequest,
-  ): Promise<AdmissionDecision> => {
-    const gateIdRaw = await eventStore.readScopeIndex(scopeId);
-    if (gateIdRaw === null) {
-      return freezeDecision({
-        kind: "CREATE_GENESIS",
-        workspaceIdentity: request.workspaceIdentity,
-        scopeId,
-        installationId: "",
-        enrollmentAuthorizationEventId: "",
-        verifiedWorkspaceFrontierHash: "",
-        completeRelationClosureDigest: "",
-      });
-    }
-    const gateId = gateIdRaw as GateId;
-    const events = await eventStore.readEvents(gateId);
-    const projection = projectReviewGate(events);
-    const gateCreated = events.find(
-      (event): event is Extract<ReviewGateEvent, { eventType: "GATE_CREATED" }> =>
-        event.eventType === "GATE_CREATED",
-    );
-    if (gateCreated === undefined) {
-      throw new ScopeAdmissionBlocked("admission_scope_index_corrupt");
-    }
-    const latestBindingEvent = events
-      .filter((event) => event.eventType === "ARTIFACT_BINDINGS_UPDATED")
-      .at(-1);
-    const latestDesignArtifact =
-      latestBindingEvent?.eventType === "ARTIFACT_BINDINGS_UPDATED"
-        ? latestBindingEvent.payload.designArtifact
-        : gateCreated.payload.designArtifact;
-    const latestPlanArtifact =
-      latestBindingEvent?.eventType === "ARTIFACT_BINDINGS_UPDATED"
-        ? latestBindingEvent.payload.planArtifact
-        : gateCreated.payload.planArtifact;
-    const [designBytes, planBytes] = await Promise.all([
-      workspaceReader.readWorkspaceFile(request.designPath),
-      workspaceReader.readWorkspaceFile(request.planPath),
-    ]);
-    if (designBytes === null || planBytes === null) {
-      throw new ScopeAdmissionBlocked("admission_artifact_unreadable");
-    }
-    const designDigest = computeArtifactDigest(designBytes);
-    const planDigest = computeArtifactDigest(planBytes);
-    const expectedDesignArtifact =
-      projection.status === "completed"
-        ? projection.approvalBinding?.designArtifact
-        : latestDesignArtifact;
-    const expectedPlanArtifact =
-      projection.status === "completed"
-        ? projection.approvalBinding?.planArtifact
-        : latestPlanArtifact;
-    const bindingsMatch =
-      expectedDesignArtifact !== undefined &&
-      expectedPlanArtifact !== undefined &&
-      expectedDesignArtifact.digest === designDigest &&
-      expectedPlanArtifact.digest === planDigest &&
-      expectedDesignArtifact.canonicalPath === request.designPath &&
-      expectedPlanArtifact.canonicalPath === request.planPath;
-
-    if (projection.status === "completed" && bindingsMatch) {
-      return freezeDecision({
-        kind: "REUSE_COMPLETED",
-        gateId,
-        generationId: LEGACY_GENERATION_ID,
-        approvalEventId: `legacy:${gateId}:completed-approval`,
-        verifiedHistoryFrontier: await legacyFrontierHash(gateId),
-      });
-    }
-    if (projection.status !== "completed" && bindingsMatch) {
-      return freezeDecision({
-        kind: "RESUME",
-        gateId,
-        generationId: LEGACY_GENERATION_ID,
-        witnessFrontierHash: await legacyFrontierHash(gateId),
-      });
-    }
-    // Drifted binding: create a successor generation in the same scope.
-    return freezeDecision({
-      kind: "CREATE_SUCCESSOR",
-      scopeId,
-      predecessorScopeId: scopeId,
-      predecessorGateId: gateId,
-      predecessorApprovalEventId:
-        projection.approvalBinding !== null ? `legacy:${gateId}:completed-approval` : "",
-      predecessorRelationProofDigest: "",
-      verifiedWorkspaceFrontierHash: await legacyFrontierHash(gateId),
-    });
-  };
 
   type Nc1Inspection =
     | Readonly<{ readonly ok: true; readonly candidate: VerifiedNC1EligibleChangeV1 | null }>
@@ -761,6 +659,7 @@ export function createReviewGateScopeAdmission(
     request: ScopeAdmissionRequest,
     snapshot: VerifiedAdmissionSnapshot,
     decision: Extract<AdmissionDecision, { kind: "INSPECT_NC1_ELIGIBLE_CHANGE" }>,
+    owned: AdmissionOwnedWitness,
   ): Promise<Nc1Inspection> => {
     try {
       const isNc1Tip = (candidate: VerifiedGateTip): candidate is UnfinishedTip =>
@@ -782,11 +681,9 @@ export function createReviewGateScopeAdmission(
       }
       const stop: VerifiedNC1StopV1 = tip.nc1Stop;
       const ctx = tip.lastVerifiedBinding.effective.context;
-      // Re-read the protected witness/frontier under the same lease.
-      if (witness === null) {
-        return { ok: false, error: "NC1 inspection requires the protected workspace witness." };
-      }
-      const frontier = await witness.readWorkspaceScopeFrontier(request.workspaceIdentity);
+      // Re-read the protected witness/frontier under the same lease via the
+      // owned capability (no guard re-entry).
+      const frontier = await owned.readVerifiedFrontier();
       if (frontier.globalFrontierHash !== snapshot.verifiedFrontierHash) {
         return { ok: false, error: "The protected witness frontier moved during NC1 inspection." };
       }
@@ -829,78 +726,197 @@ export function createReviewGateScopeAdmission(
     }
   };
 
-  const decide = async (
+  /**
+   * Full owned observation of the requested scope under the held admission
+   * lease. Returns the observation (snapshot + Requirements resolution) or
+   * throws `ScopeAdmissionBlocked` when the material cannot be observed.
+   */
+  const observeOwned = async (
     request: ScopeAdmissionRequest,
     scopeId: ReviewScopeId,
-  ): Promise<AdmissionDecision> => {
-    if (!durable) return await legacyDecision(scopeId, request);
-    if (witness === null) {
-      // A durable store without its protected witness never inherits authority:
-      // graph-level fail closed, never a legacy unanchored fallback.
-      throw new ScopeAdmissionBlocked("witness_unavailable");
-    }
-    if (request.workspaceRoot.length === 0 || request.workspaceIdentity.length === 0) {
-      throw new ScopeAdmissionBlocked("workspace_identity");
-    }
-    // Fail closed on inconsistent workspace identity or missing ledger membership.
-    const frontier = await witness.readWorkspaceScopeFrontier(request.workspaceIdentity);
-    if (!frontier.scopes.some((scope) => scope.scopeId === scopeId)) {
-      return blockReason(
-        "scope_not_enrolled",
-        "The requested scope is not enrolled in the verified workspace ledger.",
-      );
-    }
-    const snapshot = await observeSnapshot({
+    owned: AdmissionOwnedWitness,
+  ): Promise<ReviewGateAdmissionObservation> => {
+    const frontier = await owned.readVerifiedFrontier();
+    const installation = await owned.readInstallation();
+    const observation = await observeVerifiedAdmissionSnapshotOwned({
       workspaceRoot: request.workspaceRoot,
       scopeId,
       protocol: request.protocol,
       eventStore,
       workspaceReader,
+      owned,
+      authority: { installation, frontier, firstEnrollment: null },
+      request: {
+        designPath: request.designPath,
+        planPath: request.planPath,
+        explicitRequirementsPath: request.explicitRequirementsPath,
+      },
     });
-    if (snapshot === null) {
+    if (observation === null) {
       throw new ScopeAdmissionBlocked("admission_snapshot_unavailable");
     }
-    const firstDecision = planReviewGateAdmission(snapshot);
-    if (firstDecision.kind !== "INSPECT_NC1_ELIGIBLE_CHANGE") return firstDecision;
+    return observation;
+  };
 
-    const inspected = await inspectNc1(request, snapshot, firstDecision);
+  const decide = async (
+    request: ScopeAdmissionRequest,
+    scopeId: ReviewScopeId,
+    owned: AdmissionOwnedWitness,
+  ): Promise<Readonly<{ decision: AdmissionDecision; observation: ReviewGateAdmissionObservation | null }>> => {
+    if (request.workspaceRoot.length === 0 || request.workspaceIdentity.length === 0) {
+      throw new ScopeAdmissionBlocked("workspace_identity");
+    }
+
+    const transaction = await owned.read();
+    const workspace = transaction.data.workspaces[request.workspaceIdentity];
+    const authorizationEventId = workspace?.authorization.authority.authorizationEventId;
+    if (
+      (workspace?.enrollmentState === "pending" ||
+        workspace?.enrollmentState === "consumed") &&
+      authorizationEventId !== undefined
+    ) {
+      const preparedGenesis = Object.values(transaction.data.pending).find((record) =>
+        record.input.workspaceIdentity === request.workspaceIdentity &&
+        record.input.firstEnrollmentAuthorizationId === authorizationEventId &&
+        record.input.nextFrontier.scopes.some((scope) =>
+          scope.scopeId === scopeId && scope.provenance.kind === "verified_genesis",
+        ),
+      );
+      if (preparedGenesis !== undefined) {
+        const recovered = await owned.recoverPreparedPublication(
+          preparedGenesis.input.publicationId,
+        );
+        if (recovered === "blocked") {
+          throw new ScopeAdmissionBlocked("protected_frontier");
+        }
+      }
+    }
+
+    // Only an enrolled workspace with no scopes can admit its first genesis.
+    const frontier = await owned.readVerifiedFrontier();
+    if (!frontier.scopes.some((scope) => scope.scopeId === scopeId) &&
+      (frontier.workspaceEnrollmentId.length === 0 || frontier.scopes.length !== 0)) {
+      return {
+        decision: blockReason(
+          "scope_not_enrolled",
+          "The requested scope is not enrolled in the verified workspace ledger.",
+        ),
+        observation: null,
+      };
+    }
+    const observation = await observeOwned(request, scopeId, owned);
+    const snapshot = observation.snapshot;
+    const firstDecision = planReviewGateAdmission(snapshot);
+    if (firstDecision.kind !== "INSPECT_NC1_ELIGIBLE_CHANGE") {
+      return { decision: firstDecision, observation };
+    }
+
+    const inspected = await inspectNc1(request, snapshot, firstDecision, owned);
     if (!inspected.ok) {
-      return blockReason("nc1_candidate_invalid", inspected.error);
+      return { decision: blockReason("nc1_candidate_invalid", inspected.error), observation };
+    }
+
+    // Second pass: re-observe the FULL current snapshot under the same lease.
+    // The first-pass spread is never second-pass authority; a witnessed
+    // change during inspection invalidates all earlier read material.
+    const currentObservation = await observeOwned(request, scopeId, owned);
+    if (currentObservation.snapshot.verifiedFrontierHash !== snapshot.verifiedFrontierHash) {
+      return {
+        decision: blockReason(
+          "frontier_mismatch",
+          "The verified frontier advanced during NC1 inspection; admission must retry against the new material.",
+        ),
+        observation: currentObservation,
+      };
     }
     const secondSnapshot: VerifiedAdmissionSnapshot = Object.freeze({
-      ...snapshot,
+      ...currentObservation.snapshot,
       nc1Observation: inspected.candidate === null ? ("VERIFIED_NONE" as const) : ("VERIFIED_CANDIDATE" as const),
       nc1Candidate: inspected.candidate,
     });
     const secondDecision = planReviewGateAdmission(secondSnapshot);
     if (secondDecision.kind === "INSPECT_NC1_ELIGIBLE_CHANGE") {
-      return blockReason(
-        "nc1_candidate_invalid",
-        "The second admission pass requested a further NC1 inspection; reinspection is not permitted.",
-      );
+      return {
+        decision: blockReason(
+          "nc1_candidate_invalid",
+          "The second admission pass requested a further NC1 inspection; reinspection is not permitted.",
+        ),
+        observation: currentObservation,
+      };
     }
-    return secondDecision;
+    const stop = currentObservation.nc1Evidence?.stop;
+    const nc1Evidence = stop === undefined
+      ? null
+      : Object.freeze({
+          stop,
+          change: inspected.candidate,
+          validationOutcome: currentObservation.nc1Evidence?.validationOutcome ?? null,
+          frontierHash: currentObservation.snapshot.verifiedFrontierHash,
+        });
+    const secondObservation: ReviewGateAdmissionObservation = Object.freeze({
+      ...currentObservation,
+      snapshot: Object.freeze({ ...secondSnapshot, nc1Evidence }),
+      nc1Evidence,
+    });
+    return { decision: secondDecision, observation: secondObservation };
   };
 
   const withAdmissionLease = async <T>(
     request: ScopeAdmissionRequest,
-    run: (decision: AdmissionDecision) => Promise<T>,
+    run: (
+      decision: AdmissionDecision,
+      observation: ReviewGateAdmissionObservation | null,
+      owned: AdmissionOwnedWitness,
+    ) => Promise<T>,
   ): Promise<T> => {
+    if (witness === null) {
+      // A store without its protected witness never inherits authority:
+      // graph-level fail closed, never a legacy unanchored fallback.
+      throw new ScopeAdmissionBlocked("witness_unavailable");
+    }
     const scopeId = computeReviewScopeId(request.designPath, request.planPath) as ReviewScopeId;
-    // Admission inspection lease: the scope lock only. Witness reads assert
-    // the admission order (scope held, no gate lock), so the lease never
-    // takes gate locks, and run() executes strictly after release.
-    const lease = await lockManager.acquireScopeLock(scopeId);
-    if (lease === "occupied") {
+
+    // Fast lease probe: an occupied scope lock must surface as
+    // scope_lease_occupied before the wider witness lock-order assertion,
+    // so the coordinator can wait for the lease instead of bypassing
+    // admission on contention.
+    const probe = await lockManager.acquireScopeLock(scopeId);
+    if (probe === "occupied") {
       throw new ScopeAdmissionBlocked("scope_lease_occupied");
     }
-    let decision: AdmissionDecision;
+    probe.release();
+
     try {
-      decision = await decide(request, scopeId);
-    } finally {
-      lease.release();
+      // Admission authority now spans the whole callback: the owned
+      // transaction holds the installation guard plus the sorted scope/Gate
+      // locks, and the decision is applied before any guard releases.
+      return await witness.withAdmissionWitnessTransaction(
+        {
+          workspaceIdentity: request.workspaceIdentity,
+          designPath: request.designPath,
+          planPath: request.planPath,
+          authorizeAdmittedMembership: options.authorizeAdmittedMembership,
+        } as const,
+        async (owned) => {
+          const outcome = await decide(request, scopeId, owned);
+          return run(outcome.decision, outcome.observation, owned);
+        },
+      );
+    } catch (error: unknown) {
+      if (error instanceof WitnessBlocked) {
+        if (error.code === "busy_retryable") {
+          throw new ScopeAdmissionBlocked("scope_lease_occupied");
+        }
+        if (error.code === "workspace_identity") {
+          throw new ScopeAdmissionBlocked("workspace_identity");
+        }
+        // Protected-witness verification failures (registry, journals,
+        // membership) fail the admission closed; the coordinator converts
+        // the code to blocked guidance instead of a runtime crash.
+        throw new ScopeAdmissionBlocked("protected_frontier");
+      }
+      throw error;
     }
-    return await run(decision);
   };
 
   return Object.freeze({ withAdmissionLease });

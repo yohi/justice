@@ -1,14 +1,8 @@
 import { rm } from "node:fs/promises";
 import { afterEach, beforeEach, expect, it } from "vitest";
+import { validateReviewGateEventRecord } from "../../src/core/review-gate/event-schema.js";
 import {
-  computeArtifactDigest,
-  computeCanonicalJsonFingerprint,
-} from "../../src/core/review-gate/identity.js";
-import {
-  encodeReviewGateEventRecord,
-  validateReviewGateEventRecord,
-} from "../../src/core/review-gate/event-schema.js";
-import {
+  buildSubsequentPublicationFixture,
   createWitnessFixture,
   prepareHandoffFixture,
   type WitnessFixture,
@@ -43,59 +37,17 @@ it("does not publish terminal completion while a canonical target still has an a
     planProtocolFingerprint: "e".repeat(64),
     approvedAt: "2026-10-11T00:00:00.000Z",
   };
-  const envelope = {
-    gateId: genesis.gateId,
-    writerId: genesis.writerId,
-    epochId: genesis.epochId,
-    emittedAt: genesis.emittedAt,
-  };
-  const records = [
-    genesis,
-    validateReviewGateEventRecord({
-      ...envelope,
-      eventType: "DESIGN_CLEAR",
-      payload: { designProtocolFingerprint: binding.designProtocolFingerprint },
-    }),
-    validateReviewGateEventRecord({
-      ...envelope,
-      eventType: "PLAN_CLEAR",
-      payload: { completedApprovalBinding: binding },
-    }),
-    validateReviewGateEventRecord({
-      ...envelope,
-      eventType: "COMPLETED_APPROVAL_BINDING",
-      payload: { approvalBinding: binding },
-    }),
-  ];
-  const bytes = Buffer.from(records.map(encodeReviewGateEventRecord).join("\n") + "\n");
-  const { globalFrontierHash: oldHash, ...base } = prior.input.nextFrontier;
-  const body = {
-    ...base,
-    writerHeads: [
-      {
-        scopeId: "scope-1",
-        gateId: "gate-1",
-        writerId: "writer-1",
-        sequence: 4,
-        hash: computeArtifactDigest(bytes),
-      },
-    ],
-  };
-  const next = { ...body, globalFrontierHash: computeCanonicalJsonFingerprint(body) };
-  const input = {
-    ...prior.input,
+  const { input, bytes } = await buildSubsequentPublicationFixture(f, {
     publicationId: "close-publication",
     operationId: "close-publication-operation",
-    expectedInstallationFrontier: await f.witness.readInstallationFrontierHash(),
-    expectedGlobalFrontier: oldHash,
-    expectedWriterSequence: 1,
-    expectedWriterHash: prior.input.newWriterHash,
-    newWriterSequence: 4,
-    newWriterHash: computeArtifactDigest(bytes),
-    newTailDigest: computeArtifactDigest(bytes),
-    newTailLength: bytes.length,
-    newGlobalFrontier: next.globalFrontierHash,
-    nextFrontier: next,
-  };
+    event: {
+      gateId: genesis.gateId,
+      writerId: genesis.writerId,
+      epochId: genesis.epochId,
+      emittedAt: genesis.emittedAt,
+      eventType: "COMPLETED_APPROVAL_BINDING",
+      payload: { approvalBinding: binding },
+    },
+  });
   await expect(f.witness.preparePublication(input, bytes)).rejects.toThrow("terminal");
 });

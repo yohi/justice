@@ -13,6 +13,7 @@ import type {
   GateId,
   LineageId,
   ReviewGateEvent,
+  ReopenRequiredV1,
   ReviewScopeId,
   WriterId,
 } from "../../../src/core/review-gate-types.js";
@@ -947,6 +948,119 @@ describe("projectVerifiedGateTip", () => {
       remainingRounds: 5,
       witnessFrontierAtStop: "frontier-1",
     });
+  });
+
+  it("clears a verified NC1 stop only for same-epoch applied reentry", () => {
+    const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+    const applied = validateReviewGateEventRecord({
+      schemaVersion: 2,
+      eventId: "event-nc1-applied",
+      parentEventId: "event-genesis",
+      emittedAt: "2026-10-11T00:00:02.000Z",
+      gateId: "gate-1",
+      epochId: "epoch-1",
+      generationId: "generation-1",
+      writerId: "writer-1",
+      eventType: "NC1_REENTRY_OUTCOME_APPLIED",
+      payload: {
+        operationId: "operation-nc1",
+        validationEventId: "validation-1",
+        nc1EvidenceEventId: "synthetic-v1-stop",
+        changeObservedEventId: "change-1",
+        remainingRounds: 5,
+      },
+    });
+    const stopped = validateReviewGateEventRecord({
+      eventType: "REVIEW_NON_CONVERGENT",
+      gateId: "gate-1" as GateId,
+      writerId: "writer-1" as WriterId,
+      epochId: "epoch-1" as EpochId,
+      emittedAt: "2026-10-11T00:00:01.000Z",
+      payload: { phase: "design", lineageIds: ["lineage-1" as LineageId] },
+    });
+    const tip = projectVerifiedGateTip({
+      gateId: "gate-1",
+      scopeId: "scope-1",
+      events: [genesis, stopped, applied],
+      frontier: frontier() as VerifiedScopeFrontier,
+    });
+
+    expect(tip.status).toBe("active");
+    if (tip.status !== "active") throw new Error("expected_nc1_reentry_active_tip");
+    expect(tip).toMatchObject({
+      status: "active",
+      gateId: "gate-1",
+      generationId: "generation-1",
+      suspensionReason: null,
+      suspensionEpochId: null,
+      rounds: { design: 0, plan: 0 },
+      nc1Stop: null,
+    });
+  });
+
+  it("keeps reopen suspension after NC1 outcome until the finding is reopened", () => {
+    const genesis = validateReviewGateEventRecord(v2GateCreatedRecord());
+    const stopped = validateReviewGateEventRecord({
+      eventType: "REVIEW_NON_CONVERGENT",
+      gateId: "gate-1" as GateId,
+      writerId: "writer-1" as WriterId,
+      epochId: "epoch-nc1" as EpochId,
+      emittedAt: "2026-10-11T00:00:01.000Z",
+      payload: { phase: "design", lineageIds: ["lineage-1" as LineageId] },
+    });
+    const reopen = validateReviewGateEventRecord(event<ReopenRequiredV1>("REOPEN_REQUIRED", {
+      phase: "design",
+      lineageIds: ["lineage-1" as LineageId],
+    }));
+    const applied = validateReviewGateEventRecord({
+      schemaVersion: 2,
+      eventId: "event-nc1-applied",
+      parentEventId: "event-genesis",
+      emittedAt: "2026-10-11T00:00:03.000Z",
+      gateId: "gate-1",
+      epochId: "epoch-nc1",
+      generationId: "generation-1",
+      writerId: "writer-1",
+      eventType: "NC1_REENTRY_OUTCOME_APPLIED",
+      payload: {
+        operationId: "operation-nc1",
+        validationEventId: "validation-1",
+        nc1EvidenceEventId: "synthetic-v1-stop",
+        changeObservedEventId: "change-1",
+        remainingRounds: 5,
+      },
+    });
+    const reopened = validateReviewGateEventRecord(event<FindingReopenedV1>("FINDING_REOPENED", {
+      lineageId: "lineage-1" as LineageId,
+      findingId: "finding-1" as FindingId,
+      reopenedBy: "epoch-reopen" as EpochId,
+    }));
+
+    const beforeReopenCompletion = projectVerifiedGateTip({
+      gateId: "gate-1",
+      scopeId: "scope-1",
+      events: [genesis, reopen, stopped, applied],
+      frontier: frontier() as VerifiedScopeFrontier,
+    });
+    if (beforeReopenCompletion.status !== "suspended") {
+      throw new Error("expected_reopen_required_suspended_tip");
+    }
+    expect(beforeReopenCompletion.status).toBe("suspended");
+    expect(beforeReopenCompletion.suspensionReason).toBe("reopen_required");
+    expect(beforeReopenCompletion.suspensionEpochId).toBe(reopen.epochId);
+
+    const afterReopenCompletion = projectVerifiedGateTip({
+      gateId: "gate-1",
+      scopeId: "scope-1",
+      events: [genesis, reopen, stopped, applied, reopened],
+      frontier: frontier() as VerifiedScopeFrontier,
+    });
+    if (afterReopenCompletion.status !== "active") {
+      throw new Error("expected_reopened_active_tip");
+    }
+    expect(afterReopenCompletion.status).toBe("active");
+    expect(afterReopenCompletion.suspensionReason).toBeNull();
+    expect(afterReopenCompletion.suspensionEpochId).toBeNull();
   });
 
   it("rejects a history without a V2 GATE_CREATED event", () => {

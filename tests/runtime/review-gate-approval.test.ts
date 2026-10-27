@@ -133,6 +133,21 @@ function freshRoot(): string {
   tempRoots.push(root);
   mkdirSync(path.join(root, "docs"), { recursive: true });
   execFileSync("git", ["init", "-q", root]);
+  writeFileSync(path.join(root, DESIGN_PATH), "# Design\n", "utf8");
+  writeFileSync(path.join(root, PLAN_PATH), "# Plan\n", "utf8");
+  writeFileSync(path.join(root, "docs/other-plan.md"), "# Other Plan\n", "utf8");
+  execFileSync("git", ["-C", root, "add", DESIGN_PATH, PLAN_PATH, "docs/other-plan.md"]);
+  execFileSync("git", [
+    "-C",
+    root,
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "commit",
+    "-qm",
+    "artifacts",
+  ]);
   return root;
 }
 

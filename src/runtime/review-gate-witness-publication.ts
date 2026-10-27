@@ -1,12 +1,10 @@
 import { computeArtifactDigest } from "../core/review-gate/identity.js";
-import { validateReviewGateEventRecord } from "../core/review-gate/event-schema.js";
 import type {
   PreparedWitnessPublicationV1,
   PublicationCommitInput,
   PublicationCommitResult,
 } from "./review-gate-witness-contracts.js";
 import { publicationSchema } from "./review-gate-witness-registry.js";
-import { WitnessBlocked } from "./review-gate-protected-store.js";
 import {
   withWitnessTransaction,
   workspaceFrom,
@@ -16,9 +14,8 @@ import {
   createPublicationRecords,
   publicationLockIds,
   preparePublicationUnlocked,
+  publishPreparedJournalUnlocked,
 } from "./review-gate-publication-record.js";
-import { verifyTerminalPublication } from "./review-gate-witness-terminal-publication.js";
-import { withWitnessScopeGateLocks } from "./review-gate-lock-manager.js";
 
 export function createWitnessPublication(context: WitnessContext) {
   const { readPrepared, commit } = createPublicationRecords(context);
@@ -98,49 +95,14 @@ export function createWitnessPublication(context: WitnessContext) {
       }
     },
     async publishPreparedJournal(publicationId: string): Promise<void> {
-      return withWitnessTransaction(context, async (current) => {
-        const { input, bytes } = await readPrepared(current, publicationId);
-        return withWitnessScopeGateLocks(
-          context.lockManager,
-          publicationLockIds(input),
-          async () => {
-            if (context.provider === undefined)
-              throw new WitnessBlocked("journal_native_unavailable");
-            const previous = await context.provider.readWriterShard(
-              input.scopeId,
-              input.gateId,
-              input.writerId,
-            );
-            if (previous?.equals(bytes)) return;
-            if (current.data.committed[publicationId] !== undefined)
-              throw new WitnessBlocked("journal_history_lost");
-            if (current.revision !== (current.data.pending[publicationId]?.preparedRevision ?? -1))
-              throw new WitnessBlocked("publication_frontier");
-            const events = bytes
-              .toString("utf8")
-              .trimEnd()
-              .split("\n")
-              .map((line) => validateReviewGateEventRecord(JSON.parse(line)));
-            await verifyTerminalPublication(
-              context,
-              current,
-              events.slice(input.expectedWriterSequence),
-            );
-            if (
-              (previous === null ? "0".repeat(64) : computeArtifactDigest(previous)) !==
-              input.expectedWriterHash
-            )
-              throw new WitnessBlocked("publication_preimage");
-            await context.provider.durableReplaceWriterShard(
-              input.scopeId,
-              input.gateId,
-              input.writerId,
-              previous === null ? null : computeArtifactDigest(previous),
-              bytes,
-            );
-          },
-        );
-      });
+      const { input } = await withWitnessTransaction(context, async (current) =>
+        readPrepared(current, publicationId),
+      );
+      return withWitnessTransaction(
+        context,
+        (current) => publishPreparedJournalUnlocked(context, current, publicationId),
+        publicationLockIds(input),
+      );
     },
     async commitPreparedPublicationCAS(
       input: PublicationCommitInput,

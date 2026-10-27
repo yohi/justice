@@ -117,7 +117,7 @@ export async function validatePublication(
     const genesis = records[0];
     const auth = workspace.authorization.authority;
     if (
-      workspace.enrollmentState !== "consumed" ||
+      workspace.enrollmentState === "committed" ||
       input.nextFrontier.scopes.length !== 1 ||
       scope === undefined ||
       scope.provenance.kind !== "verified_genesis" ||

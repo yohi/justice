@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { generateKeyPairSync, sign } from "node:crypto";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -30,8 +30,11 @@ export async function createWitnessFixture(lockManager?: ReviewGateLockManager) 
       "base64",
     );
   execFileSync("git", ["init", "-q", root]);
+  await mkdir(join(root, "docs"), { recursive: true });
+  await writeFile(join(root, "docs/design.md"), "# Design\n");
+  await writeFile(join(root, "docs/plan.md"), "# Plan\n");
   await writeFile(join(root, "artifact.md"), "original");
-  execFileSync("git", ["-C", root, "add", "artifact.md"]);
+  execFileSync("git", ["-C", root, "add", "artifact.md", "docs/design.md", "docs/plan.md"]);
   execFileSync("git", [
     "-C",
     root,

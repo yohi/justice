@@ -5,6 +5,7 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import {
   createReviewGateCoordinator,
+  isApprovedDesignOperationReadBinding,
   type CallerRoutingDecisionV1,
 } from "../../src/runtime/review-gate-coordinator";
 import {
@@ -33,6 +34,24 @@ const asArtifactDigest = (value: string): ArtifactDigest => value as ArtifactDig
 
 const DESIGN_PATH = "docs/design.md";
 const PLAN_PATH = "docs/plan.md";
+
+describe("approved Design recovery binding OIDs", () => {
+  it("accepts both Git object identifier widths", () => {
+    const makeBinding = (treeSha: string, blobSha: string): unknown => ({
+      gateId: "gate-1",
+      operationId: "operation-1",
+      canonicalPath: DESIGN_PATH,
+      treeSha,
+      blobSha,
+      gitMode: "100644",
+      objectSize: 1,
+    });
+
+    expect(isApprovedDesignOperationReadBinding(makeBinding("a".repeat(40), "b".repeat(64)))).toBe(true);
+    expect(isApprovedDesignOperationReadBinding(makeBinding("a".repeat(64), "b".repeat(40)))).toBe(true);
+    expect(isApprovedDesignOperationReadBinding(makeBinding("a".repeat(48), "b".repeat(64)))).toBe(false);
+  });
+});
 
 let harnessCounter = 0;
 

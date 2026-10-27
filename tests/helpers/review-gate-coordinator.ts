@@ -7,10 +7,14 @@
 
 import { createHash } from "node:crypto";
 import type {
+  DurableReviewGateEventStore,
   ReviewGateDispatchRecordV1,
   ReviewGateEventStore,
   ReviewGateV2Journal,
 } from "../../src/runtime/review-gate-event-store";
+import type { AdmissionOwnedWitness } from "../../src/runtime/review-gate-admission-context";
+import type { PublicationCommitInput, PublicationCommitResult } from "../../src/runtime/review-gate-witness-contracts";
+import { computeArtifactDigest } from "../../src/core/review-gate/identity";
 import {
   encodeReviewGateEventRecord,
   validateReviewGateEventRecord,
@@ -33,15 +37,24 @@ type InMemoryGateData = {
   readonly dispatches: ReviewGateDispatchRecordV1[];
 };
 
-export type InMemoryReviewGateEventStore = ReviewGateEventStore & {
+export type InMemoryReviewGateEventStore = ReviewGateEventStore & Pick<DurableReviewGateEventStore, "prepareAdmittedGenerationPublication"> & {
+  readonly writerId: string;
   readonly gates: () => ReadonlyMap<string, InMemoryGateData>;
+  readonly commitPreparedPublicationCAS: (input: PublicationCommitInput) => Promise<PublicationCommitResult>;
 };
 
 export function createInMemoryReviewGateEventStore(): InMemoryReviewGateEventStore {
   const gates = new Map<string, InMemoryGateData>();
   const scopeIndex = new Map<string, string>();
+  const preparedEvents = new Map<string, Readonly<{
+    readonly events: readonly VerifiedReviewGateEvent[];
+    readonly expectedGlobalFrontier: string;
+    readonly expectedWriterHash: string;
+  }>>();
+  const committedPublications = new Set<string>();
 
   const store: InMemoryReviewGateEventStore = {
+    writerId: "test-writer-authority",
     gates: () => gates,
     appendEvents: async (gateId, events) => {
       const data = gates.get(gateId) ?? { events: [], v2Events: [], dispatches: [] };
@@ -95,6 +108,7 @@ export function createInMemoryReviewGateEventStore(): InMemoryReviewGateEventSto
       });
     },
     readEvents: async (gateId) => gates.get(gateId)?.events ?? [],
+    readVerifiedEvents: async (gateId) => gates.get(gateId)?.v2Events ?? [],
     recordDispatch: async (gateId, dispatch) => {
       const data = gates.get(gateId) ?? { events: [], v2Events: [], dispatches: [] };
       const existing = data.dispatches.find((record) => record.operationId === dispatch.operationId);
@@ -133,6 +147,93 @@ export function createInMemoryReviewGateEventStore(): InMemoryReviewGateEventSto
       scopeIndex.set(reviewScopeId, gateId);
     },
     listGateIds: async () => [...gates.keys()].sort((left, right) => left.localeCompare(right)),
+    prepareAdmittedGenerationPublication: async (input, owned: AdmissionOwnedWitness) => {
+      const frontier = await owned.readVerifiedFrontier();
+      const scope = input.membership.authorization.scope;
+      const event = input.canonicalEvents[0];
+      if (event === undefined || event.eventType !== "GATE_CREATED" || !("schemaVersion" in event) || event.schemaVersion !== 2) {
+        throw new Error("review_gate_test_admitted_creation_event_invalid");
+      }
+      const writerHeadHash = computeArtifactDigest(
+        Buffer.from(`${encodeReviewGateEventRecord(event)}\n`, "utf8"),
+      );
+      if (writerHeadHash !== input.membership.writerHead.hash) {
+        throw new Error("review_gate_test_admitted_creation_writer_hash_invalid");
+      }
+      preparedEvents.set(input.operationId, {
+        events: input.canonicalEvents,
+        expectedGlobalFrontier: input.membership.authorization.expectedWorkspaceFrontier,
+        expectedWriterHash: "0".repeat(64),
+      });
+      return {
+        installationId: input.membership.authorization.installationId,
+        workspaceIdentity: input.membership.authorization.workspaceIdentity,
+        scopeId: input.scopeId,
+        gateId: input.gateId,
+        writerId: input.writerId,
+        operationId: input.operationId,
+        publicationId: input.operationId,
+        expectedInstallationFrontier: frontier.globalFrontierHash,
+        expectedGlobalFrontier: input.membership.authorization.expectedWorkspaceFrontier,
+        expectedWriterSequence: 0,
+        expectedWriterHash: "0".repeat(64),
+        newWriterSequence: input.membership.writerHead.sequence,
+        newWriterHash: input.membership.writerHead.hash,
+        canonicalShardPath: `${input.scopeId}/${input.gateId}/${input.writerId}`,
+        newTailLength: Buffer.byteLength(`${encodeReviewGateEventRecord(event)}\n`, "utf8"),
+        newTailDigest: writerHeadHash,
+        newGlobalFrontier: frontier.globalFrontierHash,
+        firstEnrollmentAuthorizationId: input.decision.kind === "CREATE_GENESIS" ? input.decision.enrollmentAuthorizationEventId : null,
+        payloadSchemaVersion: 1,
+        nextFrontier: {
+          ...frontier,
+          scopes: [...frontier.scopes.filter((entry) => entry.scopeId !== scope.scopeId), scope],
+          writerHeads: [...frontier.writerHeads, {
+            scopeId: input.scopeId,
+            gateId: input.gateId,
+            writerId: input.writerId,
+            sequence: input.membership.writerHead.sequence,
+            hash: input.membership.writerHead.hash,
+          }],
+        },
+      };
+    },
+    commitPreparedPublicationCAS: async ({ publicationId, expectedGlobalFrontier, expectedWriterHash }) => {
+      if (committedPublications.has(publicationId)) return "already_committed";
+      const prepared = preparedEvents.get(publicationId);
+      if (
+        prepared === undefined ||
+        prepared.expectedGlobalFrontier !== expectedGlobalFrontier ||
+        prepared.expectedWriterHash !== expectedWriterHash
+      ) return "blocked";
+      const batch = prepared.events;
+      const first = batch[0];
+      if (first === undefined || first.eventType !== "GATE_CREATED" || !("schemaVersion" in first) || first.schemaVersion !== 2) {
+        return "blocked";
+      }
+      await store.appendV2Events(first.gateId, batch);
+      await store.appendEvents(first.gateId, [{
+        eventType: "GATE_CREATED",
+        gateId: first.gateId as ReviewGateEvent["gateId"],
+        writerId: first.writerId as ReviewGateEvent["writerId"],
+        epochId: first.epochId as ReviewGateEvent["epochId"],
+        emittedAt: first.emittedAt,
+        payload: {
+          reviewScopeId: first.payload.reviewScopeId,
+          designArtifact: first.payload.designArtifact,
+          planArtifact: first.payload.planArtifact,
+          requirementsResolution: {
+            source: first.payload.requirementsResolution.source === "design_declared_reference" ? "auto_design_reference" : "explicit",
+            canonicalPath: first.payload.requirementsResolution.canonicalPath,
+            digest: first.payload.requirementsResolution.digest,
+          },
+          reviewProtocolFingerprint: first.payload.reviewProtocolFingerprint,
+        },
+      }]);
+      committedPublications.add(publicationId);
+      preparedEvents.delete(publicationId);
+      return "advanced";
+    },
     close: () => undefined,
   };
   return store;

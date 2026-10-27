@@ -1,6 +1,4 @@
 import { createPrivateKey, createPublicKey, randomUUID, sign } from "node:crypto";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import {
   canonicalizeArtifactPath,
   computeCanonicalJsonFingerprint,
@@ -11,14 +9,18 @@ import {
   withWitnessTransaction,
   workspaceFrom,
   type WitnessContext,
+  type WitnessTransaction,
 } from "./review-gate-witness-context.js";
 import { firstEnrollmentSchema } from "./review-gate-witness-registry.js";
 import { hostProofValid } from "./review-gate-witness-installation.js";
+import { runGitLiteral } from "./review-gate-query.js";
+import { parseBlobTreeEntry } from "./review-gate-head-artifact.js";
 import {
   verifyProvisionerSignature,
   scopeInstallationIdSchema,
 } from "./review-gate-witness-verification.js";
 import type { TrustedFirstEnrollmentV1 } from "./review-gate-witness-contracts.js";
+import type { VerifiedEnrollmentAdmissionSnapshot } from "./review-gate-admission-context.js";
 
 export type FirstEnrollmentRequest = Readonly<{
   designPath: string;
@@ -129,6 +131,68 @@ export async function authorizeWorkspace(
     return authorization;
   });
 }
+
+/**
+ * Target-local admission-time validation of a first enrollment authority.
+ *
+ * Unlike the legacy workspace-wide `git status` check, this validator only
+ * inspects the two canonical artifacts named by the enrollment authority. It
+ * confirms the paths are safe canonical paths, belong to the locked workspace
+ * identity/repository, and are clean against HEAD. This lets unrelated dirty
+ * workspace state coexist with first-use admission.
+ */
+export async function validateFirstEnrollmentUnderAdmission(
+  context: WitnessContext,
+  current: WitnessTransaction,
+  auth: TrustedFirstEnrollmentV1,
+  snapshot?: VerifiedEnrollmentAdmissionSnapshot | null,
+): Promise<void> {
+  const designPath = canonicalizeArtifactPath(auth.authority.canonicalDesignPath);
+  const planPath = canonicalizeArtifactPath(auth.authority.canonicalPlanPath);
+  if (
+    designPath === null ||
+    planPath === null ||
+    designPath !== auth.authority.canonicalDesignPath ||
+    planPath !== auth.authority.canonicalPlanPath
+  )
+    throw new WitnessBlocked("enrollment_invalid");
+  if (auth.authority.workspaceIdentity !== context.options.workspaceIdentity)
+    throw new WitnessBlocked("authentication");
+  if (auth.repositoryIdentity !== current.repositoryIdentity)
+    throw new WitnessBlocked("authentication");
+  if (snapshot !== undefined && snapshot !== null) {
+    if (
+      snapshot.current.design.canonicalPath !== designPath ||
+      snapshot.current.plan.canonicalPath !== planPath
+    )
+      throw new WitnessBlocked("enrollment_snapshot_mismatch");
+  }
+
+  const headTree = await runGitLiteral(context.options.workspaceRoot, [
+    "ls-tree",
+    "-z",
+    "HEAD",
+    "--",
+    designPath,
+    planPath,
+  ]);
+  if (
+    headTree.code !== 0 ||
+    parseBlobTreeEntry(headTree.stdout, designPath) === null ||
+    parseBlobTreeEntry(headTree.stdout, planPath) === null
+  ) {
+    throw new WitnessBlocked("target_dirty");
+  }
+  const diff = await runGitLiteral(context.options.workspaceRoot, [
+    "diff",
+    "--quiet",
+    "HEAD",
+    "--",
+    designPath,
+  ]);
+  if (diff.code !== 0) throw new WitnessBlocked("target_dirty");
+}
+
 export async function consumeFirstEnrollment(
   context: WitnessContext,
   untrusted: TrustedFirstEnrollmentV1,
@@ -163,25 +227,7 @@ export async function consumeFirstEnrollment(
         auth.authority.verifiedAbsentPriorEnrollmentFrontierHash
     )
       throw new WitnessBlocked("authentication");
-    const git = promisify(execFile);
-    const env = Object.fromEntries(
-      Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
-    );
-    const prefix = [
-      "-c",
-      "core.fsmonitor=false",
-      "-c",
-      "core.untrackedCache=false",
-      "-C",
-      context.options.workspaceRoot,
-    ];
-    await git("git", [...prefix, "rev-parse", "--verify", "HEAD"], { env, timeout: 10_000 });
-    const status = await git(
-      "git",
-      [...prefix, "status", "--porcelain=v1", "--untracked-files=all"],
-      { env, timeout: 10_000 },
-    );
-    if (status.stdout.trim() !== "") throw new WitnessBlocked("workspace_dirty");
+    await validateFirstEnrollmentUnderAdmission(context, current, auth);
     await context.store.advance("scope", current, {
       ...current.data,
       workspaces: {
