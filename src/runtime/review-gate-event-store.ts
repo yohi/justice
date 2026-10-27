@@ -1421,9 +1421,15 @@ export function createReviewGateEventStore(
       ) {
         throw new Error("review_gate_writer_membership_missing");
       }
-      scopes = input.admittedScope === undefined
-        ? observed.scopes
-        : observed.scopes.map((entry) => entry.scopeId === input.scopeId ? scope : entry);
+      if (input.admittedScope === undefined) {
+        scopes = observed.scopes;
+      } else if (observed.scopes.some((entry) => entry.scopeId === input.scopeId)) {
+        scopes = observed.scopes.map((entry) => entry.scopeId === input.scopeId ? scope : entry);
+      } else {
+        scopes = [...observed.scopes, scope].sort((left, right) =>
+          left.scopeId.localeCompare(right.scopeId),
+        );
+      }
     }
 
     const tailLines = input.canonicalEvents.map(encodeReviewGateEventRecord).join("\n");
@@ -1788,7 +1794,7 @@ export function createReviewGateEventStore(
         );
         if (
           scope === undefined || predecessor === undefined ||
-          scope.scopeId !== input.scopeId ||
+          decision.scopeId !== input.scopeId ||
           membership.supersedesGateId !== decision.predecessorGateId ||
           membership.authorization.scope.scopeId !== input.scopeId ||
           membership.authorization.scope.provenance.kind !== "verified_completed_successor" ||
@@ -1838,6 +1844,7 @@ export function createReviewGateEventStore(
           event.payload.supersedesGateId !== membership.supersedesGateId
         ) throw new Error("review_gate_admitted_successor_event_invalid");
         owned.assertOwnedScope(input.scopeId);
+        owned.assertOwnedGate(input.gateId);
         owned.assertOwnedGate(decision.predecessorGateId);
         const { publication, bytes } = await buildPublication({
           scopeId: input.scopeId, gateId: input.gateId, writerId: input.writerId,

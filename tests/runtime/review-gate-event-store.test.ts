@@ -47,7 +47,11 @@ import type { ReviewGateScopeAdmissionRequest } from "../../src/runtime/review-g
 import { computeReviewScopeId } from "../../src/core/review-gate/identity";
 import { createReviewGateProtocolDescriptor } from "../../src/runtime/review-gate-protocol";
 import { planReviewGateAdmission } from "../../src/core/review-gate/admission";
-import type { ScopeEnrollmentV1, VerifiedScopeFrontier } from "../../src/core/review-gate/types";
+import type {
+  ReviewApprovalBindingV1,
+  ScopeEnrollmentV1,
+  VerifiedScopeFrontier,
+} from "../../src/core/review-gate/types";
 
 const TEST_WRITER_ID = "writer-1";
 const DESIGN_PATH = "docs/design.md";
@@ -1614,7 +1618,259 @@ describe("ReviewGateEventStore — tamper and crash recovery (Task 6)", () => {
       closeWitnessFixture(ctx);
     });
 
-  it.todo("publishes successor membership with exact predecessor");
+  it("publishes successor membership with its exact completed predecessor", async () => {
+    const ctx = await freshContext("admitted-successor");
+    const store = createReviewGateEventStore(
+      ctx.root,
+      eventStoreOptions(ctx.root, ctx.writerId, ctx.witness),
+    );
+    const predecessorScopeId = computeReviewScopeId(DESIGN_PATH, PLAN_PATH);
+    const predecessorGateId = "predecessor-gate";
+    const predecessorGenerationId = "predecessor-generation";
+    const workspaceIdentity = computeWorkspaceIdentity(ctx.root);
+    const digest = "a".repeat(64);
+    const requirementsResolution = {
+      schemaVersion: 2 as const,
+      source: "explicit" as const,
+      canonicalPath: "docs/requirements.md",
+      digest,
+      gitMode: "100644" as const,
+      requirementsGitBlobOid: "requirements-blob",
+      committedBaselineOid: "baseline-commit",
+      workspaceIdentity,
+      selectionEvidence: { commandPath: "--requirements docs/requirements.md" },
+    };
+    const predecessorCreated = validateReviewGateEventRecord({
+      schemaVersion: 2,
+      eventId: "predecessor-created",
+      parentEventId: "predecessor-parent",
+      emittedAt: "2026-10-16T00:00:00.000Z",
+      gateId: predecessorGateId,
+      epochId: "predecessor-epoch",
+      generationId: predecessorGenerationId,
+      writerId: ctx.writerId,
+      eventType: "GATE_CREATED",
+      payload: {
+        reviewScopeId: predecessorScopeId,
+        supersedesGateId: null,
+        requirementsResolution,
+        designArtifact: { canonicalPath: DESIGN_PATH, digest, gitMode: "100644" },
+        planArtifact: { canonicalPath: PLAN_PATH, digest, gitMode: "100644" },
+        reviewProtocolFingerprint: "review-fingerprint",
+        designProtocolFingerprint: "design-fingerprint",
+        planProtocolFingerprint: "plan-fingerprint",
+      },
+    });
+    const approvalBinding: ReviewApprovalBindingV1 = {
+      reviewScopeId: predecessorScopeId,
+      gateId: predecessorGateId,
+      designArtifact: predecessorCreated.payload.designArtifact,
+      planArtifact: predecessorCreated.payload.planArtifact,
+      requirementsResolution: {
+        source: "explicit",
+        canonicalPath: "docs/requirements.md",
+        digest,
+      },
+      reviewProtocolFingerprint: "review-fingerprint",
+      designProtocolFingerprint: "design-fingerprint",
+      planProtocolFingerprint: "plan-fingerprint",
+      approvedAt: "2026-10-16T00:00:01.000Z",
+    };
+    const predecessorApprovalEventId = "predecessor-completed";
+    const predecessorCompleted = validateReviewGateEventRecord({
+      schemaVersion: 2,
+      eventId: predecessorApprovalEventId,
+      parentEventId: predecessorCreated.eventId,
+      emittedAt: "2026-10-16T00:00:01.000Z",
+      gateId: predecessorGateId,
+      epochId: "predecessor-epoch",
+      generationId: predecessorGenerationId,
+      writerId: ctx.writerId,
+      eventType: "COMPLETED_APPROVAL_BINDING",
+      payload: {
+        approvalBinding,
+        designClearEventId: "predecessor-design-clear",
+        planClearEventId: "predecessor-plan-clear",
+        currentRequirementsAuthorityEventId: predecessorCreated.eventId,
+        currentRequirements: {
+          source: "explicit",
+          workspaceIdentity,
+          canonicalPath: "docs/requirements.md",
+          digest,
+          gitMode: "100644",
+          gitBlobOid: "requirements-blob",
+          selectedByEventId: predecessorCreated.eventId,
+        },
+      },
+    });
+    const enrollment = await ensureEnrollment(ctx.witness, DESIGN_PATH, PLAN_PATH);
+    const predecessorPublication = await store.prepareVerifiedEventPublication({
+      scopeId: predecessorScopeId,
+      gateId: predecessorGateId,
+      writerId: ctx.writerId,
+      operationId: "seed-predecessor-operation",
+      canonicalEvents: [predecessorCreated, predecessorCompleted],
+      firstEnrollment: {
+        authorization: enrollment,
+        generationId: predecessorGenerationId,
+        workflowContinuityId: "predecessor-continuity",
+      },
+    });
+    expect(await store.publishPreparedEvent(predecessorPublication)).toBe("committed");
+
+    const frontier = await ctx.witness.readWorkspaceScopeFrontier();
+    const successorScopeId = computeReviewScopeId("docs/successor-design.md", "docs/successor-plan.md");
+    const relationProofDigest = "b".repeat(64);
+    const successorGateId = "successor-gate";
+    const successorGenerationId = "successor-generation";
+    const operationId = "successor-operation";
+    const decision = {
+      kind: "CREATE_SUCCESSOR" as const,
+      scopeId: successorScopeId,
+      predecessorScopeId,
+      predecessorGateId,
+      predecessorApprovalEventId,
+      predecessorRelationProofDigest: relationProofDigest,
+      verifiedWorkspaceFrontierHash: frontier.globalFrontierHash,
+    };
+    const proposedScope: ScopeEnrollmentV1 = {
+      scopeId: successorScopeId,
+      workflowContinuityId: "predecessor-continuity",
+      canonicalDesignPath: "docs/successor-design.md",
+      canonicalPlanPath: "docs/successor-plan.md",
+      pathPairDigest: computeCanonicalJsonFingerprint([
+        "docs/successor-design.md",
+        "docs/successor-plan.md",
+      ]),
+      provenance: {
+        kind: "verified_completed_successor",
+        evidenceDigest: relationProofDigest,
+        priorScopeId: predecessorScopeId,
+        priorGateId: predecessorGateId,
+      },
+      gateMembership: [{
+        gateId: successorGateId,
+        generationId: successorGenerationId,
+        supersedesGateId: predecessorGateId,
+        admissionEventId: "successor-admission",
+        writerIds: [ctx.writerId],
+      }],
+    };
+    const observation = {
+      snapshot: {
+        scopeId: successorScopeId,
+        workspaceIdentity,
+        verifiedFrontierHash: frontier.globalFrontierHash,
+        workspaceContinuity: {
+          relationClosureProofDigest: relationProofDigest,
+          verifiedCrossScopePredecessor: {
+            priorScopeId: predecessorScopeId,
+            priorGateId: predecessorGateId,
+            completedApprovalEventId: predecessorApprovalEventId,
+            relationshipProofDigest: relationProofDigest,
+          },
+        },
+      },
+      requirementsResolution,
+      lastVerifiedBinding: null,
+      nc1Evidence: null,
+    } as unknown as import("../../src/runtime/review-gate-admission-context").ReviewGateAdmissionObservation;
+    const successorCreated = validateReviewGateEventRecord({
+      schemaVersion: 2,
+      eventId: "successor-created",
+      parentEventId: "successor-parent",
+      emittedAt: "2026-10-16T00:00:02.000Z",
+      gateId: successorGateId,
+      epochId: "successor-epoch",
+      generationId: successorGenerationId,
+      writerId: ctx.writerId,
+      eventType: "GATE_CREATED",
+      payload: {
+        reviewScopeId: successorScopeId,
+        supersedesGateId: predecessorGateId,
+        requirementsResolution,
+        designArtifact: {
+          canonicalPath: proposedScope.canonicalDesignPath,
+          digest: "c".repeat(64),
+          gitMode: "100644",
+        },
+        planArtifact: {
+          canonicalPath: proposedScope.canonicalPlanPath,
+          digest: "d".repeat(64),
+          gitMode: "100644",
+        },
+        reviewProtocolFingerprint: "successor-review-fingerprint",
+        designProtocolFingerprint: "successor-design-fingerprint",
+        planProtocolFingerprint: "successor-plan-fingerprint",
+      },
+    });
+    const approve = witnessApprovers.get(ctx.witness);
+    if (approve === undefined) throw new Error("test_witness_missing_approver");
+    const scope = await authorizeScopeEnrollment({
+      witness: ctx.witness,
+      scope: proposedScope,
+      operationId,
+      authorize: approve,
+    });
+    const membershipAuthorization = {
+      installationId: (await ctx.witness.readInstallation()).installationId,
+      workspaceIdentity,
+      operationId,
+      expectedWorkspaceFrontier: frontier.globalFrontierHash,
+      scope,
+    };
+    const membership = {
+      gateId: successorGateId,
+      generationId: successorGenerationId,
+      operationId,
+      writerId: ctx.writerId,
+      writerHead: {
+        sequence: 1,
+        hash: computeArtifactDigest(
+          Buffer.from(`${encodeReviewGateEventRecord(successorCreated)}\n`),
+        ),
+      },
+      supersedesGateId: predecessorGateId,
+      authorization: {
+        ...membershipAuthorization,
+        signature: await approve(membershipAuthorization),
+      },
+    };
+    const prepared = await ctx.witness.withAdmissionWitnessTransaction(
+      {
+        workspaceIdentity,
+        designPath: scope.canonicalDesignPath,
+        planPath: scope.canonicalPlanPath,
+      },
+      (owned) => store.prepareAdmittedGenerationPublication({
+        scopeId: successorScopeId,
+        gateId: successorGateId,
+        writerId: ctx.writerId,
+        operationId,
+        canonicalEvents: [successorCreated],
+        decision,
+        observation,
+        membership,
+      }, owned),
+    );
+    expect(await store.publishPreparedEvent(prepared)).toBe("committed");
+
+    const committedFrontier = await ctx.witness.readWorkspaceScopeFrontier();
+    const successor = committedFrontier.scopes.find((entry) => entry.scopeId === successorScopeId);
+    expect(successor?.gateMembership).toContainEqual(expect.objectContaining({
+      gateId: successorGateId,
+      supersedesGateId: predecessorGateId,
+      writerIds: [ctx.writerId],
+    }));
+    expect(successor?.provenance).toMatchObject({
+      kind: "verified_completed_successor",
+      priorScopeId: predecessorScopeId,
+      priorGateId: predecessorGateId,
+    });
+
+    store.close();
+    closeWitnessFixture(ctx);
+  });
 
   it.todo("recovers prepared genesis without a second budget");
   });

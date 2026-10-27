@@ -176,6 +176,15 @@ export async function withAdmissionWitnessTransaction<T>(
           scopeIds.add(scope.scopeId);
           for (const gate of scope.gateMembership) gateIds.add(gate.gateId);
         }
+        for (const authorization of Object.values(current.data.scopeAuthorizations)) {
+          if (
+            !authorization.consumed &&
+            authorization.expectedWorkspaceFrontier === workspace.frontier.globalFrontierHash &&
+            scopeIds.has(authorization.scope.scopeId)
+          ) {
+            for (const gate of authorization.scope.gateMembership) gateIds.add(gate.gateId);
+          }
+        }
       }
 
       let released = false;
