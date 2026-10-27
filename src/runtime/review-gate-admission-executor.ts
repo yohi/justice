@@ -89,7 +89,7 @@ export function planAdmissionNC1Reentry(
     change.gateId !== decision.gateId ||
     change.generationId !== decision.generationId ||
     change.changeObservedEventId !== decision.changeObservedEventId ||
-    change.changeObservedEventId !== decision.nc1EvidenceEventId ||
+    evidence.stop.stopEventId !== decision.nc1EvidenceEventId ||
     evidence.frontierHash !== decision.witnessFrontierHash ||
     snapshot.verifiedFrontierHash !== decision.witnessFrontierHash ||
     change.witnessFrontierAtObservation !== decision.witnessFrontierHash

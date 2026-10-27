@@ -252,7 +252,7 @@ describe("coordinator startOrResume routes through scope admission", () => {
           eventType: "DESIGN_CLEAR",
           payload: {
             designProtocolFingerprint: "protocol-design",
-            approvedContextEventId: "design-clear-event",
+            approvedContextEventId: "approved-context-operation",
           },
         },
       ]]]),
@@ -345,7 +345,7 @@ describe("coordinator startOrResume routes through scope admission", () => {
       eventType: "DESIGN_CLEAR",
       payload: {
         designProtocolFingerprint: observation.snapshot.current.designProtocolFingerprint,
-        approvedContextEventId: "design-clear-event",
+        approvedContextEventId: "approved-context-operation",
       },
     })]);
 

@@ -1844,12 +1844,17 @@ export function createReviewGateCoordinator(
             if (decision.kind === "BLOCK") return null;
             const events = await eventStore.readVerifiedEvents(session.gateId);
             const clear = events.find((event) => event.eventType === "DESIGN_CLEAR");
-            if (clear === undefined || !("eventId" in clear)) return null;
+            if (
+              clear === undefined ||
+              !("eventId" in clear) ||
+              !("schemaVersion" in clear) ||
+              typeof clear.payload.approvedContextEventId !== "string"
+            ) return null;
             return buildApprovedDesignOperationReadBinding(
               owned,
               {
                 gateId: session.gateId,
-                operationId: clear.eventId,
+                operationId: clear.payload.approvedContextEventId,
                 designPath: session.designPath,
               },
               options.approvedDesignReadDependencies,

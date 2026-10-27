@@ -739,7 +739,9 @@ export function projectVerifiedGateTip(
         case "FINDING_REOPENED":
           reopenRequired = false;
           suspensionReason = nc1Reason ?? (executionSuspended ? "execution_suspended" : null);
-          if (suspensionReason === null) suspensionEpochId = null;
+          suspensionEpochId = suspensionReason === "execution_suspended"
+            ? suspensionEpochId
+            : nc1Stop?.epochId ?? null;
           break;
         default:
           break;
@@ -774,8 +776,12 @@ export function projectVerifiedGateTip(
         ) {
           nc1Reason = null;
           nc1Stop = null;
-          suspensionReason = executionSuspended ? "execution_suspended" : null;
-          suspensionEpochId = suspensionReason === null ? null : suspensionEpochId;
+          suspensionReason = reopenRequired
+            ? "reopen_required"
+            : executionSuspended
+              ? "execution_suspended"
+              : null;
+          if (!reopenRequired && !executionSuspended) suspensionEpochId = null;
         }
         break;
       }

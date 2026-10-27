@@ -855,13 +855,22 @@ export class OpenCodeAdapter {
       }
 
       const lockOwnerSessionId = this.resolveLockOwnerSession(input.sessionID) ?? null;
+      const reviewGateLock = lockOwnerSessionId === null
+        ? undefined
+        : justice.getPlanBridge().getReviewGateLock(lockOwnerSessionId);
       reviewGateLockActive =
         lockOwnerSessionId === null
           ? justice.getPlanBridge().hasAnyReviewGateLock()
-          : justice.getPlanBridge().getReviewGateLock(lockOwnerSessionId) !== undefined;
+          : reviewGateLock !== undefined;
       const genericContentTool = /^(read|grep|search|glob|find|cat|show|git_show|git-show|bash|shell|terminal|exec)$/iu.test(input.tool) ||
         /(?:^|[._-])(read|grep|search|show|shell|terminal)(?:$|[._-])/iu.test(input.tool);
-      if (reviewGateLockActive && input.tool !== "justice_review" && genericContentTool) {
+      const reviewGateToolPaths = extractReviewGateToolPaths(input.tool, output.args);
+      const reviewingProtectedRead = reviewGateLock?.phase === "reviewing" &&
+        genericContentTool &&
+        (reviewGateToolPaths === null || reviewGateToolPaths.length === 0 ||
+          reviewGateToolPaths.includes(reviewGateLock.designPath ?? "") ||
+          reviewGateToolPaths.includes(reviewGateLock.planPath ?? ""));
+      if (reviewingProtectedRead && input.tool !== "justice_review") {
         return {
           action: "skip",
           reason: "review_scope_violation",
@@ -874,7 +883,6 @@ export class OpenCodeAdapter {
         justice
           .getPlanBridge()
           .isPendingReviewGatePrompt(lockOwnerSessionId, originalPrompt);
-      const reviewGateToolPaths = extractReviewGateToolPaths(input.tool, output.args);
       const lockDecision = justice.getPlanBridge().classifyReviewGateToolUse(lockOwnerSessionId, {
         toolName: input.tool,
         isPendingReviewGateTask,

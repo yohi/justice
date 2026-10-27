@@ -1398,15 +1398,32 @@ export function createReviewGateEventStore(
         ? [buildGenesisScope(input, input.firstEnrollment)]
         : [input.admittedScope];
     } else {
-      const scope = findScope(observed, input.scopeId);
+      const scope = input.admittedScope === undefined
+        ? findScope(observed, input.scopeId)
+        : input.admittedScope;
       const gate = scope === null ? null : findGate(scope, input.gateId);
       if (scope === null || gate === null) {
         throw new Error("review_gate_gate_membership_missing");
       }
-      if (!gate.writerIds.includes(input.writerId)) {
+      const admittedEvent = input.canonicalEvents[0];
+      if (
+        !gate.writerIds.includes(input.writerId) ||
+        (input.admittedScope !== undefined &&
+          (admittedEvent === undefined ||
+            admittedEvent.eventType !== "GATE_CREATED" ||
+            !("schemaVersion" in admittedEvent) ||
+            admittedEvent.schemaVersion !== 2 ||
+            admittedEvent.gateId !== input.gateId ||
+            admittedEvent.writerId !== input.writerId ||
+            admittedEvent.generationId !== gate.generationId ||
+            admittedEvent.payload.reviewScopeId !== scope.scopeId ||
+            admittedEvent.payload.supersedesGateId !== gate.supersedesGateId))
+      ) {
         throw new Error("review_gate_writer_membership_missing");
       }
-      scopes = observed.scopes;
+      scopes = input.admittedScope === undefined
+        ? observed.scopes
+        : observed.scopes.map((entry) => entry.scopeId === input.scopeId ? scope : entry);
     }
 
     const tailLines = input.canonicalEvents.map(encodeReviewGateEventRecord).join("\n");

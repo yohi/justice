@@ -634,7 +634,7 @@ function evaluateNc1Candidate(
     nc1StopEventId: stop.stopEventId,
     changeObservedEventId: candidate.changeObservedEventId,
     witnessFrontierHash: input.verifiedFrontierHash,
-    nc1EvidenceEventId: candidate.changeObservedEventId,
+    nc1EvidenceEventId: stop.stopEventId,
   });
 }
 

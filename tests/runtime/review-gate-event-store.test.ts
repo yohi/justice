@@ -1614,40 +1614,9 @@ describe("ReviewGateEventStore — tamper and crash recovery (Task 6)", () => {
       closeWitnessFixture(ctx);
     });
 
-    it.fails("publishes successor membership with exact predecessor", async () => {
-      const ctx = await freshContext("admitted-successor");
-      const store = createReviewGateEventStore(
-        ctx.root,
-        eventStoreOptions(ctx.root, ctx.writerId, ctx.witness),
-      );
+  it.todo("publishes successor membership with exact predecessor");
 
-      const publication = await store.prepareAdmittedGenerationPublication(
-        {} as never,
-        {} as never,
-      );
-
-      expect(publication.nextFrontier.scopes).toHaveLength(1);
-      store.close();
-      closeWitnessFixture(ctx);
-    });
-
-    it.fails("recovers prepared genesis without a second budget", async () => {
-      const ctx = await freshContext("admitted-recovery");
-      const store = createReviewGateEventStore(
-        ctx.root,
-        eventStoreOptions(ctx.root, ctx.writerId, ctx.witness),
-      );
-
-      const publication = await store.prepareAdmittedGenerationPublication(
-        {} as never,
-        {} as never,
-      );
-      const recovery = await store.recoverPreparedPublication(publication.publicationId);
-
-      expect(recovery).toBe("committed");
-      store.close();
-      closeWitnessFixture(ctx);
-    });
+  it.todo("recovers prepared genesis without a second budget");
   });
 
   it("fails closed when the authority shard is tampered outside the witness", async () => {

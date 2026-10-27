@@ -307,7 +307,7 @@ describe("planAdmissionNC1Reentry", () => {
       ...reentryDecision,
       nc1StopEventId: nc1Stop.stopEventId,
       changeObservedEventId: nc1Change.changeObservedEventId,
-      nc1EvidenceEventId: nc1Change.changeObservedEventId,
+      nc1EvidenceEventId: nc1Stop.stopEventId,
     };
     const admissionObservation: ReviewGateAdmissionObservation = {
       ...observation,
@@ -345,7 +345,7 @@ describe("planAdmissionNC1Reentry", () => {
       ...reentryDecision,
       nc1StopEventId: nc1Stop.stopEventId,
       changeObservedEventId: nc1Change.changeObservedEventId,
-      nc1EvidenceEventId: nc1Change.changeObservedEventId,
+      nc1EvidenceEventId: nc1Stop.stopEventId,
     };
     const admissionObservation: ReviewGateAdmissionObservation = {
       ...observation,
@@ -370,7 +370,7 @@ describe("planAdmissionNC1Reentry", () => {
       ...reentryDecision,
       nc1StopEventId: nc1Stop.stopEventId,
       changeObservedEventId: nc1Change.changeObservedEventId,
-      nc1EvidenceEventId: nc1Change.changeObservedEventId,
+      nc1EvidenceEventId: nc1Stop.stopEventId,
     };
     const admissionObservation: ReviewGateAdmissionObservation = {
       ...observation,

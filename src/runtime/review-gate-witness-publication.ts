@@ -95,8 +95,13 @@ export function createWitnessPublication(context: WitnessContext) {
       }
     },
     async publishPreparedJournal(publicationId: string): Promise<void> {
-      return withWitnessTransaction(context, async (current) =>
-        publishPreparedJournalUnlocked(context, current, publicationId),
+      const { input } = await withWitnessTransaction(context, async (current) =>
+        readPrepared(current, publicationId),
+      );
+      return withWitnessTransaction(
+        context,
+        (current) => publishPreparedJournalUnlocked(context, current, publicationId),
+        publicationLockIds(input),
       );
     },
     async commitPreparedPublicationCAS(

@@ -887,7 +887,7 @@ describe("NC1 suspended gate admission", () => {
     expectDecision(decision, "REENTRY_CANDIDATE");
     if (decision.kind !== "REENTRY_CANDIDATE") return;
     expect(decision.changeObservedEventId).toBe(candidate.changeObservedEventId);
-    expect(decision.nc1EvidenceEventId).toBe(candidate.changeObservedEventId);
+    expect(decision.nc1EvidenceEventId).toBe(stop.stopEventId);
   });
 
   it("blocks an NC1 protocol candidate when historical release does not match stop authority", () => {

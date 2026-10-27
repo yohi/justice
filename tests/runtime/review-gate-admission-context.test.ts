@@ -7,7 +7,9 @@ import { afterAll, describe, expect, it } from "vitest";
 import {
   MAX_DESIGN_REMEDIATION_ROUNDS,
   MAX_PLAN_REMEDIATION_ROUNDS,
+  type ReviewScopeId,
 } from "../../src/core/review-gate-types";
+import type { VerifiedScopeFrontier } from "../../src/core/review-gate/types";
 import type { ReviewGateProtocolDescriptor } from "../../src/runtime/review-gate-protocol";
 import {
   computeCanonicalJsonFingerprint,
@@ -204,13 +206,31 @@ function closeFixture(fixture: Fixture): void {
  */
 function testOwnedWitness(frontier: VerifiedScopeFrontier): AdmissionOwnedWitness {
   const owned: AdmissionOwnedWitness = {
+    read: async () => {
+      throw new Error("test_owned_read_unused");
+    },
     readVerifiedFrontier: async () => frontier,
     readFirstEnrollmentAuthority: async () => null,
+    consumeFirstEnrollmentAuthority: async () => {
+      throw new Error("test_owned_consume_unused");
+    },
     readInstallation: async () => {
       throw new Error("test_owned_installation_unused");
     },
+    readVerifiedDesignBinding: async () => null,
     assertOwnedScope: () => undefined,
     assertOwnedGate: () => undefined,
+    preparePublication: async () => {
+      throw new Error("test_owned_prepare_unused");
+    },
+    publishPreparedJournal: async () => {
+      throw new Error("test_owned_publish_unused");
+    },
+    commitPreparedPublicationCAS: async () => "blocked",
+    recoverPreparedPublication: async () => "blocked",
+    signAdmittedMembership: async () => {
+      throw new Error("test_owned_sign_unused");
+    },
   };
   markAdmissionOwnedWitnessLive(owned);
   return owned;
@@ -271,6 +291,7 @@ owned: testOwnedWitness(frontier),
   it("returns null when a requested artifact is missing", async () => {
     const fixture = await createFixture("missing");
     await writeCommittedFile(fixture.root, DESIGN_PATH, "# Design");
+    await rm(path.join(fixture.root, PLAN_PATH));
 
     const eventStore = createReviewGateEventStore(fixture.root, {
       workspaceIdentity: computeWorkspaceIdentity(fixture.root),
