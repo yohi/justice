@@ -1,0 +1,253 @@
+{
+  "schema_version": "1.0",
+  "report_version": "R0.1",
+  "date_jst": "2026-11-01",
+  "repository": "yohi/justice",
+  "v4_head": "e988a34dd112985832ed15744d74f275abf853b0",
+  "evidence_kind": "pinned locator/analyst evaluation (source bytes not bundled)",
+  "no_github_write": true,
+  "no_execution": true,
+  "knowledge_index": [
+    {
+      "id": "JV4-K-001",
+      "topic": "「頭脳・神経・手脚」の責務分離",
+      "claim": "Superpowersは開発方法論を所有し、Justiceは文脈・意味の橋渡しと受理証拠を扱い、実行基盤の主導権を奪わない。",
+      "evidence": "[`SPEC.md` §§1–2,4.1d/e](https://github.com/yohi/justice/blob/e988a34dd112985832ed15744d74f275abf853b0/SPEC.md)、[PR #277](https://github.com/yohi/justice/pull/277)。",
+      "evaluation": "`PRINCIPLE_SUPPORTED`。v4の原則としては明確だが、全コード経路で一切の重複がないという証明ではない。",
+      "v6_disposition": "原則を維持。接続先がOmOであることだけを抽象化して再評価。",
+      "review_question": "JusticeがSDDのタスク進行・モデル選択・実行スケジュールを重複所有していないか。",
+      "source_urls": [
+        "https://github.com/yohi/justice/blob/e988a34dd112985832ed15744d74f275abf853b0/SPEC.md",
+        "https://github.com/yohi/justice/pull/277"
+      ],
+      "owner_adoption": "NOT_ADOPTED",
+      "independent_runtime_verification": "NOT_RUN"
+    },
+    {
+      "id": "JV4-K-002",
+      "topic": "Plan原文・明示委譲意図の忠実性",
+      "claim": "元タスク本文`rawBody`、caller指定、文脈、継続identityを勝手に縮退・再構成しない。",
+      "evidence": "[v4仕様 §4.1d](https://github.com/yohi/justice/blob/e988a34dd112985832ed15744d74f275abf853b0/SPEC.md)、[10/9実装監査](https://github.com/yohi/justice/blob/e988a34dd112985832ed15744d74f275abf853b0/docs/reports/2026-10-09-documentation-contract-audit.md)。",
+      "evaluation": "`IMPLEMENTATION_AND_TEST_REPORTED_WITH_LIMITS`。関連ソース/テスト経路の報告があるが、OpenCode V2のHostで未検証。",
+      "v6_disposition": "不変条件を継承、wire形式は採択Hostで再定義。",
+      "review_question": "Parent→Justice→Childの経路で原文・明示指定・identityが保持されるか。",
+      "source_urls": [
+        "https://github.com/yohi/justice/blob/e988a34dd112985832ed15744d74f275abf853b0/SPEC.md",
+        "https://github.com/yohi/justice/blob/e988a34dd112985832ed15744d74f275abf853b0/docs/reports/2026-10-09-documentation-contract-audit.md"
+      ],
+      "owner_adoption": "NOT_ADOPTED",
+      "independent_runtime_verification": "NOT_RUN"
+    },
+    {
+      "id": "JV4-K-003",
+      "topic": "Routing ownership と実行系のSingle Source of Truth",
+      "claim": "Caller-owned named subagentとJustice-managed semantic routeを分離し、model/provider/fallbackは実行基盤側へ委ねる。",
+      "evidence": "[PR #277](https://github.com/yohi/justice/pull/277)、[PR #335](https://github.com/yohi/justice/pull/335)、v4仕様 §3.2。",
+      "evaluation": "`CONDITIONAL_CARRY_FORWARD`。OmOカテゴリとOpenCode V1 `general`例外は実行基盤固有。",
+      "v6_disposition": "ルーティングの**所有権原則**のみ継承、固定カテゴリの機械的移植はしない。",
+      "review_question": "明示caller指定がJusticeの推測によって上書きされないか。",
+      "source_urls": [
+        "https://github.com/yohi/justice/pull/277",
+        "https://github.com/yohi/justice/pull/335"
+      ],
+      "owner_adoption": "NOT_ADOPTED",
+      "independent_runtime_verification": "NOT_RUN"
+    },
+    {
+      "id": "JV4-K-004",
+      "topic": "正しいExecutor選択はモデルの推測に任せられない",
+      "claim": "Skill起動、ネイティブSubtask、OmO plugin `task`、実Review Workerは同じ契約ではない。",
+      "evidence": "[PR #287](https://github.com/yohi/justice/pull/287)の実ホスト失敗報告と専用Controller案。",
+      "evaluation": "`REAL_HOST_FAILURE_REPORTED`。失敗の記録は重要だが、今回独立に再現していない。",
+      "v6_disposition": "Subagent APIの存在だけで満足せず、実行されたTool・Call ID・Parent/Child・Review IDを実証する。",
+      "review_question": "実際に選ばれたExecutorと証拠を誰が認証できるか。",
+      "source_urls": [
+        "https://github.com/yohi/justice/pull/287"
+      ],
+      "owner_adoption": "NOT_ADOPTED",
+      "independent_runtime_verification": "NOT_RUN"
+    },
+    {
+      "id": "JV4-K-005",
+      "topic": "CLEAR / Human Approval / Implementation Authorizationの分離",
+      "claim": "レビューがCLEARでも、Human承認やImplementation実行権限を獲得したことにならない。",
+      "evidence": "v4仕様 §4.1c/e、[Issue #310](https://github.com/yohi/justice/issues/310)。",
+      "evaluation": "`PRINCIPLE_SUPPORTED`、Production全経路のEnforcementは別途証拠を要する。",
+      "v6_disposition": "独立した受理境界として維持。",
+      "review_question": "文書レビュー、Gate CLEAR、Owner採択、書き込み許可を混同していないか。",
+      "source_urls": [
+        "https://github.com/yohi/justice/issues/310"
+      ],
+      "owner_adoption": "NOT_ADOPTED",
+      "independent_runtime_verification": "NOT_RUN"
+    },
+    {
+      "id": "JV4-K-006",
+      "topic": "Fail-open execution / Fail-closed acceptanceの境界",
+      "claim": "通常I/O障害は無関係な開発フロー全体を阻害しない。ただし不明な証拠は受理せず、保護されたReview Gateでは適切に実行拒否する。",
+      "evidence": "v4仕様 §1.2、および[PR #343](https://github.com/yohi/justice/pull/343) `NEG-V4-20261027-001`。",
+      "evaluation": "`BOUNDARY_REQUIRES_REDEFINITION`。Recognized Commandの初期化失敗時にexpanded partsが残る問題が示される。",
+      "v6_disposition": "失敗種類／対象操作ごとの明確な境界として再定義。",
+      "review_question": "利便性のためのfail-openが承認・実行バイパスにならないか。",
+      "source_urls": [
+        "https://github.com/yohi/justice/pull/343"
+      ],
+      "owner_adoption": "NOT_ADOPTED",
+      "independent_runtime_verification": "NOT_RUN"
+    },
+    {
+      "id": "JV4-K-007",
+      "topic": "Self-reportとEvidence-based Acceptanceの分離",
+      "claim": "Workerの「完了した」という出力だけでProgressやReview acceptanceを確定しない。",
+      "evidence": "[10/9実装監査](https://github.com/yohi/justice/blob/e988a34dd112985832ed15744d74f275abf853b0/docs/reports/2026-10-09-documentation-contract-audit.md)、v4仕様 §4.1e。",
+      "evaluation": "`IMPLEMENTATION_AND_TEST_REPORTED_WITH_LIMITS`。証拠の収集・結果投影は実装されているが全Host経路の完全性は未証明。",
+      "v6_disposition": "強く継承。Observed executionとaccepted evidenceを分離する。",
+      "review_question": "誰が何をいつ実行したか、再起動後も厳密に結合できるか。",
+      "source_urls": [
+        "https://github.com/yohi/justice/blob/e988a34dd112985832ed15744d74f275abf853b0/docs/reports/2026-10-09-documentation-contract-audit.md"
+      ],
+      "owner_adoption": "NOT_ADOPTED",
+      "independent_runtime_verification": "NOT_RUN"
+    },
+    {
+      "id": "JV4-K-008",
+      "topic": "Event Store保存とSemantic Replayは異なる",
+      "claim": "V2のverified tipにある集約ラウンド数などだけでは、既存Core Plannerが必要とする`RemediationRound[]`、`FindingState`、review candidateの完全状態を復元できない。",
+      "evidence": "[PR #343のR2追加 §RG-343-R1-001](https://github.com/yohi/justice/blob/8203d5b77c8f3226acbb52a6f2eeb08b1a8a4335/docs/superpowers/plans/2026-10-27-justice-v4-review-gate-drift-remediation.md)。",
+      "evaluation": "`STATIC_GAP_IDENTIFIED / DESIGN_REVIEW_REQUIRED`。空MapやダミーRoundで埋める案は採用できない。",
+      "v6_disposition": "Native Core projectionか非損失な変換契約の**証明義務**を定義する。v4の代替実装は未採択。",
+      "review_question": "verified durable eventだけで全authoritative stateを再投影できるか。",
+      "source_urls": [
+        "https://github.com/yohi/justice/blob/8203d5b77c8f3226acbb52a6f2eeb08b1a8a4335/docs/superpowers/plans/2026-10-27-justice-v4-review-gate-drift-remediation.md"
+      ],
+      "owner_adoption": "NOT_ADOPTED",
+      "independent_runtime_verification": "NOT_RUN"
+    },
+    {
+      "id": "JV4-K-009",
+      "topic": "RESULT_COMMITTED / OUTCOME_APPLIEDの意味的不足",
+      "claim": "`resultEventId`と`outcomeAppliedEventId`が存在しても、その指す意味的Finding/State遷移の永続型が証明されなければ再生できない。",
+      "evidence": "[PR #343 R2 §RG-343-R1-002](https://github.com/yohi/justice/blob/8203d5b77c8f3226acbb52a6f2eeb08b1a8a4335/docs/superpowers/plans/2026-10-27-justice-v4-review-gate-drift-remediation.md)。",
+      "evaluation": "`STATIC_GAP_IDENTIFIED / NOT_ESTABLISHED`。その是正方式の正しさは未決。",
+      "v6_disposition": "Result→Core Decision→Applied Transitionの厳密な因果鎖と再実行不変性を検証。",
+      "review_question": "Private raw responseが破棄されても同じSemantic Stateへ復元できるか。",
+      "source_urls": [
+        "https://github.com/yohi/justice/blob/8203d5b77c8f3226acbb52a6f2eeb08b1a8a4335/docs/superpowers/plans/2026-10-27-justice-v4-review-gate-drift-remediation.md"
+      ],
+      "owner_adoption": "NOT_ADOPTED",
+      "independent_runtime_verification": "NOT_RUN"
+    },
+    {
+      "id": "JV4-K-010",
+      "topic": "Approved D0 と Dirty/Staged D1の分離",
+      "claim": "Plan reviewerは承認済みimmutable D0を参照すべきで、現在のdirty/staged D1は診断データに留める。",
+      "evidence": "[PR #341](https://github.com/yohi/justice/pull/341)、[PR #343 §R1-003](https://github.com/yohi/justice/blob/8203d5b77c8f3226acbb52a6f2eeb08b1a8a4335/docs/superpowers/plans/2026-10-27-justice-v4-review-gate-drift-remediation.md)。",
+      "evaluation": "`DESIGN_SUPPORTED / HOST_NOT_PROVEN`。Read/Search/Show/Attachmentsなどの全経路適用は未証明。",
+      "v6_disposition": "根本要件を継承し、ホストのArtifact Authority機構に合わせる。",
+      "review_question": "所属Operationが変わった後も古いcached bindingで読めてしまわないか。",
+      "source_urls": [
+        "https://github.com/yohi/justice/blob/8203d5b77c8f3226acbb52a6f2eeb08b1a8a4335/docs/superpowers/plans/2026-10-27-justice-v4-review-gate-drift-remediation.md",
+        "https://github.com/yohi/justice/pull/341"
+      ],
+      "owner_adoption": "NOT_ADOPTED",
+      "independent_runtime_verification": "NOT_RUN"
+    },
+    {
+      "id": "JV4-K-011",
+      "topic": "Protected Witness / Admissionは一部実装、全面成立は別",
+      "claim": "v4ではGenesis、Witness CAS、Admitted operation等の機構と関連テストが進められた。",
+      "evidence": "[PR #341](https://github.com/yohi/justice/pull/341)、[v4 Evidence Checklist](https://github.com/yohi/justice/blob/e988a34dd112985832ed15744d74f275abf853b0/docs/review-gate-v4-evidence-checklist.md)。",
+      "evaluation": "`IMPLEMENTED_PARTIAL / FULL_HOST_EVIDENCE_NOT_CLAIMED`。#341の3,586 passed/2 expected fail/7 skippedはPR報告でありG1/G2/G3承認ではない。",
+      "v6_disposition": "安全要求は維持。Witness方式そのものの継承可否は責務・実行基盤に照らして判断。",
+      "review_question": "同じ保証をもっと軽量なHost契約で得られるか。",
+      "source_urls": [
+        "https://github.com/yohi/justice/blob/e988a34dd112985832ed15744d74f275abf853b0/docs/review-gate-v4-evidence-checklist.md",
+        "https://github.com/yohi/justice/pull/341"
+      ],
+      "owner_adoption": "NOT_ADOPTED",
+      "independent_runtime_verification": "NOT_RUN"
+    },
+    {
+      "id": "JV4-K-012",
+      "topic": "Mock/Integration/Real Hostは別の証拠強度",
+      "claim": "テスト成功と実ホスト受入を同一視してはならず、skipはPASSではない。",
+      "evidence": "[v4 Evidence Checklist](https://github.com/yohi/justice/blob/e988a34dd112985832ed15744d74f275abf853b0/docs/review-gate-v4-evidence-checklist.md) のTask 18–20・G3=`NOT CLAIMED`、[PR #338](https://github.com/yohi/justice/pull/338)。",
+      "evaluation": "`VERIFIED_EVIDENCE_LIMITATION`。現行v4 HEADのLive E2Eを今回実行していない。",
+      "v6_disposition": "Verification Matrixを構成要素別に採用。",
+      "review_question": "static、unit、integration、real-host、providerを別々に記載したか。",
+      "source_urls": [
+        "https://github.com/yohi/justice/blob/e988a34dd112985832ed15744d74f275abf853b0/docs/review-gate-v4-evidence-checklist.md",
+        "https://github.com/yohi/justice/pull/338"
+      ],
+      "owner_adoption": "NOT_ADOPTED",
+      "independent_runtime_verification": "NOT_RUN"
+    },
+    {
+      "id": "JV4-K-013",
+      "topic": "Worker入力はschema検証だけでなく許可フィールドに再構築",
+      "claim": "`parseReviewWorkerResult()`の`{...finding}`とredaction側の`{...finding}`は、元入力に追加キーがある場合、それを残し得る。",
+      "evidence": "[v4 review-artifact.ts](https://github.com/yohi/justice/blob/e988a34dd112985832ed15744d74f275abf853b0/src/core/review-artifact.ts)、[v4 persistence-redaction.ts](https://github.com/yohi/justice/blob/e988a34dd112985832ed15744d74f275abf853b0/src/core/v2/persistence-redaction.ts)、[未マージCommit bbf58cf](https://github.com/yohi/justice/commit/bbf58cf98b0b26c0c0a7ae460ceb88afb11156cd)。",
+      "evaluation": "`CODE_OBSERVED / UNMERGED_PATCH_CANDIDATE`。実際の情報流出を立証したわけではない。未マージブランチは現行v4とdiverged。",
+      "v6_disposition": "未知のフィールドのdropとログ境界での再正規化を安全原則候補に。",
+      "review_question": "型検証だけで未知キーが残っていないか。",
+      "source_urls": [
+        "https://github.com/yohi/justice/blob/e988a34dd112985832ed15744d74f275abf853b0/src/core/review-artifact.ts",
+        "https://github.com/yohi/justice/blob/e988a34dd112985832ed15744d74f275abf853b0/src/core/v2/persistence-redaction.ts",
+        "https://github.com/yohi/justice/commit/bbf58cf98b0b26c0c0a7ae460ceb88afb11156cd"
+      ],
+      "owner_adoption": "NOT_ADOPTED",
+      "independent_runtime_verification": "NOT_RUN"
+    },
+    {
+      "id": "JV4-K-014",
+      "topic": "Pre-implementation Review GateとSDD Orchestrationの分離",
+      "claim": "Design/Plan承認は独立の関門になり得るが、実装タスクの進行・修正・再レビューのスケジュールはSuperpowersの方法論と重複させない。",
+      "evidence": "[Issue #298](https://github.com/yohi/justice/issues/298)、v4仕様 §4.1c/e、[PR #291](https://github.com/yohi/justice/pull/291) のAuto Retry。",
+      "evaluation": "`OWNERSHIP_REDEFINITION_REQUIRED`。v6のReview Gate所有者は未決。",
+      "v6_disposition": "「前段の承認保証」と「SDD実行の進行」を別契約にする。",
+      "review_question": "Justiceが第三のワークフロー司令塔になっていないか。",
+      "source_urls": [
+        "https://github.com/yohi/justice/issues/298",
+        "https://github.com/yohi/justice/pull/291"
+      ],
+      "owner_adoption": "NOT_ADOPTED",
+      "independent_runtime_verification": "NOT_RUN"
+    },
+    {
+      "id": "JV4-K-015",
+      "topic": "v5 Native探索はv6の既定基盤ではない",
+      "claim": "PR #295は実行基盤の成立性探索で、開発・移行のGO判断ではない。",
+      "evidence": "[PR #295](https://github.com/yohi/justice/pull/295)（Draft、Task 1 Evidence Spike）。",
+      "evaluation": "`CANDIDATE_EVIDENCE_ONLY`。Native/OpenCode V2とも現時点でv6の正式選定を主張できない。",
+      "v6_disposition": "比較証拠として残す。OpenCode V2直接接続の成立性も別途実証。",
+      "review_question": "何の能力が証明され、何が未証明かHostごとに分けられているか。",
+      "source_urls": [
+        "https://github.com/yohi/justice/pull/295"
+      ],
+      "owner_adoption": "NOT_ADOPTED",
+      "independent_runtime_verification": "NOT_RUN"
+    }
+  ],
+  "referenced_urls": [
+    "https://github.com/yohi/justice",
+    "https://github.com/yohi/justice/blob/8203d5b77c8f3226acbb52a6f2eeb08b1a8a4335/docs/superpowers/plans/2026-10-27-justice-v4-review-gate-drift-remediation.md",
+    "https://github.com/yohi/justice/blob/e988a34dd112985832ed15744d74f275abf853b0/SPEC.md",
+    "https://github.com/yohi/justice/blob/e988a34dd112985832ed15744d74f275abf853b0/docs/reports/2026-10-09-documentation-contract-audit.md",
+    "https://github.com/yohi/justice/blob/e988a34dd112985832ed15744d74f275abf853b0/docs/review-gate-v4-evidence-checklist.md",
+    "https://github.com/yohi/justice/blob/e988a34dd112985832ed15744d74f275abf853b0/src/core/review-artifact.ts",
+    "https://github.com/yohi/justice/blob/e988a34dd112985832ed15744d74f275abf853b0/src/core/v2/persistence-redaction.ts",
+    "https://github.com/yohi/justice/commit/bbf58cf98b0b26c0c0a7ae460ceb88afb11156cd",
+    "https://github.com/yohi/justice/compare/v4.3.1...e988a34dd112985832ed15744d74f275abf853b0",
+    "https://github.com/yohi/justice/issues/298",
+    "https://github.com/yohi/justice/issues/310",
+    "https://github.com/yohi/justice/pull/277",
+    "https://github.com/yohi/justice/pull/287",
+    "https://github.com/yohi/justice/pull/291",
+    "https://github.com/yohi/justice/pull/295",
+    "https://github.com/yohi/justice/pull/326",
+    "https://github.com/yohi/justice/pull/335",
+    "https://github.com/yohi/justice/pull/338",
+    "https://github.com/yohi/justice/pull/341",
+    "https://github.com/yohi/justice/pull/343"
+  ]
+}
