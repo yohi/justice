@@ -1,0 +1,339 @@
+{
+  "schema_version": "justice-v4-evidence-crosswalk-r0.2",
+  "date_jst": "2026-11-01",
+  "repository": "yohi/justice",
+  "fixed_v4_head": "e988a34dd112985832ed15744d74f275abf853b0",
+  "authority": "DOCUMENT_ONLY/STATIC_RECONCILIATION/NO_V4_SOURCE_CHANGE/NO_TEST/NO_BUILD/NO_CI_DISPATCH/NO_IMPLEMENTATION/NO_OWNER_ADOPTION",
+  "predecessor": {
+    "issue": "https://github.com/yohi/justice/issues/345",
+    "draft_pr": "https://github.com/yohi/justice/pull/346"
+  },
+  "status": "ANALYST_DRAFT_PENDING_INDEPENDENT_REVIEW",
+  "status_as_of_r0_2": "ANALYST_DRAFT_PENDING_INDEPENDENT_REVIEW",
+  "status_snapshot_note": "This status describes the R0.2 authoring snapshot only. R0.3 and R0.4 did not yet exist at that time. At fixed PR #347 PRE HEAD 56bfdc112b1c11a25a449003a9acc323f057d3eb, both exist as unadopted documentary candidates; fresh independent R1 static review is completed with limitations, not final approval or Owner adoption.",
+  "limitations": [
+    "These PR references are not newly independent-verified whole-program code reviews",
+    "Historical CI/test descriptions not reexecuted",
+    "No full per-commit review of 404 commits",
+    "Host E2E/G3 not claimed",
+    "Branch-only content triage incomplete",
+    "At R0.2 authoring time R0.3 and R0.4 did not yet exist, and R1.0 was pending; this historical limitation does not describe later document/review status"
+  ],
+  "records": [
+    {
+      "id": "RG310-01",
+      "topic": "generation_admission_round_budget",
+      "disposition": "PARTIAL_IMPLEMENTATION",
+      "evidence": [
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/322",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/332",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/341",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/343",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        }
+      ],
+      "source_of_original_claim": "https://github.com/yohi/justice/issues/310",
+      "owner_adoption": "NOT_ADOPTED",
+      "host_e2e_proven": false
+    },
+    {
+      "id": "RG310-02",
+      "topic": "self_review_new_findings",
+      "disposition": "PARTIAL_IMPLEMENTATION",
+      "evidence": [
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/322",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/343",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        }
+      ],
+      "source_of_original_claim": "https://github.com/yohi/justice/issues/310",
+      "owner_adoption": "NOT_ADOPTED",
+      "host_e2e_proven": false
+    },
+    {
+      "id": "RG310-03",
+      "topic": "commit_bound_resolution",
+      "disposition": "PARTIAL_IMPLEMENTATION",
+      "evidence": [
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/322",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/343",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        }
+      ],
+      "source_of_original_claim": "https://github.com/yohi/justice/issues/310",
+      "owner_adoption": "NOT_ADOPTED",
+      "host_e2e_proven": false
+    },
+    {
+      "id": "RG310-04",
+      "topic": "semantic_lineage_regression_nc1",
+      "disposition": "COMPONENT_PROGRESS_WITH_E2E_GAP",
+      "evidence": [
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/322",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/330",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/332",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/343",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        }
+      ],
+      "source_of_original_claim": "https://github.com/yohi/justice/issues/310",
+      "owner_adoption": "NOT_ADOPTED",
+      "host_e2e_proven": false
+    },
+    {
+      "id": "RG310-05",
+      "topic": "strict_event_schema_and_causal_history",
+      "disposition": "SEMANTIC_CAUSAL_REPLAY_GAP",
+      "evidence": [
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/313",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/327",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/341",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/343",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        }
+      ],
+      "source_of_original_claim": "https://github.com/yohi/justice/issues/310",
+      "owner_adoption": "NOT_ADOPTED",
+      "host_e2e_proven": false
+    },
+    {
+      "id": "RG310-06",
+      "topic": "deterministic_validation",
+      "disposition": "ALL_STAGES_HOST_NOT_ESTABLISHED",
+      "evidence": [
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/322",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/330",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/338",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/341",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        }
+      ],
+      "source_of_original_claim": "https://github.com/yohi/justice/issues/310",
+      "owner_adoption": "NOT_ADOPTED",
+      "host_e2e_proven": false
+    },
+    {
+      "id": "RG310-07",
+      "topic": "nc1_reentry",
+      "disposition": "HOST_REENTRY_NOT_ESTABLISHED",
+      "evidence": [
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/332",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/341",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/343",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        }
+      ],
+      "source_of_original_claim": "https://github.com/yohi/justice/issues/310",
+      "owner_adoption": "NOT_ADOPTED",
+      "host_e2e_proven": false
+    },
+    {
+      "id": "RG310-08",
+      "topic": "completed_successor_design_review",
+      "disposition": "NORMATIVE_SUPERSEDED_IMPL_PARTIAL",
+      "evidence": [
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/334",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/335",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/341",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        }
+      ],
+      "source_of_original_claim": "https://github.com/yohi/justice/issues/310",
+      "owner_adoption": "NOT_ADOPTED",
+      "host_e2e_proven": false,
+      "authority_snapshot": {
+        "source": "Issue #310 — DEP-01 契約改訂履歴（2026-10-09）",
+        "related_pull_requests": [334, 335, 341],
+        "normative_event": "DEP-01_RATIFIED",
+        "old_contract_status": "SUPERSEDED",
+        "new_contract": "COMPLETED_SUCCESSOR_REQUIRES_FRESH_DESIGN_REVIEW_INCLUDING_PLAN_ONLY_CHANGES",
+        "status_as_of_original_issue": {
+          "formal_design_gate": "BLOCKED",
+          "implementation_plan": "NOT_AUTHORIZED",
+          "production_source": "NOT_AUTHORIZED"
+        },
+        "current_status_claim": "NOT_ASSERTED",
+        "lifting_event": "NOT_ESTABLISHED; do not infer lift without a new Owner-ratified authoritative event",
+        "prohibited_document_statuses": ["RESOLVED", "DESIGN_GATE_PASS", "IMPLEMENTATION_AUTHORIZED", "G3_PASS", "OWNER_ADOPTED"]
+      }
+    },
+    {
+      "id": "RG310-09",
+      "topic": "caller_routing_and_parser_fences",
+      "disposition": "ROUTING_PARTIAL_FENCE_EQUIVALENCE_NOT_ESTABLISHED",
+      "evidence": [
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/335",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/338",
+          "status": "SEE_PER_PULL_REQUEST_CLASSIFICATION"
+        }
+      ],
+      "source_of_original_claim": "https://github.com/yohi/justice/issues/310",
+      "owner_adoption": "NOT_ADOPTED",
+      "host_e2e_proven": false
+    }
+  ],
+  "important_contract_revision": {
+    "id": "DEP-01",
+    "source": "https://github.com/yohi/justice/issues/310",
+    "old": "conditional inherited Design CLEAR",
+    "new": "new completed successor requires fresh Design review including Plan-only drift",
+    "normative_event": "DEP-01_RATIFIED",
+    "old_contract_status": "SUPERSEDED",
+    "new_contract": "COMPLETED_SUCCESSOR_REQUIRES_FRESH_DESIGN_REVIEW_INCLUDING_PLAN_ONLY_CHANGES",
+    "status_as_of_original_issue": {
+      "source": "Issue #310 — DEP-01 契約改訂履歴（2026-10-09）",
+      "formal_design_gate": "BLOCKED",
+      "implementation_plan": "NOT_AUTHORIZED",
+      "production_source": "NOT_AUTHORIZED"
+    },
+    "current_status_claim": "NOT_ASSERTED",
+    "lifting_event": "NOT_ESTABLISHED; do not infer lift without a new Owner-ratified authoritative event"
+  },
+  "pull_request_classification": {
+    "classification_basis": "GitHub PR state and merged metadata checked for each referenced PR; classification does not establish byte-level source-delta inclusion in fixed_v4_head.",
+    "source_inclusion_default": "SOURCE_DELTA_INCLUSION_NOT_INDEPENDENTLY_ESTABLISHED",
+    "records": [
+      {"number": 313, "state": "CLOSED", "merged": true, "evidence_kind": "MERGED_SOURCE_HISTORY", "commit_ancestry_to_fixed_v4": "NOT_INDEPENDENTLY_VERIFIED", "source_delta_inclusion": "SOURCE_DELTA_INCLUSION_NOT_INDEPENDENTLY_ESTABLISHED"},
+      {"number": 322, "state": "CLOSED", "merged": true, "evidence_kind": "MERGED_SOURCE_HISTORY", "commit_ancestry_to_fixed_v4": "NOT_INDEPENDENTLY_VERIFIED", "source_delta_inclusion": "SOURCE_DELTA_INCLUSION_NOT_INDEPENDENTLY_ESTABLISHED"},
+      {"number": 327, "state": "CLOSED", "merged": true, "evidence_kind": "MERGED_SOURCE_HISTORY", "commit_ancestry_to_fixed_v4": "NOT_INDEPENDENTLY_VERIFIED", "source_delta_inclusion": "SOURCE_DELTA_INCLUSION_NOT_INDEPENDENTLY_ESTABLISHED"},
+      {"number": 330, "state": "CLOSED", "merged": true, "evidence_kind": "MERGED_SOURCE_HISTORY", "commit_ancestry_to_fixed_v4": "NOT_INDEPENDENTLY_VERIFIED", "source_delta_inclusion": "SOURCE_DELTA_INCLUSION_NOT_INDEPENDENTLY_ESTABLISHED"},
+      {"number": 332, "state": "CLOSED", "merged": true, "evidence_kind": "MERGED_SOURCE_HISTORY", "commit_ancestry_to_fixed_v4": "NOT_INDEPENDENTLY_VERIFIED", "source_delta_inclusion": "SOURCE_DELTA_INCLUSION_NOT_INDEPENDENTLY_ESTABLISHED"},
+      {"number": 334, "state": "CLOSED", "merged": false, "evidence_kind": "UNMERGED_STACKED_REFERENCE", "commit_ancestry_to_fixed_v4": "NOT_ESTABLISHED", "source_delta_inclusion": "NOT_INCLUDED_AS_A_MERGE; exact diff inclusion not independently checked"},
+      {"number": 335, "state": "CLOSED", "merged": true, "evidence_kind": "MERGED_SOURCE_HISTORY", "commit_ancestry_to_fixed_v4": "NOT_INDEPENDENTLY_VERIFIED", "source_delta_inclusion": "SOURCE_DELTA_INCLUSION_NOT_INDEPENDENTLY_ESTABLISHED"},
+      {"number": 338, "state": "CLOSED", "merged": true, "evidence_kind": "MERGED_SOURCE_HISTORY", "commit_ancestry_to_fixed_v4": "NOT_INDEPENDENTLY_VERIFIED", "source_delta_inclusion": "SOURCE_DELTA_INCLUSION_NOT_INDEPENDENTLY_ESTABLISHED"},
+      {"number": 340, "state": "CLOSED", "merged": true, "evidence_kind": "MERGED_DOCUMENTARY_HISTORY", "commit_ancestry_to_fixed_v4": "NOT_APPLICABLE_TO_SOURCE_CLAIMS", "source_delta_inclusion": "NOT_APPLICABLE_DOCUMENT_ONLY"},
+      {"number": 341, "state": "CLOSED", "merged": true, "evidence_kind": "MERGED_SOURCE_HISTORY", "commit_ancestry_to_fixed_v4": "NOT_INDEPENDENTLY_VERIFIED", "source_delta_inclusion": "SOURCE_DELTA_INCLUSION_NOT_INDEPENDENTLY_ESTABLISHED"},
+      {"number": 343, "state": "OPEN", "merged": false, "evidence_kind": "UNMERGED_DOCUMENT_ONLY", "commit_ancestry_to_fixed_v4": "NOT_ESTABLISHED", "source_delta_inclusion": "NOT_APPLICABLE_DOCUMENT_ONLY"}
+    ]
+  },
+  "r1_review": {
+    "report_locator": "JUSTICE_V4_FRESH_INDEPENDENT_R1_REVIEW_20261101(1).md",
+    "report_sha256": "482474049820e4295e6be54a740f1bdd6f890fdd1f17092743a7189027fea62e",
+    "verdict": "DOCUMENT_RECONCILIATION_SUPPORTED_WITH_LIMITATIONS",
+    "review_status": "COMPLETED_WITH_LIMITATIONS_NOT_FINAL_APPROVAL",
+    "r2_status": "NOT_PERFORMED",
+    "findings": [
+      {"id": "R1-F-01", "status": "DOC_STATUS / DOCUMENT_CORRECTION_CANDIDATE"},
+      {"id": "R1-F-02", "status": "DOC_STATUS / DOCUMENT_CORRECTION_CANDIDATE"},
+      {"id": "R1-F-03", "status": "DOC_STATUS / DOCUMENT_CORRECTION_CANDIDATE"},
+      {"id": "R1-F-04", "status": "STATIC_RISK / NOT_OBSERVED_EXPLOIT / NOT_REMEDIATED"},
+      {"id": "R1-F-05", "status": "OWNERSHIP_PROOF_REQUIRED / NO_WORKFLOW_AUTHORITY_GRANTED"},
+      {"id": "R1-F-06", "status": "HOST_PROOF_NOT_ESTABLISHED"},
+      {"id": "R1-F-07", "status": "SOURCE_INVENTORY_BOUNDED"}
+    ]
+  },
+  "rg310_08_authority_snapshot": {
+    "source": "Issue #310 — DEP-01 契約改訂履歴（2026-10-09）",
+    "related_pull_requests": [334, 335, 341],
+    "normative_event": "DEP-01_RATIFIED",
+    "old_contract_status": "SUPERSEDED",
+    "new_contract": "COMPLETED_SUCCESSOR_REQUIRES_FRESH_DESIGN_REVIEW_INCLUDING_PLAN_ONLY_CHANGES",
+    "status_as_of_original_issue": {
+      "formal_design_gate": "BLOCKED",
+      "implementation_plan": "NOT_AUTHORIZED",
+      "production_source": "NOT_AUTHORIZED"
+    },
+    "current_status_claim": "NOT_ASSERTED",
+    "lifting_event": "NOT_ESTABLISHED; do not infer lift without a new Owner-ratified authoritative event",
+    "prohibited_document_statuses": ["RESOLVED", "DESIGN_GATE_PASS", "IMPLEMENTATION_AUTHORIZED", "G3_PASS", "OWNER_ADOPTED"]
+  },
+  "additional": {
+    "NEG-V4-20261027-001": "UNMERGED_COMMAND_FAIL_CLOSED_FIX_PROPOSAL",
+    "TARGET-V4-001": "V2_SEMANTIC_REPLAY_DESIGN_REVIEW_REQUIRED",
+    "TARGET-V4-002": "APPROVED_D0_HOST_WIDE_READ_NOT_ESTABLISHED"
+  }
+}
