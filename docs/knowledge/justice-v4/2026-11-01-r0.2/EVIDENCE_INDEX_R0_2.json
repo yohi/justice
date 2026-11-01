@@ -1,0 +1,264 @@
+{
+  "schema_version": "justice-v4-evidence-crosswalk-r0.2",
+  "date_jst": "2026-11-01",
+  "repository": "yohi/justice",
+  "fixed_v4_head": "e988a34dd112985832ed15744d74f275abf853b0",
+  "authority": "DOCUMENT_ONLY/STATIC_RECONCILIATION/NO_V4_SOURCE_CHANGE/NO_TEST/NO_BUILD/NO_CI_DISPATCH/NO_IMPLEMENTATION/NO_OWNER_ADOPTION",
+  "predecessor": {
+    "issue": "https://github.com/yohi/justice/issues/345",
+    "draft_pr": "https://github.com/yohi/justice/pull/346"
+  },
+  "status": "ANALYST_DRAFT_PENDING_INDEPENDENT_REVIEW",
+  "limitations": [
+    "These PR references are not newly independent-verified whole-program code reviews",
+    "Historical CI/test descriptions not reexecuted",
+    "No full per-commit review of 404 commits",
+    "Host E2E/G3 not claimed",
+    "Branch-only content triage incomplete",
+    "R0.3/R0.4/R1.0 pending"
+  ],
+  "records": [
+    {
+      "id": "RG310-01",
+      "topic": "generation_admission_round_budget",
+      "disposition": "PARTIAL_IMPLEMENTATION",
+      "evidence": [
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/322",
+          "status": "HISTORICAL_MERGED_OR_STACKED_REFERENCE"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/332",
+          "status": "HISTORICAL_MERGED_OR_STACKED_REFERENCE"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/341",
+          "status": "HISTORICAL_MERGED_OR_STACKED_REFERENCE"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/343",
+          "status": "UNMERGED_DOCUMENT_ONLY"
+        }
+      ],
+      "source_of_original_claim": "https://github.com/yohi/justice/issues/310",
+      "owner_adoption": "NOT_ADOPTED",
+      "host_e2e_proven": false
+    },
+    {
+      "id": "RG310-02",
+      "topic": "self_review_new_findings",
+      "disposition": "PARTIAL_IMPLEMENTATION",
+      "evidence": [
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/322",
+          "status": "HISTORICAL_MERGED_OR_STACKED_REFERENCE"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/343",
+          "status": "UNMERGED_DOCUMENT_ONLY"
+        }
+      ],
+      "source_of_original_claim": "https://github.com/yohi/justice/issues/310",
+      "owner_adoption": "NOT_ADOPTED",
+      "host_e2e_proven": false
+    },
+    {
+      "id": "RG310-03",
+      "topic": "commit_bound_resolution",
+      "disposition": "PARTIAL_IMPLEMENTATION",
+      "evidence": [
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/322",
+          "status": "HISTORICAL_MERGED_OR_STACKED_REFERENCE"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/343",
+          "status": "UNMERGED_DOCUMENT_ONLY"
+        }
+      ],
+      "source_of_original_claim": "https://github.com/yohi/justice/issues/310",
+      "owner_adoption": "NOT_ADOPTED",
+      "host_e2e_proven": false
+    },
+    {
+      "id": "RG310-04",
+      "topic": "semantic_lineage_regression_nc1",
+      "disposition": "COMPONENT_PROGRESS_WITH_E2E_GAP",
+      "evidence": [
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/322",
+          "status": "HISTORICAL_MERGED_OR_STACKED_REFERENCE"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/330",
+          "status": "HISTORICAL_MERGED_OR_STACKED_REFERENCE"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/332",
+          "status": "HISTORICAL_MERGED_OR_STACKED_REFERENCE"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/343",
+          "status": "UNMERGED_DOCUMENT_ONLY"
+        }
+      ],
+      "source_of_original_claim": "https://github.com/yohi/justice/issues/310",
+      "owner_adoption": "NOT_ADOPTED",
+      "host_e2e_proven": false
+    },
+    {
+      "id": "RG310-05",
+      "topic": "strict_event_schema_and_causal_history",
+      "disposition": "SEMANTIC_CAUSAL_REPLAY_GAP",
+      "evidence": [
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/313",
+          "status": "HISTORICAL_MERGED_OR_STACKED_REFERENCE"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/327",
+          "status": "HISTORICAL_MERGED_OR_STACKED_REFERENCE"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/341",
+          "status": "HISTORICAL_MERGED_OR_STACKED_REFERENCE"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/343",
+          "status": "UNMERGED_DOCUMENT_ONLY"
+        }
+      ],
+      "source_of_original_claim": "https://github.com/yohi/justice/issues/310",
+      "owner_adoption": "NOT_ADOPTED",
+      "host_e2e_proven": false
+    },
+    {
+      "id": "RG310-06",
+      "topic": "deterministic_validation",
+      "disposition": "ALL_STAGES_HOST_NOT_ESTABLISHED",
+      "evidence": [
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/322",
+          "status": "HISTORICAL_MERGED_OR_STACKED_REFERENCE"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/330",
+          "status": "HISTORICAL_MERGED_OR_STACKED_REFERENCE"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/338",
+          "status": "HISTORICAL_MERGED_OR_STACKED_REFERENCE"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/341",
+          "status": "HISTORICAL_MERGED_OR_STACKED_REFERENCE"
+        }
+      ],
+      "source_of_original_claim": "https://github.com/yohi/justice/issues/310",
+      "owner_adoption": "NOT_ADOPTED",
+      "host_e2e_proven": false
+    },
+    {
+      "id": "RG310-07",
+      "topic": "nc1_reentry",
+      "disposition": "HOST_REENTRY_NOT_ESTABLISHED",
+      "evidence": [
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/332",
+          "status": "HISTORICAL_MERGED_OR_STACKED_REFERENCE"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/341",
+          "status": "HISTORICAL_MERGED_OR_STACKED_REFERENCE"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/343",
+          "status": "UNMERGED_DOCUMENT_ONLY"
+        }
+      ],
+      "source_of_original_claim": "https://github.com/yohi/justice/issues/310",
+      "owner_adoption": "NOT_ADOPTED",
+      "host_e2e_proven": false
+    },
+    {
+      "id": "RG310-08",
+      "topic": "completed_successor_design_review",
+      "disposition": "NORMATIVE_SUPERSEDED_IMPL_PARTIAL",
+      "evidence": [
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/334",
+          "status": "HISTORICAL_MERGED_OR_STACKED_REFERENCE"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/335",
+          "status": "HISTORICAL_MERGED_OR_STACKED_REFERENCE"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/341",
+          "status": "HISTORICAL_MERGED_OR_STACKED_REFERENCE"
+        }
+      ],
+      "source_of_original_claim": "https://github.com/yohi/justice/issues/310",
+      "owner_adoption": "NOT_ADOPTED",
+      "host_e2e_proven": false
+    },
+    {
+      "id": "RG310-09",
+      "topic": "caller_routing_and_parser_fences",
+      "disposition": "ROUTING_PARTIAL_FENCE_EQUIVALENCE_NOT_ESTABLISHED",
+      "evidence": [
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/335",
+          "status": "HISTORICAL_MERGED_OR_STACKED_REFERENCE"
+        },
+        {
+          "type": "pull_request",
+          "url": "https://github.com/yohi/justice/pull/338",
+          "status": "HISTORICAL_MERGED_OR_STACKED_REFERENCE"
+        }
+      ],
+      "source_of_original_claim": "https://github.com/yohi/justice/issues/310",
+      "owner_adoption": "NOT_ADOPTED",
+      "host_e2e_proven": false
+    }
+  ],
+  "important_contract_revision": {
+    "id": "DEP-01",
+    "source": "https://github.com/yohi/justice/issues/310",
+    "old": "conditional inherited Design CLEAR",
+    "new": "new completed successor requires fresh Design review including Plan-only drift",
+    "status": "RATIFIED_IN_HISTORICAL_ISSUE_NOT_IMPL_PROOF"
+  },
+  "additional": {
+    "NEG-V4-20261027-001": "UNMERGED_COMMAND_FAIL_CLOSED_FIX_PROPOSAL",
+    "TARGET-V4-001": "V2_SEMANTIC_REPLAY_DESIGN_REVIEW_REQUIRED",
+    "TARGET-V4-002": "APPROVED_D0_HOST_WIDE_READ_NOT_ESTABLISHED"
+  }
+}
