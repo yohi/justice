@@ -10,6 +10,8 @@
 - Purpose: Reconcile nine historic findings in Issue #310 (v4.3.1 baseline) with subsequent merged PRs and the unmerged R2-amended PR #343.
 - Method: GitHub issue text, PR metadata and descriptions, fixed SPEC, evidence checklist, PR #343 R2 plan, targeted source/branch comparison. No code/test/build/CI/Host execution.
 - This is not an exhaustive independent inspection of all 404 post-v4.3.1 commits. PR-reported test results are not newly executed PASS.
+- R0.2 records the evidence and limitations known when R0.2 was authored. Its historical snapshot is not a later review status.
+- At fixed PR #347 PRE HEAD `56bfdc112b1c11a25a449003a9acc323f057d3eb`, R0.3 and R0.4 exist as unadopted documentary candidates. The fresh independent R1 static review is completed with limitations; it is not final approval or Owner adoption. See the R1 status trace in §9 and the machine-readable index.
 
 ## 2. Evidence hierarchy
 
@@ -26,12 +28,12 @@ Normative ratification ≠ implementation; merged PR ≠ runtime acceptance; cor
 | RG310-05 | Strict Event/Causal history | `PARTIAL` | 後続#313/#327/#341でV2 schema、recovery cursor、protected publicationの部分実装。#343はRESULT_COMMITTEDとOUTCOME_APPLIEDの意味イベント未確立を指摘。 [PR #313](https://github.com/yohi/justice/pull/313), [PR #327](https://github.com/yohi/justice/pull/327), [PR #341](https://github.com/yohi/justice/pull/341), [PR #343](https://github.com/yohi/justice/pull/343) |
 | RG310-06 | Deterministic validation | `PARTIAL` | 後続#322/#330にstage-aware validation、#341にAdmission接続の記録。全stageのproduction証拠とG3は未確立。 [PR #322](https://github.com/yohi/justice/pull/322), [PR #330](https://github.com/yohi/justice/pull/330), [PR #338](https://github.com/yohi/justice/pull/338), [PR #341](https://github.com/yohi/justice/pull/341) |
 | RG310-07 | NC1復帰と連続性 | `PARTIAL` | 後続#332/#341でreentry/phase reopen接続。Hostと永続semantic stateの全面受理は未成立。 [PR #332](https://github.com/yohi/justice/pull/332), [PR #341](https://github.com/yohi/justice/pull/341), [PR #343](https://github.com/yohi/justice/pull/343) |
-| RG310-08 | Completed Successor/Design CLEAR | `NORMATIVE_SUPERSEDED; IMPLEMENTATION_PARTIAL` | Issue #310のDEP-01 RATIFIEDにより旧Design CLEAR継承要件をSUPERSEDE。Plan-only変更でもfresh Design reviewが必要。後続#334/#335のsuccessor lookupは全受理の証拠ではない。 [PR #334](https://github.com/yohi/justice/pull/334), [PR #335](https://github.com/yohi/justice/pull/335), [PR #341](https://github.com/yohi/justice/pull/341) |
+| RG310-08 | Completed Successor/Design CLEAR | `NORMATIVE_SUPERSEDED; IMPLEMENTATION_PARTIAL` | Issue #310 の DEP-01 契約改訂履歴（2026-10-09）で新契約を RATIFIED。旧条件付き Design CLEAR 継承は SUPERSEDED。後続の successor lookup は全受理や現在の Gate 状態を証明しない。 [Issue #310](https://github.com/yohi/justice/issues/310), [PR #334](https://github.com/yohi/justice/pull/334), [PR #335](https://github.com/yohi/justice/pull/335), [PR #341](https://github.com/yohi/justice/pull/341) |
 | RG310-09 | Caller routingとInterfaces fence | `PARTIAL` | 後続#335はcaller-owned routing実装を報告。一方SPEC §4.1dにはgeneral例外・fence grammar同等性の未証明が残る。 [PR #335](https://github.com/yohi/justice/pull/335), [PR #338](https://github.com/yohi/justice/pull/338) |
 
 ### Critical normative change
 
-- **RG310-08 must not be treated as an ordinary unimplemented inherited Design CLEAR feature.** Issue #310 DEP-01 says the old conditional inheritance contract is SUPERSEDED, and conservative fresh Design re-review was RATIFIED. That normative event does not prove the replacement implementation or determine v6 design.
+- **RG310-08 must not be treated as an ordinary unimplemented inherited Design CLEAR feature.** Issue #310, `DEP-01 契約改訂履歴（2026-10-09）`, records DEP-01 RATIFIED: the old conditional inherited Design CLEAR is SUPERSEDED, and every completed successor requires fresh Design review, including Plan-only changes. At that historical Issue #310 authority snapshot, Formal Design Gate = BLOCKED and Implementation Plan / production source = NOT_AUTHORIZED. These are historical statuses, not assertions about current state; no later Owner-ratified authoritative event lifting them is established here. This documentary record does not prove replacement implementation or determine v6 design.
 - Other findings have source/test progress, but the latest V2 evidence model still contains missing semantic result and replay contracts. Do not label RG310-01 through RG310-09 globally RESOLVED.
 
 ## 4. Additional 2026-10-27 evidence
@@ -55,7 +57,7 @@ Normative ratification ≠ implementation; merged PR ≠ runtime acceptance; cor
 | `feature/task-9-*、feature/task-13-*、feature/task-20-real-host-e2e 等` | behind only, ahead 0 | 現行v4の祖先に含まれる。旧PR個別のマージ可否と区別 |
 | `docs/rg310-* / docs/v5-* / spike/justice-v5-native-evidence-294` | v4とdiverged | 主にv5/Native設計証拠として別枠。v4実装負債に計上しない |
 
-**Branch scope limits:** The comparisons distinguish representative unique v4 deltas, inherited branches and v5 divergent work. A closed stacked PR is not automatically a discarded change; an unmerged branch is not automatically a new current-v4 regression. Exhaustive per-commit content reconciliation remains for R0.3.
+**Per-PR evidence limits:** Each referenced PR is classified independently in `EVIDENCE_INDEX_R0_2.json` by state, merged flag, evidence kind, ancestry status, and source-delta inclusion status. A later aggregate merge does not alone prove byte-level inclusion of an earlier stacked PR's exact diff. Where the exact source delta was not independently established, the index says `SOURCE_DELTA_INCLUSION_NOT_INDEPENDENTLY_ESTABLISHED`. PR descriptions and historical tests are not independent production or Host E2E proof. A closed stacked PR is not automatically a discarded change; an unmerged branch is not automatically a current-v4 regression.
 
 ## 6. Original v4 mission beyond Review Gate — initial review candidates
 
@@ -85,3 +87,17 @@ Normative ratification ≠ implementation; merged PR ≠ runtime acceptance; cor
 - **R1.0**: fresh independent evidence/document review; Human Owner adoption separately. No self-issued PASS/READY or automatic v6 adoption.
 
 **STOP remains in effect: v4 source, tests, build, legacy PR merge, CI dispatch, CodeRabbit triggers and v6 implementation are not authorized.**
+
+## 9. R1 independent review status trace
+
+| Finding | Status | Evidence / limit |
+|---|---|---|
+| R1-F-01 | `DOC_STATUS / DOCUMENT_CORRECTION_CANDIDATE` | Fresh independent R1 review report supplied by the Human Owner: `JUSTICE_V4_FRESH_INDEPENDENT_R1_REVIEW_20261101(1).md`, SHA-256 `482474049820e4295e6be54a740f1bdd6f890fdd1f17092743a7189027fea62e`. Review completed with limitations; no final approval or adoption. |
+| R1-F-02 | `DOC_STATUS / DOCUMENT_CORRECTION_CANDIDATE` | Per-PR metadata and evidence limits are recorded in the JSON index; exact source-delta inclusion is not inferred from aggregate merges. |
+| R1-F-03 | `DOC_STATUS / DOCUMENT_CORRECTION_CANDIDATE` | DEP-01 authority snapshot is explicit in both documents; no Gate or implementation authority is granted. |
+| R1-F-04 | `STATIC_RISK / NOT_OBSERVED_EXPLOIT / NOT_REMEDIATED` | Unknown-key propagation remains an unresolved static risk; no exploit observed and no remediation claimed. |
+| R1-F-05 | `OWNERSHIP_PROOF_REQUIRED / NO_WORKFLOW_AUTHORITY_GRANTED` | Loop/Pivot versus Superpowers ownership remains unresolved; this correction grants no workflow authority. |
+| R1-F-06 | `HOST_PROOF_NOT_ESTABLISHED` | OpenCode V2 TaskFeedback parent/child/tool-call provenance remains unproven on Host. |
+| R1-F-07 | `SOURCE_INVENTORY_BOUNDED` | Twelve-source inventory remains bounded; no claim of exhaustive inventory is made. |
+
+R1-F-04 through R1-F-07 are retained as open findings, not corrected by this documentation-only change. Independent R2 has not been performed.
