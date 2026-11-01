@@ -1,0 +1,182 @@
+{
+  "schema_version": "justice-v5-knowledge-r0.1",
+  "snapshot_date": "2026-11-01",
+  "timezone": "Asia/Tokyo",
+  "repository": "yohi/justice",
+  "source_commit": "08e9dbe3bee87c1e7f16307f302760f1f7161b19",
+  "source_blobs": {
+    "requirements": {
+      "path": "docs/superpowers/requirements/2026-09-27-justice-v5-requirements.md",
+      "sha": "d335c34b747cafd6ac3b2e81d710fdcc61fb777e"
+    },
+    "design": {
+      "path": "docs/superpowers/specs/2026-09-27-justice-v5-semantic-control-plane-design.md",
+      "sha": "8e833fb17c1b27470e0a62c2d6a39627fe2d460d"
+    },
+    "plan": {
+      "path": "docs/superpowers/plans/2026-09-28-justice-v5-semantic-control-plane.md",
+      "sha": "e431460453577ae1c7fe6ee36ec5b76319f61582"
+    }
+  },
+  "authority": {
+    "type": "ANALYST_DOCUMENTATION_ONLY",
+    "v6_owner_adoption": false,
+    "architecture_option_selected": null,
+    "implementation_authorized": false,
+    "tests_run_in_this_work": false,
+    "manual_ci_dispatched": false,
+    "coderabbit_invoked": false
+  },
+  "task_summary": {
+    "total": 14,
+    "task1": "HISTORICAL_SPIKE_FINAL_BLOCKED",
+    "task2_14": "NOT_AUTHORIZED",
+    "verification_scenarios": 56,
+    "scenario_evidence": "SPECIFIED_NOT_INDEPENDENTLY_RUN"
+  },
+  "knowledge_hub": "https://github.com/yohi/justice/issues/348",
+  "claim_refs": [
+    {
+      "id": "JV5-E-001",
+      "source": "Issue #273",
+      "url": "https://github.com/yohi/justice/issues/273",
+      "claim": "Original OpenCode-first / SDD ownership",
+      "status": "VERIFIED_DOCUMENT",
+      "limitation": "Document intent; no runtime claim"
+    },
+    {
+      "id": "JV5-E-002",
+      "source": "PR #294",
+      "url": "https://github.com/yohi/justice/pull/294",
+      "claim": "Native-first switch, merged docs only",
+      "status": "VERIFIED_DOCUMENT",
+      "limitation": "No Native adapter implementation"
+    },
+    {
+      "id": "JV5-E-003",
+      "source": "PR #296",
+      "url": "https://github.com/yohi/justice/pull/296",
+      "claim": "Capability affiliation replaces independent origin requirement",
+      "status": "VERIFIED_DOCUMENT",
+      "limitation": "Token-holder semantic honesty assumed"
+    },
+    {
+      "id": "JV5-E-004",
+      "source": "PR #295",
+      "url": "https://github.com/yohi/justice/pull/295",
+      "claim": "Revisioned Task 1 report, final BLOCKED",
+      "status": "PRIOR_REVIEW_REPORTED",
+      "limitation": "Test logs and host not rerun here"
+    },
+    {
+      "id": "JV5-E-005",
+      "source": "Issue #297",
+      "url": "https://github.com/yohi/justice/issues/297",
+      "claim": "Review Gate convergence/validation/traceability requirements",
+      "status": "VERIFIED_DOCUMENT",
+      "limitation": "Requirements do not establish implementation"
+    },
+    {
+      "id": "JV5-E-006",
+      "source": "Issue #298",
+      "url": "https://github.com/yohi/justice/issues/298",
+      "claim": "Event-sourced deterministic review architecture proposal",
+      "status": "PROPOSED",
+      "limitation": "V2 semantic replay completeness unproven"
+    },
+    {
+      "id": "JV5-E-007",
+      "source": "PR #325",
+      "url": "https://github.com/yohi/justice/pull/325",
+      "claim": "R11 static candidate / historical Task1 31/32",
+      "status": "PROPOSED_BLOCKED",
+      "limitation": "Static acceptability != Host/Owner approval"
+    },
+    {
+      "id": "JV5-E-008",
+      "source": "PR #342",
+      "url": "https://github.com/yohi/justice/pull/342",
+      "claim": "DP-R3.2 document readiness",
+      "status": "DOCUMENT_ONLY_LIMITED",
+      "limitation": "Binary ZIP provenance requires byte read"
+    },
+    {
+      "id": "JV5-E-009",
+      "source": "PR #344",
+      "url": "https://github.com/yohi/justice/pull/344",
+      "claim": "R9 candidate; 31 findings OPEN; B0+B1, implementation HOLD",
+      "status": "PROPOSED_BLOCKED",
+      "limitation": "R9 not v5 Plan's 14 tasks; no feasibility"
+    },
+    {
+      "id": "JV5-E-010",
+      "source": "Issue #345 adoption",
+      "url": "https://github.com/yohi/justice/issues/345#issuecomment-6554658221",
+      "claim": "v4 historical knowledge limited Owner adoption",
+      "status": "APPROVED_BY_OWNER_HISTORICAL_ONLY",
+      "limitation": "No v6 design or runtime selection"
+    },
+    {
+      "id": "JV5-E-011",
+      "source": "PR #346",
+      "url": "https://github.com/yohi/justice/pull/346",
+      "claim": "v4 R0.1 knowledge archive merged on 2026-11-01",
+      "status": "VERIFIED_PR_STATE",
+      "limitation": "Historical documents and current decision separate"
+    },
+    {
+      "id": "JV5-E-012",
+      "source": "PR #347",
+      "url": "https://github.com/yohi/justice/pull/347",
+      "claim": "v4 R0.2-R0.4 reconciled archive merged on 2026-11-01",
+      "status": "VERIFIED_PR_STATE",
+      "limitation": "Unresolved R1-F-04..07 remain"
+    }
+  ],
+  "goal_ids": [
+    "V5-G-01",
+    "V5-G-02",
+    "V5-G-03",
+    "V5-G-04",
+    "V5-G-05",
+    "V5-G-06",
+    "V5-G-07",
+    "V5-G-08",
+    "V5-G-09",
+    "V5-G-10",
+    "V5-G-11",
+    "V5-G-12"
+  ],
+  "knowledge_ids": [
+    "JV5-K-001",
+    "JV5-K-002",
+    "JV5-K-003",
+    "JV5-K-004",
+    "JV5-K-005",
+    "JV5-K-006",
+    "JV5-K-007",
+    "JV5-K-008",
+    "JV5-K-009",
+    "JV5-K-010",
+    "JV5-K-011",
+    "JV5-K-012"
+  ],
+  "v6_candidates": [
+    "JV6-CAND-01",
+    "JV6-CAND-02",
+    "JV6-CAND-03",
+    "JV6-CAND-04",
+    "JV6-CAND-05",
+    "JV6-CAND-06",
+    "JV6-CAND-07",
+    "JV6-CAND-08"
+  ],
+  "review_status": "INDEPENDENT_REVIEW_NOT_RUN",
+  "limitations": [
+    "Source-fetched design and traceability, not exhaustive normative line-to-code audit",
+    "Underlying historical test/host evidence not independently re-executed",
+    "Unmerged ZIP archive byte integrity not independently audited",
+    "Historical PASS and READY never imply implementation authorization",
+    "v6 architecture A/B/C not selected"
+  ]
+}
