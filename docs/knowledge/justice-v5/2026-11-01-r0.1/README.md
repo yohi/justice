@@ -17,7 +17,7 @@ Justice v5 historical purpose and technical knowledge are archived here as a **v
 - `JUSTICE_V5_RESEARCH_EVIDENCE_LEDGER_R0_1_20261101.md` — V5-03: source commits/blobs, Revisioned Task 1, historical PR/Issue status and limitations.
 - `JUSTICE_V5_ARCHITECTURE_AND_V6_MAPPING_R0_1_20261101.md` — V5-04/V5-05: validity classes, v4 knowledge linkage, v6 candidate proof obligations and unselected A/B/C options.
 - `evidence-index.json` — structured evidence/claim lookup and source hashes.
-- `SHA256SUMS` — byte integrity hashes of the five text/index files (only if included after publishing/verification).
+- `SHA256SUMS` — SHA-256 hashes of the six listed source files (the checksum manifest itself is excluded).
 
 **Fixed source:** Requirements blob `d335c34b747cafd6ac3b2e81d710fdcc61fb777e`; Design blob `8e833fb17c1b27470e0a62c2d6a39627fe2d460d`; Plan blob `e431460453577ae1c7fe6ee36ec5b76319f61582` at commit `08e9dbe3bee87c1e7f16307f302760f1f7161b19`. See the individual documents for source URLs and status assumptions.
 
