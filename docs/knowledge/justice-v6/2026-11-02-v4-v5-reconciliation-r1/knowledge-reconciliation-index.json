@@ -1,0 +1,1388 @@
+{
+  "schema_id": "justice-v6-knowledge-reconciliation-index-r1-candidate",
+  "generated_date_jst": "2026-11-02",
+  "repository": "yohi/justice",
+  "task": "JUSTICE_V6_V4_V5_KNOWLEDGE_RECONCILIATION_R1",
+  "analyst_verdict": "RECONCILIATION_CANDIDATE_READY_WITH_LIMITATIONS",
+  "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+  "external_json_schema_validated": false,
+  "json_syntax_validated_locally": true,
+  "independent_review": "NOT_RUN",
+  "fixed_commits": {
+    "v4_implementation": "e988a34dd112985832ed15744d74f275abf853b0",
+    "v4_knowledge": "08e9dbe3bee87c1e7f16307f302760f1f7161b19",
+    "v5_r0_2_archive": "abf95e45dc5b90728a29506234902ce585986f9a",
+    "v5_parent": "adbb397a6c73da22fafb1a656f16832bf961168d"
+  },
+  "source_registry": [
+    {
+      "source_id": "V4-SPEC",
+      "label": "Frozen v4 SPEC",
+      "commit": "e988a34dd112985832ed15744d74f275abf853b0",
+      "path": "SPEC.md",
+      "blob_sha1": "4c535b5dc9b171dedabf54299d34ba13eca83896",
+      "sha256": null,
+      "url": "https://github.com/yohi/justice/blob/e988a34dd112985832ed15744d74f275abf853b0/SPEC.md",
+      "access": "DIRECT_GITHUB_FILE_FETCH",
+      "adoption_state": "HISTORICAL_SOURCE",
+      "limitation": "Host runtime status not inferred from specification"
+    },
+    {
+      "source_id": "V4-R01",
+      "label": "v4 Knowledge Register R0.1",
+      "commit": "08e9dbe3bee87c1e7f16307f302760f1f7161b19",
+      "path": "docs/knowledge/justice-v4/2026-11-01-r0.1/JUSTICE_V4_KNOWLEDGE_EVIDENCE_R0_1_20261101.md",
+      "blob_sha1": "4456efe172b95eebfde5a86b01c26c8038fc7ccc",
+      "sha256": null,
+      "url": "https://github.com/yohi/justice/blob/08e9dbe3bee87c1e7f16307f302760f1f7161b19/docs/knowledge/justice-v4/2026-11-01-r0.1/JUSTICE_V4_KNOWLEDGE_EVIDENCE_R0_1_20261101.md",
+      "access": "DIRECT_GITHUB_FILE_FETCH",
+      "adoption_state": "OWNER_BOUNDED_HISTORICAL_KNOWLEDGE_ONLY",
+      "limitation": "Static document/source; not Host proof"
+    },
+    {
+      "source_id": "V4-R02",
+      "label": "v4 Issue310 Crosswalk",
+      "commit": "08e9dbe3bee87c1e7f16307f302760f1f7161b19",
+      "path": "docs/knowledge/justice-v4/2026-11-01-r0.2/JUSTICE_V4_R0_2_ISSUE310_CROSSWALK.md",
+      "blob_sha1": "936c60eb0365efd10123eadd243cf558cf952ab4",
+      "sha256": null,
+      "url": "https://github.com/yohi/justice/blob/08e9dbe3bee87c1e7f16307f302760f1f7161b19/docs/knowledge/justice-v4/2026-11-01-r0.2/JUSTICE_V4_R0_2_ISSUE310_CROSSWALK.md",
+      "access": "DIRECT_GITHUB_FILE_FETCH",
+      "adoption_state": "OWNER_BOUNDED_HISTORICAL_INPUT",
+      "limitation": "Static document/source; not Host proof"
+    },
+    {
+      "source_id": "V4-R03",
+      "label": "v4 Source Inventory",
+      "commit": "08e9dbe3bee87c1e7f16307f302760f1f7161b19",
+      "path": "docs/knowledge/justice-v4/2026-11-01-r0.3/JUSTICE_V4_R0_3_SOURCE_INVENTORY.md",
+      "blob_sha1": "e877068f1e1865516474adc356cc3c23fa0b4c05",
+      "sha256": null,
+      "url": "https://github.com/yohi/justice/blob/08e9dbe3bee87c1e7f16307f302760f1f7161b19/docs/knowledge/justice-v4/2026-11-01-r0.3/JUSTICE_V4_R0_3_SOURCE_INVENTORY.md",
+      "access": "DIRECT_GITHUB_FILE_FETCH",
+      "adoption_state": "OWNER_BOUNDED_HISTORICAL_INPUT",
+      "limitation": "12 sources only; non-exhaustive, host V2 unproven"
+    },
+    {
+      "source_id": "V4-R04",
+      "label": "v4 Vision Validity Candidate",
+      "commit": "08e9dbe3bee87c1e7f16307f302760f1f7161b19",
+      "path": "docs/knowledge/justice-v4/2026-11-01-r0.4/JUSTICE_V4_R0_4_VISION_VALIDITY_CANDIDATE.md",
+      "blob_sha1": "d2c6c5123671ba0ea6f7702b9357af99ae22b75e",
+      "sha256": null,
+      "url": "https://github.com/yohi/justice/blob/08e9dbe3bee87c1e7f16307f302760f1f7161b19/docs/knowledge/justice-v4/2026-11-01-r0.4/JUSTICE_V4_R0_4_VISION_VALIDITY_CANDIDATE.md",
+      "access": "DIRECT_GITHUB_FILE_FETCH",
+      "adoption_state": "OWNER_BOUNDED_HISTORICAL_INPUT",
+      "limitation": "Analyst candidate, not v6 design"
+    },
+    {
+      "source_id": "V4-R02-J",
+      "label": "v4 Issue310 evidence index",
+      "commit": "08e9dbe3bee87c1e7f16307f302760f1f7161b19",
+      "path": "docs/knowledge/justice-v4/2026-11-01-r0.2/EVIDENCE_INDEX_R0_2.json",
+      "blob_sha1": "c31a7c7ff3a9de24d83f840de53f8b777eff0677",
+      "sha256": null,
+      "url": "https://github.com/yohi/justice/blob/08e9dbe3bee87c1e7f16307f302760f1f7161b19/docs/knowledge/justice-v4/2026-11-01-r0.2/EVIDENCE_INDEX_R0_2.json",
+      "access": "GIT_TREE_IDENTITY_ONLY",
+      "adoption_state": "HISTORICAL_SOURCE",
+      "limitation": "Index file content not independently parsed in this run"
+    },
+    {
+      "source_id": "V4-R01-J",
+      "label": "v4 initial evidence index",
+      "commit": "08e9dbe3bee87c1e7f16307f302760f1f7161b19",
+      "path": "docs/knowledge/justice-v4/2026-11-01-r0.1/evidence-index.json",
+      "blob_sha1": "08fc922f476565586d5a7337d4e438d85bfd0466",
+      "sha256": null,
+      "url": "https://github.com/yohi/justice/blob/08e9dbe3bee87c1e7f16307f302760f1f7161b19/docs/knowledge/justice-v4/2026-11-01-r0.1/evidence-index.json",
+      "access": "GIT_TREE_IDENTITY_ONLY",
+      "adoption_state": "HISTORICAL_SOURCE",
+      "limitation": "Static document/source; not Host proof"
+    },
+    {
+      "source_id": "V5-README",
+      "label": "v5 adopted R0.2 README.md",
+      "commit": "abf95e45dc5b90728a29506234902ce585986f9a",
+      "path": "docs/knowledge/justice-v5/2026-11-01-r0.2/README.md",
+      "blob_sha1": "abbe586a483ca24073a169eceb25f2c41fd06d25",
+      "sha256": "d22c8cafb1ab73c05e0cffd77b8e9df8bbcfdfb6aacb2d2c5a5898b9da48f5e1",
+      "url": "https://github.com/yohi/justice/blob/abf95e45dc5b90728a29506234902ce585986f9a/docs/knowledge/justice-v5/2026-11-01-r0.2/README.md",
+      "access": "FRESH_FETCH_SHA256_AND_GIT_BLOB_SHA1_RECOMPUTED_MATCH",
+      "adoption_state": "OWNER_ADOPTED_AS_LIMITED_HISTORICAL_KNOWLEDGE",
+      "limitation": "Adopted historical text only, not v6 norm or runtime verification"
+    },
+    {
+      "source_id": "V5-PURPOSE",
+      "label": "v5 adopted R0.2 JUSTICE_V5_PURPOSE_AND_GOALS_R0_2_20261101.md",
+      "commit": "abf95e45dc5b90728a29506234902ce585986f9a",
+      "path": "docs/knowledge/justice-v5/2026-11-01-r0.2/JUSTICE_V5_PURPOSE_AND_GOALS_R0_2_20261101.md",
+      "blob_sha1": "04505f0796d3e5785d5459831384c9361ae54ffe",
+      "sha256": "89f4f7256e201a9e7b3f573489f6173015c34532e2700b6f3c6126e4a809b042",
+      "url": "https://github.com/yohi/justice/blob/abf95e45dc5b90728a29506234902ce585986f9a/docs/knowledge/justice-v5/2026-11-01-r0.2/JUSTICE_V5_PURPOSE_AND_GOALS_R0_2_20261101.md",
+      "access": "FRESH_FETCH_SHA256_AND_GIT_BLOB_SHA1_RECOMPUTED_MATCH",
+      "adoption_state": "OWNER_ADOPTED_AS_LIMITED_HISTORICAL_KNOWLEDGE",
+      "limitation": "Adopted historical text only, not v6 norm or runtime verification"
+    },
+    {
+      "source_id": "V5-CROSSWALK",
+      "label": "v5 adopted R0.2 JUSTICE_V5_REQUIREMENT_DESIGN_TASK_CROSSWALK_R0_2_20261101.md",
+      "commit": "abf95e45dc5b90728a29506234902ce585986f9a",
+      "path": "docs/knowledge/justice-v5/2026-11-01-r0.2/JUSTICE_V5_REQUIREMENT_DESIGN_TASK_CROSSWALK_R0_2_20261101.md",
+      "blob_sha1": "e7a37f80ac54953521a145a30cb32a8674dd15e2",
+      "sha256": "9b2dcf57428ccf9a21cd2b32ad2211f66e077ae394e527f226230c88718ea098",
+      "url": "https://github.com/yohi/justice/blob/abf95e45dc5b90728a29506234902ce585986f9a/docs/knowledge/justice-v5/2026-11-01-r0.2/JUSTICE_V5_REQUIREMENT_DESIGN_TASK_CROSSWALK_R0_2_20261101.md",
+      "access": "FRESH_FETCH_SHA256_AND_GIT_BLOB_SHA1_RECOMPUTED_MATCH",
+      "adoption_state": "OWNER_ADOPTED_AS_LIMITED_HISTORICAL_KNOWLEDGE",
+      "limitation": "Adopted historical text only, not v6 norm or runtime verification"
+    },
+    {
+      "source_id": "V5-LEDGER",
+      "label": "v5 adopted R0.2 JUSTICE_V5_RESEARCH_EVIDENCE_LEDGER_R0_2_20261101.md",
+      "commit": "abf95e45dc5b90728a29506234902ce585986f9a",
+      "path": "docs/knowledge/justice-v5/2026-11-01-r0.2/JUSTICE_V5_RESEARCH_EVIDENCE_LEDGER_R0_2_20261101.md",
+      "blob_sha1": "0994aae8a2c3250ef821142b695a9a34f85d184a",
+      "sha256": "632016127f685211c2fac8f32b6b11db55c8cb0b6a97aaf51feb67bc6ce8f3a6",
+      "url": "https://github.com/yohi/justice/blob/abf95e45dc5b90728a29506234902ce585986f9a/docs/knowledge/justice-v5/2026-11-01-r0.2/JUSTICE_V5_RESEARCH_EVIDENCE_LEDGER_R0_2_20261101.md",
+      "access": "FRESH_FETCH_SHA256_AND_GIT_BLOB_SHA1_RECOMPUTED_MATCH",
+      "adoption_state": "OWNER_ADOPTED_AS_LIMITED_HISTORICAL_KNOWLEDGE",
+      "limitation": "Adopted historical text only, not v6 norm or runtime verification"
+    },
+    {
+      "source_id": "V5-ARCH",
+      "label": "v5 adopted R0.2 JUSTICE_V5_ARCHITECTURE_AND_V6_MAPPING_R0_2_20261101.md",
+      "commit": "abf95e45dc5b90728a29506234902ce585986f9a",
+      "path": "docs/knowledge/justice-v5/2026-11-01-r0.2/JUSTICE_V5_ARCHITECTURE_AND_V6_MAPPING_R0_2_20261101.md",
+      "blob_sha1": "834750402710341412131d7ee3131c2d64bc8915",
+      "sha256": "337bce2e04771d0355746a1bed5965a427fd3723cdc5243dab3aa0cf09cab53d",
+      "url": "https://github.com/yohi/justice/blob/abf95e45dc5b90728a29506234902ce585986f9a/docs/knowledge/justice-v5/2026-11-01-r0.2/JUSTICE_V5_ARCHITECTURE_AND_V6_MAPPING_R0_2_20261101.md",
+      "access": "FRESH_FETCH_SHA256_AND_GIT_BLOB_SHA1_RECOMPUTED_MATCH",
+      "adoption_state": "OWNER_ADOPTED_AS_LIMITED_HISTORICAL_KNOWLEDGE",
+      "limitation": "Adopted historical text only, not v6 norm or runtime verification"
+    },
+    {
+      "source_id": "V5-INDEX",
+      "label": "v5 adopted R0.2 evidence-index.json",
+      "commit": "abf95e45dc5b90728a29506234902ce585986f9a",
+      "path": "docs/knowledge/justice-v5/2026-11-01-r0.2/evidence-index.json",
+      "blob_sha1": "f1cd023fd0d6f9ffcf8f2dbd37a74bd873d8d4ed",
+      "sha256": "9aec13496ee73ae70b624ed05d1277c01ed288ba2d59603bffb5d67eec8224ca",
+      "url": "https://github.com/yohi/justice/blob/abf95e45dc5b90728a29506234902ce585986f9a/docs/knowledge/justice-v5/2026-11-01-r0.2/evidence-index.json",
+      "access": "FRESH_FETCH_SHA256_AND_GIT_BLOB_SHA1_RECOMPUTED_MATCH",
+      "adoption_state": "OWNER_ADOPTED_AS_LIMITED_HISTORICAL_KNOWLEDGE",
+      "limitation": "Adopted historical text only, not v6 norm or runtime verification"
+    },
+    {
+      "source_id": "V5-SUMS",
+      "label": "v5 adopted R0.2 SHA256SUMS",
+      "commit": "abf95e45dc5b90728a29506234902ce585986f9a",
+      "path": "docs/knowledge/justice-v5/2026-11-01-r0.2/SHA256SUMS",
+      "blob_sha1": "86b326c8876d700f069e597798d937b5c23279e4",
+      "sha256": "de83eff1d49e10e5b8269fcf4cd3e628ac7805bb5dd84c1d425eceb2e6f28de9",
+      "url": "https://github.com/yohi/justice/blob/abf95e45dc5b90728a29506234902ce585986f9a/docs/knowledge/justice-v5/2026-11-01-r0.2/SHA256SUMS",
+      "access": "FRESH_FETCH_SHA256_AND_GIT_BLOB_SHA1_RECOMPUTED_MATCH",
+      "adoption_state": "OWNER_ADOPTED_AS_LIMITED_HISTORICAL_KNOWLEDGE",
+      "limitation": "Adopted historical text only, not v6 norm or runtime verification"
+    },
+    {
+      "source_id": "V5-OWNER",
+      "label": "v5 archival V5-OWNER",
+      "commit": "abf95e45dc5b90728a29506234902ce585986f9a",
+      "path": "docs/knowledge/justice-v5/2026-11-01-r0.2-owner-adoption/JUSTICE_V5_KNOWLEDGE_R0_2_OWNER_LIMITED_ADOPTION_DECISION_20261101.md",
+      "blob_sha1": "1ab9e81f5142788607385cba5e1f0bc15b788474",
+      "sha256": null,
+      "url": "https://github.com/yohi/justice/blob/abf95e45dc5b90728a29506234902ce585986f9a/docs/knowledge/justice-v5/2026-11-01-r0.2-owner-adoption/JUSTICE_V5_KNOWLEDGE_R0_2_OWNER_LIMITED_ADOPTION_DECISION_20261101.md",
+      "access": "DIRECT_GITHUB_FILE_FETCH_BLOB_ID_CONFIRMED",
+      "adoption_state": "ARCHIVAL_EVIDENCE_NOT_ADDITIONAL_V6_REQUIREMENTS",
+      "limitation": "Historical R2 and R3 bounded static review; creation-time Owner Decision said Git write pending, later commit verifies archival"
+    },
+    {
+      "source_id": "V5-R2",
+      "label": "v5 archival V5-R2",
+      "commit": "abf95e45dc5b90728a29506234902ce585986f9a",
+      "path": "docs/knowledge/justice-v5/2026-11-01-r0.2-owner-adoption/INDEPENDENT_REVIEWS/JUSTICE_V5_KNOWLEDGE_R0_2_FRESH_INDEPENDENT_R2_REVIEW_REPORT (1).md",
+      "blob_sha1": "c95db18caa5fac19290c61f8e3feebcfaa24b001",
+      "sha256": null,
+      "url": "https://github.com/yohi/justice/blob/abf95e45dc5b90728a29506234902ce585986f9a/docs/knowledge/justice-v5/2026-11-01-r0.2-owner-adoption/INDEPENDENT_REVIEWS/JUSTICE_V5_KNOWLEDGE_R0_2_FRESH_INDEPENDENT_R2_REVIEW_REPORT (1).md",
+      "access": "DIRECT_GITHUB_FILE_FETCH_BLOB_ID_CONFIRMED",
+      "adoption_state": "ARCHIVAL_EVIDENCE_NOT_ADDITIONAL_V6_REQUIREMENTS",
+      "limitation": "Historical R2 and R3 bounded static review; creation-time Owner Decision said Git write pending, later commit verifies archival"
+    },
+    {
+      "source_id": "V5-R3",
+      "label": "v5 archival V5-R3",
+      "commit": "abf95e45dc5b90728a29506234902ce585986f9a",
+      "path": "docs/knowledge/justice-v5/2026-11-01-r0.2-owner-adoption/INDEPENDENT_REVIEWS/JUSTICE_V5_KNOWLEDGE_R0_2_FRESH_INDEPENDENT_R3_REVIEW_REPORT(1).md",
+      "blob_sha1": "5e4106f6f6299aaa785e68c17008a91549dc6c12",
+      "sha256": null,
+      "url": "https://github.com/yohi/justice/blob/abf95e45dc5b90728a29506234902ce585986f9a/docs/knowledge/justice-v5/2026-11-01-r0.2-owner-adoption/INDEPENDENT_REVIEWS/JUSTICE_V5_KNOWLEDGE_R0_2_FRESH_INDEPENDENT_R3_REVIEW_REPORT(1).md",
+      "access": "DIRECT_GITHUB_FILE_FETCH_BLOB_ID_CONFIRMED",
+      "adoption_state": "ARCHIVAL_EVIDENCE_NOT_ADDITIONAL_V6_REQUIREMENTS",
+      "limitation": "Historical R2 and R3 bounded static review; creation-time Owner Decision said Git write pending, later commit verifies archival"
+    },
+    {
+      "source_id": "V5-PROVENANCE",
+      "label": "v5 archival V5-PROVENANCE",
+      "commit": "abf95e45dc5b90728a29506234902ce585986f9a",
+      "path": "docs/knowledge/justice-v5/2026-11-01-r0.2-owner-adoption/PROVENANCE.json",
+      "blob_sha1": "4654f402a6baf58071e1716186390846de980222",
+      "sha256": null,
+      "url": "https://github.com/yohi/justice/blob/abf95e45dc5b90728a29506234902ce585986f9a/docs/knowledge/justice-v5/2026-11-01-r0.2-owner-adoption/PROVENANCE.json",
+      "access": "DIRECT_GITHUB_FILE_FETCH_BLOB_ID_CONFIRMED",
+      "adoption_state": "ARCHIVAL_EVIDENCE_NOT_ADDITIONAL_V6_REQUIREMENTS",
+      "limitation": "Historical R2 and R3 bounded static review; creation-time Owner Decision said Git write pending, later commit verifies archival"
+    }
+  ],
+  "external_evidence_registry": [
+    {
+      "source_id": "V4-OWNER-ISSUE",
+      "url": "https://github.com/yohi/justice/issues/345#issuecomment-6554658221",
+      "claim": "Owner bounded adoption, exceptions, unresolved four findings",
+      "strength": "DIRECT_GITHUB_ISSUE_COMMENT_READ",
+      "authority": "HUMAN_OWNER_HISTORICAL_ADOPTION"
+    },
+    {
+      "source_id": "V5-ARCHIVE-ISSUE",
+      "url": "https://github.com/yohi/justice/issues/348#issuecomment-6567050806",
+      "claim": "Commit/Push verified, 11 Git blobs, R2/R3 snapshots and 7 R0.2 adopted files",
+      "strength": "DIRECT_GITHUB_ISSUE_COMMENT_READ",
+      "authority": "ARCHIVAL_RECEIPT"
+    },
+    {
+      "source_id": "ISSUE-297",
+      "url": "https://github.com/yohi/justice/issues/297",
+      "claim": "staged Requirements/Design/Plan Review Gate contracts",
+      "strength": "DIRECT_GITHUB_ISSUE_BODY_READ",
+      "authority": "HISTORICAL_REQUIREMENT_SOURCE_NOT_V6_ADOPTED"
+    },
+    {
+      "source_id": "ISSUE-298",
+      "url": "https://github.com/yohi/justice/issues/298",
+      "claim": "v5 event-sourced Review Gate proposal, separated from Superpowers SDD",
+      "strength": "DIRECT_GITHUB_ISSUE_BODY_READ",
+      "authority": "ARCHITECTURE_PROPOSAL"
+    },
+    {
+      "source_id": "ISSUE-310",
+      "url": "https://github.com/yohi/justice/issues/310",
+      "claim": "9 findings and DEP-01 ratified/superseded contract; Gate blocked in historical snapshot",
+      "strength": "DIRECT_GITHUB_ISSUE_BODY_READ",
+      "authority": "PARTIAL_HISTORICAL_CONTRACT_RATIFICATION"
+    },
+    {
+      "source_id": "PR-295",
+      "url": "https://github.com/yohi/justice/pull/295",
+      "claim": "historical Native Task1 evidence spike; fixed report blob in Owner record",
+      "strength": "PR_METADATA_READ_AND_FIXED_R3_REPORT_RECONCILED",
+      "authority": "PRIOR_TEST_REPORTED_ONLY"
+    },
+    {
+      "source_id": "PR-341",
+      "url": "https://github.com/yohi/justice/pull/341",
+      "claim": "v4 Review Gate partial wiring merged and 3586 passed/2 expected fail/7 skipped reported",
+      "strength": "PR_METADATA_AND_TEST_REPORT_READ",
+      "authority": "PRIOR_TEST_REPORTED_NOT_G3"
+    },
+    {
+      "source_id": "PR-343",
+      "url": "https://github.com/yohi/justice/pull/343",
+      "claim": "unmerged documentation on drift, D0, replay, fail-closed handling",
+      "strength": "PR_METADATA_READ_V4_R01_AND_R02_REFS",
+      "authority": "UNMERGED_CANDIDATE"
+    },
+    {
+      "source_id": "PR-325",
+      "url": "https://github.com/yohi/justice/pull/325",
+      "claim": "R11 static candidate, not runtime proof",
+      "strength": "PR_METADATA_READ",
+      "authority": "PROPOSED_BLOCKED"
+    },
+    {
+      "source_id": "PR-342",
+      "url": "https://github.com/yohi/justice/pull/342",
+      "claim": "DP-R3.2 documentary readiness and provenance limitation",
+      "strength": "PR_METADATA_READ",
+      "authority": "DOCUMENT_ONLY_LIMITED"
+    },
+    {
+      "source_id": "PR-344",
+      "url": "https://github.com/yohi/justice/pull/344",
+      "claim": "R9 proposal, 31/31 findings OPEN",
+      "strength": "PR_METADATA_READ",
+      "authority": "PROPOSED_BLOCKED"
+    }
+  ],
+  "knowledge_items": [
+    {
+      "reconciliation_id": "JV6-KR-R1-001",
+      "v4_knowledge_ids": [
+        "JV4-K-001",
+        "JV4-K-014"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-001"
+      ],
+      "claim": "方法論と実行の非侵襲的分離",
+      "v4_evidence": "V4-R01 §JV4-K-001/014; V4-SPEC §§1–2",
+      "v5_evidence": "V5-PURPOSE §§1,5; V5-ARCH §2",
+      "agreement_conflict": "原則一致・実装重複未検証",
+      "evidence_strength": "DOCUMENT_OBSERVED + STATIC_INFERENCE",
+      "classification": "CARRY_FORWARD_PRINCIPLE_CANDIDATE",
+      "counterevidence": "v4 Loop/Pivotが進行へ介入し得る",
+      "v6_implication": "責務表と非二重Dispatchの入力",
+      "proof_obligation": "PO-01",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R01",
+        "V4-SPEC",
+        "V5-ARCH",
+        "V5-PURPOSE"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-002",
+      "v4_knowledge_ids": [
+        "JV4-K-002"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-002"
+      ],
+      "claim": "原文rawBodyとCaller Intentの損失防止",
+      "v4_evidence": "V4-SPEC §4.1d; V4-R01 K-002",
+      "v5_evidence": "V5-PURPOSE V5-G-02; V5-ARCH K-002",
+      "agreement_conflict": "原則一致・Host transport相違",
+      "evidence_strength": "IMPLEMENTATION_REPORTED; HOST_NOT_VERIFIED",
+      "classification": "CARRY_FORWARD_PRINCIPLE_CANDIDATE",
+      "counterevidence": "checkbox化・prompt再生成で意味変質",
+      "v6_implication": "semantic input identity / lossless transport候補",
+      "proof_obligation": "PO-02",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R01",
+        "V4-SPEC",
+        "V5-ARCH",
+        "V5-PURPOSE"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-003",
+      "v4_knowledge_ids": [
+        "JV4-K-003",
+        "JV4-K-020"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-011"
+      ],
+      "claim": "モデル・Provider選択の所有権",
+      "v4_evidence": "V4-R01 K-003; V4-R03 K-020",
+      "v5_evidence": "V5-PURPOSE §5; V5-ARCH K-011",
+      "agreement_conflict": "主旨一致・具体カテゴリ非可搬",
+      "evidence_strength": "CODE_OBSERVED; HOST_NOT_VERIFIED",
+      "classification": "ADAPT_IMPLEMENTATION_CANDIDATE",
+      "counterevidence": "OmOカテゴリ・V1 general例外がHost依存",
+      "v6_implication": "route policyはowner同意を伴うこと",
+      "proof_obligation": "PO-03",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R01",
+        "V4-R03",
+        "V5-ARCH",
+        "V5-PURPOSE"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-004",
+      "v4_knowledge_ids": [
+        "JV4-K-004",
+        "JV4-K-019"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-004",
+        "JV5-K-005"
+      ],
+      "claim": "Executorの実観測とTool API区別",
+      "v4_evidence": "V4-R01 K-004; V4-R03 K-019",
+      "v5_evidence": "V5-ARCH K-004/005; V5-LEDGER §7.1",
+      "agreement_conflict": "一致・実Host実証は不足",
+      "evidence_strength": "REAL_HOST_FAILURE_REPORTED; HOST_NOT_VERIFIED",
+      "classification": "PROOF_REQUIRED",
+      "counterevidence": "native subtask≠OmO task; Case A/B",
+      "v6_implication": "Hostが実際に選んだexecutor証拠",
+      "proof_obligation": "PO-04",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R01",
+        "V4-R03",
+        "V5-ARCH",
+        "V5-LEDGER"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-005",
+      "v4_knowledge_ids": [
+        "JV4-K-005",
+        "JV4-K-010"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-003"
+      ],
+      "claim": "承認済Artifact ChainとHuman境界",
+      "v4_evidence": "V4-R01 K-005/010; V4-SPEC §4.1c",
+      "v5_evidence": "V5-PURPOSE V5-G-03; V5-ARCH K-003",
+      "agreement_conflict": "原則一致・旧Gate/新Gateは同一でない",
+      "evidence_strength": "DOCUMENT_OBSERVED; HOST_NOT_VERIFIED",
+      "classification": "CARRY_FORWARD_PRINCIPLE_CANDIDATE",
+      "counterevidence": "Gate CLEAR≠Human承認; D1 drift",
+      "v6_implication": "digest/revision/OwnerEvent独立識別",
+      "proof_obligation": "PO-05",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R01",
+        "V4-SPEC",
+        "V5-ARCH",
+        "V5-PURPOSE"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-006",
+      "v4_knowledge_ids": [
+        "JV4-K-007"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-007"
+      ],
+      "claim": "Evidence-based AcceptanceとWorker自己申告",
+      "v4_evidence": "V4-R01 K-007",
+      "v5_evidence": "V5-PURPOSE V5-G-09; V5-ARCH K-007",
+      "agreement_conflict": "一致・証拠取得は未閉鎖",
+      "evidence_strength": "IMPLEMENTATION_REPORTED; NOT_VERIFIED",
+      "classification": "CARRY_FORWARD_PRINCIPLE_CANDIDATE",
+      "counterevidence": "self-reportと実行/受理混同",
+      "v6_implication": "Task結合とFinding closureの受理規則",
+      "proof_obligation": "PO-06",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R01",
+        "V5-ARCH",
+        "V5-PURPOSE"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-007",
+      "v4_knowledge_ids": [
+        "JV4-K-006"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-008"
+      ],
+      "claim": "通常実行継続と保護操作の拒否を分離",
+      "v4_evidence": "V4-R01 K-006; PR-343",
+      "v5_evidence": "V5-ARCH K-008",
+      "agreement_conflict": "原則一致・operation fence再設計",
+      "evidence_strength": "STATIC_RISK; HOST_NOT_VERIFIED",
+      "classification": "ADAPT_IMPLEMENTATION_CANDIDATE",
+      "counterevidence": "command初期化失敗でexpanded parts残存候補",
+      "v6_implication": "操作別fail-open/fail-closed契約",
+      "proof_obligation": "PO-07",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R01",
+        "V5-ARCH"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-008",
+      "v4_knowledge_ids": [
+        "JV4-K-005",
+        "JV4-K-014"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-001",
+        "JV5-K-006",
+        "JV5-K-010"
+      ],
+      "claim": "Pre-implementation GateとImplementation SDD分離",
+      "v4_evidence": "V4-R01 K-014; V4-SPEC §4.1c",
+      "v5_evidence": "V5-ARCH §§3,8.2; ISSUE-297/298",
+      "agreement_conflict": "原則一致・Gate実装権限は未決",
+      "evidence_strength": "HISTORICAL_CONTRACT + STATIC_INFERENCE",
+      "classification": "CARRY_FORWARD_PRINCIPLE_CANDIDATE",
+      "counterevidence": "Justice側のreview dispatchとSuperpowersが衝突し得る",
+      "v6_implication": "2本の独立lifecycleと二重起動防止",
+      "proof_obligation": "PO-08",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R01",
+        "V4-SPEC",
+        "V5-ARCH"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-009",
+      "v4_knowledge_ids": [
+        "JV4-K-014",
+        "JV4-K-021"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-001",
+        "JV5-K-006"
+      ],
+      "claim": "Review worker dispatchの所有者衝突",
+      "v4_evidence": "V4-R03 K-021; V4-R01 K-014",
+      "v5_evidence": "V5-ARCH K-006; V5-PURPOSE §5",
+      "agreement_conflict": "v4の制御候補 vs v5の非所有方針",
+      "evidence_strength": "CODE_OBSERVED + DESIGN_CONFLICT",
+      "classification": "CONFLICT_REQUIRES_DECISION",
+      "counterevidence": "二重review、fix、再reviewスケジューリング",
+      "v6_implication": "pre-Gateのみの管理境界検討",
+      "proof_obligation": "PO-09",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R01",
+        "V4-R03",
+        "V5-ARCH",
+        "V5-PURPOSE"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-010",
+      "v4_knowledge_ids": [
+        "JV4-K-014",
+        "JV4-K-021"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-001",
+        "JV5-K-006",
+        "JV5-K-012"
+      ],
+      "claim": "Loop/Pivot/RetryのAdvisoryとExecutive差",
+      "v4_evidence": "V4-R03 K-021; V4-R02 R1-F-05",
+      "v5_evidence": "V5-PURPOSE §5; V5-ARCH K-012",
+      "agreement_conflict": "方向相違・ownership未決",
+      "evidence_strength": "STATIC_INFERENCE; OWNER_OPEN_FINDING",
+      "classification": "CONFLICT_REQUIRES_DECISION",
+      "counterevidence": "v4 R1-F-05未解消",
+      "v6_implication": "禁止する実行権限と観測だけの境界",
+      "proof_obligation": "PO-10",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R02",
+        "V4-R03",
+        "V5-ARCH",
+        "V5-PURPOSE"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-011",
+      "v4_knowledge_ids": [
+        "JV4-K-008",
+        "JV4-K-009"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-009",
+        "JV5-K-010"
+      ],
+      "claim": "V2 Event Storeと完全Semantic Replay",
+      "v4_evidence": "V4-R01 K-008/009; V4-R02 RG310-05",
+      "v5_evidence": "V5-ARCH K-009/010; ISSUE-298",
+      "agreement_conflict": "要求は共通・方式成立未証明",
+      "evidence_strength": "STATIC_GAP_IDENTIFIED; NOT_VERIFIED",
+      "classification": "PROOF_REQUIRED",
+      "counterevidence": "RemediationRound[]/FindingState欠落、IDのみ復元",
+      "v6_implication": "lossless projection and re-entry",
+      "proof_obligation": "PO-11",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R01",
+        "V4-R02",
+        "V5-ARCH"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-012",
+      "v4_knowledge_ids": [
+        "JV4-K-008",
+        "JV4-K-011"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-010"
+      ],
+      "claim": "Deterministic ProjectionとCAS/Witnessの手段分離",
+      "v4_evidence": "V4-R01 K-008/011; PR-341",
+      "v5_evidence": "V5-ARCH K-010; ISSUE-298",
+      "agreement_conflict": "保証は近い・方式の必然性なし",
+      "evidence_strength": "PARTIAL_IMPLEMENTATION_REPORTED",
+      "classification": "DO_NOT_PORT_AS_IS_CANDIDATE",
+      "counterevidence": "PR-341テスト≠G3、V2 replay欠落",
+      "v6_implication": "比較可能な軽量代替の安全証明",
+      "proof_obligation": "PO-12",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R01",
+        "V5-ARCH"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-013",
+      "v4_knowledge_ids": [
+        "JV4-K-010"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-003",
+        "JV5-K-010"
+      ],
+      "claim": "Approved D0とdirty D1のArtifact authority",
+      "v4_evidence": "V4-R01 K-010; PR-341/343",
+      "v5_evidence": "V5-ARCH K-003/010",
+      "agreement_conflict": "一致・Host全I/O経路未証明",
+      "evidence_strength": "DESIGN_SUPPORTED; HOST_NOT_VERIFIED",
+      "classification": "PROOF_REQUIRED",
+      "counterevidence": "Read/Search/Show/attachmentsへの漏れ",
+      "v6_implication": "D0バイト不変と全露出面検証",
+      "proof_obligation": "PO-13",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R01",
+        "V5-ARCH"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-014",
+      "v4_knowledge_ids": [
+        "JV4-K-013"
+      ],
+      "v5_knowledge_ids": [],
+      "claim": "Finding Field Propagationの未知キー",
+      "v4_evidence": "V4-R01 K-013; V4-R02 R1-F-04",
+      "v5_evidence": "対応なし：v5 adopted K固有Finding未特定",
+      "agreement_conflict": "直接対照なし・横断安全知見",
+      "evidence_strength": "STATIC_RISK; NOT_OBSERVED_EXPLOIT",
+      "classification": "CARRY_FORWARD_PRINCIPLE_CANDIDATE",
+      "counterevidence": "{...finding}の未知キー残存; 未修正",
+      "v6_implication": "allowlist再構築とredactionの検証",
+      "proof_obligation": "PO-14",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R01",
+        "V4-R02"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-015",
+      "v4_knowledge_ids": [
+        "JV4-K-019"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-004"
+      ],
+      "claim": "TaskFeedbackの親子ToolCall相関",
+      "v4_evidence": "V4-R03 K-019; V4-R02 R1-F-06",
+      "v5_evidence": "V5-ARCH K-004; V5-LEDGER §7.1",
+      "agreement_conflict": "一致・V2 Host証拠不足",
+      "evidence_strength": "HOST_PROOF_NOT_ESTABLISHED",
+      "classification": "PROOF_REQUIRED",
+      "counterevidence": "tool=taskの暗黙前提と未知result",
+      "v6_implication": "parent/session/call/child/terminal join",
+      "proof_obligation": "PO-15",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R02",
+        "V4-R03",
+        "V5-ARCH",
+        "V5-LEDGER"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-016",
+      "v4_knowledge_ids": [
+        "JV4-K-020"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-011"
+      ],
+      "claim": "AgentRouterは実行エンジンではない",
+      "v4_evidence": "V4-R03 K-020",
+      "v5_evidence": "V5-PURPOSE §5; V5-ARCH K-011",
+      "agreement_conflict": "v4実装の限界とv5方針が一致",
+      "evidence_strength": "SOURCE_INVENTORY; STATIC_INFERENCE",
+      "classification": "DO_NOT_PORT_AS_IS_CANDIDATE",
+      "counterevidence": "wrapperの存在はOmO機能充足を示さない",
+      "v6_implication": "Option Cの能力分解と費用測定",
+      "proof_obligation": "PO-16",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R03",
+        "V5-ARCH",
+        "V5-PURPOSE"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-017",
+      "v4_knowledge_ids": [
+        "JV4-K-022"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-012"
+      ],
+      "claim": "WisdomとTiered Storesの費用対価値",
+      "v4_evidence": "V4-R03 K-022",
+      "v5_evidence": "V5-ARCH K-012",
+      "agreement_conflict": "双方未証明・義務化できない",
+      "evidence_strength": "CODE_OBSERVED; VALUE_NOT_MEASURED",
+      "classification": "OPTIONAL_VALUE_UNPROVEN",
+      "counterevidence": "context污染・retention・secret leakage",
+      "v6_implication": "品質改善・プライバシー・コスト比較",
+      "proof_obligation": "PO-17",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R03",
+        "V5-ARCH"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-018",
+      "v4_knowledge_ids": [
+        "JV4-K-022"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-012"
+      ],
+      "claim": "Telemetryの価値と保持ポリシー",
+      "v4_evidence": "V4-R03 §Source snapshot; K-022",
+      "v5_evidence": "V5-ARCH K-012",
+      "agreement_conflict": "双方で価値未実証",
+      "evidence_strength": "CODE_OBSERVED; VALUE_NOT_MEASURED",
+      "classification": "OPTIONAL_VALUE_UNPROVEN",
+      "counterevidence": "latency / privacy / storage overhead",
+      "v6_implication": "計測しない設計との比較",
+      "proof_obligation": "PO-18",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R03",
+        "V5-ARCH"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-019",
+      "v4_knowledge_ids": [
+        "JV4-K-023"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-009"
+      ],
+      "claim": "Compaction context continuityとHost機構",
+      "v4_evidence": "V4-R03 K-023",
+      "v5_evidence": "V5-ARCH K-009",
+      "agreement_conflict": "目的共通・再注入方式非可搬",
+      "evidence_strength": "CODE_OBSERVED; HOST_NOT_VERIFIED",
+      "classification": "ADAPT_IMPLEMENTATION_CANDIDATE",
+      "counterevidence": "旧Hook保証なし・復元時承認昇格危険",
+      "v6_implication": "再圧縮/再起動/断線でidentity保持",
+      "proof_obligation": "PO-19",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R03",
+        "V5-ARCH"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-020",
+      "v4_knowledge_ids": [
+        "JV4-K-015"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-011"
+      ],
+      "claim": "Native-firstはv6既定ではない",
+      "v4_evidence": "V4-R01 K-015; V4-R04 §4",
+      "v5_evidence": "V5-PURPOSE §4; V5-ARCH §4",
+      "agreement_conflict": "一致：A/B/C未選定",
+      "evidence_strength": "PRIOR_TEST_REPORTED; NOT_SELECTED",
+      "classification": "PROOF_REQUIRED",
+      "counterevidence": "31/32とCase AからHost一般証明不可",
+      "v6_implication": "Option A/B/C同一Capability表",
+      "proof_obligation": "PO-20",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R01",
+        "V4-R04",
+        "V5-ARCH",
+        "V5-PURPOSE"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-021",
+      "v4_knowledge_ids": [],
+      "v5_knowledge_ids": [
+        "JV5-K-005"
+      ],
+      "claim": "Case A provider stream error後の安全性",
+      "v4_evidence": "対応なし：v4独立Case A固有試験なし",
+      "v5_evidence": "V5-LEDGER §7.1 RG-310-A-001; V5-R3 §5",
+      "agreement_conflict": "v5固有の未証明を保持",
+      "evidence_strength": "BLOCKED; PRIOR_TEST_REPORTED",
+      "classification": "PROOF_REQUIRED",
+      "counterevidence": "5つのpost-error観測欠落",
+      "v6_implication": "実Hostでの拒否・再承認・遅延出力",
+      "proof_obligation": "PO-21",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V5-LEDGER",
+        "V5-R3"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-022",
+      "v4_knowledge_ids": [
+        "JV4-K-004",
+        "JV4-K-019"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-004",
+        "JV5-K-005"
+      ],
+      "claim": "Unknown-tool synthetic result厳密ID結合",
+      "v4_evidence": "V4-R01 K-004; V4-R03 K-019",
+      "v5_evidence": "V5-LEDGER §7.1 RG-310-B-001; V5-R3 §5",
+      "agreement_conflict": "共通identity問題・v5に具体的BLOCK",
+      "evidence_strength": "BLOCKED; PRIOR_TEST_REPORTED",
+      "classification": "PROOF_REQUIRED",
+      "counterevidence": "callback message.id/post append messageIdともnull",
+      "v6_implication": "同一session/callの確実な結合",
+      "proof_obligation": "PO-22",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R01",
+        "V4-R03",
+        "V5-LEDGER",
+        "V5-R3"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-023",
+      "v4_knowledge_ids": [
+        "JV4-K-013"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-005"
+      ],
+      "claim": "Positive sanitizer removal証明",
+      "v4_evidence": "V4-R01 K-013（一般的な漏えいリスクのみ）",
+      "v5_evidence": "V5-LEDGER §7.1 RG-310-B-002; V5-R3 §5",
+      "agreement_conflict": "関連するが直接同一のFindingではない",
+      "evidence_strength": "NOT_PROVEN; PRIOR_TEST_REPORTED",
+      "classification": "PROOF_REQUIRED",
+      "counterevidence": "token未出現/changed=falseは除去証明でない",
+      "v6_implication": "tokenあり→除去の正の対照",
+      "proof_obligation": "PO-23",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R01",
+        "V5-LEDGER",
+        "V5-R3"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-024",
+      "v4_knowledge_ids": [
+        "JV4-K-012"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-007",
+        "JV5-K-011"
+      ],
+      "claim": "全56シナリオのE2E Closure",
+      "v4_evidence": "V4-R01 K-012",
+      "v5_evidence": "V5-CROSSWALK §§5,7; V5-R2 §3",
+      "agreement_conflict": "証拠階層共通・v5全件未成立",
+      "evidence_strength": "DOCUMENT_OBSERVED; E2E_NOT_ESTABLISHED",
+      "classification": "PROOF_REQUIRED",
+      "counterevidence": "unit30/integration15/E2E10/spike1は計画分類",
+      "v6_implication": "実HostとE2E closureの識別",
+      "proof_obligation": "PO-24",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R01",
+        "V5-CROSSWALK",
+        "V5-R2"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-025",
+      "v4_knowledge_ids": [
+        "JV4-K-005",
+        "JV4-K-010"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-003",
+        "JV5-K-010"
+      ],
+      "claim": "Stale Authorizationとreopen",
+      "v4_evidence": "V4-R01 K-005/010; ISSUE-310 DEP-01",
+      "v5_evidence": "V5-ARCH K-003/010; ISSUE-298",
+      "agreement_conflict": "要件方向一致・世代継承契約に差異",
+      "evidence_strength": "HISTORICAL_RATIFICATION + STATIC_GAP",
+      "classification": "CONFLICT_REQUIRES_DECISION",
+      "counterevidence": "v4 successor fresh review vs #298の限定継承案",
+      "v6_implication": "change matrixと失効契約再審",
+      "proof_obligation": "PO-25",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R01",
+        "V5-ARCH"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-026",
+      "v4_knowledge_ids": [
+        "JV4-K-008",
+        "JV4-K-009",
+        "JV4-K-023"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-009",
+        "JV5-K-010"
+      ],
+      "claim": "Recoveryとidempotent external side effects",
+      "v4_evidence": "V4-R01 K-008/009; V4-R03 K-023",
+      "v5_evidence": "V5-ARCH K-009/010; ISSUE-298",
+      "agreement_conflict": "目的一致・イベントモデル未証明",
+      "evidence_strength": "STATIC_GAP_IDENTIFIED; NOT_VERIFIED",
+      "classification": "ADAPT_IMPLEMENTATION_CANDIDATE",
+      "counterevidence": "event存在≠semantic state復元",
+      "v6_implication": "crash windowごとの二重作用否定",
+      "proof_obligation": "PO-26",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R01",
+        "V4-R03",
+        "V5-ARCH"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-027",
+      "v4_knowledge_ids": [
+        "JV4-K-004",
+        "JV4-K-007"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-005"
+      ],
+      "claim": "認証済Protocol Affiliationの信頼境界",
+      "v4_evidence": "V4-R01 K-004/007",
+      "v5_evidence": "V5-PURPOSE §4; V5-LEDGER §3; V5-ARCH K-005",
+      "agreement_conflict": "v5設計転換・hidden origin証明ではない",
+      "evidence_strength": "DOCUMENT_OBSERVED; HOST_NOT_VERIFIED",
+      "classification": "PROOF_REQUIRED",
+      "counterevidence": "token-holder mislabelを防ぐ強い証明なし",
+      "v6_implication": "capability実測と敵対的テスト",
+      "proof_obligation": "PO-27",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R01",
+        "V5-ARCH",
+        "V5-LEDGER",
+        "V5-PURPOSE"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-028",
+      "v4_knowledge_ids": [
+        "JV4-K-005"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-003",
+        "JV5-K-007"
+      ],
+      "claim": "Requirements/Design/Planの静的ID連鎖",
+      "v4_evidence": "V4-R01 K-005",
+      "v5_evidence": "V5-CROSSWALK §§2–7; V5-R2 §3",
+      "agreement_conflict": "歴史的文書構造は一致",
+      "evidence_strength": "DOCUMENT_OBSERVED; NO_RUNTIME_CLOSURE",
+      "classification": "CARRY_FORWARD_PRINCIPLE_CANDIDATE",
+      "counterevidence": "118 Req/38 Design/14 Tasksは実装済みではない",
+      "v6_implication": "条項・証拠・判断の一意追跡",
+      "proof_obligation": "PO-28",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R01",
+        "V5-CROSSWALK",
+        "V5-R2"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-029",
+      "v4_knowledge_ids": [
+        "JV4-K-005",
+        "JV4-K-007",
+        "JV4-K-012"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-003",
+        "JV5-K-007",
+        "JV5-K-010"
+      ],
+      "claim": "Evidence・Gate・Owner・Implementationの権限分離",
+      "v4_evidence": "V4-R01 K-005/007/012; V4-OWNER-ISSUE",
+      "v5_evidence": "V5-OWNER; V5-ARCH §§3,8.2",
+      "agreement_conflict": "全面一致（規範採択は別工程）",
+      "evidence_strength": "OWNER_HISTORICAL_ADOPTION_ONLY",
+      "classification": "CARRY_FORWARD_PRINCIPLE_CANDIDATE",
+      "counterevidence": "R3 PASSは訂正範囲のみ",
+      "v6_implication": "独立approval/authorization ledger",
+      "proof_obligation": "PO-29",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-OWNER-ISSUE",
+        "V4-R01",
+        "V5-ARCH",
+        "V5-OWNER"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-030",
+      "v4_knowledge_ids": [
+        "JV4-K-003",
+        "JV4-K-020",
+        "JV4-K-021"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-011",
+        "JV5-K-012"
+      ],
+      "claim": "Adaptive routingとFallback/Retryの過剰所有",
+      "v4_evidence": "V4-R03 K-020/021; V4-R01 K-003",
+      "v5_evidence": "V5-PURPOSE §5; V5-ARCH K-011/012",
+      "agreement_conflict": "Justice実行系拡張は衝突候補",
+      "evidence_strength": "STATIC_INFERENCE; VALUE_NOT_ESTABLISHED",
+      "classification": "OPTIONAL_VALUE_UNPROVEN",
+      "counterevidence": "Host/providerが既に同等機能を持つ可能性",
+      "v6_implication": "反事実的価値と二重実行の計測",
+      "proof_obligation": "PO-30",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R01",
+        "V4-R03",
+        "V5-ARCH",
+        "V5-PURPOSE"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-031",
+      "v4_knowledge_ids": [
+        "JV4-K-001",
+        "JV4-K-020"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-001",
+        "JV5-K-011"
+      ],
+      "claim": "Option CでOmO相当Runtimeを内包",
+      "v4_evidence": "V4-R01 K-001; V4-R03 K-020",
+      "v5_evidence": "V5-ARCH §§3–4",
+      "agreement_conflict": "非侵襲原則と重大な設計緊張",
+      "evidence_strength": "STATIC_INFERENCE; NOT_SELECTED",
+      "classification": "CONFLICT_REQUIRES_DECISION",
+      "counterevidence": "安全負担とSSOTの重複、実利未測定",
+      "v6_implication": "分解可能なHost Gapと最低実装境界",
+      "proof_obligation": "PO-31",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R01",
+        "V4-R03",
+        "V5-ARCH"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    },
+    {
+      "reconciliation_id": "JV6-KR-R1-032",
+      "v4_knowledge_ids": [
+        "JV4-K-004",
+        "JV4-K-007"
+      ],
+      "v5_knowledge_ids": [
+        "JV5-K-004",
+        "JV5-K-006"
+      ],
+      "claim": "Review Worker/semantic role identityの厳密性",
+      "v4_evidence": "V4-R01 K-004/007; V4-SPEC §4.1c",
+      "v5_evidence": "V5-ARCH K-004/006",
+      "agreement_conflict": "共通保証・API差異あり",
+      "evidence_strength": "REAL_HOST_FAILURE_REPORTED; NOT_VERIFIED",
+      "classification": "ADAPT_IMPLEMENTATION_CANDIDATE",
+      "counterevidence": "native controller≠inner worker",
+      "v6_implication": "正規worker身元と結果帰属の証明",
+      "proof_obligation": "PO-32",
+      "authority": "ANALYST_CANDIDATE / NOT_OWNER_ADOPTED",
+      "source_ids": [
+        "V4-R01",
+        "V4-SPEC",
+        "V5-ARCH"
+      ],
+      "proof_status": "NOT_EXECUTED"
+    }
+  ],
+  "proof_obligations": [
+    {
+      "id": "PO-01",
+      "claim": "方法論と実行の非侵襲的分離",
+      "negative_control": "v4 Loop/Pivotが進行へ介入し得る",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-02",
+      "claim": "原文rawBodyとCaller Intentの損失防止",
+      "negative_control": "checkbox化・prompt再生成で意味変質",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-03",
+      "claim": "モデル・Provider選択の所有権",
+      "negative_control": "OmOカテゴリ・V1 general例外がHost依存",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-04",
+      "claim": "Executorの実観測とTool API区別",
+      "negative_control": "native subtask≠OmO task; Case A/B",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-05",
+      "claim": "承認済Artifact ChainとHuman境界",
+      "negative_control": "Gate CLEAR≠Human承認; D1 drift",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-06",
+      "claim": "Evidence-based AcceptanceとWorker自己申告",
+      "negative_control": "self-reportと実行/受理混同",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-07",
+      "claim": "通常実行継続と保護操作の拒否を分離",
+      "negative_control": "command初期化失敗でexpanded parts残存候補",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-08",
+      "claim": "Pre-implementation GateとImplementation SDD分離",
+      "negative_control": "Justice側のreview dispatchとSuperpowersが衝突し得る",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-09",
+      "claim": "Review worker dispatchの所有者衝突",
+      "negative_control": "二重review、fix、再reviewスケジューリング",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-10",
+      "claim": "Loop/Pivot/RetryのAdvisoryとExecutive差",
+      "negative_control": "v4 R1-F-05未解消",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-11",
+      "claim": "V2 Event Storeと完全Semantic Replay",
+      "negative_control": "RemediationRound[]/FindingState欠落、IDのみ復元",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-12",
+      "claim": "Deterministic ProjectionとCAS/Witnessの手段分離",
+      "negative_control": "PR-341テスト≠G3、V2 replay欠落",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-13",
+      "claim": "Approved D0とdirty D1のArtifact authority",
+      "negative_control": "Read/Search/Show/attachmentsへの漏れ",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-14",
+      "claim": "Finding Field Propagationの未知キー",
+      "negative_control": "{...finding}の未知キー残存; 未修正",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-15",
+      "claim": "TaskFeedbackの親子ToolCall相関",
+      "negative_control": "tool=taskの暗黙前提と未知result",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-16",
+      "claim": "AgentRouterは実行エンジンではない",
+      "negative_control": "wrapperの存在はOmO機能充足を示さない",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-17",
+      "claim": "WisdomとTiered Storesの費用対価値",
+      "negative_control": "context污染・retention・secret leakage",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-18",
+      "claim": "Telemetryの価値と保持ポリシー",
+      "negative_control": "latency / privacy / storage overhead",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-19",
+      "claim": "Compaction context continuityとHost機構",
+      "negative_control": "旧Hook保証なし・復元時承認昇格危険",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-20",
+      "claim": "Native-firstはv6既定ではない",
+      "negative_control": "31/32とCase AからHost一般証明不可",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-21",
+      "claim": "Case A provider stream error後の安全性",
+      "negative_control": "5つのpost-error観測欠落",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-22",
+      "claim": "Unknown-tool synthetic result厳密ID結合",
+      "negative_control": "callback message.id/post append messageIdともnull",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-23",
+      "claim": "Positive sanitizer removal証明",
+      "negative_control": "token未出現/changed=falseは除去証明でない",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-24",
+      "claim": "全56シナリオのE2E Closure",
+      "negative_control": "unit30/integration15/E2E10/spike1は計画分類",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-25",
+      "claim": "Stale Authorizationとreopen",
+      "negative_control": "v4 successor fresh review vs #298の限定継承案",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-26",
+      "claim": "Recoveryとidempotent external side effects",
+      "negative_control": "event存在≠semantic state復元",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-27",
+      "claim": "認証済Protocol Affiliationの信頼境界",
+      "negative_control": "token-holder mislabelを防ぐ強い証明なし",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-28",
+      "claim": "Requirements/Design/Planの静的ID連鎖",
+      "negative_control": "118 Req/38 Design/14 Tasksは実装済みではない",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-29",
+      "claim": "Evidence・Gate・Owner・Implementationの権限分離",
+      "negative_control": "R3 PASSは訂正範囲のみ",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-30",
+      "claim": "Adaptive routingとFallback/Retryの過剰所有",
+      "negative_control": "Host/providerが既に同等機能を持つ可能性",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-31",
+      "claim": "Option CでOmO相当Runtimeを内包",
+      "negative_control": "安全負担とSSOTの重複、実利未測定",
+      "status": "NOT_EXECUTED"
+    },
+    {
+      "id": "PO-32",
+      "claim": "Review Worker/semantic role identityの厳密性",
+      "negative_control": "native controller≠inner worker",
+      "status": "NOT_EXECUTED"
+    }
+  ],
+  "mandatory_counterexample_count": 12,
+  "historical_status": {
+    "v4_stop": "ACTIVE",
+    "v4_continuing_findings": [
+      "V4-R1-F-04",
+      "V4-R1-F-05",
+      "V4-R1-F-06",
+      "V4-R1-F-07"
+    ],
+    "v4_nonadopted_ids": [
+      "JV4-K-016",
+      "JV4-K-017",
+      "JV4-K-018",
+      "JV4-K-024",
+      "JV4-K-025",
+      "JV4-K-026"
+    ],
+    "v5_r2": "CORRECTION_REQUIRED",
+    "v5_r3": "PASS_WITH_LIMITATIONS",
+    "v5_owner": "OWNER_ADOPTED_AS_LIMITED_HISTORICAL_KNOWLEDGE",
+    "task1_canonical": {
+      "proven": 31,
+      "total": 32,
+      "blocked": 1,
+      "overall": "BLOCKED"
+    },
+    "case_a": "BLOCKED_OUTSIDE_CANONICAL_DENOMINATOR",
+    "case_b": "PROVEN_SEPARATE_CONTROL",
+    "tasks_2_to_14": "NOT_AUTHORIZED",
+    "verification_scenarios_planned": 56,
+    "e2e_closure": "NOT_ESTABLISHED_ALL_56",
+    "v6_requirements": "NOT_ADOPTED",
+    "runtime_options": "UNSELECTED",
+    "gate_hold": "UNCHANGED"
+  },
+  "notes": [
+    "Source hashes of adopted R0.2 seven were recomputed from newly fetched UTF-8 bytes and matched Git Blob SHA1.",
+    "No full external JSON Schema supplied; syntax validation only.",
+    "This index is not a normative requirement or runtime proof."
+  ]
+}
