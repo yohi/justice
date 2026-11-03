@@ -1,10 +1,11 @@
-# Justice v6 — S1-a Artifact Registry / Loader Design R0.1
+# Justice v6 — S1-a Artifact Registry / Loader Design R0.1.1 (F001/F002 limited remediation)
 
 **Date:** 2026-11-03 (JST)  
 **Source:** [yohi/justice Issue #350](https://github.com/yohi/justice/issues/350)  
 **Decision Hub:** [Issue #349, D-1–D-3 Owner approval](https://github.com/yohi/justice/issues/349#issuecomment-6600623047)  
 **Scope:** S1-a only; interfaces to S1-b and S1-e  
-**Status:** `DESIGN_CANDIDATE / OWNER_APPROVAL_PENDING / IMPLEMENTATION_NOT_AUTHORIZED`  
+**Status:** `TARGETED_DOCUMENTARY_REMEDIATION_CANDIDATE / OWNER_APPROVAL_PENDING / IMPLEMENTATION_NOT_AUTHORIZED`  
+**Delta:** Review Gate R1 `JV6-S1A-RG1-F001` (authority-status separation) and `JV6-S1A-RG1-F002` (missing/invalid Manifest digest); no changes to accepted choices, code, or Host authority.  
 **Proposed repository location (not written):** `docs/superpowers/specs/2026-11-03-justice-v6-s1a-artifact-loader-design.md`
 
 ## 1. Intent and completion boundary
@@ -44,14 +45,21 @@ The chosen approach minimizes S1-a construction and testing while retaining a cl
 
 The loader guarantees, when input bytes can safely be read: `observed_manifest_sha256 == expected_manifest_sha256`; each selected artifact's raw bytes match a Manifest-pinned digest; reference revisions, kinds and scope match exactly. It does **not** guarantee that the expected digest was provided by an actual Owner, that the Manifest has never been superseded elsewhere, or that the runtime was free of a malicious concurrent file-system actor. The report must state those limits.
 
-Separate two dimensions in every assessment:
+**Independent assessment axes (F001):**
 
-- `identityStatus`: `MATCH` / `MISMATCH` / `UNKNOWN` — reproducible assertions about supplied bytes and references.
-- `ownerAuthorityStatus`: `EXTERNALLY_ASSERTED_NOT_CRYPTOGRAPHICALLY_PROVEN` / `NOT_PROVEN` — an explicit qualification, **never** `OWNER_PROVEN` derived from CLI argument presence.
+1. **Identity axis**: `identityStatus: MATCH | MISMATCH | UNKNOWN` describes only what can be established about the supplied Manifest pin, references, required AC closure and artifact bytes. `MATCH` is a *byte/reference match against supplied expected values*, **not** an Owner approval. `MISMATCH` requires a concrete observed contradiction; `UNKNOWN` includes not-readable, not-supplied, structurally invalid, or otherwise unassessable evidence, but **does not mean “untrusted Owner authority.”** The Owner authority axis must not change this identity result.
+2. **Owner authority axis**: `ownerAuthorityStatus: NOT_PROVEN` is the **only value S1-a v1 may emit**. The loader neither authenticates Owner identity nor verifies a trusted CLI invocation channel. It cannot emit `OWNER_PROVEN`, and it must not emit `EXTERNALLY_ASSERTED_NOT_CRYPTOGRAPHICALLY_PROVEN` from a CLI flag, expected digest, artifact claim, `approvalRef`, manifest field, local environment variable, or `TaskIntent`.
 
-A `MATCH` is eligibility for further assessment **only within the externally trusted invocation boundary**. Without that established boundary, the resulting baseline remains `NOT_PROVEN` for approval purposes; S1-b/S1-c must not upgrade it automatically. These categories must not be collapsed into the word `APPROVED`.
+The label `EXTERNALLY_ASSERTED_NOT_CRYPTOGRAPHICALLY_PROVEN` is **reserved for a separate, explicitly authored Human Owner decision/attestation outside S1-a**. Only the Human Owner, through a separately controlled decision process, may attach such an external assertion to a precisely identified Manifest digest, scope and approved Artifact references. An AI agent, CLI caller or downstream automated component may not assert it on the Owner's behalf. This design does not implement or accept any new trust-context input, assertion parser, credential, signature, Host trust root or Approval API. Even that external label, if recorded elsewhere, is **not** cryptographic Owner authentication, Host proof or proof of Task/AC execution. The provenance and validity of any future external decision remain outside S1-a and require separate Owner authorization if operationalized.
 
-For scope-level processing, `eligibleBaseline` is true only when all selected identities match and the caller records an externally established Owner-trust context. As S1-a itself cannot authenticate that context, its machine output should carry `ownerTrustPrecondition: "EXTERNAL_NOT_VERIFIED_BY_S1A"`; a consumer cannot infer the trust context from mere CLI flags. The CLI may show `IDENTITY_MATCH_WITH_AUTHORITY_LIMITATION`, not an authoritative approval decision.
+**Fixed S1-a outputs and eligibility:**
+
+- `ownerTrustPrecondition` always equals `EXTERNAL_NOT_VERIFIED_BY_S1A`. This is a **disclaimer indicating an unsatisfied/unverifiable precondition**, not a boolean indicating Owner trust was established.
+- `identityCandidateReady` is true **if and only if** `identityStatus=MATCH` after full Manifest-digest verification, strict Manifest/TaskIntent validation, complete Design→Plan→Task→mandatory AC resolution and all selected raw-artifact byte checks. It authorizes **read-only analytical comparison only**.
+- `eligibleBaseline` (for any approval, acceptance or authoritative Gate use) is **always false in S1-a v1**: S1-a cannot establish the Owner trust precondition. Identity match + `--manifest-sha256` + an `approvalRef` cannot change this value. A future Owner decision made and verified outside S1-a may decide whether to use the identified candidate as an accepted baseline, but **cannot be inferred by S1-a/S1-b/S1-c**.
+- If an external Owner trust context does not exist, approval remains `NOT_PROVEN` **even when `identityStatus=MATCH`** (N-09); if it does exist, S1-a still reports `NOT_PROVEN` because it cannot verify that context. Do not replace the fixed output with an assertion about the caller.
+
+**Downstream non-escalation invariant:** S1-b/S1-c must preserve the original `identityStatus`, `ownerAuthorityStatus`, `ownerTrustPrecondition`, `identityCandidateReady` and `eligibleBaseline` on S1-a's immutable result. They may attach their **own** separately sourced evidence and decision records, but may not reinterpret identity match as Owner approval, convert a self-claim into externally asserted approval, infer provenance from the digest parameter, treat `identityCandidateReady` as authoritative acceptance eligibility, or claim execution/AC satisfaction from a Manifest entry. An UNKNOWN/NOT_PROVEN authority cannot be promoted by identity success. These rules permit diagnostic work without introducing new Host enforcement or blocking unrelated Superpowers steps.
 
 ## 4. Minimum input model (design contract, not implemented API)
 
@@ -109,12 +117,12 @@ In the actual test fixture, replace placeholder strings with genuine digests and
 
 ## 5. Read-only processing pipeline
 
-1. Receive caller-specified Manifest file, `--manifest-sha256`, `--intent`, and `--artifacts-root` (conceptual CLI interface). The caller is responsible for its trusted Owner-supplied expected value; S1-a cannot verify who supplied it.
-2. Open and read Manifest bytes within limits, compute SHA-256, and compare to the expected digest **before** parsing. If mismatch: fail closed for **baseline eligibility**, return `MANIFEST_DIGEST_MISMATCH`, do not treat Manifest contents as approved.
-3. Parse strict schema and validate uniqueness, graph relationships, path syntax and scope requirements. Fail with typed error if malformed.
-4. Parse untrusted TaskIntent; resolve the exact Design→Plan→Task→AC chain with exact kinds/revisions/scopes and mandatory AC completeness. No discovery/fallback.
-5. Safely read the selected local artifact bytes and calculate raw SHA-256; compare to pinned values. Missing file => `UNKNOWN`, observed different bytes => `MISMATCH` (`ARTIFACT_DIGEST_MISMATCH`, the S1-a definition of dirty). Unsupported/unreadable path => `UNKNOWN` with reason, never positive verification.
-6. Return an immutable result with per-check expected/actual values, safe logical references, reason codes, `identityStatus`, and authority disclaimer. Do not write a report file in this component; emitting data to the caller/standard output is allowed. Never trigger Review/Fix/Task/Gate/API operations.
+1. Receive caller-specified Manifest file, required `--manifest-sha256`, `--intent`, and `--artifacts-root` (conceptual CLI interface). The caller is responsible for its independently Owner-fixed expected value; S1-a cannot verify who supplied it. **Before opening or parsing the Manifest**, validate that the expected digest is present and exactly 64 lower-case hexadecimal characters (raw SHA-256, no prefix). If omitted, return `MANIFEST_DIGEST_REQUIRED`; if malformed, return `MANIFEST_DIGEST_FORMAT_INVALID`. Both are **input-invalid / verification-not-performed**, not observed mismatches: `manifestDigestMatch="unknown"`, `identityStatus=UNKNOWN`, `selectedRefs=[]`, `identityCandidateReady=false`, `eligibleBaseline=false`, `ownerAuthorityStatus=NOT_PROVEN`.
+2. With a syntactically valid expected digest, open and read raw Manifest bytes within limits and compute SHA-256 **before JSON parsing**. If inaccessible/unreadable, return `MANIFEST_UNREADABLE` with `manifestDigestMatch="unknown"`, `identityStatus=UNKNOWN` and no selected references. If observed SHA-256 differs from the expected bytes, return **only then** `MANIFEST_DIGEST_MISMATCH`, with `manifestDigestMatch=false`, `identityStatus=MISMATCH`, and no selected references. Never parse or trust an unverified Manifest.
+3. Only after a byte match (`manifestDigestMatch=true`), parse strict schema and validate uniqueness, graph relationships, path syntax and scope requirements. A malformed Manifest yields a typed `MANIFEST_INVALID`/specific structural reason, `identityStatus=UNKNOWN` unless a different concrete mismatch has been observed, and `selectedRefs=[]`.
+4. Parse untrusted TaskIntent; resolve the exact Design→Plan→Task→AC chain with exact kinds/revisions/scopes and mandatory AC completeness. If structurally unusable, return `UNKNOWN` and no selected references. For a concrete mismatch (revision, scope, parent or AC set), report `MISMATCH` with the applicable reason code; no discovery/fallback and no acceptance eligibility.
+5. Safely read the selected local artifact bytes and calculate raw SHA-256; compare to pinned values. Missing file => `UNKNOWN`, observed different bytes => `MISMATCH` (`ARTIFACT_DIGEST_MISMATCH`, the S1-a definition of dirty). Unsupported/unreadable path => `UNKNOWN` with reason, never positive verification. A concrete mismatch is never relabeled UNKNOWN simply because some other check could not run.
+6. Return an immutable result with per-check expected/actual values, safe logical references, stable reason codes, `identityStatus`, and the **fixed Owner authority disclaimer/non-eligibility**. Do not write a report file in this component; emitting data to the caller/standard output is allowed. Never trigger Review/Fix/Task/Gate/API operations.
 
 The implementation should use the existing TypeScript/Bun codebase boundaries: pure validation/transformation core separated from narrow, read-only filesystem/CLI adapters. Prior `src/core/loader-contract.ts` validates **OpenCode plugin module exports**, so it must not be repurposed or confused with this Artifact Loader. Existing `src/core/plan-fingerprint.ts` computes a canonicalized plan fingerprint, **not** the same property as raw-byte digest; do not substitute it. Existing `src/core/plan-authorization.ts` is mutable session authorization storage, not the S1-a Owner trust root.
 
@@ -122,20 +130,37 @@ The implementation should use the existing TypeScript/Bun codebase boundaries: p
 
 `LoaderResult` contains:
 
-- `schemaVersion` (versioned); `manifestId` only when validated; input artifact identifiers/scope, with safe redaction;
-- `manifestDigestMatch: true|false|"unknown"`, `identityStatus: MATCH|MISMATCH|UNKNOWN`, and `ownerAuthorityStatus: EXTERNALLY_ASSERTED_NOT_CRYPTOGRAPHICALLY_PROVEN|NOT_PROVEN`;
+- `schemaVersion` (versioned); `manifestId` **only after digest match and structural validation**; input artifact identifiers/scope, with safe redaction;
+- `manifestDigestMatch: true | false | "unknown"`, `identityStatus: MATCH | MISMATCH | UNKNOWN`, and **`ownerAuthorityStatus: NOT_PROVEN` (constant in S1-a v1)**;
 - `checks[]`: `{targetId, check, outcome: MATCH|MISMATCH|UNKNOWN, reasonCode, expected?, observed?}` (no secret/absolute paths);
-- `selectedRefs[]` **only** for successfully resolved entries, each reflecting the expected Manifest identity plus observed digest/comparison status, clearly marked non-authoritative;
-- `ownerTrustPrecondition: EXTERNAL_NOT_VERIFIED_BY_S1A`, limits/provenance annotations;
+- `selectedRefs[]` **only after verified Manifest bytes, valid schema and complete, unambiguous TaskIntent reference resolution**; each carries the expected Manifest identity plus observed digest/comparison status and is **not authoritative**. In preflight/input/Manifest failures, use `[]`, not partial or untrusted selections;
+- `ownerTrustPrecondition: EXTERNAL_NOT_VERIFIED_BY_S1A` (constant), `identityCandidateReady: boolean` (identity-only), `eligibleBaseline: false` (constant for approval/acceptance in this S1-a version), plus limits/provenance annotations;
 - deterministic ordering (Design, Plan, Task, AC sorted by `artifactId`), stable reason code strings, no timestamps unless injected for presentation outside the core.
 
-**Scope-specific meaning:** `MATCH` = exact pinned bytes and metadata match; `MISMATCH` = a concrete contradiction observed; `UNKNOWN` = not readable, absent, not trusted, or otherwise unverifiable. `NOT_PROVEN` is not a synonym for an observed failure. A mismatch is sufficient to refuse **use of that baseline for downstream acceptance**, not to block filesystem actions or Superpowers workflow. Even a clean result is **not** proof that the task was executed or an AC was satisfied; those belong to S1-b/S1-c.
+**Exact result classification (F001/F002):**
+
+| Condition | Reason code / category | `manifestDigestMatch` | `identityStatus` | `selectedRefs` | `identityCandidateReady` | `ownerAuthorityStatus` / `eligibleBaseline` |
+|---|---|---|---|---|---|---|
+| Missing required `--manifest-sha256` | `MANIFEST_DIGEST_REQUIRED` / `INPUT_INVALID` | `"unknown"` | `UNKNOWN` | `[]` | `false` | `NOT_PROVEN` / `false` |
+| Invalid syntax (including non-lowercase hex, wrong length, prefix) | `MANIFEST_DIGEST_FORMAT_INVALID` / `INPUT_INVALID` | `"unknown"` | `UNKNOWN` | `[]` | `false` | `NOT_PROVEN` / `false` |
+| Manifest not readable or byte limit prevents digest verification | `MANIFEST_UNREADABLE` / `CHECK_INCOMPLETE` | `"unknown"` | `UNKNOWN` | `[]` | `false` | `NOT_PROVEN` / `false` |
+| Raw Manifest SHA-256 actually compared and **different** | `MANIFEST_DIGEST_MISMATCH` / observed contradiction | `false` | `MISMATCH` | `[]` | `false` | `NOT_PROVEN` / `false` |
+| SHA matches, but Manifest/schema/graph invalid | `MANIFEST_INVALID` (or specific structural code) / `INPUT_INVALID` | `true` | `UNKNOWN` | `[]` | `false` | `NOT_PROVEN` / `false` |
+| SHA matches, but TaskIntent invalid/unresolvable | `TASK_INTENT_INVALID` (or specific code) / `INPUT_INVALID` | `true` | `UNKNOWN` | `[]` | `false` | `NOT_PROVEN` / `false` |
+| SHA matches, a selected revision/scope/parent/AC set concretely contradicts pin | E.g. `REVISION_MISMATCH`, `SCOPE_MISMATCH`, `PARENT_LINK_MISMATCH`, `REQUIRED_AC_MISSING` | `true` | `MISMATCH` | `[]` if full unambiguous resolution is impossible; otherwise resolved references, still non-authoritative | `false` | `NOT_PROVEN` / `false` |
+| SHA matches, a selected artifact is unreadable/missing with no observed contradiction | `ARTIFACT_UNREADABLE` / `CHECK_INCOMPLETE` | `true` | `UNKNOWN` | Resolved references marked unverified | `false` | `NOT_PROVEN` / `false` |
+| SHA matches, a selected artifact digest is observed different | `ARTIFACT_DIGEST_MISMATCH` / observed contradiction | `true` | `MISMATCH` | Resolved references marked mismatched | `false` | `NOT_PROVEN` / `false` |
+| All Manifest/reference/artifact identity checks match, with **or without** real external Owner context | `IDENTITY_MATCH_WITH_AUTHORITY_LIMITATION` | `true` | `MATCH` | Complete resolved set | `true` | `NOT_PROVEN` / `false` |
+
+**Aggregation and error invariants:** `manifestDigestMatch=false` means **only a completed byte comparison with a different hash**; it must never represent a missing parameter, malformed digest, I/O failure or invalid schema. For selected checks, preserve every directly observed contradiction as `MISMATCH`; aggregate priority is observed `MISMATCH` over `UNKNOWN` over `MATCH`. A parse error, missing input or invalid provenance is not itself proof of byte mismatch. Absent/invalid expected digest is detected before opening the Manifest; no Manifest content or selected identity is trusted or exposed in that case. Every outcome in the table has `ownerTrustPrecondition=EXTERNAL_NOT_VERIFIED_BY_S1A`, no acceptance-eligible baseline and no side effects.
+
+`MATCH` means exact pinned bytes/metadata match, not Owner authorization. `MISMATCH` means a concrete contradiction observed; `UNKNOWN` means information is insufficient to complete an identity determination—not “untrusted Owner authority.” `NOT_PROVEN` is the *separate* Owner-authority verdict, not a synonym for a check failure. Refusing baseline eligibility is not a filesystem action block, Review/Fix dispatch or Gate alteration. Even a clean result does not prove Task execution, AC satisfaction or correct evidence origin; those require separately sourced inputs handled by S1-b/S1-c.
 
 ## 7. S1-a / S1-b / S1-e boundary
 
 - **S1-a owns:** fixed baseline identity and selected artifact bytes/metadata checks; does not evaluate execution evidence or code correctness.
-- **S1-b consumes:** immutable selected identities plus check outcomes to bind external `EvidenceRef` against Task/Revision/AC, separately evaluating origin/issuer/trust; may not turn a Manifest approval claim into Host-verified execution evidence.
-- **S1-c consumes:** results and externally supplied evidence, decides deviation findings; S1-a does not decide a final Gate outcome.
+- **S1-b consumes:** immutable selected identities plus check outcomes to bind external `EvidenceRef` against Task/Revision/AC, separately evaluating origin/issuer/trust; may not turn a Manifest approval claim into Host-verified execution evidence. **Must propagate S1-a's fixed `NOT_PROVEN` authority, `EXTERNAL_NOT_VERIFIED_BY_S1A` precondition and `eligibleBaseline=false` without mutation or automatic promotion, including when identity is `MATCH`.**
+- **S1-c consumes:** identity/diagnostic results and separately sourced evidence, decides deviation findings; S1-a does not decide a final Gate outcome. **S1-c may analyze an `identityCandidateReady=true` candidate but cannot make it authoritative for acceptance without an explicit, independently validated Owner decision outside S1-a; it must not synthesize that decision from `TaskIntent`, Manifest declarations, CLI arguments or S1-b evidence.** Identity status, Owner authority and execution evidence are independent axes.
 - **S1-d consumes:** structured results to render understandable reports; formatting/export belongs there.
 - **S1-e owns:** fixtures for positive and negative cases, followed later by native-only comparison; no big fixture harness needed now.
 
@@ -143,22 +168,25 @@ The implementation should use the existing TypeScript/Bun codebase boundaries: p
 
 | Case | Setup | Required observation |
 |---|---|---|
-| P-01 | Manifest expected SHA verified; all four types and mandatory ACs present, matching | `identityStatus=MATCH`; authority limitation remains visible; no side effects |
-| N-01 | Manifest bytes changed but expected SHA unchanged | `MANIFEST_DIGEST_MISMATCH`, no usable baseline |
+| P-01 | Manifest expected SHA verified; all four types and mandatory ACs present, matching | `manifestDigestMatch=true`, `identityStatus=MATCH`, `identityCandidateReady=true`, `ownerAuthorityStatus=NOT_PROVEN`, `eligibleBaseline=false`; no side effects |
+| N-01 | Manifest bytes changed but expected SHA unchanged | Observed `MANIFEST_DIGEST_MISMATCH`; `manifestDigestMatch=false`, `identityStatus=MISMATCH`, `selectedRefs=[]`, non-eligible |
 | N-02 | TaskIntent requests old Plan revision | `REVISION_MISMATCH`; no older-revision fallback |
 | N-03 | Artifact content changed without Manifest update | `ARTIFACT_DIGEST_MISMATCH` (dirty), not MATCH |
 | N-04 | Intent and approved entry have different scope | `SCOPE_MISMATCH` |
 | N-05 | Intent omits one mandatory AC or points to a different Task/Plan chain | `REQUIRED_AC_MISSING` or `PARENT_LINK_MISMATCH`; no partial approval |
-| N-06 | Missing/unreadable artifact, or no independent expected Manifest SHA | `UNKNOWN/NOT_PROVEN`, not fabricated MISMATCH or PROVEN |
-| N-07 | Artifact/Manifest claims `approved: true` but trusted Owner input is absent | Never treated as authoritative; schema claim either rejected or ignored as untrusted |
-| N-08 | Duplicate artifact ID, invalid path, symlink, unknown schema, or malformed manifest | Typed invalid/unknown result; no access outside artifact root |
-| N-09 | AI agent supplies altered Manifest and matching digest without Owner trust | Byte matching may occur; Owner authority remains `NOT_PROVEN`, never automatic authorization |
+| N-06a | Artifact missing/unreadable after valid Manifest pin | `manifestDigestMatch=true`, `identityStatus=UNKNOWN` without a concrete contradictory check; selected resolved references unverified; `NOT_PROVEN`, non-eligible |
+| N-06b | Required `--manifest-sha256` omitted | `MANIFEST_DIGEST_REQUIRED` (`INPUT_INVALID`), `manifestDigestMatch="unknown"`, `identityStatus=UNKNOWN`, `selectedRefs=[]`, `identityCandidateReady=false`, `NOT_PROVEN`, non-eligible; Manifest not parsed |
+| N-06c | Expected Manifest SHA malformed (wrong length, non-hex/uppercase, or prefixed) | `MANIFEST_DIGEST_FORMAT_INVALID` (`INPUT_INVALID`), same `"unknown"` / `UNKNOWN` / `[]` / `NOT_PROVEN` / non-eligible as N-06b; not `MANIFEST_DIGEST_MISMATCH` |
+| N-07 | Artifact/Manifest claims `approved: true` but independent Owner trust is absent | An unknown `approved` field in the strict Manifest schema is rejected (`MANIFEST_INVALID`); an Artifact-internal claim is never accepted as Owner authority; always `NOT_PROVEN` |
+| N-08a | Manifest digest verified, but duplicate ID, invalid path, unknown schema, or malformed Manifest | `manifestDigestMatch=true`, typed `MANIFEST_INVALID` (or specific structural reason), `identityStatus=UNKNOWN`, `selectedRefs=[]`, `NOT_PROVEN`, non-eligible; no access outside root |
+| N-08b | Manifest digest verified, but a selected path is a symlink/unreadable at read time | Typed `ARTIFACT_UNREADABLE`/safe-path reason, `identityStatus=UNKNOWN` unless other check is concretely mismatched, resolved references unverified, non-eligible; no access outside root |
+| N-09 | AI agent supplies altered Manifest and matching digest without independent Owner trust | Byte checks may produce `manifestDigestMatch=true`, `identityStatus=MATCH`, `identityCandidateReady=true`, but `ownerAuthorityStatus=NOT_PROVEN`, `ownerTrustPrecondition=EXTERNAL_NOT_VERIFIED_BY_S1A`, `eligibleBaseline=false`; no promotion to external assertion or acceptance |
 
-No real Build/Test/CI, system probe, file mutation, or GitHub write has been performed in this brainstorming task. These are future implementation-time acceptance conditions, not claims of results.
+No Build/Test/CI, Host probe, repository source mutation, or GitHub write has been performed in this documentary remediation. Only the standalone corrected document candidate was created. These are future implementation-time acceptance conditions, not claims of results.
 
 ## 9. Residual risks / deferred choices
 
-1. **Owner origin:** An arbitrary CLI value cannot authenticate Human Owner identity. S1-a documents but cannot establish a trusted delivery channel. A trusted wrapper/custody mechanism would require a distinct approved scope if demanded.
+1. **Owner origin:** An arbitrary CLI value cannot authenticate Human Owner identity. S1-a documents but cannot establish a trusted delivery channel. Consequently S1-a v1 always yields `ownerAuthorityStatus=NOT_PROVEN` and `eligibleBaseline=false`, irrespective of identity matching. An external Human Owner decision, if one exists, is outside this tool and must not be fabricated by downstream automation. A trusted wrapper/custody mechanism would require a distinct approved scope if demanded.
 2. **Supersession:** S1-a cannot discover that Owner has revoked/superseded a pin out-of-band. Exact matching is relative to the supplied fixed Manifest, not a global “current approval” oracle.
 3. **Hostile local filesystem:** Symlink/path validation reduces accidental and common traversal issues; hardlink abuse and concurrent modification can require more robust OS-specific defenses. S1-a must not claim tamper-proof enforcement; preserve UNKNOWN on ambiguous reads. This does not justify blocking independent read-only MVP design.
 4. **Superpowers artifact extraction:** Real Task/AC may reside inside Plan Markdown. This first S1 fixture uses separate raw-byte files. A trusted deterministic extraction/derivation policy is explicitly deferred until needed; do not silently conflate plan canonical fingerprints with fixed raw digests.
@@ -169,6 +197,6 @@ No real Build/Test/CI, system probe, file mutation, or GitHub write has been per
 
 **Request:** Adopt this S1-a design **only** as the input to a subsequent Superpowers `writing-plans` implementation-plan authoring task. The approval does not authorize source code modifications, Build/Test/CI, GitHub Commit/Push/PR, Host access, review auto-dispatch, Gate/HOLD changes or S2–S5.
 
-**Stop condition:** Once the Human Owner accepts or requests a bounded change to this design, this brainstorming task is complete. Do not create further independent review/correction cycles or files by default. If adopted, invoke `superpowers:writing-plans` only under that explicit approval and produce a plan with bounded implementation Tasks and test cases; implementation itself still requires separate Owner authorization.
+**Stop condition for this remediation:** Stop when the F001/F002 documentary correction candidate is complete and handed to the Human Owner; do not await adoption, auto-trigger another review/correction round, create extra deliverables, or start downstream tasks. If the Human Owner later adopts this design and explicitly authorizes the next step, invoke `superpowers:writing-plans` for a bounded Implementation Plan. Implementation itself still requires separate Owner authorization.
 
-**State at drafting:** `S1A_DESIGN_CANDIDATE_READY_FOR_OWNER_DECISION / NO_RUNTIME_VERIFICATION / NO_IMPLEMENTATION_AUTHORIZATION / NO_GITHUB_WRITE`.
+**State at targeted remediation:** `S1A_R011_F001_F002_DOCUMENTARY_CORRECTION_CANDIDATE / OWNER_ADOPTION_PENDING / IMPLEMENTATION_PLAN_NOT_CREATED / NO_RUNTIME_VERIFICATION / NO_IMPLEMENTATION_AUTHORIZATION / NO_GITHUB_WRITE`. Subsequent implementation-plan terminology, interfaces, error handling, test strategy and nonfunctional constraints must be aligned **when that plan is authored**; no plan exists to cross-check now.
