@@ -20,16 +20,25 @@ export function resolveTaskIntent(manifest:OwnerManifest,intent:TaskIntent):Reso
  const checks:LoaderCheck[]=[];
  const rawRefs:[ArtifactKind,IntentRef][]=[['design',intent.design],['plan',intent.plan],['task',intent.task],...intent.ac.map(x=>['ac',x] as [ArtifactKind,IntentRef])];
  const refs:ApprovedArtifactRef[]=[];
+ let hasUnknownRef=false;
  for(const [kind,ref] of rawRefs){
   const r=byId.get(ref.artifactId);
-  if(!r)return {refs:[],checks:[makeCheck('task-intent','schema','UNKNOWN','TASK_INTENT_INVALID','INPUT_INVALID')],complete:false};
+  if(!r){
+   hasUnknownRef=true;
+   checks.push(makeCheck('task-intent','reference','UNKNOWN','TASK_INTENT_INVALID','INPUT_INVALID'));
+   continue;
+  }
   refs.push(r);const target='artifact:'+r.artifactId;
   if(r.kind!==kind)checks.push(makeCheck(target,'kind','MISMATCH','KIND_MISMATCH','OBSERVED_CONTRADICTION',kind,r.kind));
   if(r.revision!==ref.revision)checks.push(makeCheck(target,'revision','MISMATCH','REVISION_MISMATCH','OBSERVED_CONTRADICTION',r.revision,ref.revision));
   if(r.scopeKey!==intent.scopeKey)checks.push(makeCheck(target,'scope','MISMATCH','SCOPE_MISMATCH','OBSERVED_CONTRADICTION',r.scopeKey,intent.scopeKey));
  }
+ if(hasUnknownRef)return {refs:[],checks,complete:false};
  const [design,plan,task]=refs;
- if(!design||!plan||!task)return {refs:[],checks:[makeCheck('task-intent','schema','UNKNOWN','TASK_INTENT_INVALID','INPUT_INVALID')],complete:false};
+ if(!design||!plan||!task){
+  checks.push(makeCheck('task-intent','schema','UNKNOWN','TASK_INTENT_INVALID','INPUT_INVALID'));
+  return {refs:[],checks,complete:false};
+ }
  if(plan.parentId!==design.artifactId)checks.push(makeCheck('artifact:'+plan.artifactId,'parent','MISMATCH','PARENT_LINK_MISMATCH','OBSERVED_CONTRADICTION'));
  if(task.parentId!==plan.artifactId)checks.push(makeCheck('artifact:'+task.artifactId,'parent','MISMATCH','PARENT_LINK_MISMATCH','OBSERVED_CONTRADICTION'));
  for(const r of refs.slice(3))if(r.parentId!==task.artifactId)checks.push(makeCheck('artifact:'+r.artifactId,'parent','MISMATCH','PARENT_LINK_MISMATCH','OBSERVED_CONTRADICTION'));
@@ -41,7 +50,10 @@ export function resolveTaskIntent(manifest:OwnerManifest,intent:TaskIntent):Reso
   return {refs:[],checks,complete:false};
  }
  const ordered=[design,plan,task,...refs.slice(3).sort((a,b)=>a.artifactId.localeCompare(b.artifactId,'en'))];
- if(new Set(ordered.map(x=>x.artifactId)).size!==ordered.length)return {refs:[],checks:[makeCheck('task-intent','schema','UNKNOWN','TASK_INTENT_INVALID','INPUT_INVALID')],complete:false};
+ if(new Set(ordered.map(x=>x.artifactId)).size!==ordered.length){
+  checks.push(makeCheck('task-intent','reference','UNKNOWN','TASK_INTENT_INVALID','INPUT_INVALID'));
+  return {refs:[],checks,complete:false};
+ }
  if(ordered.length>S1A_LIMITS.selectedArtifacts){
   // Preserve an already observed mismatch; count overflow never authorizes partial selection.
   if(checks.some(x=>x.outcome==='MISMATCH'))return {refs:[],checks,complete:false};

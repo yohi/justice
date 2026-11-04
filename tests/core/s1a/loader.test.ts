@@ -25,4 +25,23 @@ describe('raw Manifest first/immutable non-elevating loader',()=>{
   expect(r.checks[0]).toEqual({targetId:'manifest',check:'schema',outcome:'UNKNOWN',reasonCode:'MANIFEST_INVALID',category:'INPUT_INVALID'});
   expect(JSON.stringify(r)).not.toContain('secret');expect(r.selectedRefs).toEqual([]);
  });
+
+ it('revisionMismatchPlusUnknownAcRetainsMismatchAndNeverSelects',async()=>{
+  const f=s1aFixture();const missing='ac-private-secret';
+  const intent={...f.intent,plan:{...f.intent.plan,revision:'R0'},ac:[f.intent.ac[0]!,{artifactId:missing,revision:'R1'}]};
+  const source={...f.source,readInputFile:async(path:string,max:number)=>path==='intent'?jsonBytes(intent):f.source.readInputFile(path,max),readArtifact:vi.fn(f.source.readArtifact)};
+  const result=await loadS1aArtifacts(f.input,source);
+  expect(result.identityStatus).toBe('MISMATCH');expect(result.checks.map(x=>x.reasonCode)).toContain('REVISION_MISMATCH');
+  expect(result.checks.some(x=>x.outcome==='UNKNOWN')).toBe(true);expect(result.selectedRefs).toEqual([]);
+  expect(result.identityCandidateReady).toBe(false);expect(result.ownerAuthorityStatus).toBe('NOT_PROVEN');expect(result.eligibleBaseline).toBe(false);
+  expect(JSON.stringify(result)).not.toContain(missing);expect(source.readArtifact).not.toHaveBeenCalled();
+ });
+ it('unknownReferenceAloneRemainsUnknownAndNoneligible',async()=>{
+  const f=s1aFixture();const intent={...f.intent,ac:[f.intent.ac[0]!,{artifactId:'ac-secret-only',revision:'R1'}]};
+  const source={...f.source,readInputFile:async(path:string,max:number)=>path==='intent'?jsonBytes(intent):f.source.readInputFile(path,max)};
+  const result=await loadS1aArtifacts(f.input,source);
+  expect(result.identityStatus).toBe('UNKNOWN');expect(result.selectedRefs).toEqual([]);
+  expect(result.identityCandidateReady).toBe(false);expect(result.ownerAuthorityStatus).toBe('NOT_PROVEN');expect(result.eligibleBaseline).toBe(false);
+  expect(JSON.stringify(result)).not.toContain('ac-secret-only');
+ });
 });

@@ -30,4 +30,33 @@ describe('TaskIntent/mandatory AC resolution',()=>{
   expect(good.complete).toBe(true);expect(good.refs).toHaveLength(128);
   const bad=resolveTaskIntent(m,intent);expect(bad.complete).toBe(false);expect(bad.refs).toEqual([]);expect(bad.checks[0]?.reasonCode).toBe('SELECTED_ARTIFACT_LIMIT_EXCEEDED');
  });
+
+ it('revisionMismatchAndUnknownAcKeepsObservedMismatch',()=>{
+  const f=s1aFixture();const missing='ac-private-secret';
+  const intent={...f.intent,plan:{...f.intent.plan,revision:'R0'},ac:[f.intent.ac[0]!,{artifactId:missing,revision:'R1'}]};
+  const result=resolveTaskIntent(f.manifest,intent);
+  expect(result.complete).toBe(false);expect(result.refs).toEqual([]);
+  expect(result.checks.map(x=>x.reasonCode)).toContain('REVISION_MISMATCH');
+  expect(result.checks.some(x=>x.outcome==='UNKNOWN')).toBe(true);
+  expect(JSON.stringify(result)).not.toContain(missing);
+ });
+ it('wrongKindAndDuplicatedSelectedIdPreservesKindMismatch',()=>{
+  const f=s1aFixture();const intent={...f.intent,plan:{artifactId:f.intent.design.artifactId,revision:'R1'}};
+  const result=resolveTaskIntent(f.manifest,intent);
+  expect(result.complete).toBe(false);expect(result.refs).toEqual([]);
+  expect(result.checks.map(x=>x.reasonCode)).toContain('KIND_MISMATCH');
+  expect(result.checks.some(x=>x.outcome==='UNKNOWN')).toBe(true);
+ });
+ it('onlyUnknownIncompleteRefsNeverReturnPartialSelection',()=>{
+  const f=s1aFixture();const intent={...f.intent,ac:[f.intent.ac[0]!,{artifactId:'ac-not-registered',revision:'R1'}]};
+  const result=resolveTaskIntent(f.manifest,intent);
+  expect(result.complete).toBe(false);expect(result.refs).toEqual([]);
+  expect(result.checks.some(x=>x.outcome==='MISMATCH')).toBe(false);
+  expect(result.checks.some(x=>x.outcome==='UNKNOWN')).toBe(true);
+ });
+ it('positiveFixtureRemainsCompleteMatch',()=>{
+  const f=s1aFixture();const result=resolveTaskIntent(f.manifest,f.intent);
+  expect(result.complete).toBe(true);expect(result.refs).toHaveLength(5);
+  expect(result.checks.every(x=>x.outcome==='MATCH')).toBe(true);
+ });
 });
