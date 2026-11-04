@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "justice-s1a-task-intent-v1",
+  "scopeKey": "fixture-scope",
+  "design": {
+    "artifactId": "design-1",
+    "revision": "R1"
+  },
+  "plan": {
+    "artifactId": "plan-1",
+    "revision": "R1"
+  },
+  "task": {
+    "artifactId": "task-1",
+    "revision": "R1"
+  },
+  "ac": [
+    {
+      "artifactId": "ac-1",
+      "revision": "R1"
+    },
+    {
+      "artifactId": "ac-2",
+      "revision": "R1"
+    }
+  ]
+}
