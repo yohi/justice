@@ -56,12 +56,32 @@ describe('raw Manifest first/immutable non-elevating loader',()=>{
   expect(result.identityStatus).toBe('UNKNOWN');expect(result.checks[0]?.reasonCode).toBe('TASK_INTENT_INVALID');
   expect(result.manifestId).toBe(f.manifest.manifestId);expect(result.selectedRefs).toEqual([]);
  });
+ it('unreadableIntentReturnsUnknownWithManifestIdentity',async()=>{
+  const f=s1aFixture();const source={...f.source,readInputFile:async(path:string,max:number)=>{if(path==='intent')throw Error('intent unavailable');return f.source.readInputFile(path,max);}};
+  const result=await loadS1aArtifacts(f.input,source);
+  expect(result.identityStatus).toBe('UNKNOWN');expect(result.checks[0]?.reasonCode).toBe('TASK_INTENT_UNREADABLE');
+  expect(result.manifestDigestMatch).toBe(true);expect(result.manifestId).toBe(f.manifest.manifestId);
+ });
+ it('malformedManifestReturnsUnknownAfterDigestMatch',async()=>{
+  const f=s1aFixture();const raw=jsonBytes({...f.manifest,unsupported:true});
+  const source={...f.source,readInputFile:async(path:string,max:number)=>path==='manifest'?raw:f.source.readInputFile(path,max)};
+  const result=await loadS1aArtifacts({...f.input,expectedManifestSha256:sha256(raw)},source);
+  expect(result.identityStatus).toBe('UNKNOWN');expect(result.checks[0]?.reasonCode).toBe('MANIFEST_INVALID');
+  expect(result.manifestDigestMatch).toBe(true);expect(result.selectedRefs).toEqual([]);
+ });
  it('unreadableArtifactReturnsUnknownAndRetainsOtherArtifactEvidence',async()=>{
   const f=s1aFixture();let reads=0;
   const source={...f.source,readArtifact:async(root:string,path:string,max:number)=>{reads++;if(path==='design-1.md')throw Error('private path');return f.source.readArtifact(root,path,max);}};
   const result=await loadS1aArtifacts(f.input,source);
   expect(result.identityStatus).toBe('UNKNOWN');expect(result.checks.some(x=>x.reasonCode==='ARTIFACT_UNREADABLE')).toBe(true);
   expect(result.selectedRefs[0]?.observedDigest).toBeNull();expect(reads).toBe(f.manifest.artifacts.length);
+ });
+ it('artifactSizeLimitReturnsUnknownAndStopsFurtherReads',async()=>{
+  const f=s1aFixture();let reads=0;
+  const source={...f.source,readArtifact:async()=>{reads++;throw Object.assign(Error('too large'),{kind:'over_limit'});}};
+  const result=await loadS1aArtifacts(f.input,source);
+  expect(result.identityStatus).toBe('UNKNOWN');expect(result.checks.some(x=>x.reasonCode==='ARTIFACT_SIZE_LIMIT_EXCEEDED')).toBe(true);
+  expect(reads).toBe(1);expect(result.eligibleBaseline).toBe(false);
  });
  it('artifactDigestMismatchIsObservedAndNeverEligible',async()=>{
   const f=s1aFixture();
