@@ -69,21 +69,30 @@ describe('justice-s1a standalone CLI',()=>{
  it('total attempted bytes over the limit stay UNKNOWN and cannot authorize a baseline',async()=>{
   const f=s1aFixture();const manifest={...f.manifest,artifacts:f.manifest.artifacts.map((ref,index)=>({...ref,digest:{...ref.digest,hex:sha256(index<4?new Uint8Array(8_388_608):new Uint8Array([1]))}}))};
   const manifestBytes=jsonBytes(manifest);const artifacts=new Map(manifest.artifacts.map((ref,index)=>[ref.relativePath,index<4?new Uint8Array(8_388_608):new Uint8Array([1])]));
+  const manifestPath='/private/justice-secret-path/manifest.json';
   const source={
    ...f.source,
-   async readInputFile(path:string,maxBytes:number){return path==='manifest'?manifestBytes:f.source.readInputFile(path,maxBytes);},
+   async readInputFile(path:string,maxBytes:number){return path===manifestPath?manifestBytes:f.source.readInputFile(path,maxBytes);},
    async readArtifact(_root:string,path:string,maxBytes:number){
     const bytes=artifacts.get(path);if(!bytes)throw new Error('unreadable');
     if(bytes.byteLength>maxBytes)throw Object.assign(new Error('over_limit'),{kind:'over_limit'});
     return bytes;
    },
   };
-  const argv=['check','--manifest','manifest','--manifest-sha256',sha256(manifestBytes),'--intent','intent','--artifacts-root','root'];
+  const argv=['check','--manifest',manifestPath,'--manifest-sha256',sha256(manifestBytes),'--intent','intent','--artifacts-root','root'];
   const first=await runS1aCli(argv,source);const second=await runS1aCli(argv,source);const result=JSON.parse(first.stdout);
   expect(first.exitCode).toBe(3);expect(first.stdout).toBe(second.stdout);expect(result.identityStatus).toBe('UNKNOWN');
   expect(result.checks.map((check:{reasonCode:string})=>check.reasonCode)).toContain('TOTAL_ARTIFACT_LIMIT_EXCEEDED');
-  expect(result.selectedRefs).toEqual([]);expect(result.identityCandidateReady).toBe(false);expect(result.eligibleBaseline).toBe(false);
+  expect(result.selectedRefs.map(({artifactId,digestOutcome,observedDigest}:{artifactId:string;digestOutcome:string;observedDigest:string|null})=>({artifactId,digestOutcome,observedDigest}))).toEqual([
+   {artifactId:'design-1',digestOutcome:'MATCH',observedDigest:sha256(new Uint8Array(8_388_608))},
+   {artifactId:'plan-1',digestOutcome:'MATCH',observedDigest:sha256(new Uint8Array(8_388_608))},
+   {artifactId:'task-1',digestOutcome:'MATCH',observedDigest:sha256(new Uint8Array(8_388_608))},
+   {artifactId:'ac-1',digestOutcome:'MATCH',observedDigest:sha256(new Uint8Array(8_388_608))},
+   {artifactId:'ac-2',digestOutcome:'UNKNOWN',observedDigest:null},
+  ]);
   expect(result.ownerAuthorityStatus).toBe('NOT_PROVEN');expect(result.ownerTrustPrecondition).toBe('EXTERNAL_NOT_VERIFIED_BY_S1A');
+  expect(result.identityCandidateReady).toBe(false);expect(result.eligibleBaseline).toBe(false);
+  expect(first.stdout).not.toContain(manifestPath);expect(first.stdout).not.toContain('untrusted-reference');
  });
 
  it('a previously observed mismatch outranks a later total-byte UNKNOWN',async()=>{
@@ -98,10 +107,18 @@ describe('justice-s1a standalone CLI',()=>{
    },
   };
   const argv=['check','--manifest','manifest','--manifest-sha256',sha256(manifestBytes),'--intent','intent','--artifacts-root','root'];
-  const result=await runS1aCli(argv,source);const json=JSON.parse(result.stdout);
+  const result=await runS1aCli(argv,source);const repeated=await runS1aCli(argv,source);const json=JSON.parse(result.stdout);
+  expect(result.stdout).toBe(repeated.stdout);
   expect(result.exitCode).toBe(2);expect(json.identityStatus).toBe('MISMATCH');
   expect(json.checks.map((check:{reasonCode:string})=>check.reasonCode)).toEqual(expect.arrayContaining(['ARTIFACT_DIGEST_MISMATCH','TOTAL_ARTIFACT_LIMIT_EXCEEDED']));
-  expect(json.selectedRefs).toEqual([]);expect(json.identityCandidateReady).toBe(false);expect(json.eligibleBaseline).toBe(false);
+  expect(json.selectedRefs.map(({artifactId,digestOutcome,observedDigest}:{artifactId:string;digestOutcome:string;observedDigest:string|null})=>({artifactId,digestOutcome,observedDigest}))).toEqual([
+   {artifactId:'design-1',digestOutcome:'MISMATCH',observedDigest:sha256(Uint8Array.from(new Uint8Array(8_388_608),()=>2))},
+   {artifactId:'plan-1',digestOutcome:'MATCH',observedDigest:sha256(new Uint8Array(8_388_608))},
+   {artifactId:'task-1',digestOutcome:'MATCH',observedDigest:sha256(new Uint8Array(8_388_608))},
+   {artifactId:'ac-1',digestOutcome:'MATCH',observedDigest:sha256(new Uint8Array(8_388_608))},
+   {artifactId:'ac-2',digestOutcome:'UNKNOWN',observedDigest:null},
+  ]);
+  expect(json.identityCandidateReady).toBe(false);expect(json.eligibleBaseline).toBe(false);
   expect(json.ownerAuthorityStatus).toBe('NOT_PROVEN');expect(json.ownerTrustPrecondition).toBe('EXTERNAL_NOT_VERIFIED_BY_S1A');
  });
 });

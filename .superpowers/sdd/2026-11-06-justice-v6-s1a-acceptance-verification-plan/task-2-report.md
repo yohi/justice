@@ -1,6 +1,8 @@
 # Task 2 Report
 
-## Status: BLOCKED
+## Final status: DONE_WITH_CONCERNS
+
+Initial status was BLOCKED after interpreting the brief's `selectedRefs=[]` line as applying after artifact reads; this was superseded by the controller ruling recorded under Fix round 1.
 
 ## Attempted implementation
 
@@ -54,3 +56,30 @@ Not run. A green result requires a production behavior change prohibited by this
 ## Concerns / follow-up boundary
 
 The partial `selectedRefs` result contradicts Task 2 Step 2's explicit requirement for incomplete selection and affects both limit-only UNKNOWN and MISMATCH-priority cases. The owner/controller must authorize and dispatch any production correction separately before these tests can pass. No GitHub operations or follow-up implementation tasks were created.
+
+## Fix round 1
+
+The controller ruling established that complete resolved `selectedRefs` with unchecked entries `UNKNOWN` is the authoritative post-resolution contract. The earlier BLOCKED assessment above is superseded by this ruling; no production defect was present.
+
+### Changes
+
+- Updated the total-byte CLI test to assert all five resolved refs: the first four are `MATCH`; `ac-2` is `UNKNOWN` with `observedDigest: null`. It also repeats the invocation to verify byte-identical stdout and checks that the absolute manifest path and untrusted approval reference are not emitted.
+- Updated the MISMATCH-plus-later-limit CLI test to assert all five resolved refs: `design-1` is `MISMATCH`, the next three are `MATCH`, and `ac-2` is `UNKNOWN` with `observedDigest: null`. It verifies repeated stdout equality and keeps exit 2, both reason codes, no identity candidate, and no baseline eligibility.
+- Extended deterministic real-FS coverage for final-component symlinks, absolute artifact paths, and directory/nonregular paths. Existing byte-cap assertions cover exact-size success (3-byte file with cap 3) and +1 overflow (same file with cap 2).
+- Reviewed `tests/core/s1a/loader.test.ts`: the total-byte case already requires the final selected ref to be `UNKNOWN`, and the mismatch-priority case retains the complete five-ref set. These assertions are consistent with the ruling; no change was needed.
+- `changed_during_read` remains `SKIPPED_UNPROVEN`; inducing it deterministically would require a race/unsafe hook not authorized by this task.
+
+### Verification
+
+- `bun run vitest run tests/runtime/s1a-cli.test.ts` — **8/8 passed**.
+- `bun run vitest run tests/core/s1a/loader.test.ts` — **9/9 passed**.
+- `bun run vitest run --config vitest.integration.config.ts tests/real-fs/s1a-read-only-fs.test.ts` — **2/2 passed**.
+- `bun run typecheck` — passed with no diagnostics.
+- `bun run build` — passed; TypeScript compilation and bundle completed.
+- `bunx eslint tests/runtime/s1a-cli.test.ts tests/real-fs/s1a-read-only-fs.test.ts` — **0 errors, 15 warnings** (the repository's existing `explicit-function-return-type` and dynamic temporary-path security warnings).
+- `bun run lint` — completed with **2 errors and 261 warnings** in the existing lint scope, including errors in untouched `tests/node/s1a.test.mjs` (`readFile` unused and `TextEncoder` undefined); no errors in either changed test file.
+- `bun run test` — **2,272 passed, 17 failed, 5 skipped (2,294 collected across 170 files)**. Failures were environment/setup-related and outside the changed S1-a tests: 15 native review-artifact provider tests cannot load the native addon, and 2 SDK fixture tests cannot resolve the expected worktree-local TypeScript compiler module. The focused CLI, core loader, and real-FS suites listed above all passed.
+
+An intermediate focused run had 7/8 passing because the test asserted that the expected selected identifier `ac-2` was absent. This incorrectly treated a resolved selected ref as a leak; the assertion was corrected to check only the untrusted approval reference and absolute path, after which the focused suite passed 8/8.
+
+No production files were changed. Fix round 1 changes are committed separately after the initial test/report commit.
