@@ -44,4 +44,30 @@ describe('raw Manifest first/immutable non-elevating loader',()=>{
   expect(result.identityCandidateReady).toBe(false);expect(result.ownerAuthorityStatus).toBe('NOT_PROVEN');expect(result.eligibleBaseline).toBe(false);
   expect(JSON.stringify(result)).not.toContain('ac-secret-only');
  });
+ it('unreadableManifestReturnsUnknownWithoutLeakingInput',async()=>{
+  const f=s1aFixture();const source={...f.source,readInputFile:vi.fn(async()=>{throw Error('private path');})};
+  const result=await loadS1aArtifacts(f.input,source);
+  expect(result.identityStatus).toBe('UNKNOWN');expect(result.checks[0]?.reasonCode).toBe('MANIFEST_UNREADABLE');
+  expect(JSON.stringify(result)).not.toContain('private path');
+ });
+ it('invalidIntentReturnsUnknownAfterManifestDigestMatches',async()=>{
+  const f=s1aFixture();const source={...f.source,readInputFile:async(path:string,max:number)=>path==='intent'?new Uint8Array([0xff]):f.source.readInputFile(path,max)};
+  const result=await loadS1aArtifacts(f.input,source);
+  expect(result.identityStatus).toBe('UNKNOWN');expect(result.checks[0]?.reasonCode).toBe('TASK_INTENT_INVALID');
+  expect(result.manifestId).toBe(f.manifest.manifestId);expect(result.selectedRefs).toEqual([]);
+ });
+ it('unreadableArtifactReturnsUnknownAndRetainsOtherArtifactEvidence',async()=>{
+  const f=s1aFixture();let reads=0;
+  const source={...f.source,readArtifact:async(root:string,path:string,max:number)=>{reads++;if(path==='design-1.md')throw Error('private path');return f.source.readArtifact(root,path,max);}};
+  const result=await loadS1aArtifacts(f.input,source);
+  expect(result.identityStatus).toBe('UNKNOWN');expect(result.checks.some(x=>x.reasonCode==='ARTIFACT_UNREADABLE')).toBe(true);
+  expect(result.selectedRefs[0]?.observedDigest).toBeNull();expect(reads).toBe(f.manifest.artifacts.length);
+ });
+ it('artifactDigestMismatchIsObservedAndNeverEligible',async()=>{
+  const f=s1aFixture();
+  const source={...f.source,readArtifact:async(root:string,path:string,max:number)=>path==='design-1.md'?jsonBytes('changed'):f.source.readArtifact(root,path,max)};
+  const result=await loadS1aArtifacts(f.input,source);
+  expect(result.identityStatus).toBe('MISMATCH');expect(result.checks.some(x=>x.reasonCode==='ARTIFACT_DIGEST_MISMATCH')).toBe(true);
+  expect(result.selectedRefs[0]?.digestOutcome).toBe('MISMATCH');expect(result.eligibleBaseline).toBe(false);
+ });
 });
