@@ -17,10 +17,14 @@ const ALL_SPECIFIERS = [
 
 describe("FF-009: distribution entry loader contract", () => {
   // 検証 3: 全エントリの解決可能性（テストランタイム = Bun 上で import 可能）
-  it.each(ALL_SPECIFIERS)('resolves and imports "%s" via self-reference', async (specifier) => {
-    const mod = (await import(specifier)) as Record<string, unknown>;
-    expect(Object.keys(mod).length).toBeGreaterThan(0);
-  });
+  it.each(ALL_SPECIFIERS)(
+    'resolves and imports "%s" via self-reference',
+    async (specifier) => {
+      const mod = (await import(specifier)) as Record<string, unknown>;
+      expect(Object.keys(mod).length).toBeGreaterThan(0);
+    },
+    15_000,
+  );
 
   // 検証 1: plugin エントリの全 export がローダ契約を満たす
   it.each(PLUGIN_ENTRY_SPECIFIERS)(

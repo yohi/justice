@@ -1,0 +1,70 @@
+{
+  "schemaVersion": "justice-s1a-manifest-v1",
+  "manifestId": "fixture-1",
+  "artifacts": [
+    {
+      "artifactId": "design-1",
+      "kind": "design",
+      "revision": "R1",
+      "digest": {
+        "algorithm": "sha256",
+        "hex": "2c1f01e37a150fd02e10dd63ce8a268c168a68813b40f16f18c3430319073ce6"
+      },
+      "relativePath": "design.md",
+      "scopeKey": "fixture-scope",
+      "approvalRef": "fixture-reference-only"
+    },
+    {
+      "artifactId": "plan-1",
+      "kind": "plan",
+      "revision": "R1",
+      "digest": {
+        "algorithm": "sha256",
+        "hex": "c3964bb3b70a957ec9b233c7dd3653f6ba17701ab00facf88ae1393dc6155577"
+      },
+      "relativePath": "plan.md",
+      "scopeKey": "fixture-scope",
+      "approvalRef": "fixture-reference-only",
+      "parentId": "design-1"
+    },
+    {
+      "artifactId": "task-1",
+      "kind": "task",
+      "revision": "R1",
+      "digest": {
+        "algorithm": "sha256",
+        "hex": "f80cbdfd03e004c334ea6986991a649d6da0abf9c67a9e5cb32d4a91927d203e"
+      },
+      "relativePath": "task-1.json",
+      "scopeKey": "fixture-scope",
+      "approvalRef": "fixture-reference-only",
+      "parentId": "plan-1"
+    },
+    {
+      "artifactId": "ac-1",
+      "kind": "ac",
+      "revision": "R1",
+      "digest": {
+        "algorithm": "sha256",
+        "hex": "d61458a838c4d5757ca25c178acb094491c056c8720892db27ab2a2f346543e3"
+      },
+      "relativePath": "ac-1.json",
+      "scopeKey": "fixture-scope",
+      "approvalRef": "fixture-reference-only",
+      "parentId": "task-1"
+    },
+    {
+      "artifactId": "ac-2",
+      "kind": "ac",
+      "revision": "R1",
+      "digest": {
+        "algorithm": "sha256",
+        "hex": "3fe20854fab064c48dc76ae022dc34700ecfea1e686dc6373f611d759778638d"
+      },
+      "relativePath": "ac-2.json",
+      "scopeKey": "fixture-scope",
+      "approvalRef": "fixture-reference-only",
+      "parentId": "task-1"
+    }
+  ]
+}
