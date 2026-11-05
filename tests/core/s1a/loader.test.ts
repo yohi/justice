@@ -74,43 +74,48 @@ describe('raw Manifest first/immutable non-elevating loader',()=>{
  it('totalArtifactByteBudgetBoundary',async()=>{
   const run=async(fifthBytes:Uint8Array)=>{
    const f=s1aFixture();const buffers=[0,1,2,3].map(()=>new Uint8Array(S1A_LIMITS.artifactBytes));
-   const artifacts=f.manifest.artifacts.map((artifact,index)=>{
-    const bytes=index<4?buffers[index]!:fifthBytes;const relativePath=`budget-${index}.bin`;
-    return {...artifact,relativePath,digest:{algorithm:'sha256' as const,hex:sha256(index===4&&fifthBytes.byteLength>0?new Uint8Array():bytes)}};
+   const artifacts=[...f.manifest.artifacts,{...f.manifest.artifacts.find(artifact=>artifact.kind==='ac')!,artifactId:'ac-extra-unread',relativePath:'budget-5.bin',digest:{algorithm:'sha256' as const,hex:sha256(new Uint8Array())}}];
+   const intent={...f.intent,ac:[...f.intent.ac,{artifactId:'ac-extra-unread',revision:'R1'}]};
+   const mapped=artifacts.map((artifact,index)=>{
+    const bytes=index<4?buffers[index]!:index===4?fifthBytes:new Uint8Array();const relativePath=`budget-${index}.bin`;
+    return {...artifact,relativePath,digest:{algorithm:'sha256' as const,hex:sha256(bytes)}};
    });
-   const manifest={...f.manifest,artifacts};const manifestBytes=jsonBytes(manifest);const intentBytes=jsonBytes(f.intent);let reads=0;
+   const manifest={...f.manifest,artifacts:mapped};const manifestBytes=jsonBytes(manifest);const intentBytes=jsonBytes(intent);let reads=0;
    const source={async readInputFile(path:string){return path==='manifest'?manifestBytes:intentBytes;},async readArtifact(_root:string,path:string,maxBytes:number){
-    reads++;const index=Number(path.slice('budget-'.length,-'.bin'.length));const bytes=index<4?buffers[index]!:fifthBytes;
+    reads++;const index=Number(path.slice('budget-'.length,-'.bin'.length));const bytes=index<4?buffers[index]!:index===4?fifthBytes:new Uint8Array();
     if(bytes.byteLength>maxBytes)throw Object.assign(Error('over_limit'),{kind:'over_limit'});return bytes;
    }};
    return {result:await loadS1aArtifacts({...f.input,expectedManifestSha256:sha256(manifestBytes)},source),getReads:()=>reads};
   };
   const boundary=await run(new Uint8Array());
-  expect(boundary.result.identityStatus).toBe('MATCH');expect(boundary.result.selectedRefs).toHaveLength(5);
+  expect(boundary.result.identityStatus).toBe('MATCH');expect(boundary.result.selectedRefs).toHaveLength(6);
   expect(boundary.result.selectedRefs.every(ref=>ref.digestOutcome==='MATCH')).toBe(true);
   const exceeded=await run(new Uint8Array([1]));
   expect(exceeded.result.checks.map(check=>check.reasonCode)).toContain('TOTAL_ARTIFACT_LIMIT_EXCEEDED');
   expect(exceeded.result.identityStatus).toBe('UNKNOWN');expect(exceeded.result.identityCandidateReady).toBe(false);
-  expect(exceeded.result.eligibleBaseline).toBe(false);expect(exceeded.result.selectedRefs.at(-1)?.digestOutcome).toBe('UNKNOWN');
+  expect(exceeded.result.eligibleBaseline).toBe(false);expect(exceeded.result.selectedRefs).toHaveLength(6);
+  expect(exceeded.result.selectedRefs[4]?.digestOutcome).toBe('UNKNOWN');expect(exceeded.result.selectedRefs[4]?.observedDigest).toBeNull();
+  expect(exceeded.result.selectedRefs[5]?.digestOutcome).toBe('UNKNOWN');expect(exceeded.result.selectedRefs[5]?.observedDigest).toBeNull();
   expect(exceeded.getReads()).toBe(5);
  });
 
  it('mismatchOverridesOtherUnknown',async()=>{
   const f=s1aFixture();const buffers=[0,1,2,3].map(()=>new Uint8Array(S1A_LIMITS.artifactBytes));buffers[0]![0]=1;
-  const artifacts=f.manifest.artifacts.map((artifact,index)=>{
-   const bytes=index<4?buffers[index]!:new Uint8Array([1]);const expected=index===0?new Uint8Array(S1A_LIMITS.artifactBytes):index===4?new Uint8Array():bytes;
+  const artifacts=[...f.manifest.artifacts,{...f.manifest.artifacts.find(artifact=>artifact.kind==='ac')!,artifactId:'ac-extra-unread',relativePath:'priority-5.bin',digest:{algorithm:'sha256' as const,hex:sha256(new Uint8Array())}}].map((artifact,index)=>{
+   const bytes=index<4?buffers[index]!:index===4?new Uint8Array([1]):new Uint8Array();const expected=index===0?new Uint8Array(S1A_LIMITS.artifactBytes):bytes;
    return {...artifact,relativePath:`priority-${index}.bin`,digest:{algorithm:'sha256' as const,hex:sha256(expected)}};
   });
-  const manifest={...f.manifest,artifacts};const manifestBytes=jsonBytes(manifest);const intentBytes=jsonBytes(f.intent);let reads=0;
+  const manifest={...f.manifest,artifacts};const intent={...f.intent,ac:[...f.intent.ac,{artifactId:'ac-extra-unread',revision:'R1'}]};const manifestBytes=jsonBytes(manifest);const intentBytes=jsonBytes(intent);let reads=0;
   const source={async readInputFile(path:string){return path==='manifest'?manifestBytes:intentBytes;},async readArtifact(_root:string,path:string,maxBytes:number){
-   reads++;const index=Number(path.slice('priority-'.length,-'.bin'.length));const bytes=index<4?buffers[index]!:new Uint8Array([1]);
+   reads++;const index=Number(path.slice('priority-'.length,-'.bin'.length));const bytes=index<4?buffers[index]!:index===4?new Uint8Array([1]):new Uint8Array();
    if(bytes.byteLength>maxBytes)throw Object.assign(Error('over_limit'),{kind:'over_limit'});return bytes;
   }};
   const result=await loadS1aArtifacts({...f.input,expectedManifestSha256:sha256(manifestBytes)},source);
   const reasons=result.checks.map(check=>check.reasonCode);
   expect(reasons).toContain('ARTIFACT_DIGEST_MISMATCH');expect(reasons).toContain('TOTAL_ARTIFACT_LIMIT_EXCEEDED');
   expect(result.identityStatus).toBe('MISMATCH');expect(result.identityCandidateReady).toBe(false);
-  expect(result.eligibleBaseline).toBe(false);expect(result.selectedRefs).toHaveLength(5);expect(reads).toBe(5);
+  expect(result.eligibleBaseline).toBe(false);expect(result.selectedRefs).toHaveLength(6);expect(reads).toBe(5);
+  expect(result.selectedRefs[5]?.digestOutcome).toBe('UNKNOWN');expect(result.selectedRefs[5]?.observedDigest).toBeNull();
   expect(JSON.stringify(result)).not.toContain('priority-');
  });
  it('unreadableManifestReturnsUnknownWithoutLeakingInput',async()=>{
