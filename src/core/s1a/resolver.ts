@@ -49,7 +49,7 @@ export function resolveTaskIntent(manifest:OwnerManifest,intent:TaskIntent):Reso
   checks.push(makeCheck('task-intent','mandatory_ac','MISMATCH','REQUIRED_AC_MISSING','OBSERVED_CONTRADICTION'));
   return {refs:[],checks,complete:false};
  }
- const ordered=[design,plan,task,...refs.slice(3).sort((a,b)=>a.artifactId.localeCompare(b.artifactId,'en'))];
+ const ordered=[design,plan,task,...refs.slice(3).sort((a,b)=>a.artifactId<b.artifactId?-1:a.artifactId>b.artifactId?1:0)];
  if(new Set(ordered.map(x=>x.artifactId)).size!==ordered.length){
   checks.push(makeCheck('task-intent','reference','UNKNOWN','TASK_INTENT_INVALID','INPUT_INVALID'));
   return {refs:[],checks,complete:false};

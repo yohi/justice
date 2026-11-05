@@ -1,6 +1,6 @@
 #!/usr/bin/env node
+import {realpathSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
-import {resolve} from 'node:path';
 import {loadS1aArtifacts,makeS1aResult} from '../core/s1a/loader.js';
 import {makeCheck,type LoaderInput,type S1aReadOnlySource} from '../core/s1a/contract.js';
 import {createS1aReadOnlySource} from './s1a-read-only-fs.js';
@@ -22,7 +22,7 @@ export async function runS1aCli(argv:readonly string[],source:S1aReadOnlySource)
   return {stdout:JSON.stringify(result)+'\n',exitCode};
  }catch{return invalid();}
 }
-if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
+if(process.argv[1]&&realpathSync(process.argv[1])===realpathSync(fileURLToPath(import.meta.url))){
  runS1aCli(process.argv.slice(2),createS1aReadOnlySource()).then(r=>{process.stdout.write(r.stdout);process.exitCode=r.exitCode;},()=>{
   const safe=makeS1aResult('unknown',[makeCheck('task-intent','cli_arguments','UNKNOWN','CLI_ARGUMENT_INVALID','INPUT_INVALID')]);
   process.stdout.write(JSON.stringify(safe)+'\n');process.exitCode=64;

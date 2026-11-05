@@ -5,6 +5,14 @@ describe('TaskIntent/mandatory AC resolution',()=>{
  it('resolvesOneDesignPlanTaskAndTwoAcs',()=>{
   const f=s1aFixture();expect(resolveTaskIntent(f.manifest,f.intent).refs.map(r=>r.kind)).toEqual(['design','plan','task','ac','ac']);
  });
+ it('ordersAcIdentifiersByAsciiCodePoint',()=>{
+  const f=s1aFixture();
+  const artifacts=f.manifest.artifacts.filter(x=>x.kind!=='ac');
+  const acs=['a-ac','A-ac'].map(artifactId=>({...f.manifest.artifacts[3]!,artifactId}));
+  const manifest={...f.manifest,artifacts:[...artifacts,...acs]};
+  const intent={...f.intent,ac:[{artifactId:'a-ac',revision:'R1'},{artifactId:'A-ac',revision:'R1'}]};
+  expect(resolveTaskIntent(manifest,intent).refs.slice(3).map(x=>x.artifactId)).toEqual(['A-ac','a-ac']);
+ });
  it('missingMandatoryAcNeverResolvesPartially',()=>{
   const f=s1aFixture();const resolved=resolveTaskIntent(f.manifest,{...f.intent,ac:[f.intent.ac[0]!]});
   expect(resolved.checks.map(x=>x.reasonCode)).toContain('REQUIRED_AC_MISSING');expect(resolved.complete).toBe(false);expect(resolved.refs).toEqual([]);
@@ -16,8 +24,11 @@ describe('TaskIntent/mandatory AC resolution',()=>{
  it('scopeAndParentConflict',()=>{
   const f=s1aFixture();const scope=resolveTaskIntent(f.manifest,{...f.intent,scopeKey:'scope-2'});
   expect(scope.checks.map(x=>x.reasonCode)).toContain('SCOPE_MISMATCH');
-  const swapped={...f.intent,design:{artifactId:'design-1',revision:'R1'}};
-  expect(resolveTaskIntent(f.manifest,swapped).complete).toBe(true);
+  const alternatePlan={...f.manifest.artifacts[1]!,artifactId:'plan-2'};
+  const manifest={...f.manifest,artifacts:[...f.manifest.artifacts,alternatePlan]};
+  const selectedOtherPlan={...f.intent,plan:{artifactId:'plan-2',revision:'R1'}};
+  const parentConflict=resolveTaskIntent(manifest,selectedOtherPlan);
+  expect(parentConflict.checks.map(x=>x.reasonCode)).toContain('PARENT_LINK_MISMATCH');
  });
  it('rejectUnsafeIntentIdentifiers',()=>{
   const f=s1aFixture();for(const v of ['../token','S1\nBearer-secret','Y'.repeat(65)])

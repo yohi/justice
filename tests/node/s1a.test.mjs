@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
+import {spawnSync} from 'node:child_process';
+import {execPath} from 'node:process';
 import {mkdtemp,writeFile,mkdir,symlink,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {join,resolve} from 'node:path';
 import {TextEncoder} from 'node:util';
 import {parseOwnerManifest} from '../../dist/core/s1a/manifest.js';
 import {parseTaskIntent,resolveTaskIntent} from '../../dist/core/s1a/resolver.js';
@@ -112,6 +114,15 @@ test('CLI returns JSON only, and does not infer approval',async()=>{
  assert.equal(cli.exitCode,0);assert.equal(JSON.parse(cli.stdout).identityStatus,'MATCH');assert.equal(JSON.parse(cli.stdout).eligibleBaseline,false);
  assert.equal(cli.stdout.endsWith('\n'),true);
  const malformed=await runS1aCli(['bad','--password','token-secret'],s);assert.equal(malformed.exitCode,64);assert.equal(malformed.stdout.includes('token-secret'),false);
+});
+test('CLI invoked through a symlink handles unknown commands with exit 64',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'justice-s1a-cli-'));try{
+  const link=join(root,'justice-s1a');
+  await symlink(resolve('dist/runtime/s1a-cli.js'),link);
+  const result=spawnSync(execPath,[link,'unknown'],{encoding:'utf8'});
+  assert.equal(result.status,64);
+  assert.equal(JSON.parse(result.stdout).checks[0].reasonCode,'CLI_ARGUMENT_INVALID');
+ }finally{await rm(root,{recursive:true,force:true});}
 });
 test('N-DIAG-01/02 complete JSON matches contract and never emits input secrets',async()=>{
  const f=fixture();const modified={...f.manifest,artifacts:f.manifest.artifacts.map((r,i)=>i===0?{...r,artifactId:'../../private?token=secret'}:r)};
