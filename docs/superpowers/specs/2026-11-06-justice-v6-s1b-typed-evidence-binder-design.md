@@ -73,7 +73,15 @@ A baseline is usable for binding comparison only when the S1-a output has:
 
 The selected records must remain consistent with the relationships already checked by S1-a. Structural contradictions in the supplied LoaderResult are invalid input, not successful baseline selection.
 
-If the structurally valid S1-a result has `identityCandidateReady !== true`, binding comparison is unavailable. This produces `BASELINE_UNKNOWN`, never an authoritative match.
+**Normative S1-a aggregate consistency (F004):** The existing S1-a `loader.ts` derives `identityStatus` from `checks[].outcome` using this exact precedence:
+
+1. If **any** check is `MISMATCH`, aggregate `identityStatus = MISMATCH`.
+2. Otherwise, if **any** check is `UNKNOWN`, aggregate `identityStatus = UNKNOWN`.
+3. Otherwise, aggregate `identityStatus = MATCH` (including the empty-check case, as defined by the existing implementation).
+
+The derived readiness flag is **exactly** `identityCandidateReady === (identityStatus === 'MATCH' && manifestDigestMatch === true)`. S1-b validates the structure and outcome enum of every check, recomputes both derived values, and compares each against the supplied S1-a result. A contradiction in either comparison is **`MALFORMED`**, mapped to `INPUT_REJECTED` / `BASELINE_SHAPE_INVALID`; it must never be accepted as ready and must not be treated as a normal nonready result.
+
+A structurally valid and **aggregate-consistent** S1-a result with `identityCandidateReady === false` is **`NOT_READY`**. This includes legitimate `MISMATCH` or `UNKNOWN` aggregate outcomes and incomplete selected references permitted by S1-a. It produces `BASELINE_UNKNOWN`, never an authoritative match or `MISSING_EVIDENCE`. Do not impose ready-only selected-ref completeness conditions on an otherwise valid `NOT_READY` result.
 
 No S1-b operation can change:
 
@@ -288,13 +296,13 @@ The Core performs the following steps.
 
 **Step 1 — Validate input structure**
 
-Validate the BinderInput schema, the supplied S1-a result structure, all EvidenceRefs, identifier safety, uniqueness and limits.
+Validate the BinderInput schema, the supplied S1-a result structure, all EvidenceRefs, identifier safety, uniqueness and limits. For S1-a, independently recompute `identityStatus` from all validated `checks[].outcome` values using **MISMATCH > UNKNOWN > MATCH**, then recompute `identityCandidateReady` as `identityStatus === 'MATCH' && manifestDigestMatch === true`. Both values must match the corresponding supplied fields.
 
 Validation must complete across the relevant collection before any binding success is emitted.
 
 **Step 2 — Reject malformed collections atomically**
 
-If validation fails, return:
+If validation fails—including an internally contradictory S1-a aggregate or ready flag—return `BASELINE_SHAPE_INVALID` for that baseline defect (subject to the existing global input-rejection precedence), not `BASELINE_UNKNOWN`:
 
 - `evaluationStatus: INPUT_REJECTED`
 - `bindingResults: []`
@@ -323,7 +331,7 @@ No unchecked offending value is copied into the result.
 
 **Step 3 — Establish comparison availability**
 
-If the structurally valid S1-a baseline is not ready, return:
+If the structurally valid, aggregate-consistent S1-a baseline is not ready (a legitimate `NOT_READY`, not `MALFORMED`), return:
 
 - `evaluationStatus: BASELINE_UNKNOWN`
 - One `BindingResult` per valid EvidenceRef, each with `bindingStatus: UNKNOWN`
