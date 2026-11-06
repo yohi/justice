@@ -18,6 +18,44 @@ describe("inspectEvidenceRefs", () => {
     expect(result).toEqual({ issueCodes: [], refs: [{ ...validRef(), reportedOutcome: "PASS" }] });
   });
 
+  it("accepts every supported evidence type and optional identity and digest references", () => {
+    const types = ["test", "build", "lint", "artifact", "review", "other"] as const;
+    const refs = types.map((type, index) => ({
+      ...validRef(`evidence-${index}`),
+      type,
+      acRef: { artifactId: "ac-1", revision: "rev-1" },
+      reportedOutcome: "UNKNOWN",
+      contentDigest: { algorithm: "sha256", hex: "a".repeat(64) },
+    }));
+
+    expect(inspectEvidenceRefs(refs).refs).toHaveLength(types.length);
+  });
+
+  it("rejects sparse collections and invalid optional identity references atomically", () => {
+    const sparse = new Array(1);
+    const invalidAcRef = { ...validRef(), acRef: { artifactId: "../ac", revision: "rev-1" } };
+
+    expect(inspectEvidenceRefs(sparse).issueCodes).toContain("EVIDENCE_FIELD_INVALID");
+    expect(inspectEvidenceRefs([invalidAcRef])).toEqual({
+      issueCodes: ["UNSAFE_IDENTIFIER"],
+      refs: null,
+    });
+  });
+
+  it("returns a fixed schema diagnostic when an input proxy throws during inspection", () => {
+    const hostile = new Proxy([validRef()], {
+      get(target, property, receiver): unknown {
+        if (property === "length") throw new Error("sensitive value");
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    expect(inspectEvidenceRefs(hostile)).toEqual({
+      issueCodes: ["INPUT_SCHEMA_INVALID"],
+      refs: null,
+    });
+  });
+
   it("rejects unknown nested fields and null optional fields without exposing invalid values", () => {
     const attack = "do-not-echo";
     const result = inspectEvidenceRefs([{ ...validRef(), reportedOutcome: null, taskRef: { artifactId: "task-1", revision: "rev-1", [attack]: attack } }]);
