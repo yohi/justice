@@ -8,7 +8,7 @@
 
 **Tech Stack:** Repository TypeScript 6 (strict, ES2022, ESM), Bun, Vitest 4; reuse `src/core/s1a/contract.ts` and `tests/helpers/s1a-fixtures.ts`; no new dependencies.
 
-**Spec:** `docs/superpowers/specs/2026-11-06-justice-v6-s1b-typed-evidence-binder-design.md` — **Design R0.1.1**, GitHub commit `b6bd1d30e99b8aa3462505d0c77c278e83027611`, blob `e8a789ab02d878abc90181161fe7cf38f37a9d4d`; Issue [#351](https://github.com/yohi/justice/issues/351).
+**Spec:** `docs/superpowers/specs/2026-11-06-justice-v6-s1b-typed-evidence-binder-design.md` — **Design R0.1.1, including F-001–F004 corrections**; Issue [#351](https://github.com/yohi/justice/issues/351). The Design document committed alongside this Implementation Plan in the **same feature-branch revision** is its normative specification. This reference does not assert Owner adoption; at the Human Owner adoption checkpoint, both documents' identities can be fixed together. No self-referential commit SHA is required.
 
 **Intended repo path:** `docs/superpowers/plans/2026-11-06-justice-v6-s1b-typed-evidence-binder.md`.
 

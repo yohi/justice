@@ -8,7 +8,7 @@
 **Scope:** S1-b / Host-independent Core  
 **Correction base:** `13752b0c7da4ba19779db27584bc32df4c395559`  
 **Status:** `DOCUMENT_CORRECTION_CANDIDATE / OWNER_ADOPTION_PENDING / CODE_IMPLEMENTATION_NOT_AUTHORIZED`  
-**Correction scope:** F-001 / F-002 / F-003 only. Sections 3–6 clarified.
+**Correction scope:** F-001 / F-002 / F-003 / F004. Sections 3–6 clarified. F005: reference metadata alignment only.
 
 > **Authority:** This document records the S1-b brainstorming result. Committing this document does not adopt the design, authorize source-code changes or test execution, change Gate/HOLD state, authorize Host probes, or trigger further reviews or implementation. Any implementation requires a separate explicit Human Owner decision. S1-c and S2–S5 remain outside this scope.
 
