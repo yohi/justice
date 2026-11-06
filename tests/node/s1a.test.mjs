@@ -154,7 +154,8 @@ test('N-LIM-02 exact total 33,554,432 accepted; 33,554,433 rejected with UNKNOWN
 test('N-LIM-02 observed earlier artifact digest MISMATCH overrides later total UNKNOWN',async()=>{
  const big=new Uint8Array(S1A_LIMITS.artifactBytes);const small=new Uint8Array([1]);
  const f=fixture();const m={...f.manifest,artifacts:f.manifest.artifacts.map((r,i)=>({...r,digest:{algorithm:'sha256',hex:sha(i<4?big:new Uint8Array())}}))};const reads=[];
- const source={async readInputFile(p){return bytes(p==='manifest'?m:f.intent);},async readArtifact(root,path,cap){reads.push(path);const v=path==='ac-2.md'?small:path==='ac-3.md'?new Uint8Array():big;if(v.length>cap)throw {kind:'over_limit'};if(path==='design-1.md')return Uint8Array.from(v,()=>2);return v;}};
+ const artifactBytes=new Map([['ac-2.md',small],['ac-3.md',new Uint8Array()]]);
+ const source={async readInputFile(p){return bytes(p==='manifest'?m:f.intent);},async readArtifact(root,path,cap){reads.push(path);const v=artifactBytes.get(path)??big;if(v.length>cap)throw {kind:'over_limit'};if(path==='design-1.md')return Uint8Array.from(v,()=>2);return v;}};
  const r=await loadS1aArtifacts({...input(f),expectedManifestSha256:sha(bytes(m))},source);
  assert.equal(r.identityStatus,'MISMATCH');check(r,'TOTAL_ARTIFACT_LIMIT_EXCEEDED');check(r,'ARTIFACT_DIGEST_MISMATCH');assert.equal(r.selectedRefs.length,6);assert.equal(r.selectedRefs[5].digestOutcome,'UNKNOWN');assert.equal(r.selectedRefs[5].observedDigest,null);assert.equal(reads.length,5);assert.equal(reads.includes('ac-3.md'),false);
 });
