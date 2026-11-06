@@ -56,7 +56,7 @@ describe("bindEvidence", () => {
       taskRef: { artifactId: "task-other", revision: "R2" }, scopeKey: "scope-other",
     })]));
     expect(result.bindingResults[0]?.reasonCodes).toEqual([
-      "TASK_NOT_SELECTED", "TASK_REVISION_MISMATCH", "SCOPE_MISMATCH",
+      "TASK_NOT_SELECTED", "SCOPE_MISMATCH",
     ]);
   });
 
@@ -87,7 +87,7 @@ describe("bindEvidence", () => {
     const reversed = bindEvidence(input(baseline, [...refs].reverse())).bindingResults.map((binding) => binding.reasonCodes);
     expect(reversed).toEqual(forward);
     expect(forward[0]).toEqual([
-      "TASK_NOT_SELECTED", "TASK_REVISION_MISMATCH", "SCOPE_MISMATCH",
+      "TASK_NOT_SELECTED", "SCOPE_MISMATCH",
       "AC_REVISION_MISMATCH", "AC_TASK_MISMATCH",
     ]);
   });

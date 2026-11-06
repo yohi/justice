@@ -112,8 +112,11 @@ function result(
 
 function bindReady(ref: EvidenceRefV1, task: { readonly artifactId: string; readonly revision: string; readonly scopeKey: string }, acs: readonly { readonly artifactId: string; readonly revision: string; readonly parentId?: string }[]): BindingResult {
   const reasons = new Set<BindingReasonCode>();
-  if (ref.taskRef.artifactId !== task.artifactId) reasons.add("TASK_NOT_SELECTED");
-  if (ref.taskRef.revision !== task.revision) reasons.add("TASK_REVISION_MISMATCH");
+  if (ref.taskRef.artifactId !== task.artifactId) {
+    reasons.add("TASK_NOT_SELECTED");
+  } else if (ref.taskRef.revision !== task.revision) {
+    reasons.add("TASK_REVISION_MISMATCH");
+  }
   if (ref.scopeKey !== task.scopeKey) reasons.add("SCOPE_MISMATCH");
   if (ref.acRef) {
     const selectedAc = acs.find((ac) => ac.artifactId === ref.acRef?.artifactId);
