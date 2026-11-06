@@ -65,7 +65,7 @@ The controller ruling established that complete resolved `selectedRefs` with unc
 
 - Updated the total-byte CLI test to assert all five resolved refs: the first four are `MATCH`; `ac-2` is `UNKNOWN` with `observedDigest: null`. It also repeats the invocation to verify byte-identical stdout and checks that the absolute manifest path and untrusted approval reference are not emitted.
 - Updated the MISMATCH-plus-later-limit CLI test to assert all five resolved refs: `design-1` is `MISMATCH`, the next three are `MATCH`, and `ac-2` is `UNKNOWN` with `observedDigest: null`. It verifies repeated stdout equality and keeps exit 2, both reason codes, no identity candidate, and no baseline eligibility.
-- Extended deterministic real-FS coverage for final-component symlinks, absolute artifact paths, and directory/nonregular paths. Existing byte-cap assertions cover exact-size success (3-byte file with cap 3) and +1 overflow (same file with cap 2).
+- Extended deterministic real-FS coverage for final-component symlinks, absolute artifact paths, and directory/nonregular paths. The `child/file-link` symlink is read through `fs.readArtifact` and asserted to reject with `unsafe_path`. Existing byte-cap assertions cover exact-size success (3-byte file with cap 3) and +1 overflow (same file with cap 2).
 - Reviewed `tests/core/s1a/loader.test.ts`: the total-byte case already requires the final selected ref to be `UNKNOWN`, and the mismatch-priority case retains the complete five-ref set. These assertions are consistent with the ruling; no change was needed.
 - `changed_during_read` remains `SKIPPED_UNPROVEN`; inducing it deterministically would require a race/unsafe hook not authorized by this task.
 
