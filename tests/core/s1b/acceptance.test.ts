@@ -107,9 +107,21 @@ describe("S1-b evidence binding acceptance", () => {
   ])("$name", ({ change, outcome, state }) => {
     const input = cloneS1bFixture(fixture, { evidenceRefs: alterRef(0, change) }).input;
     const result = bindEvidence(input);
+    const firstBinding = result.bindingResults[0];
+
+    expect(result.evaluationStatus).toBe("EVALUATED");
+    expect(firstBinding?.bindingStatus).toBe("MATCH");
+    expect(firstBinding?.reasonCodes).toEqual([]);
+    expect(result.coverageAssessmentStatus).toBe("ASSESSABLE");
+    expect(result.coverageResults).toHaveLength(2);
+    expect(result.coverageResults.map((coverage) => coverage.coverageStatus)).toEqual([
+      "MATCHED_REF_PRESENT",
+      "MATCHED_REF_PRESENT",
+    ]);
     expect(result.bindingResults[0]?.reportedOutcome).toBe(outcome);
     expect(result.bindingResults[0]?.reportedExecutionState).toBe(state);
     expect(result.bindingResults[0]?.authenticityStatus).toBe("NOT_VERIFIED");
     expect(result.bindingResults[0]?.executionVerificationStatus).toBe("NOT_VERIFIED");
+    // A reported FAIL is still only a declaration; matching references stay MATCH and unverified.
   });
 });
