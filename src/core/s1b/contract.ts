@@ -1,5 +1,12 @@
 import type { LoaderResult } from "../s1a/contract.js";
 
+export const S1B_MAX_EVIDENCE_REFS = 128;
+export const S1B_LIMITATIONS = Object.freeze([
+  "OWNER_APPROVAL_NOT_PROVEN",
+  "EVIDENCE_AUTHENTICITY_NOT_VERIFIED",
+  "HOST_EXECUTION_NOT_VERIFIED",
+] as const);
+
 export type IdentityRef = Readonly<{ artifactId: string; revision: string }>;
 export type EvidenceType = "test" | "build" | "lint" | "artifact" | "review" | "other";
 export type ProvenanceClass = "SELF_DECLARED" | "FIXTURE_OBSERVATION" | "UNVERIFIED_EXTERNAL";
@@ -69,7 +76,3 @@ export type BinderResult = Readonly<{
   executionVerificationStatus: ExecutionVerificationStatus;
   limitations: readonly ["OWNER_APPROVAL_NOT_PROVEN", "EVIDENCE_AUTHENTICITY_NOT_VERIFIED", "HOST_EXECUTION_NOT_VERIFIED"];
 }>;
-export type BaselineInspection =
-  | Readonly<{ status: "READY"; baseline: LoaderResult }>
-  | Readonly<{ status: "NOT_READY"; baseline: LoaderResult }>
-  | Readonly<{ status: "MALFORMED" }>;

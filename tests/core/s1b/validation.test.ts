@@ -46,6 +46,46 @@ describe("inspectEvidenceRefs", () => {
     expect(rejected.refs).toBeNull();
   });
 
+  it("rejects a 129-entry array without consulting its custom iterator", () => {
+    const overLimit = new Array(129).fill(validRef());
+    let yielded = 0;
+    Object.defineProperty(overLimit, Symbol.iterator, {
+      value: function* (): Generator<Record<string, unknown>, void, unknown> {
+        for (let index = 0; index < 200; index += 1) {
+          yielded += 1;
+          yield validRef(`iter-${index}`);
+        }
+      },
+    });
+    const result = inspectEvidenceRefs(overLimit);
+    expect(result.issueCodes).toContain("EVIDENCE_LIMIT_EXCEEDED");
+    expect(result.refs).toBeNull();
+    expect(yielded).toBe(0);
+  });
+
+  it("uses one snapshotted evidence id for validation and output", () => {
+    const ref = validRef();
+    let reads = 0;
+    Object.defineProperty(ref, "evidenceId", {
+      get: () => {
+        reads += 1;
+        return reads === 1 ? "stable-id" : "!unsafe-after-snapshot";
+      },
+    });
+    const result = inspectEvidenceRefs([ref]);
+    expect(result.refs?.[0]?.evidenceId).toBe("stable-id");
+    expect(reads).toBe(1);
+  });
+
+  it("uses one snapshotted digest hex for validation and output", () => {
+    const hex = "a".repeat(64);
+    const digest = { algorithm: "sha256", get hex(): string { return hexRead++ === 0 ? hex : "NOT_A_DIGEST"; } };
+    let hexRead = 0;
+    const result = inspectEvidenceRefs([{ ...validRef(), contentDigest: digest }]);
+    expect(result.refs?.[0]?.contentDigest?.hex).toBe(hex);
+    expect(hexRead).toBe(1);
+  });
+
   it("rejects duplicate ids even when another ref is malformed", () => {
     const result = inspectEvidenceRefs([validRef("same"), { ...validRef("same"), type: "bogus" }]);
     expect(result.issueCodes).toContain("DUPLICATE_EVIDENCE_ID");

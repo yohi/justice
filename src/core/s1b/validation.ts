@@ -1,12 +1,8 @@
 import { isLowercaseSha256Hex, isSafeIdentifier } from "../s1a/contract.js";
+import { S1B_MAX_EVIDENCE_REFS, S1B_LIMITATIONS } from "./contract.js";
 import type { EvidenceRefV1, IdentityRef, InputRejectionReason } from "./contract.js";
 
-export const S1B_MAX_EVIDENCE_REFS = 128;
-export const S1B_LIMITATIONS = [
-  "OWNER_APPROVAL_NOT_PROVEN",
-  "EVIDENCE_AUTHENTICITY_NOT_VERIFIED",
-  "HOST_EXECUTION_NOT_VERIFIED",
-] as const;
+export { S1B_MAX_EVIDENCE_REFS, S1B_LIMITATIONS };
 
 export type EvidenceInspection = Readonly<{
   issueCodes: readonly InputRejectionReason[];
@@ -67,14 +63,17 @@ function parseIdentityRef(value: unknown, issues: Set<InputRejectionReason>): Id
   return { artifactId, revision };
 }
 
-function parseEvidenceRef(value: unknown, issues: Set<InputRejectionReason>): EvidenceRefV1 | null {
+function parseEvidenceRef(
+  value: unknown,
+  evidenceId: unknown,
+  issues: Set<InputRejectionReason>,
+): EvidenceRefV1 | null {
   if (!isRecord(value)) {
     issues.add("EVIDENCE_FIELD_INVALID");
     return null;
   }
   if (!hasOnlyKeys(value, REF_KEYS)) issues.add("EVIDENCE_FIELD_INVALID");
 
-  const evidenceId = value.evidenceId;
   const type = value.type;
   const taskRef = parseIdentityRef(value.taskRef, issues);
   const scopeKey = value.scopeKey;
@@ -97,10 +96,16 @@ function parseEvidenceRef(value: unknown, issues: Set<InputRejectionReason>): Ev
 
   let parsedDigest: EvidenceRefV1["contentDigest"];
   if (hasOwn(value, "contentDigest")) {
-    if (!isRecord(contentDigest) || !hasOnlyKeys(contentDigest, DIGEST_KEYS) || !hasOwn(contentDigest, "algorithm") || !hasOwn(contentDigest, "hex") || contentDigest.algorithm !== "sha256" || !isLowercaseSha256Hex(contentDigest.hex)) {
+    if (!isRecord(contentDigest) || !hasOnlyKeys(contentDigest, DIGEST_KEYS) || !hasOwn(contentDigest, "algorithm") || !hasOwn(contentDigest, "hex")) {
       issues.add("EVIDENCE_FIELD_INVALID");
     } else {
-      parsedDigest = { algorithm: "sha256", hex: contentDigest.hex };
+      const algorithm = contentDigest.algorithm;
+      const hex = contentDigest.hex;
+      if (algorithm !== "sha256" || !isLowercaseSha256Hex(hex)) {
+        issues.add("EVIDENCE_FIELD_INVALID");
+      } else {
+        parsedDigest = { algorithm, hex };
+      }
     }
   }
 
@@ -137,21 +142,30 @@ export function inspectEvidenceRefs(value: unknown): EvidenceInspection {
   const issues = new Set<InputRejectionReason>();
   try {
     if (!Array.isArray(value)) return { issueCodes: ["INPUT_SCHEMA_INVALID"], refs: null };
-    if (value.length > S1B_MAX_EVIDENCE_REFS) return { issueCodes: ["EVIDENCE_LIMIT_EXCEEDED"], refs: null };
+    const length = value.length;
+    if (length > S1B_MAX_EVIDENCE_REFS) return { issueCodes: ["EVIDENCE_LIMIT_EXCEEDED"], refs: null };
 
     const refs: EvidenceRefV1[] = [];
     const ids = new Set<string>();
-    for (const candidate of value) {
+    for (let index = 0; index < length; index += 1) {
+      if (!hasOwn(value, String(index))) {
+        issues.add("EVIDENCE_FIELD_INVALID");
+        continue;
+      }
+      const candidate = Object.getOwnPropertyDescriptor(value, String(index))?.value;
       if (candidate === undefined) {
         issues.add("EVIDENCE_FIELD_INVALID");
         continue;
       }
-      if (isRecord(candidate) && typeof candidate.evidenceId === "string" && isSafeIdentifier(candidate.evidenceId)) {
-        if (ids.has(candidate.evidenceId)) issues.add("DUPLICATE_EVIDENCE_ID");
-        ids.add(candidate.evidenceId);
+      const evidenceId = isRecord(candidate) && hasOwn(candidate, "evidenceId")
+        ? candidate.evidenceId
+        : undefined;
+      if (typeof evidenceId === "string" && isSafeIdentifier(evidenceId)) {
+        if (ids.has(evidenceId)) issues.add("DUPLICATE_EVIDENCE_ID");
+        ids.add(evidenceId);
       }
       const before = issues.size;
-      const ref = parseEvidenceRef(candidate, issues);
+      const ref = parseEvidenceRef(candidate, evidenceId, issues);
       if (ref) refs.push(ref);
       else if (issues.size === before) {
         issues.add("EVIDENCE_FIELD_INVALID");
