@@ -18,12 +18,12 @@ const sha=raw=>createHash('sha256').update(raw).digest('hex');
 const encoder=new TextEncoder();
 const bytes=x=>encoder.encode(typeof x==='string'?x:JSON.stringify(x));
 const entries=[
- ['design-1','design',undefined],['plan-1','plan','design-1'],['task-1','task','plan-1'],['ac-1','ac','task-1'],['ac-2','ac','task-1']
+ ['design-1','design',undefined],['plan-1','plan','design-1'],['task-1','task','plan-1'],['ac-1','ac','task-1'],['ac-2','ac','task-1'],['ac-3','ac','task-1']
 ];
 function fixture(){
  const artifacts=entries.map(([artifactId,kind,parentId])=>({...{artifactId,kind,revision:'R1',digest:{algorithm:'sha256',hex:sha(artifactId)},relativePath:artifactId+'.md',scopeKey:'scope-1',approvalRef:'https://example.com/token-secret'},...(parentId?{parentId}:{})}));
  const manifest={schemaVersion:'justice-s1a-manifest-v1',manifestId:'fixture-1',artifacts};
- const intent={schemaVersion:'justice-s1a-task-intent-v1',scopeKey:'scope-1',design:{artifactId:'design-1',revision:'R1'},plan:{artifactId:'plan-1',revision:'R1'},task:{artifactId:'task-1',revision:'R1'},ac:[{artifactId:'ac-1',revision:'R1'},{artifactId:'ac-2',revision:'R1'}]};
+ const intent={schemaVersion:'justice-s1a-task-intent-v1',scopeKey:'scope-1',design:{artifactId:'design-1',revision:'R1'},plan:{artifactId:'plan-1',revision:'R1'},task:{artifactId:'task-1',revision:'R1'},ac:[{artifactId:'ac-1',revision:'R1'},{artifactId:'ac-2',revision:'R1'},{artifactId:'ac-3',revision:'R1'}]};
  const content={};artifacts.forEach(a=>content[a.relativePath]=bytes(a.artifactId));
  return {manifest,intent,content};
 }
@@ -36,7 +36,7 @@ const check=(result,code)=>assert.equal(result.checks.some(c=>c.reasonCode===cod
 
 test('P-01 valid exact raw-byte references identity MATCH never Owner approval',async()=>{
  const f=fixture(); const r=await loadS1aArtifacts(input(f),mockSource(f));
- assert.equal(r.identityStatus,'MATCH');assert.equal(r.manifestDigestMatch,true);assert.equal(r.identityCandidateReady,true);assert.equal(r.ownerAuthorityStatus,'NOT_PROVEN');assert.equal(r.eligibleBaseline,false);assert.equal(r.selectedRefs.length,5);assert.equal(Object.isFrozen(r),true);
+ assert.equal(r.identityStatus,'MATCH');assert.equal(r.manifestDigestMatch,true);assert.equal(r.identityCandidateReady,true);assert.equal(r.ownerAuthorityStatus,'NOT_PROVEN');assert.equal(r.eligibleBaseline,false);assert.equal(r.selectedRefs.length,6);assert.equal(Object.isFrozen(r),true);
  assert.equal(JSON.stringify(r).includes('token-secret'),false);
 });
 test('N-06b/c missing and malformed sha return UNKNOWN without reads',async()=>{
@@ -144,19 +144,20 @@ test('N-LIM-02 exact total 33,554,432 accepted; 33,554,433 rejected with UNKNOWN
  const big= new Uint8Array(S1A_LIMITS.artifactBytes); big.fill(65); const small=new Uint8Array([65]);
  const f=fixture(); const m={...f.manifest,artifacts:f.manifest.artifacts.map((r,i)=>({...r,digest:{algorithm:'sha256',hex:sha(i<4?big:new Uint8Array())}}))};
  const map={};m.artifacts.forEach((a,i)=>map[a.relativePath]=i<4?big:new Uint8Array());
- const make=(mapping)=>{let calls=0;return {get calls(){return calls;},async readInputFile(p){return bytes(p==='manifest'?m:f.intent);},async readArtifact(root,path,cap){calls++;const v=mapping[path];if(v.length>cap)throw {kind:'over_limit'};return v;}}};
+ const make=(mapping)=>{let calls=0;const readPaths=[];return {get calls(){return calls;},readPaths,async readInputFile(p){return bytes(p==='manifest'?m:f.intent);},async readArtifact(root,path,cap){calls++;readPaths.push(path);const v=mapping[path];if(v.length>cap)throw {kind:'over_limit'};return v;}}};
  const inp={...input(f),expectedManifestSha256:sha(bytes(m))};const goodSrc=make(map);
  const good=await loadS1aArtifacts(inp,goodSrc);
- assert.equal(good.identityStatus,'MATCH');assert.equal(good.selectedRefs.length,5);assert.equal(goodSrc.calls,5);
+ assert.equal(good.identityStatus,'MATCH');assert.equal(good.selectedRefs.length,6);assert.equal(goodSrc.calls,6);
  const changed={...map,'ac-2.md':small};const badSrc=make(changed);
- const over=await loadS1aArtifacts(inp,badSrc);check(over,'TOTAL_ARTIFACT_LIMIT_EXCEEDED');assert.equal(over.identityStatus,'UNKNOWN');assert.equal(over.identityCandidateReady,false);assert.equal(over.eligibleBaseline,false);assert.equal(badSrc.calls,5);
+ const over=await loadS1aArtifacts(inp,badSrc);check(over,'TOTAL_ARTIFACT_LIMIT_EXCEEDED');assert.equal(over.identityStatus,'UNKNOWN');assert.equal(over.identityCandidateReady,false);assert.equal(over.eligibleBaseline,false);assert.equal(badSrc.calls,5);assert.equal(over.selectedRefs.length,6);assert.equal(over.selectedRefs[5].digestOutcome,'UNKNOWN');assert.equal(over.selectedRefs[5].observedDigest,null);assert.equal(badSrc.readPaths.includes('ac-3.md'),false);
 });
 test('N-LIM-02 observed earlier artifact digest MISMATCH overrides later total UNKNOWN',async()=>{
  const big=new Uint8Array(S1A_LIMITS.artifactBytes);const small=new Uint8Array([1]);
- const f=fixture();const m={...f.manifest,artifacts:f.manifest.artifacts.map((r,i)=>({...r,digest:{algorithm:'sha256',hex:sha(i<4?big:new Uint8Array())}}))};
- const source={async readInputFile(p){return bytes(p==='manifest'?m:f.intent);},async readArtifact(root,path,cap){const v=path==='ac-2.md'?small:big;if(v.length>cap)throw {kind:'over_limit'};if(path==='design-1.md')return Uint8Array.from(v,()=>2);return v;}};
+ const f=fixture();const m={...f.manifest,artifacts:f.manifest.artifacts.map((r,i)=>({...r,digest:{algorithm:'sha256',hex:sha(i<4?big:new Uint8Array())}}))};const reads=[];
+ const artifactBytes=new Map([['ac-2.md',small],['ac-3.md',new Uint8Array()]]);
+ const source={async readInputFile(p){return bytes(p==='manifest'?m:f.intent);},async readArtifact(root,path,cap){reads.push(path);const v=artifactBytes.get(path)??big;if(v.length>cap)throw {kind:'over_limit'};if(path==='design-1.md')return Uint8Array.from(v,()=>2);return v;}};
  const r=await loadS1aArtifacts({...input(f),expectedManifestSha256:sha(bytes(m))},source);
- assert.equal(r.identityStatus,'MISMATCH');check(r,'TOTAL_ARTIFACT_LIMIT_EXCEEDED');check(r,'ARTIFACT_DIGEST_MISMATCH');
+ assert.equal(r.identityStatus,'MISMATCH');check(r,'TOTAL_ARTIFACT_LIMIT_EXCEEDED');check(r,'ARTIFACT_DIGEST_MISMATCH');assert.equal(r.selectedRefs.length,6);assert.equal(r.selectedRefs[5].digestOutcome,'UNKNOWN');assert.equal(r.selectedRefs[5].observedDigest,null);assert.equal(reads.length,5);assert.equal(reads.includes('ac-3.md'),false);
 });
 test('CLI rejects duplicate flags, unknown flags and positional extras without raw echo',async()=>{
  const f=fixture(),s=mockSource(f),flags=['check','--manifest','manifest','--intent','intent','--artifacts-root','root'];
