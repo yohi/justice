@@ -9,6 +9,35 @@ async function readyResult(): Promise<LoaderResult> {
   return loadS1aArtifacts(fixture.input, fixture.source);
 }
 
+function withAcCount(baseline: LoaderResult, acCount: number): LoaderResult {
+  const templateRef = baseline.selectedRefs.find((ref) => ref.kind === "ac");
+  const templateCheck = baseline.checks.find((check) => check.check === "artifact_digest" && check.targetId.startsWith("artifact:ac-"));
+  if (!templateRef || !templateCheck) throw Error("ready fixture must contain an AC digest check");
+  const additions = Array.from({ length: acCount - baseline.selectedRefs.filter((ref) => ref.kind === "ac").length }, (_, index) => {
+    const artifactId = `ac-extra-${index + 1}`;
+    return {
+      ref: { ...templateRef, artifactId },
+      check: { ...templateCheck, targetId: `artifact:${artifactId}` },
+    };
+  });
+  return {
+    ...baseline,
+    selectedRefs: [...baseline.selectedRefs, ...additions.map(({ ref }) => ref)],
+    checks: [...baseline.checks, ...additions.map(({ check }) => check)],
+  };
+}
+
+function withCheckCount(baseline: LoaderResult, checkCount: number): LoaderResult {
+  const filler = Array.from({ length: checkCount - baseline.checks.length }, () => ({
+    targetId: "manifest",
+    check: "schema" as const,
+    outcome: "MATCH" as const,
+    reasonCode: "CHECK_MATCH" as const,
+    category: "IDENTITY_MATCH" as const,
+  }));
+  return { ...baseline, checks: [...baseline.checks, ...filler] };
+}
+
 describe("inspectBaseline", () => {
   it("readyLoaderFixtureIsCandidateNotAuthority", async () => {
     const baseline = await readyResult();
@@ -67,6 +96,9 @@ describe("inspectBaseline", () => {
 
   it("atMost128Selected", async () => {
     const baseline = await readyResult();
+    const atLimit = withAcCount(baseline, 125);
+    expect(atLimit.selectedRefs).toHaveLength(128);
+    expect(inspectBaseline(atLimit).state).toBe("READY");
     expect(inspectBaseline({ ...baseline, selectedRefs: Array.from({ length: 129 }, (_, index) => ({ ...baseline.selectedRefs[0], artifactId: `artifact-${index}` })) }).state).toBe("MALFORMED");
   });
 
@@ -103,19 +135,51 @@ describe("inspectBaseline", () => {
   });
 
   it("checksOverBinderLimitIsMalformed", async () => {
-    const baseline = await readyResult();
-    expect(inspectBaseline({ ...baseline, checks: Array.from({ length: 129 }, (_, index) => ({ ...baseline.checks[0], targetId: `check-${index}` })) }).state).toBe("MALFORMED");
+    const baseline = withAcCount(await readyResult(), 125);
+    expect(inspectBaseline(withCheckCount(baseline, 2_192)).state).toBe("READY");
+    expect(inspectBaseline(withCheckCount(baseline, 2_193)).state).toBe("MALFORMED");
   });
 
   it("checksOverLimitUsesBaselinePrecedence", async () => {
-    const baseline = await readyResult();
-    const checks = Array.from({ length: 129 }, (_, index) => ({ ...baseline.checks[0], targetId: `check-${index}` }));
-    expect(inspectBaseline({ ...baseline, identityCandidateReady: false, identityStatus: "MATCH", manifestDigestMatch: true, checks }).state).toBe("MALFORMED");
+    const fixture = s1aFixture();
+    const baseline = await loadS1aArtifacts(fixture.input, {
+      ...fixture.source,
+      async readArtifact() { throw Error("unreadable"); },
+    });
+    const template = baseline.checks[0];
+    if (!template) throw Error("non-ready fixture must contain a check");
+    const checks = Array.from({ length: 2_193 }, () => ({ ...template }));
+    expect(inspectBaseline({ ...baseline, checks }).state).toBe("MALFORMED");
   });
 
   it("consistentNonreadyS1aIsNotReady", async () => {
     const fixture = s1aFixture();
     const baseline = await loadS1aArtifacts(fixture.input, { ...fixture.source, async readArtifact() { throw Error("unreadable"); } });
     expect(inspectBaseline(baseline).state).toBe("NOT_READY");
+  });
+
+  it("duplicateSelectedIdentityInNonreadyResultIsMalformed", async () => {
+    const fixture = s1aFixture();
+    const baseline = await loadS1aArtifacts(fixture.input, {
+      ...fixture.source,
+      async readArtifact() { throw Error("unreadable"); },
+    });
+
+    expect(baseline.identityStatus).toBe("UNKNOWN");
+    expect(inspectBaseline({ ...baseline, selectedRefs: [...baseline.selectedRefs, baseline.selectedRefs[0]] }).state).toBe("MALFORMED");
+  });
+
+  it("rejectsNonreadyResultOverTheS1aCheckLimit", async () => {
+    const fixture = s1aFixture();
+    const baseline = await loadS1aArtifacts(fixture.input, {
+      ...fixture.source,
+      async readArtifact() { throw Error("unreadable"); },
+    });
+    const template = baseline.checks[0];
+    if (!template) throw Error("non-ready fixture must contain a check");
+    const checks = Array.from({ length: 2_193 }, () => ({ ...template }));
+
+    expect(baseline.identityStatus).toBe("UNKNOWN");
+    expect(inspectBaseline({ ...baseline, checks }).state).toBe("MALFORMED");
   });
 });

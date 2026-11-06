@@ -14,6 +14,8 @@ import type {
   SelectedArtifactRef,
 } from "../s1a/contract.js";
 
+const S1B_MAX_S1A_CHECKS = 2_192;
+
 type ReadySelection = Readonly<{
   task: SelectedArtifactRef;
   acs: readonly SelectedArtifactRef[];
@@ -129,12 +131,17 @@ function parseResult(value: unknown): LoaderResult | null {
     value.ownerTrustPrecondition !== "EXTERNAL_NOT_VERIFIED_BY_S1A" ||
     typeof value.identityCandidateReady !== "boolean" || value.eligibleBaseline !== false ||
     !Array.isArray(value.selectedRefs) || value.selectedRefs.length > S1A_LIMITS.selectedArtifacts ||
-    !Array.isArray(value.checks) || value.checks.length > S1A_LIMITS.selectedArtifacts ||
+    !Array.isArray(value.checks) || value.checks.length > S1B_MAX_S1A_CHECKS ||
     !Array.isArray(value.limitations) || !value.limitations.every((item) => typeof item === "string")
   ) return null;
   const selectedRefs = value.selectedRefs.map(parseSelectedRef);
   const checks = value.checks.map(parseCheck);
   if (selectedRefs.some((ref) => ref === null) || checks.some((check) => check === null)) return null;
+  const identities = new Set<string>();
+  for (const ref of selectedRefs) {
+    if (ref === null || identities.has(ref.artifactId)) return null;
+    identities.add(ref.artifactId);
+  }
   return {
     schemaVersion: "justice-s1a-result-v1",
     ...(value.manifestId !== undefined ? { manifestId: value.manifestId } : {}),
@@ -153,10 +160,7 @@ function parseResult(value: unknown): LoaderResult | null {
 function validReadySelection(refs: readonly SelectedArtifactRef[]): ReadySelection | null {
   if (refs.length < 4 || refs.length > S1A_LIMITS.selectedArtifacts) return null;
   const kinds = new Map<ArtifactKind, SelectedArtifactRef[]>();
-  const ids = new Set<string>();
   for (const ref of refs) {
-    if (ids.has(ref.artifactId)) return null;
-    ids.add(ref.artifactId);
     const group = kinds.get(ref.kind) ?? [];
     group.push(ref);
     kinds.set(ref.kind, group);
