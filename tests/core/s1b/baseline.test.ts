@@ -58,6 +58,23 @@ describe("inspectBaseline", () => {
     }
   });
 
+  it("rejects unknown keys at each baseline record level", async () => {
+    const baseline = await readyResult();
+    const selectedRef = baseline.selectedRefs[0];
+    const check = baseline.checks[0];
+    if (!selectedRef || !check) throw Error("ready fixture must contain refs and checks");
+
+    expect(inspectBaseline({ ...baseline, unexpected: true }).state).toBe("MALFORMED");
+    expect(inspectBaseline({
+      ...baseline,
+      selectedRefs: baseline.selectedRefs.map((ref, index) => index === 0 ? { ...ref, unexpected: true } : ref),
+    }).state).toBe("MALFORMED");
+    expect(inspectBaseline({
+      ...baseline,
+      checks: baseline.checks.map((entry, index) => index === 0 ? { ...entry, unexpected: true } : entry),
+    }).state).toBe("MALFORMED");
+  });
+
   it("mismatchedManifestOrDirtyArtifactCannotBecomeReady", async () => {
     const baseline = await readyResult();
     const dirty: LoaderResult = {

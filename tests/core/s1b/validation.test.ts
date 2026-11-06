@@ -98,4 +98,16 @@ describe("inspectEvidenceRefs", () => {
     expect(primaryRejectionReason(codes)).toBe("EVIDENCE_FIELD_INVALID");
     expect(primaryRejectionReason([...codes].reverse())).toBe("EVIDENCE_FIELD_INVALID");
   });
+
+  it("keeps unsafe identifier classification when multiple refs share the defect", () => {
+    const refs = [
+      { ...validRef("evidence-a"), taskRef: { artifactId: "../task-a", revision: "rev-1" } },
+      { ...validRef("evidence-b"), taskRef: { artifactId: "../task-b", revision: "rev-1" } },
+    ];
+
+    for (const candidates of [refs, [...refs].reverse()]) {
+      const result = inspectEvidenceRefs(candidates);
+      expect(primaryRejectionReason(result.issueCodes)).toBe("UNSAFE_IDENTIFIER");
+    }
+  });
 });

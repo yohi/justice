@@ -47,9 +47,25 @@ const REASONS = new Set([
 const CATEGORIES = new Set([
   "IDENTITY_MATCH", "INPUT_INVALID", "CHECK_INCOMPLETE", "OBSERVED_CONTRADICTION",
 ]);
+const RESULT_KEYS = new Set([
+  "schemaVersion", "manifestId", "manifestDigestMatch", "identityStatus",
+  "ownerAuthorityStatus", "ownerTrustPrecondition", "identityCandidateReady",
+  "eligibleBaseline", "selectedRefs", "checks", "limitations",
+]);
+const SELECTED_REF_KEYS = new Set([
+  "artifactId", "kind", "revision", "scopeKey", "parentId", "expectedDigest",
+  "observedDigest", "digestOutcome",
+]);
+const CHECK_KEYS = new Set([
+  "targetId", "check", "outcome", "reasonCode", "category", "expected", "observed",
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>): boolean {
+  return Object.keys(value).every((key) => allowed.has(key));
 }
 
 function isIdentityStatus(value: unknown): value is IdentityStatus {
@@ -73,7 +89,7 @@ function isReasonCategory(value: unknown): value is ReasonCategory {
 }
 
 function parseSelectedRef(value: unknown): SelectedArtifactRef | null {
-  if (!isRecord(value)) return null;
+  if (!isRecord(value) || !hasOnlyKeys(value, SELECTED_REF_KEYS)) return null;
   const { artifactId, kind, revision, scopeKey, parentId, expectedDigest, observedDigest, digestOutcome } = value;
   if (
     !isSafeIdentifier(artifactId) || !isArtifactKind(kind) ||
@@ -101,7 +117,7 @@ function parseSelectedRef(value: unknown): SelectedArtifactRef | null {
 }
 
 function parseCheck(value: unknown): LoaderCheck | null {
-  if (!isRecord(value) || typeof value.targetId !== "string" || value.targetId.length === 0) return null;
+  if (!isRecord(value) || !hasOnlyKeys(value, CHECK_KEYS) || typeof value.targetId !== "string" || value.targetId.length === 0) return null;
   const targetValid = value.targetId === "manifest" || value.targetId === "task-intent" ||
     (value.targetId.startsWith("artifact:") && isSafeIdentifier(value.targetId.slice("artifact:".length)));
   if (
@@ -123,7 +139,7 @@ function parseCheck(value: unknown): LoaderCheck | null {
 }
 
 function parseResult(value: unknown): LoaderResult | null {
-  if (!isRecord(value) || value.schemaVersion !== "justice-s1a-result-v1") return null;
+  if (!isRecord(value) || !hasOnlyKeys(value, RESULT_KEYS) || value.schemaVersion !== "justice-s1a-result-v1") return null;
   if (
     (value.manifestId !== undefined && !isSafeIdentifier(value.manifestId)) ||
     (value.manifestDigestMatch !== true && value.manifestDigestMatch !== false && value.manifestDigestMatch !== "unknown") ||

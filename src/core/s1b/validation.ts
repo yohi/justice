@@ -164,10 +164,11 @@ export function inspectEvidenceRefs(value: unknown): EvidenceInspection {
         if (ids.has(evidenceId)) issues.add("DUPLICATE_EVIDENCE_ID");
         ids.add(evidenceId);
       }
-      const before = issues.size;
-      const ref = parseEvidenceRef(candidate, evidenceId, issues);
+      const candidateIssues = new Set<InputRejectionReason>();
+      const ref = parseEvidenceRef(candidate, evidenceId, candidateIssues);
+      for (const code of candidateIssues) issues.add(code);
       if (ref) refs.push(ref);
-      else if (issues.size === before) {
+      else if (candidateIssues.size === 0) {
         issues.add("EVIDENCE_FIELD_INVALID");
       }
     }
