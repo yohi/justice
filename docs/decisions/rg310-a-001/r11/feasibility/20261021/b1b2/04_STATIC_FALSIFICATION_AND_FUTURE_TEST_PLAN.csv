@@ -1,0 +1,29 @@
+﻿case_id,counterexample,required_design_outcome,axis,status
+NC-01,prepare crash before durable reservation,no stage/authoritative write; no accepted state,B1+B2,SPEC_ONLY_NOT_EXECUTED
+NC-02,durable PREPARED then crash,quarantine; independent no-effects proof before ABORT; uncertain STOP,B1+B2,SPEC_ONLY_NOT_EXECUTED
+NC-03,stage filesystem rename/public file access escape,OS denies public state; external side effect means fail/STOP,B1,SPEC_ONLY_NOT_EXECUTED
+NC-04,commit aborted after writing content row,no accepted operation or new head or published bytes,B2,SPEC_ONLY_NOT_EXECUTED
+NC-05,commit ACK lost after durable commit,"opId lookup gives exact historic outcome, no second commit",B2,SPEC_ONLY_NOT_EXECUTED
+NC-06,serializable conflict 40001,"full admission recheck, not blind replay",B2,SPEC_ONLY_NOT_EXECUTED
+NC-07,parallel writers same preRoot,only properly serialized accepted predecessor; loser restarts/rejects,B2,SPEC_ONLY_NOT_EXECUTED
+NC-08,same opId different payload/grant,reject; immutable prior outcome unchanged,B2,SPEC_ONLY_NOT_EXECUTED
+NC-09,native nextval rollback,head/event seq has no phantom accepted history gaps,B2,SPEC_ONLY_NOT_EXECUTED
+NC-10,revocation ordered before attempted commit,grant denied if invalid under matching row/epoch order,B3,SPEC_ONLY_NOT_EXECUTED
+NC-11,revocation concurrent with commit,"one documented serialization and publication order, no ambiguity",B3,SPEC_ONLY_NOT_EXECUTED
+NC-12,grant expiry during transaction/commit,deny unless conservative time-bound proof covers linearization,B3,SPEC_ONLY_NOT_EXECUTED
+NC-13,attested clock unavailable/uncertain,"STOP, no accepted publish",B3,SPEC_ONLY_NOT_EXECUTED
+NC-14,old head read from replica after ACK,direct authoritative replica forbidden or freshness independently proven,B2,SPEC_ONLY_NOT_EXECUTED
+NC-15,gateway private cache hit after ACK,no stale accepted root served as current,B2,SPEC_ONLY_NOT_EXECUTED
+NC-16,old leader accepts after new term starts,old leader fenced; otherwise STOP,B2,SPEC_ONLY_NOT_EXECUTED
+NC-17,restore older backup loses acknowledged head,recovery denies until acknowledged prefix proves intact,B2,SPEC_ONLY_NOT_EXECUTED
+NC-18,direct Git master/CI artifact consumer,not accepted unless exact Gateway proof; if bypass exists DESIGN FAIL,B1+B2,SPEC_ONLY_NOT_EXECUTED
+NC-19,untrusted actor uses bash/exec/native syscall,OS boundary denies accepted root/DB/network tokens,B1,SPEC_ONLY_NOT_EXECUTED
+NC-20,inherited FD/bind mount to protected path,no protected FD/mount escapes to actor children,B1,SPEC_ONLY_NOT_EXECUTED
+NC-21,untrusted actor has devcontainer root/sudo,unsupported security claim; must isolate or exclude from trusted runtime,B1,SPEC_ONLY_NOT_EXECUTED
+NC-22,malicious privileged admin alters accepted DB,explicit TCB risk; not proven preventable by actor/Gateway RBAC,B1,SPEC_ONLY_NOT_EXECUTED
+NC-23,G1 stale read result relabeled G2 with same callId,H0 exact host-issued attempt identity verified; otherwise BLOCKED,A1,SPEC_ONLY_NOT_EXECUTED
+NC-24,late assistant/toolResult token persists after abort,"Task1 independent persistence predicate still BLOCKED, cannot waive",Task1,SPEC_ONLY_NOT_EXECUTED
+NC-25,renamed path accepted without DB publication,no other authoritative reader accepts it; otherwise DESIGN FAIL,B1+B2,SPEC_ONLY_NOT_EXECUTED
+NC-26,S3 fallback version missing or delete marker,"if S3 selected, exact versionId fetch/retention and fail-closed proof required",Fallback B,SPEC_ONLY_NOT_EXECUTED
+NC-27,orphan PREPARED reservation on phase close,no PHASE_COMPLETE while unresolved or without terminal tombstone,B2,SPEC_ONLY_NOT_EXECUTED
+NC-28,unknown outcome returned as success,UNKNOWN/IN_DOUBT STOP; only durable lookup can confirm accepted,B2,SPEC_ONLY_NOT_EXECUTED
