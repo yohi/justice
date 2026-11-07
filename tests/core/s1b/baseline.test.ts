@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { LoaderResult } from "../../../src/core/s1a/contract.js";
 import { loadS1aArtifacts } from "../../../src/core/s1a/loader.js";
 import { s1aFixture } from "../../helpers/s1a-fixtures.js";
+import { bindEvidence } from "../../../src/core/s1b/binder.js";
 import { inspectBaseline } from "../../../src/core/s1b/baseline.js";
+import { s1bFixture } from "../../helpers/s1b-fixtures.js";
 
 async function readyResult(): Promise<LoaderResult> {
   const fixture = s1aFixture();
@@ -74,6 +76,39 @@ describe("inspectBaseline", () => {
 
     expect(inspectBaseline(changingBaseline).state).toBe("READY");
     expect(reads).toEqual(new Map([["selectedRefs", 1], ["checks", 1], ["limitations", 1]]));
+  });
+
+  it("rejects sparse S1-a arrays without promoting malformed baselines", async (): Promise<void> => {
+    const ready = await readyResult();
+    const notReadyFixture = s1aFixture();
+    const notReady = await loadS1aArtifacts(notReadyFixture.input, {
+      ...notReadyFixture.source,
+      async readArtifact(): Promise<Uint8Array> { throw Error("unreadable"); },
+    });
+    const sparse = <T>(items: readonly T[]): T[] => {
+      const result = [...items];
+      result.length++;
+      return result;
+    };
+
+    const sparseBaselines = [
+      { ...ready, checks: sparse(ready.checks) },
+      { ...ready, selectedRefs: sparse(ready.selectedRefs) },
+      { ...ready, limitations: sparse(ready.limitations) },
+      { ...notReady, checks: sparse(notReady.checks) },
+    ];
+
+    for (const baseline of sparseBaselines) {
+      expect(inspectBaseline(baseline).state).toBe("MALFORMED");
+    }
+
+    const binderFixture = await s1bFixture();
+    const rejected = bindEvidence({ ...binderFixture.input, baseline: sparseBaselines[0]! });
+    expect(rejected.evaluationStatus).toBe("INPUT_REJECTED");
+    expect(rejected.rejectionReasonCode).toBe("BASELINE_SHAPE_INVALID");
+    expect(inspectBaseline(ready).state).toBe("READY");
+    expect(inspectBaseline(notReady).state).toBe("NOT_READY");
+    expect(ready.ownerAuthorityStatus).toBe("NOT_PROVEN");
   });
 
   it("rejects unknown keys at each baseline record level", async () => {
