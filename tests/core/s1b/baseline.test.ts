@@ -58,6 +58,24 @@ describe("inspectBaseline", () => {
     }
   });
 
+  it("reads baseline arrays once before validating them", async () => {
+    const baseline = await readyResult();
+    const reads = new Map<string, number>();
+    const changingBaseline = new Proxy({ ...baseline }, {
+      get(target, property, receiver) {
+        if (property === "selectedRefs" || property === "checks" || property === "limitations") {
+          const count = reads.get(property) ?? 0;
+          reads.set(property, count + 1);
+          if (count > 0) return [];
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    expect(inspectBaseline(changingBaseline).state).toBe("READY");
+    expect(reads).toEqual(new Map([["selectedRefs", 1], ["checks", 1], ["limitations", 1]]));
+  });
+
   it("rejects unknown keys at each baseline record level", async () => {
     const baseline = await readyResult();
     const selectedRef = baseline.selectedRefs[0];
@@ -157,18 +175,6 @@ describe("inspectBaseline", () => {
     expect(inspectBaseline(withCheckCount(baseline, 2_193)).state).toBe("MALFORMED");
   });
 
-  it("checksOverLimitUsesBaselinePrecedence", async () => {
-    const fixture = s1aFixture();
-    const baseline = await loadS1aArtifacts(fixture.input, {
-      ...fixture.source,
-      async readArtifact() { throw Error("unreadable"); },
-    });
-    const template = baseline.checks[0];
-    if (!template) throw Error("non-ready fixture must contain a check");
-    const checks = Array.from({ length: 2_193 }, () => ({ ...template }));
-    expect(inspectBaseline({ ...baseline, checks }).state).toBe("MALFORMED");
-  });
-
   it("consistentNonreadyS1aIsNotReady", async () => {
     const fixture = s1aFixture();
     const baseline = await loadS1aArtifacts(fixture.input, { ...fixture.source, async readArtifact() { throw Error("unreadable"); } });
@@ -186,7 +192,7 @@ describe("inspectBaseline", () => {
     expect(inspectBaseline({ ...baseline, selectedRefs: [...baseline.selectedRefs, baseline.selectedRefs[0]] }).state).toBe("MALFORMED");
   });
 
-  it("rejectsNonreadyResultOverTheS1aCheckLimit", async () => {
+  it("rejectsNonreadyResultOverTheS1aCheckLimitAndPreservesBaselineIdentity", async () => {
     const fixture = s1aFixture();
     const baseline = await loadS1aArtifacts(fixture.input, {
       ...fixture.source,
@@ -197,6 +203,7 @@ describe("inspectBaseline", () => {
     const checks = Array.from({ length: 2_193 }, () => ({ ...template }));
 
     expect(baseline.identityStatus).toBe("UNKNOWN");
+    expect(baseline.identityCandidateReady).toBe(false);
     expect(inspectBaseline({ ...baseline, checks }).state).toBe("MALFORMED");
   });
 });

@@ -60,34 +60,42 @@ const CHECK_KEYS = new Set([
   "targetId", "check", "outcome", "reasonCode", "category", "expected", "observed",
 ]);
 
+/** Determines whether a value is a non-null, non-array record. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Checks that a record contains no keys outside the supplied allowlist. */
 function hasOnlyKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>): boolean {
   return Object.keys(value).every((key) => allowed.has(key));
 }
 
+/** Narrows an unknown value to a supported identity status. */
 function isIdentityStatus(value: unknown): value is IdentityStatus {
   return IDENTITIES.some((status) => status === value);
 }
 
+/** Narrows an unknown value to a supported artifact kind. */
 function isArtifactKind(value: unknown): value is ArtifactKind {
   return KINDS.some((candidate) => candidate === value);
 }
 
+/** Narrows an unknown value to a supported S1-a check kind. */
 function isCheckKind(value: unknown): value is S1aCheckKind {
   return typeof value === "string" && CHECKS.has(value);
 }
 
+/** Narrows an unknown value to a supported diagnostic reason code. */
 function isReasonCode(value: unknown): value is ReasonCode {
   return typeof value === "string" && REASONS.has(value);
 }
 
+/** Narrows an unknown value to a supported diagnostic category. */
 function isReasonCategory(value: unknown): value is ReasonCategory {
   return typeof value === "string" && CATEGORIES.has(value);
 }
 
+/** Parses and validates one selected artifact reference. */
 function parseSelectedRef(value: unknown): SelectedArtifactRef | null {
   if (!isRecord(value) || !hasOnlyKeys(value, SELECTED_REF_KEYS)) return null;
   const { artifactId, kind, revision, scopeKey, parentId, expectedDigest, observedDigest, digestOutcome } = value;
@@ -116,6 +124,7 @@ function parseSelectedRef(value: unknown): SelectedArtifactRef | null {
   };
 }
 
+/** Parses and validates one loader diagnostic check. */
 function parseCheck(value: unknown): LoaderCheck | null {
   if (!isRecord(value) || !hasOnlyKeys(value, CHECK_KEYS) || typeof value.targetId !== "string" || value.targetId.length === 0) return null;
   const targetValid = value.targetId === "manifest" || value.targetId === "task-intent" ||
@@ -138,20 +147,24 @@ function parseCheck(value: unknown): LoaderCheck | null {
   };
 }
 
+/** Parses a baseline result while snapshotting each array-valued property once. */
 function parseResult(value: unknown): LoaderResult | null {
   if (!isRecord(value) || !hasOnlyKeys(value, RESULT_KEYS) || value.schemaVersion !== "justice-s1a-result-v1") return null;
+  const selectedRefsInput = value.selectedRefs;
+  const checksInput = value.checks;
+  const limitationsInput = value.limitations;
   if (
     (value.manifestId !== undefined && !isSafeIdentifier(value.manifestId)) ||
     (value.manifestDigestMatch !== true && value.manifestDigestMatch !== false && value.manifestDigestMatch !== "unknown") ||
     !isIdentityStatus(value.identityStatus) || value.ownerAuthorityStatus !== "NOT_PROVEN" ||
     value.ownerTrustPrecondition !== "EXTERNAL_NOT_VERIFIED_BY_S1A" ||
     typeof value.identityCandidateReady !== "boolean" || value.eligibleBaseline !== false ||
-    !Array.isArray(value.selectedRefs) || value.selectedRefs.length > S1A_LIMITS.selectedArtifacts ||
-    !Array.isArray(value.checks) || value.checks.length > S1B_MAX_S1A_CHECKS ||
-    !Array.isArray(value.limitations) || !value.limitations.every((item) => typeof item === "string")
+    !Array.isArray(selectedRefsInput) || selectedRefsInput.length > S1A_LIMITS.selectedArtifacts ||
+    !Array.isArray(checksInput) || checksInput.length > S1B_MAX_S1A_CHECKS ||
+    !Array.isArray(limitationsInput) || !limitationsInput.every((item) => typeof item === "string")
   ) return null;
-  const selectedRefs = value.selectedRefs.map(parseSelectedRef);
-  const checks = value.checks.map(parseCheck);
+  const selectedRefs = selectedRefsInput.map(parseSelectedRef);
+  const checks = checksInput.map(parseCheck);
   if (selectedRefs.some((ref) => ref === null) || checks.some((check) => check === null)) return null;
   const identities = new Set<string>();
   for (const ref of selectedRefs) {
@@ -169,10 +182,11 @@ function parseResult(value: unknown): LoaderResult | null {
     eligibleBaseline: false,
     selectedRefs: selectedRefs.filter((ref): ref is SelectedArtifactRef => ref !== null),
     checks: checks.filter((check): check is LoaderCheck => check !== null),
-    limitations: value.limitations.filter((item): item is string => typeof item === "string"),
+    limitations: limitationsInput.filter((item): item is string => typeof item === "string"),
   };
 }
 
+/** Resolves the unique task and AC selection when references form a ready chain. */
 function validReadySelection(refs: readonly SelectedArtifactRef[]): ReadySelection | null {
   if (refs.length < 4 || refs.length > S1A_LIMITS.selectedArtifacts) return null;
   const kinds = new Map<ArtifactKind, SelectedArtifactRef[]>();
@@ -199,6 +213,7 @@ function validReadySelection(refs: readonly SelectedArtifactRef[]): ReadySelecti
   return { task, acs };
 }
 
+/** Verifies that every selected reference has exactly one matching digest check. */
 function checksCorrespond(refs: readonly SelectedArtifactRef[], checks: readonly LoaderCheck[]): boolean {
   const digestChecks = checks.filter((check) => check.check === "artifact_digest");
   if (digestChecks.length !== refs.length) return false;
@@ -211,6 +226,7 @@ function checksCorrespond(refs: readonly SelectedArtifactRef[], checks: readonly
   });
 }
 
+/** Classifies an untrusted S1-a result as malformed, not ready, or ready for binding. */
 export function inspectBaseline(value: unknown): BaselineInspection {
   const result = parseResult(value);
   if (!result) return MALFORMED;
