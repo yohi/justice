@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+## [4.1.0](https://github.com/yohi/justice/compare/v4.0.0...v4.1.0) (2026-11-07)
+
+
+### Features
+
+* **justice-v6:** add S1-a read-only artifact identity loader and fixtures ([#350](https://github.com/yohi/justice/issues/350)) ([23b86fd](https://github.com/yohi/justice/commit/23b86fd24f84f7260d2aaeabfa7e0cfba5d62ef6))
+* **s1b:** bind evidence and assess AC reference presence ([f84f8be](https://github.com/yohi/justice/commit/f84f8be1154e0ede447c35a6a5497ffa37d0c431))
+* **s1b:** define typed evidence contract and atomic validation ([702c85f](https://github.com/yohi/justice/commit/702c85f964ae033ca581e2abcf1397db310da9a0))
+* **s1b:** implement typed evidence binder for S1-a identity candidates ([678db1f](https://github.com/yohi/justice/commit/678db1f820c0857db56120f9db272f33e07bf982))
+* **s1b:** validate S1-a comparison candidate ([ca25bc3](https://github.com/yohi/justice/commit/ca25bc33fefb0d1608e2069c529f658c93f39928))
+
+
+### Bug Fixes
+
+* **justice-v6-s1a:** preserve observed mismatches across incomplete references ([#350](https://github.com/yohi/justice/issues/350)) ([9df9719](https://github.com/yohi/justice/commit/9df971900a5fab86ebfb686e852169b4656a3b73))
+* S1-a識別子順序とCLIリンク起動を修正 ([e9813f5](https://github.com/yohi/justice/commit/e9813f5df13dc4922f5ba5ab190c3e8a19814637))
+* **s1b:** bound evidence iteration and snapshot fields ([211bfd2](https://github.com/yohi/justice/commit/211bfd2be91149b9bb082b268dc0b94b3c9ba9b2))
+* **s1b:** compare task revision only for selected task ([008b28f](https://github.com/yohi/justice/commit/008b28f84024dfe1df65c2b29b1ab2ebdfe99739))
+* **s1b:** 基線検査の件数上限と重複判定を修正 ([6228356](https://github.com/yohi/justice/commit/622835623be10111867d892ec1e1e00cddcaf31f))
+* **s1b:** 基線配列の検証を一貫化 ([5a85a68](https://github.com/yohi/justice/commit/5a85a687feba1e4a841a8374b1650863a2166249))
+* **s1b:** 欠陥分類と基線キー検証を修正 ([3281e82](https://github.com/yohi/justice/commit/3281e82ba55fd41451552a4fa36747e182179b97))
+* 疎配列のS1-a基線を拒否 ([0d91ed3](https://github.com/yohi/justice/commit/0d91ed3b4a87d4346b11fab1f97505a5c6b483e8))
+* 疎配列のS1-a基線を拒否 ([a1e5add](https://github.com/yohi/justice/commit/a1e5add8978641f24a444c43482343d306b94047))
+
 ## [4.0.0](https://github.com/yohi/justice/compare/v3.0.0...v4.0.0) (2026-09-27)
 
 
