@@ -70,6 +70,13 @@ function hasOnlyKeys(value: Record<string, unknown>, allowed: ReadonlySet<string
   return Object.keys(value).every((key) => allowed.has(key));
 }
 
+function hasDenseArrayItems(value: readonly unknown[]): boolean {
+  for (let index = 0; index < value.length; index++) {
+    if (!Object.hasOwn(value, index)) return false;
+  }
+  return true;
+}
+
 /** Narrows an unknown value to a supported identity status. */
 function isIdentityStatus(value: unknown): value is IdentityStatus {
   return IDENTITIES.some((status) => status === value);
@@ -161,7 +168,10 @@ function parseResult(value: unknown): LoaderResult | null {
     typeof value.identityCandidateReady !== "boolean" || value.eligibleBaseline !== false ||
     !Array.isArray(selectedRefsInput) || selectedRefsInput.length > S1A_LIMITS.selectedArtifacts ||
     !Array.isArray(checksInput) || checksInput.length > S1B_MAX_S1A_CHECKS ||
-    !Array.isArray(limitationsInput) || !limitationsInput.every((item) => typeof item === "string")
+    !Array.isArray(limitationsInput) ||
+    !hasDenseArrayItems(selectedRefsInput) || !hasDenseArrayItems(checksInput) ||
+    !hasDenseArrayItems(limitationsInput) ||
+    !limitationsInput.every((item) => typeof item === "string")
   ) return null;
   const selectedRefs = selectedRefsInput.map(parseSelectedRef);
   const checks = checksInput.map(parseCheck);
