@@ -39,6 +39,39 @@ describe("S1-c path rules", () => {
     expect(inspectChangeSet({ availability: "PRESENT", changes: sparse })).toEqual({ state: "INVALID" });
   });
 
+  test("snapshotsPathGetterBeforeValidationAndOutput", () => {
+    let reads = 0;
+    const change = new Proxy({ kind: "ADD", path: "src/safe.ts" }, {
+      get(target, property, receiver) {
+        if (property === "path") {
+          reads += 1;
+          return reads === 1 ? "src/safe.ts" : "../secret";
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    const result = inspectChangeSet({ availability: "PRESENT", changes: [change] });
+    expect(result).toEqual({ state: "PRESENT", touchedPaths: ["src/safe.ts"] });
+    expect(reads).toBe(1);
+    expect(compareCandidatePaths(["src/**"], result.state === "PRESENT" ? result.touchedPaths : []).comparison)
+      .toBe("WITHIN_CANDIDATE_SCOPE");
+  });
+
+  test("ignoresCustomIteratorAndCollectsOwnIndexedChanges", () => {
+    const changes = [{ kind: "ADD", path: "outside.ts" }, { kind: "ADD", path: "src/safe.ts" }];
+    Object.defineProperty(changes, Symbol.iterator, {
+      value: function* () {
+        yield { kind: "ADD", path: "src/first-iteration.ts" };
+      },
+    });
+
+    const result = inspectChangeSet({ availability: "PRESENT", changes });
+    expect(result).toEqual({ state: "PRESENT", touchedPaths: ["outside.ts", "src/safe.ts"] });
+    expect(compareCandidatePaths(["src/**"], result.state === "PRESENT" ? result.touchedPaths : []).outsidePaths)
+      .toEqual(["outside.ts"]);
+  });
+
   test("limitsAndPathSafety", () => {
     expect(inspectChangeSet({ availability: "PRESENT", changes: Array.from({ length: 129 }, (_, i) => ({ kind: "ADD", path: `file${i}` })) })).toEqual({ state: "INVALID" });
     expect(validateAllowedPaths(Array.from({ length: 129 }, (_, i) => `file${i}`))).toBeNull();

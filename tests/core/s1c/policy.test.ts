@@ -93,4 +93,18 @@ describe("extractTaskScopePolicy", () => {
     expect(extract(`${heading}\n\`\`\`\n${begin}\n${end}\n\`\`\``)).toEqual({ state: "UNDEFINED" });
     expect(extractTaskScopePolicy(new Uint8Array(8_388_609), selected)).toEqual({ state: "INVALID" });
   });
+
+  test("measuresPolicyPayloadBytesWithoutDroppingCrLf", () => {
+    const base = policy();
+    const split = base.indexOf('"allowedPaths"');
+    const multiline = `${base.slice(0, split)}\n${base.slice(split)}`;
+    const atLimitLf = `${multiline}${" ".repeat(65_536 - Buffer.byteLength(multiline, "utf8") - 1)}`;
+    expect(extract(`${heading}\n${begin}\n${atLimitLf}\n${end}`)).toMatchObject({ state: "READY" });
+
+    const atLimitCrLf = `${multiline}${" ".repeat(65_536 - Buffer.byteLength(multiline, "utf8") - 1)}`;
+    expect(extract(`${heading}\r\n${begin}\r\n${atLimitCrLf}\r\n${end}`)).toEqual({ state: "INVALID" });
+
+    const overLimitCrLf = `${multiline}${" ".repeat(65_537 - Buffer.byteLength(multiline, "utf8") - 1)}`;
+    expect(extract(`${heading}\r\n${begin}\r\n${overLimitCrLf}\r\n${end}`)).toEqual({ state: "INVALID" });
+  });
 });

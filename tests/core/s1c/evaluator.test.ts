@@ -72,6 +72,24 @@ describe("evaluateS1c", () => {
     const atLimit = evaluateS1c({ ...value, planBytes: new Uint8Array(8_388_608) });
     expect(atLimit.diagnostics.map((item) => item.code)).toContain("PLAN_IDENTITY_MISMATCH");
   });
+  it("invalidPlanStillInspectsMalformedChangeSet", async () => {
+    const value = await input({ availability: "PRESENT", changes: [null] });
+    const result = evaluateS1c({ ...value, planBytes: new Uint8Array(8_388_609) });
+    expect(result.diagnostics.map((item) => item.code)).toEqual([
+      "PLAN_BYTES_INVALID", "CHANGESET_INVALID", "AC_EVIDENCE_REF_MISSING",
+      "AC_EVIDENCE_REF_MISSING", "OWNER_AUTHORITY_NOT_VERIFIED",
+    ]);
+    expect(result.candidateScopeComparison).toBe("UNKNOWN");
+    expect(result.ownerAuthorityVerification).toBe("NOT_VERIFIED_BY_S1C");
+  });
+  it("invalidPlanStillValidatesChangeSetButLeavesComparisonUnknown", async () => {
+    const value = await input();
+    const result = evaluateS1c({ ...value, planBytes: new TextEncoder().encode("different") });
+    expect(result.diagnostics.map((item) => item.code)).toContain("PLAN_IDENTITY_MISMATCH");
+    expect(result.candidateScopeComparison).toBe("UNKNOWN");
+    expect(result.diagnostics.map((item) => item.code)).not.toContain("CHANGESET_INVALID");
+    expect(result.diagnostics.map((item) => item.code)).toContain("OWNER_AUTHORITY_NOT_VERIFIED");
+  });
   it("digestMismatchIsObservedNotInputInvalid", async () => {
     const value = await input();
     const result = evaluateS1c({ ...value, planBytes: new TextEncoder().encode("different") });

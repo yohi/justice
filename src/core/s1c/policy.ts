@@ -18,6 +18,7 @@ type PolicyReferences = Readonly<{
 }>;
 
 type Fence = Readonly<{ character: "`" | "~"; length: number }>;
+type StrictLine = Readonly<{ content: string; endingBytes: number }>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
@@ -100,7 +101,7 @@ function parsePolicy(bytes: Uint8Array): (PolicyReferences & Readonly<{ allowedP
   });
 }
 
-function strictLines(bytes: Uint8Array): readonly string[] | null {
+function strictLines(bytes: Uint8Array): readonly StrictLine[] | null {
   if (bytes.byteLength > MAX_PLAN_BYTES || (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf)) return null;
   let text: string;
   try {
@@ -109,7 +110,14 @@ function strictLines(bytes: Uint8Array): readonly string[] | null {
     return null;
   }
   if (/(?:^|[^\r])\r(?!\n)/.test(text)) return null;
-  return text.split(/\r?\n/);
+  return text.split("\n").map((line, index, lines) => {
+    const hasLineFeed = index < lines.length - 1;
+    const hasCarriageReturn = hasLineFeed && line.endsWith("\r");
+    return {
+      content: hasCarriageReturn ? line.slice(0, -1) : line,
+      endingBytes: hasLineFeed ? (hasCarriageReturn ? 2 : 1) : 0,
+    };
+  });
 }
 
 function refMismatch(policy: PolicyReferences, selected: Readonly<{ plan: SelectedArtifactRef; task: SelectedArtifactRef }>): boolean {
@@ -133,10 +141,11 @@ export function extractTaskScopePolicy(
   let blockOpen = false;
   let blockLines: string[] = [];
   let blockBytes = 0;
+  let lastBlockEndingBytes = 0;
   let blockCount = 0;
   const policies: (PolicyReferences & Readonly<{ allowedPaths: readonly string[] }>)[] = [];
 
-  for (const line of lines) {
+  for (const { content: line, endingBytes } of lines) {
     if (fence !== null) {
       if (closesFence(line, fence)) fence = null;
       continue;
@@ -153,10 +162,13 @@ export function extractTaskScopePolicy(
         blockOpen = true;
         blockLines = [];
         blockBytes = 0;
+        lastBlockEndingBytes = 0;
         blockCount += 1;
         if (blockCount > MAX_POLICY_BLOCKS) return { state: "INVALID" };
       } else {
         if (!blockOpen) return { state: "INVALID" };
+        blockBytes -= lastBlockEndingBytes;
+        if (blockBytes > MAX_POLICY_BYTES) return { state: "INVALID" };
         const json = parsePolicy(new TextEncoder().encode(blockLines.join("\n")));
         if (json === null) return { state: "INVALID" };
         policies.push(json);
@@ -169,7 +181,8 @@ export function extractTaskScopePolicy(
     if (blockOpen) {
       if (line.includes(MARKER_PREFIX)) return { state: "INVALID" };
       blockLines.push(line);
-      blockBytes += Buffer.byteLength(line, "utf8") + (blockLines.length > 1 ? 1 : 0);
+      blockBytes += Buffer.byteLength(line, "utf8") + endingBytes;
+      lastBlockEndingBytes = endingBytes;
       if (blockBytes > MAX_POLICY_BYTES) return { state: "INVALID" };
       continue;
     }

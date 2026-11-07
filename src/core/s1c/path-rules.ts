@@ -40,18 +40,23 @@ function compareUtf8(left: string, right: string): number {
   return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
 }
 
-function isDenseArray(value: unknown): value is unknown[] {
-  if (!Array.isArray(value) || value.length > MAX_ENTRIES) return false;
-  for (let index = 0; index < value.length; index += 1) {
-    if (!Object.hasOwn(value, index)) return false;
+function snapshotDenseArray(value: unknown): unknown[] | null {
+  if (!Array.isArray(value)) return null;
+  const length = value.length;
+  if (length > MAX_ENTRIES) return null;
+  const items: unknown[] = [];
+  for (let index = 0; index < length; index += 1) {
+    if (!Object.hasOwn(value, index)) return null;
+    items.push(value[index]);
   }
-  return true;
+  return items;
 }
 
 export function validateAllowedPaths(value: unknown): readonly string[] | null {
-  if (!isDenseArray(value)) return null;
+  const items = snapshotDenseArray(value);
+  if (items === null) return null;
   const paths: string[] = [];
-  for (const path of value) {
+  for (const path of items) {
     if (!isAllowedPattern(path)) return null;
     paths.push(path);
   }
@@ -60,19 +65,26 @@ export function validateAllowedPaths(value: unknown): readonly string[] | null {
 
 function validateChange(value: unknown): ChangedPath | null {
   if (!isPlainRecord(value) || typeof value.kind !== "string") return null;
-  switch (value.kind) {
+  const kind = value.kind;
+  switch (kind) {
     case "ADD":
     case "MODIFY":
-    case "DELETE":
-      if (!hasExactKeys(value, ["kind", "path"]) || !isSafePath(value.path)) return null;
-      return Object.freeze({ kind: value.kind, path: value.path });
+    case "DELETE": {
+      const path = value.path;
+      if (!hasExactKeys(value, ["kind", "path"]) || !isSafePath(path)) return null;
+      return Object.freeze({ kind, path });
+    }
     case "RENAME":
-      if (
-        !hasExactKeys(value, ["kind", "oldPath", "newPath"]) ||
-        !isSafePath(value.oldPath) ||
-        !isSafePath(value.newPath)
-      ) return null;
-      return Object.freeze({ kind: "RENAME", oldPath: value.oldPath, newPath: value.newPath });
+      {
+        const oldPath = value.oldPath;
+        const newPath = value.newPath;
+        if (
+          !hasExactKeys(value, ["kind", "oldPath", "newPath"]) ||
+          !isSafePath(oldPath) ||
+          !isSafePath(newPath)
+        ) return null;
+        return Object.freeze({ kind: "RENAME", oldPath, newPath });
+      }
     default:
       return null;
   }
@@ -85,11 +97,14 @@ export function inspectChangeSet(
   if (value.availability === "UNAVAILABLE") {
     return hasExactKeys(value, ["availability"]) ? { state: "UNAVAILABLE" } : { state: "INVALID" };
   }
-  if (value.availability !== "PRESENT" || !hasExactKeys(value, ["availability", "changes"]) || !isDenseArray(value.changes)) {
+  const changesInput = value.changes;
+  if (value.availability !== "PRESENT" || !hasExactKeys(value, ["availability", "changes"])) {
     return { state: "INVALID" };
   }
+  const changes = snapshotDenseArray(changesInput);
+  if (changes === null) return { state: "INVALID" };
   const touchedPaths: string[] = [];
-  for (const change of value.changes) {
+  for (const change of changes) {
     const valid = validateChange(change);
     if (valid === null) return { state: "INVALID" };
     if (valid.kind === "RENAME") touchedPaths.push(valid.oldPath, valid.newPath);

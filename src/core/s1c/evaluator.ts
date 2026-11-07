@@ -94,6 +94,10 @@ export function evaluateS1c(input: S1cInput): S1cResult {
   let inspected;
   try { inspected = inspectBaseline(envelope.baseline); } catch { inspected = { state: "MALFORMED" as const }; }
   if (inspected.state === "MALFORMED") return freezeResult("UNKNOWN", [{ code: "S1A_BASELINE_INVALID" }]);
+  let changes: ReturnType<typeof inspectChangeSet>;
+  try { changes = inspectChangeSet(envelope.changeSet); } catch { changes = { state: "INVALID" }; }
+  if (changes.state === "INVALID") diagnostics.push({ code: "CHANGESET_INVALID" });
+  else if (changes.state === "UNAVAILABLE") diagnostics.push({ code: "CHANGESET_UNAVAILABLE" });
   if (inspected.state === "NOT_READY") {
     diagnostics.push({ code: "S1A_BASELINE_NOT_READY" });
     collectEvidence(diagnostics, claims, envelope.baseline as unknown as LoaderResult, envelope.evidenceRefs);
@@ -103,6 +107,7 @@ export function evaluateS1c(input: S1cInput): S1cResult {
   const baseline = envelope.baseline as unknown as LoaderResult;
   collectEvidence(diagnostics, claims, baseline, envelope.evidenceRefs);
   let comparison: S1cResult["candidateScopeComparison"] = "UNKNOWN";
+  let policy: ReturnType<typeof extractTaskScopePolicy> | null = null;
   try {
     if (!(envelope.planBytes instanceof Uint8Array) || envelope.planBytes.byteLength > 8_388_608) {
       diagnostics.push({ code: "PLAN_BYTES_INVALID" });
@@ -113,20 +118,17 @@ export function evaluateS1c(input: S1cInput): S1cResult {
         const digest = createHash("sha256").update(envelope.planBytes).digest("hex");
         if (digest !== refs.plan.expectedDigest || digest !== refs.plan.observedDigest || refs.plan.digestOutcome !== "MATCH") diagnostics.push({ code: "PLAN_IDENTITY_MISMATCH" });
         else {
-          const policy = extractTaskScopePolicy(envelope.planBytes, refs);
+          policy = extractTaskScopePolicy(envelope.planBytes, refs);
           if (policy.state === "UNDEFINED") diagnostics.push({ code: "SCOPE_POLICY_UNDEFINED" });
           else if (policy.state === "INVALID") diagnostics.push({ code: "SCOPE_POLICY_INVALID" });
           else if (policy.state === "REFERENCE_MISMATCH") diagnostics.push({ code: "SCOPE_POLICY_REFERENCE_MISMATCH" });
-          const changes = inspectChangeSet(envelope.changeSet);
-          if (changes.state === "INVALID") diagnostics.push({ code: "CHANGESET_INVALID" });
-          else if (changes.state === "UNAVAILABLE") diagnostics.push({ code: "CHANGESET_UNAVAILABLE" });
-          if (policy.state === "READY" && changes.state === "PRESENT") {
-            const result = compareCandidatePaths(policy.policy.allowedPaths, changes.touchedPaths);
-            comparison = result.comparison;
-            for (const path of result.outsidePaths) diagnostics.push({ code: "OUTSIDE_CANDIDATE_SCOPE", path });
-          }
         }
       }
+    }
+    if (policy?.state === "READY" && changes.state === "PRESENT") {
+      const result = compareCandidatePaths(policy.policy.allowedPaths, changes.touchedPaths);
+      comparison = result.comparison;
+      for (const path of result.outsidePaths) diagnostics.push({ code: "OUTSIDE_CANDIDATE_SCOPE", path });
     }
   } catch {
     diagnostics.push({ code: "CHANGESET_INVALID" });
