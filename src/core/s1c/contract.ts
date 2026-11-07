@@ -53,6 +53,7 @@ export type ChangeSet = Readonly<
   | { availability: "PRESENT"; changes: readonly ChangedPath[] }
 >;
 export type TaskScopePolicy = Readonly<{
+  schemaVersion: "justice-s1c-task-scope-v1";
   planRef: Readonly<{ artifactId: string; revision: string }>;
   taskRef: Readonly<{ artifactId: string; revision: string }>;
   scopeKey: string;
