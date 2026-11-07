@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript (ES2022/ESNext), Node `node:crypto`, existing S1-a `parseStrictJson`, S1-b `inspectBaseline`/`bindEvidence`, Bun, Vitest. No new dependencies, Host adapter, service, or persistent state.
 
-**Spec:** `docs/superpowers/specs/2026-11-07-justice-v6-s1c-deviation-rules-design.md` on `feature/justice-v6-s1c-deviation-rules-design-20261107`, commit `6f898215ad6c2e3ea727042c96694e2bbb043f24` (Design R0.1.1, F001–F003). Issue: https://github.com/yohi/justice/issues/352.
+**Spec:** `docs/superpowers/specs/2026-11-07-justice-v6-s1c-deviation-rules-design.md` at immutable commit `93b4c01931d9f3769c039b4e9b12c128d11a424a`, Git Blob SHA-1 `dd9a8afe83e4a08c3d4c047999efa212372bcc96` (Design R0.1.1 incorporating F001–F006; Human Owner adopted with limitations in this conversation). Branch locator: `feature/justice-v6-s1c-deviation-rules-design-20261107`. The Design file still contains its historical `R0.1.1_OWNER_DECISION_PENDING` status text; this reference does not assert that GitHub records the adoption decision. Issue: https://github.com/yohi/justice/issues/352.
 
 **Document/authority status:** Original R0.1 was adopted with limitations. The referenced R0.1.1 is committed but is still labeled `R0.1.1_OWNER_DECISION_PENDING`. This plan is a **DOCUMENT_ONLY implementation proposal** using that correction as a conditional technical input. **STOP before any code/test/commit unless Human Owner explicitly adopts or accepts R0.1.1 as the implementation basis and authorizes the bounded implementation.** The pre-existing D-3 permission to prepare an Implementation Plan does not authorize its execution. No GitHub writes are authorized by this planning request.
 
