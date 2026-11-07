@@ -32,6 +32,17 @@ describe("evaluateS1c", () => {
     expect(result.formalVerdict).toBe("UNKNOWN");
     expect(result.reportedEvidenceClaims).toEqual([]);
   });
+  it("rejectsUnknownNonEnumerableAndSymbolEnvelopeKeys", async () => {
+    const value = await input();
+    for (const key of ["approved", Symbol("unexpected")]) {
+      const malformed = { ...value } as Record<PropertyKey, unknown>;
+      Object.defineProperty(malformed, key, { value: true, enumerable: false });
+      const result = evaluateS1c(malformed as unknown as S1cInput);
+      expect(result.diagnostics.map((item) => item.code)).toContain("S1C_INPUT_INVALID");
+      expect(result.candidateScopeComparison).toBe("UNKNOWN");
+      expect(result.formalVerdict).toBe("UNKNOWN");
+    }
+  });
   it("absentEnvelopeSlotRejectsBothBranches", async () => {
     const value = await input();
     const { evidenceRefs, ...missing } = value;

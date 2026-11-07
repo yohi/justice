@@ -39,6 +39,28 @@ describe("S1-c path rules", () => {
     expect(inspectChangeSet({ availability: "PRESENT", changes: sparse })).toEqual({ state: "INVALID" });
   });
 
+  test("rejectsUnknownOwnKeysOnChangeSetsAndEveryChangedPathKind", () => {
+    for (const key of ["unexpected", Symbol("unexpected")]) {
+      for (const availability of ["PRESENT", "UNAVAILABLE"] as const) {
+        const changeSet: Record<PropertyKey, unknown> = availability === "PRESENT"
+          ? { availability, changes: [] }
+          : { availability };
+        Object.defineProperty(changeSet, key, { value: true, enumerable: false });
+        expect(inspectChangeSet(changeSet)).toEqual({ state: "INVALID" });
+      }
+
+      for (const change of [
+        { kind: "ADD", path: "src/a.ts" },
+        { kind: "MODIFY", path: "src/a.ts" },
+        { kind: "DELETE", path: "src/a.ts" },
+        { kind: "RENAME", oldPath: "src/a.ts", newPath: "src/b.ts" },
+      ]) {
+        Object.defineProperty(change, key, { value: true, enumerable: false });
+        expect(inspectChangeSet({ availability: "PRESENT", changes: [change] })).toEqual({ state: "INVALID" });
+      }
+    }
+  });
+
   test("snapshotsPathGetterBeforeValidationAndOutput", () => {
     let reads = 0;
     const change = new Proxy({ kind: "ADD", path: "src/safe.ts" }, {

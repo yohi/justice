@@ -18,9 +18,9 @@ function record(value: unknown): value is Record<string, unknown> {
 function readInput(value: unknown): Readonly<{ valid: boolean; baseline: unknown; planBytes: unknown; changeSet: unknown; evidenceRefs: unknown }> {
   try {
     if (!record(value)) return { valid: false, baseline: undefined, planBytes: undefined, changeSet: undefined, evidenceRefs: undefined };
-    const keys = Object.keys(value);
+    const keys = Reflect.ownKeys(value);
     const descriptors = Object.getOwnPropertyDescriptors(value);
-    const valid = keys.length === INPUT_KEYS.length && INPUT_KEYS.every((key) => Object.hasOwn(value, key) && descriptors[key] !== undefined && "value" in descriptors[key]!) && descriptors.schemaVersion?.value === "justice-s1c-input-v1";
+    const valid = keys.length === INPUT_KEYS.length && keys.every((key) => typeof key === "string" && INPUT_KEYS.includes(key as typeof INPUT_KEYS[number])) && INPUT_KEYS.every((key) => Object.hasOwn(value, key) && descriptors[key] !== undefined && "value" in descriptors[key]!) && descriptors.schemaVersion?.value === "justice-s1c-input-v1";
     return { valid, baseline: descriptors.baseline?.value, planBytes: descriptors.planBytes?.value, changeSet: descriptors.changeSet?.value, evidenceRefs: descriptors.evidenceRefs?.value };
   } catch {
     return { valid: false, baseline: undefined, planBytes: undefined, changeSet: undefined, evidenceRefs: undefined };

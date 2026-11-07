@@ -10,8 +10,8 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
-  const keys = Object.keys(value);
-  return keys.length === expected.length && expected.every((key) => Object.hasOwn(value, key));
+  const keys = Reflect.ownKeys(value);
+  return keys.length === expected.length && keys.every((key) => typeof key === "string" && expected.includes(key)) && expected.every((key) => Object.hasOwn(value, key));
 }
 
 function isSafePath(value: unknown): value is string {
