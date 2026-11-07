@@ -92,7 +92,7 @@ This is a **proposed optional format**, not an instruction to modify existing Pl
 
 1. Verify the raw Plan SHA-256 and ready S1-a baseline **before** interpreting content. Decode Plan bytes as strict UTF-8 (no BOM); split into lines using LF or CRLF without changing the hashed bytes. A bare CR or invalid UTF-8 makes the policy unreadable (`SCOPE_POLICY_INVALID`). Compare each logical line without its line-ending bytes.
 2. Scan the document once in source order. Recognize fenced-code regions opened by a line indented at most three ASCII spaces followed by **at least three** backticks (`` ` ``) or tildes (`~`), optionally followed by info text. A backtick opener cannot have a backtick in its info text. A closer has at most three leading spaces, the same fence character repeated at least the opening run length, and only spaces/tabs after it. Ignore headings and policy markers on every line within a fence, including the opener/closer. Ignore indented-code lines (at least four leading spaces or an initial tab), blockquote/list-prefixed lines, and content within ordinary multi-line HTML comments. The exact standalone S1-c marker lines defined below are exceptions to ordinary HTML-comment scanning and **do not** open an HTML-comment region.
-3. The sole authorization-bearing region begins at one unquoted, unindented, unfenced line **exactly** `## Justice S1-c Task Scope Policies`. It ends immediately before the next unquoted, unindented, unfenced Markdown ATX heading of level 1 or 2 (`# ` or `## ` at column zero), or at EOF. A second exact policy-section heading anywhere outside ignored regions makes the extraction ambiguous (`SCOPE_POLICY_INVALID`). A heading appearing only inside a code fence, blockquote, indented code or HTML comment does not create a region.
+3. The sole authorization-bearing region begins at one unquoted, unindented, unfenced line **exactly** `## Justice S1-c Task Scope Policies`. It ends immediately before the next unquoted, unindented, unfenced Markdown ATX heading of level 1 or 2 at column zero: one or two `#` characters followed by one or more spaces or tabs, or by the end of the logical line. A third `#` immediately following the opening hashes does not match. A second exact policy-section heading anywhere outside ignored regions makes the extraction ambiguous (`SCOPE_POLICY_INVALID`). A heading appearing only inside a code fence, blockquote, indented code or HTML comment does not create a region.
 4. **Inside this region only**, each policy block starts with the complete line `<!-- justice:s1c-task-scope:begin -->` and ends with the complete line `<!-- justice:s1c-task-scope:end -->`, both at column zero with **no surrounding whitespace**. The sole content between them is exactly one strict UTF-8 JSON object. Marker-like lines outside the region are non-authoritative; marker-like lines inside ignored Markdown regions are examples, not live markers. Inside the active region, an unpaired, reversed, nested, altered or duplicate delimiter, or a non-ignored line containing `<!-- justice:s1c-task-scope:` without matching the exact standalone marker, makes the **whole policy extraction invalid** (`SCOPE_POLICY_INVALID`). A block cannot cross the region boundary. Ordinary prose outside a block has no Policy effect.
 5. Validate **all** recognized blocks atomically, including non-selected Tasks: duplicate JSON keys, malformed structure, unknown fields, invalid identifiers/paths, duplicate Task `artifactId` blocks, or limits exceeded yield `SCOPE_POLICY_INVALID` and no candidate comparison. Select by the S1-a Task `artifactId`; if there is no selected-Task block, yield `SCOPE_POLICY_UNDEFINED`. If the selected Task ID occurs but its revision, Plan ID/revision or `scopeKey` disagrees with the S1-a selection, yield `SCOPE_POLICY_REFERENCE_MISMATCH`. Exactly one valid selected block with matching `planRef`, `taskRef` and `scopeKey` is usable. A Policy for another Task never grants permissions to the selected Task. No raw invalid marker, JSON or path is echoed in diagnostics.
 6. If the policy heading is absent, or only explanatory examples appear in fenced/quoted/indented sections, return `candidateScopeComparison: UNKNOWN` and `SCOPE_POLICY_UNDEFINED`, even if the raw Plan SHA matches. No code fragment acquires permission merely because it was included in the digest-matched Plan.
@@ -146,8 +146,13 @@ type CandidateScopeComparison =
   | 'OUTSIDE_CANDIDATE_SCOPE'
   | 'UNKNOWN';
 
-// Import the existing S1-b type; never redeclare its reason vocabulary.
-import type { BindingReasonCode, EvidenceRefV1 } from '../s1b/contract.js';
+// Import existing S1-b types; never redeclare their vocabularies.
+import type {
+  BindingReasonCode,
+  EvidenceRefV1,
+  ReportedExecutionState,
+  ReportedOutcome,
+} from '../s1b/contract.js';
 import type { LoaderResult } from '../s1a/contract.js';
 
 type DiagnosticCode =
@@ -193,6 +198,11 @@ type S1cResult = Readonly<{
   formalVerdict: DeviationVerdict;
   candidateScopeComparison: CandidateScopeComparison;
   ownerAuthorityVerification: 'NOT_VERIFIED_BY_S1C';
+  reportedEvidenceClaims: readonly Readonly<{
+    evidenceId: string;
+    reportedOutcome?: ReportedOutcome;
+    reportedExecutionState: ReportedExecutionState;
+  }>[];
   diagnostics: readonly S1cDiagnostic[];
   limitations: typeof S1C_LIMITATIONS;
 }>;
@@ -218,7 +228,7 @@ S1-c reuses S1-b's `bindEvidence({schemaVersion: 'justice-s1b-input-v1', baselin
 - `BASELINE_UNKNOWN` → diagnostic `S1B_BASELINE_UNKNOWN`; never infer missing AC evidence.
 - `bindingStatus: MISMATCH` → emit **one** `S1B_BINDING_MISMATCH` per validated `evidenceId`, with required `bindingReasonCodes: readonly BindingReasonCode[]`, copied unchanged and in S1-b's own order from the same `BindingResult.reasonCodes`. The array must be nonempty; it is never inferred from the ID or constructed by S1-c's own matching rules. This is the **required** typed diagnostic shape defined in §5, not an optional extension.
 - `coverageStatus: MISSING_EVIDENCE` → emit `AC_EVIDENCE_REF_MISSING`. This means **no matching reference supplied**, not "AC failed" or "task failed".
-- `reportedOutcome: FAIL` or `NOT_EXECUTED` remains a **reported claim**, not an independently observed execution result.
+- For each validated EvidenceRef, `reportedEvidenceClaims` retains its `evidenceId`, supplied `reportedOutcome` (when present) and `reportedExecutionState`. These are **unverified reported claims**, not independently observed execution results or verified judgments. Claims are associated with the EvidenceRef and must never be treated as validated findings; invalid or rejected EvidenceRefs produce no entries.
 
 These are additional diagnostics. **They never independently elevate the formal S1-c verdict or the underlying Owner approval.** S1-c imports the real `BindingReasonCode` union from S1-b; it does not copy that enum, recreate bind rules or accept raw arbitrary `reasonCodes` supplied by a caller. Only safe validated `evidenceId` and S1-b-produced reason codes enter the mismatch diagnostic. Cases such as `TASK_NOT_SELECTED`, `TASK_REVISION_MISMATCH`, `SCOPE_MISMATCH`, `AC_NOT_SELECTED`, `AC_REVISION_MISMATCH`, and `AC_TASK_MISMATCH` remain distinguishable in the output. If EvidenceRefs are rejected, emit `S1B_INPUT_REJECTED` without partial binding or AC-coverage success, but retain independently valid candidate Scope diagnostics. If ChangeSet is invalid, the S1-b branch may still report its separately valid binding and coverage diagnostics; **neither branch can convert the other's unassessable state into a successful assurance verdict**.
 
