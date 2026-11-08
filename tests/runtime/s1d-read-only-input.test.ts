@@ -19,6 +19,7 @@ describe("S1-d read-only input", () => {
       async readInputFile(path) {
         if (path === "read-failure") throw Error("secret path");
         if (path === "oversize") return new Uint8Array(1_048_577);
+        if (path === "changeset-oversize") return new Uint8Array(262_145);
         if (path === "utf8") return new Uint8Array([0xc3, 0x28]);
         return new TextEncoder().encode('{"a":1,"a":2}');
       },
@@ -26,6 +27,7 @@ describe("S1-d read-only input", () => {
     };
     expect(await issueCode(source, "read-failure", "evidence")).toBe("INPUT_READ_FAILED");
     expect(await issueCode(source, "oversize", "evidence")).toBe("INPUT_TOO_LARGE");
+    expect(await issueCode(source, "changeset-oversize", "changeset")).toBe("INPUT_TOO_LARGE");
     expect(await issueCode(source, "utf8", "evidence")).toBe("INPUT_UTF8_INVALID");
     expect(await issueCode(source, "duplicate", "evidence")).toBe("INPUT_JSON_INVALID");
   });
@@ -41,27 +43,45 @@ describe("S1-d read-only input", () => {
 
   it("capturesOnlySelectedPlanWithoutReread", async () => {
     const fixture = s1aFixture();
-    const readInputFile = vi.fn(fixture.source.readInputFile);
+    const extraPlan = {
+      ...fixture.manifest.artifacts.find((ref) => ref.kind === "plan"),
+      artifactId: "plan-extra",
+      relativePath: "plan-extra.md",
+    };
+    const manifest = { ...fixture.manifest, artifacts: [...fixture.manifest.artifacts, extraPlan] };
+    const readInputFile = vi.fn(async (path: string, maxBytes: number) => path === fixture.input.manifestPath ? jsonBytes(manifest) : fixture.source.readInputFile(path, maxBytes));
     const readArtifact = vi.fn(fixture.source.readArtifact);
-    const wrapped = createCapturedS1aSource({ ...fixture.source, readInputFile, readArtifact }, fixture.input);
-    const result = await loadS1aArtifacts(fixture.input, wrapped.source);
+    const source: S1aReadOnlySource = {
+      readInputFile,
+      readArtifact,
+    };
+    const input = { ...fixture.input, expectedManifestSha256: sha256(jsonBytes(manifest)) };
+    const wrapped = createCapturedS1aSource(source, input);
+    const result = await loadS1aArtifacts(input, wrapped.source);
     expect(readInputFile).toHaveBeenCalledTimes(2);
     expect(readArtifact).toHaveBeenCalledTimes(5);
     const snapshot = wrapped.getPlanSnapshot(result);
-    expect(snapshot).toEqual(fixture.files["plan-1.md"]);
+    expect(snapshot).toEqual(Uint8Array.from(fixture.files["plan-1.md"] ?? []));
     expect(snapshot).not.toBe(fixture.files["plan-1.md"]);
+    if (snapshot === null) throw new Error("expected selected Plan snapshot");
+    snapshot[0] = 0;
+    expect(fixture.files["plan-1.md"]?.[0]).not.toBe(0);
+    const alternatePlan = { ...result, selectedRefs: result.selectedRefs.map((ref) => ref.kind === "plan" ? { ...ref, artifactId: "plan-extra" } : ref) };
+    expect(wrapped.getPlanSnapshot(alternatePlan)).toBeNull();
   });
 
   it("retainsSafelyCapturedMismatchedPlan", async () => {
     const fixture = s1aFixture();
     const planBytes = new TextEncoder().encode("changed plan");
+    const readArtifact = vi.fn(async (root: string, path: string, cap: number) => path === "plan-1.md" ? planBytes : fixture.source.readArtifact(root, path, cap));
     const source: S1aReadOnlySource = {
       async readInputFile(path) { return path === fixture.input.manifestPath ? jsonBytes(fixture.manifest) : jsonBytes(fixture.intent); },
-      async readArtifact(root, path, cap) { return path === "plan-1.md" ? planBytes : fixture.source.readArtifact(root, path, cap); },
+      readArtifact,
     };
     const wrapped = createCapturedS1aSource(source, fixture.input);
     const result = await loadS1aArtifacts(fixture.input, wrapped.source);
     expect(result.checks.some((check) => check.reasonCode === "ARTIFACT_DIGEST_MISMATCH")).toBe(true);
+    expect(readArtifact.mock.calls.filter((call) => call[1] === "plan-1.md")).toHaveLength(1);
     expect(wrapped.getPlanSnapshot(result)).toEqual(planBytes);
     expect(sha256(planBytes)).not.toBe(result.selectedRefs.find((ref) => ref.kind === "plan")?.expectedDigest);
   });
@@ -79,6 +99,20 @@ describe("S1-d read-only input", () => {
     const result = await loadS1aArtifacts(fixture.input, captured.source);
     expect(captured.getPlanSnapshot(result)).toBeNull();
     expect(captured.getPlanSnapshot({ ...result, selectedRefs: [] })).toBeNull();
+    const unknownPlan = { ...result, selectedRefs: result.selectedRefs.map((ref) => ref.kind === "plan" ? { ...ref, artifactId: "plan-unbound" } : ref) };
+    expect(captured.getPlanSnapshot(unknownPlan)).toBeNull();
+  });
+
+  it("doesNotCaptureOverLimitPlanFromNonConformingSource", async () => {
+    const fixture = s1aFixture();
+    const oversizedPlan = new Uint8Array(8_388_609);
+    const source: S1aReadOnlySource = {
+      async readInputFile(path) { return jsonBytes(path === fixture.input.manifestPath ? fixture.manifest : fixture.intent); },
+      async readArtifact(root, path, cap) { return path === "plan-1.md" ? oversizedPlan : fixture.source.readArtifact(root, path, cap); },
+    };
+    const wrapped = createCapturedS1aSource(source, fixture.input);
+    const result = await loadS1aArtifacts(fixture.input, wrapped.source);
+    expect(wrapped.getPlanSnapshot(result)).toBeNull();
   });
 
   it("doesNotBypassReadOnlyFilesystemGuards", async () => {

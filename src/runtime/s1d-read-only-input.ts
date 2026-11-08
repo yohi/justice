@@ -52,31 +52,35 @@ export function createCapturedS1aSource(
   input: LoaderInput,
 ): Readonly<{ source: S1aReadOnlySource; getPlanSnapshot(result: LoaderResult): Uint8Array | null }> {
   let manifestBytes: Uint8Array | null = null;
-  let planBytes: Uint8Array | null = null;
-  let planRoot: string | null = null;
-  let planPath: string | null = null;
+  let planPaths = new Map<string, string>();
+  const capturedPlans = new Map<string, Uint8Array>();
+  let capturedRoot: string | null = null;
 
   const wrapped: S1aReadOnlySource = {
     async readInputFile(path, maxBytes) {
       const bytes = await source.readInputFile(path, maxBytes);
       if (path === input.manifestPath && maxBytes === S1A_LIMITS.manifestBytes) {
-        manifestBytes = bytes.slice();
+        manifestBytes = Uint8Array.from(bytes);
         try {
           const plans = parseOwnerManifest(manifestBytes).artifacts.filter((ref) => ref.kind === "plan");
-          if (plans.length === 1) {
-            planRoot = input.artifactsRoot;
-            planPath = plans[0]?.relativePath ?? null;
-          }
+          planPaths = new Map(plans.map((ref) => [ref.relativePath, ref.artifactId]));
+          capturedRoot = input.artifactsRoot;
         } catch {
-          planRoot = null;
-          planPath = null;
+          planPaths = new Map();
+          capturedRoot = null;
         }
       }
       return bytes;
     },
     async readArtifact(root, relativePath, maxBytes) {
       const bytes = await source.readArtifact(root, relativePath, maxBytes);
-      if (planRoot === root && planPath === relativePath) planBytes = bytes.slice();
+      const artifactId = planPaths.get(relativePath);
+      if (capturedRoot === root && artifactId !== undefined) {
+        if (bytes.byteLength > Math.min(maxBytes, S1A_LIMITS.artifactBytes)) {
+          throw Object.assign(new Error("over_limit"), { kind: "over_limit" });
+        }
+        capturedPlans.set(artifactId, Uint8Array.from(bytes));
+      }
       return bytes;
     },
   };
@@ -84,20 +88,21 @@ export function createCapturedS1aSource(
   return Object.freeze({
     source: wrapped,
     getPlanSnapshot(result: LoaderResult): Uint8Array | null {
-      if (result.manifestDigestMatch !== true || manifestBytes === null || planBytes === null || planRoot !== input.artifactsRoot || planPath === null) return null;
+      if (result.manifestDigestMatch !== true || manifestBytes === null || capturedRoot !== input.artifactsRoot) return null;
       let manifest;
       try {
         manifest = parseOwnerManifest(manifestBytes);
       } catch {
         return null;
       }
-      const planRefs = manifest.artifacts.filter((ref) => ref.kind === "plan");
       const selectedPlans = result.selectedRefs.filter((ref) => ref.kind === "plan");
-      if (planRefs.length !== 1 || selectedPlans.length !== 1) return null;
-      const manifestPlan = planRefs[0];
+      if (selectedPlans.length !== 1) return null;
       const selectedPlan = selectedPlans[0];
-      if (manifestPlan === undefined || selectedPlan === undefined || manifestPlan.artifactId !== selectedPlan.artifactId || manifestPlan.relativePath !== planPath) return null;
-      return planBytes.slice();
+      if (selectedPlan === undefined) return null;
+      const manifestPlans = manifest.artifacts.filter((ref) => ref.kind === "plan" && ref.artifactId === selectedPlan.artifactId);
+      if (manifestPlans.length !== 1) return null;
+      const captured = capturedPlans.get(selectedPlan.artifactId);
+      return captured === undefined ? null : Uint8Array.from(captured);
     },
   });
 }
