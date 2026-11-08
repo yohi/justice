@@ -42,3 +42,13 @@ The required test command was run before implementation. It failed at module res
 ## Commit
 
 Commit: `feat(justice): add S1-d report projection`.
+
+## Round 1 review fixes
+
+- Added regression cases for duplicate binder IDs and a same-length but different binding ID set; both assert the entire provenance projection is withheld as `BINDING_INCONSISTENT`.
+- Extended report assembly coverage to assert report-level `OWNER_AUTHORITY_NOT_PROVEN` and S1-c-specific `CHANGESET_COMPLETENESS_NOT_VERIFIED`, and to verify a supplied evaluated `scopeFallback` is retained with frozen paths and its `NO_FORMAL_S1C_RESULT` limitation.
+- `assembleReport` now freezes a shallow copy of each S1-a/b/c `Stage` wrapper. The original Core result object remains the same reference and is not cloned.
+- `bun run vitest run tests/core/s1d/report.test.ts` — PASS, 1 file / 7 tests. The pre-fix run failed specifically on the unfrozen S1-a Stage wrapper; after the implementation change all seven tests passed.
+- `bun run typecheck` — PASS (`tsc --noEmit`, exit 0).
+- `bun run lint` — PASS, exit 0, 0 errors / 286 repository warnings. `bunx eslint src/core/s1d/report.ts tests/core/s1d/report.test.ts` — PASS with no file-specific warnings.
+- LSP diagnostics for the changed TypeScript files — no diagnostics.

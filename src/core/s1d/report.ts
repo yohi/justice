@@ -69,7 +69,11 @@ export function assembleReport(input: AssembleReportInput): S1dReportV1 {
   if (input.provenance.state === "CLAIMS_AVAILABLE") limitations.add("DECLARED_PROVENANCE_NOT_VERIFIED");
   if (input.scopeFallback !== undefined) limitations.add("NO_FORMAL_S1C_RESULT");
 
-  const stages = Object.freeze({ ...input.stages });
+  const stages = Object.freeze({
+    s1a: Object.freeze({ ...input.stages.s1a }),
+    s1b: Object.freeze({ ...input.stages.s1b }),
+    s1c: Object.freeze({ ...input.stages.s1c }),
+  });
   const inputIssues = Object.freeze(input.inputIssues.map((issue) => Object.freeze({ ...issue })));
   const provenance = input.provenance.state === "CLAIMS_AVAILABLE"
     ? Object.freeze({ ...input.provenance, claims: Object.freeze(input.provenance.claims.map((claim) => Object.freeze({ ...claim }))) })
