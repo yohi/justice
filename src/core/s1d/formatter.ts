@@ -4,7 +4,7 @@ import type { BinderResult } from "../s1b/contract.js";
 import type { S1cResult } from "../s1c/contract.js";
 
 function oneLine(value: string): string {
-  const redactedPaths = value.replace(/(^|[\s"'=:([])\/[^\s)\]]*/g, "$1[absolute path redacted]");
+  const redactedPaths = value.replace(new RegExp(String.raw`(^|[\s"'=:([])\/[^\s)\]]*`, "g"), "$1[absolute path redacted]");
   return [...redactedPaths].map((character) => {
     const codePoint = character.codePointAt(0) ?? 0;
     return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f)
@@ -57,16 +57,29 @@ function s1cLines(result: S1cResult): readonly string[] {
     `  candidate scope: ${result.candidateScopeComparison}`,
     `  owner authority verification: ${result.ownerAuthorityVerification}`,
     `Formal verdict: ${result.formalVerdict}`,
-    ...result.reportedEvidenceClaims.map((claim) => `  reported evidence ${oneLine(claim.evidenceId)} (unverified claim): execution=${claim.reportedExecutionState}${claim.reportedOutcome === undefined ? "" : `; outcome=${claim.reportedOutcome}`}`),
-    ...result.diagnostics.map((diagnostic) => diagnostic.code === "OUTSIDE_CANDIDATE_SCOPE"
-      ? `Finding: ${diagnostic.code} ${oneLine(diagnostic.path)}`
-      : diagnostic.code === "S1B_BINDING_MISMATCH"
-        ? `Finding: ${diagnostic.code} ${oneLine(diagnostic.evidenceId)}${diagnostic.bindingReasonCodes.length === 0 ? "" : ` (${diagnostic.bindingReasonCodes.join(", ")})`}`
-        : diagnostic.code === "AC_EVIDENCE_REF_MISSING"
-          ? `Finding: ${diagnostic.code} ${oneLine(diagnostic.acId)}`
-          : `Finding: ${diagnostic.code}`),
+    ...result.reportedEvidenceClaims.map((claim) => {
+      const outcome = claim.reportedOutcome === undefined ? "" : `; outcome=${claim.reportedOutcome}`;
+      return `  reported evidence ${oneLine(claim.evidenceId)} (unverified claim): execution=${claim.reportedExecutionState}${outcome}`;
+    }),
+    ...result.diagnostics.map(diagnosticLine),
     ...result.limitations.map((limitation) => `  limitation: ${oneLine(limitation)}`),
   ];
+}
+
+function diagnosticLine(diagnostic: S1cResult["diagnostics"][number]): string {
+  if (diagnostic.code === "OUTSIDE_CANDIDATE_SCOPE") {
+    return `Finding: ${diagnostic.code} ${oneLine(diagnostic.path)}`;
+  }
+  if (diagnostic.code === "S1B_BINDING_MISMATCH") {
+    const reasons = diagnostic.bindingReasonCodes.length === 0
+      ? ""
+      : ` (${diagnostic.bindingReasonCodes.join(", ")})`;
+    return `Finding: ${diagnostic.code} ${oneLine(diagnostic.evidenceId)}${reasons}`;
+  }
+  if (diagnostic.code === "AC_EVIDENCE_REF_MISSING") {
+    return `Finding: ${diagnostic.code} ${oneLine(diagnostic.acId)}`;
+  }
+  return `Finding: ${diagnostic.code}`;
 }
 
 function provenanceLines(report: S1dReportV1): readonly string[] {
@@ -108,13 +121,17 @@ export function formatText(report: S1dReportV1): string {
   ];
   if (report.scopeFallback !== undefined) {
     if (report.scopeFallback.state === "EVALUATED") {
-      lines.push("candidate scope only (S1-c full evaluation NOT_EVALUATED)");
-      lines.push(`candidate scope: ${report.scopeFallback.candidateScopeComparison}`);
-      lines.push("Formal verdict: NOT_EVALUATED");
+      lines.push(
+        "candidate scope only (S1-c full evaluation NOT_EVALUATED)",
+        `candidate scope: ${report.scopeFallback.candidateScopeComparison}`,
+        "Formal verdict: NOT_EVALUATED",
+      );
       lines.push(...report.scopeFallback.outsidePaths.map((path) => `outside path: ${oneLine(path)}`));
     } else {
-      lines.push(`candidate scope only: NOT_EVALUATED (${oneLine(report.scopeFallback.reason)})`);
-      lines.push("Formal verdict: NOT_EVALUATED");
+      lines.push(
+        `candidate scope only: NOT_EVALUATED (${oneLine(report.scopeFallback.reason)})`,
+        "Formal verdict: NOT_EVALUATED",
+      );
     }
   }
   lines.push(`Limitations: ${report.limitations.map(oneLine).join(", ")}`);

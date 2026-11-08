@@ -93,8 +93,10 @@ async function main(): Promise<void> {
 
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
   // no-excuse-ok: catch — process boundary uses a fixed safe fatal record.
-  main().catch(() => {
+  try {
+    await main();
+  } catch {
     process.stdout.write(SAFE_TEXT_FATAL);
     process.exitCode = 70;
-  });
+  }
 }

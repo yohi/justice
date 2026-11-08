@@ -75,9 +75,15 @@ export function assembleReport(input: AssembleReportInput): S1dReportV1 {
     s1c: Object.freeze({ ...input.stages.s1c }),
   });
   const inputIssues = Object.freeze(input.inputIssues.map((issue) => Object.freeze({ ...issue })));
-  const provenance = input.provenance.state === "CLAIMS_AVAILABLE"
-    ? Object.freeze({ ...input.provenance, claims: Object.freeze(input.provenance.claims.map((claim) => Object.freeze({ ...claim }))) })
-    : withheld(input.provenance.reason);
+  let provenance: ProvenanceProjection;
+  if (input.provenance.state === "CLAIMS_AVAILABLE") {
+    provenance = Object.freeze({
+      ...input.provenance,
+      claims: Object.freeze(input.provenance.claims.map((claim) => Object.freeze({ ...claim }))),
+    });
+  } else {
+    provenance = withheld(input.provenance.reason);
+  }
   return Object.freeze({
     schemaVersion: "justice-s1d-report-v1",
     operation: "diagnose",
@@ -88,6 +94,6 @@ export function assembleReport(input: AssembleReportInput): S1dReportV1 {
     ...(input.scopeFallback !== undefined ? { scopeFallback: Object.freeze(input.scopeFallback.state === "EVALUATED"
       ? { ...input.scopeFallback, outsidePaths: Object.freeze([...input.scopeFallback.outsidePaths]) }
       : { ...input.scopeFallback }) } : {}),
-    limitations: Object.freeze([...limitations].sort()),
+    limitations: Object.freeze([...limitations].sort((left, right) => left.localeCompare(right, "en", { sensitivity: "variant" }))),
   });
 }
