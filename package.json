@@ -38,10 +38,11 @@
   ],
   "bin": {
     "justice": "./dist/runtime/doctor-cli.js",
-    "justice-s1a": "./dist/runtime/s1a-cli.js"
+    "justice-s1a": "./dist/runtime/s1a-cli.js",
+    "justice-s1d": "./dist/runtime/s1d-cli.js"
   },
   "scripts": {
-    "build": "tsc && bun build src/opencode-plugin.ts --outfile dist/opencode-plugin.js --target node --format esm && chmod +x dist/runtime/doctor-cli.js dist/runtime/s1a-cli.js",
+    "build": "tsc && bun build src/opencode-plugin.ts --outfile dist/opencode-plugin.js --target node --format esm && chmod +x dist/runtime/doctor-cli.js dist/runtime/s1a-cli.js dist/runtime/s1d-cli.js",
     "build:native:review-artifact": "bunx --no-install napi build --manifest-path native/review-artifact-linux/Cargo.toml --target x86_64-unknown-linux-gnu --output-dir dist/native --platform --release --no-js",
     "test": "bun run vitest run",
     "test:dist": "bun run build && bun run vitest run --config vitest.dist.config.ts",
