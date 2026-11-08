@@ -12,6 +12,10 @@ type ParsedEvidence = Readonly<{ state: "PARSED"; value: unknown }>;
 type UnavailableEvidence = Readonly<{ state: "LEVEL_A_ERROR" }>;
 type EvidenceSource = ParsedEvidence | UnavailableEvidence;
 
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function withheld(reason: Extract<ProvenanceProjection, { state: "WITHHELD" }>['reason']): ProvenanceProjection {
   return Object.freeze({ state: "WITHHELD", reason, claims: Object.freeze([] as const) });
 }
@@ -42,7 +46,7 @@ export function projectProvenance(evidence: EvidenceSource, stage: Stage<BinderR
       originId: ref.originId,
       provenanceClass: ref.provenanceClass,
     }))
-    .sort((left, right) => left.evidenceId < right.evidenceId ? -1 : left.evidenceId > right.evidenceId ? 1 : 0);
+    .sort((left, right) => compareCodeUnits(left.evidenceId, right.evidenceId));
   return Object.freeze({
     state: "CLAIMS_AVAILABLE",
     validation: "ALL_EVIDENCE_REFS_STRUCTURALLY_VALID",
@@ -94,6 +98,6 @@ export function assembleReport(input: AssembleReportInput): S1dReportV1 {
     ...(input.scopeFallback !== undefined ? { scopeFallback: Object.freeze(input.scopeFallback.state === "EVALUATED"
       ? { ...input.scopeFallback, outsidePaths: Object.freeze([...input.scopeFallback.outsidePaths]) }
       : { ...input.scopeFallback }) } : {}),
-    limitations: Object.freeze([...limitations].sort((left, right) => left.localeCompare(right, "en", { sensitivity: "variant" }))),
+    limitations: Object.freeze([...limitations].sort(compareCodeUnits)),
   });
 }

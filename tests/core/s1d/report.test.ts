@@ -49,6 +49,7 @@ describe("S1-d report projection", () => {
     const refs = [
       evidence("z-evidence", { issuerId: "issuer-z", originId: "origin-z", provenanceClass: "UNVERIFIED_EXTERNAL" }),
       evidence("a-evidence", { issuerId: "issuer-a", originId: "origin-a", provenanceClass: "FIXTURE_OBSERVATION" }),
+      evidence("A-evidence", { issuerId: "issuer-upper", originId: "origin-upper", provenanceClass: "SELF_DECLARED" }),
     ];
     const binder = await bound(refs);
     const projection = projectProvenance({ state: "PARSED", value: refs }, { state: "EVALUATED", result: binder });
@@ -58,6 +59,7 @@ describe("S1-d report projection", () => {
       validation: "ALL_EVIDENCE_REFS_STRUCTURALLY_VALID",
       verification: "NOT_VERIFIED",
       claims: [
+        { evidenceId: "A-evidence", issuerId: "issuer-upper", originId: "origin-upper", provenanceClass: "SELF_DECLARED" },
         { evidenceId: "a-evidence", issuerId: "issuer-a", originId: "origin-a", provenanceClass: "FIXTURE_OBSERVATION" },
         { evidenceId: "z-evidence", issuerId: "issuer-z", originId: "origin-z", provenanceClass: "UNVERIFIED_EXTERNAL" },
       ],
@@ -145,7 +147,7 @@ describe("S1-d report projection", () => {
     const s1c: Stage<S1cResult> = { state: "EVALUATED", result: coreResult };
     const fixture = s1aFixture();
     const baseline = await loadS1aArtifacts(fixture.input, fixture.source);
-    const s1a = { state: "EVALUATED", result: { ...baseline, limitations: ["Z_LIMITATION", ...baseline.limitations, "Z_LIMITATION"] } } as const;
+    const s1a = { state: "EVALUATED", result: { ...baseline, limitations: ["a_LIMITATION", "Z_LIMITATION", ...baseline.limitations, "Z_LIMITATION"] } } as const;
     const coreSnapshot = JSON.stringify({ s1a, s1b, s1c });
     const report = assembleReport({
       stages: { ...emptyStages(), s1a, s1b, s1c }, inputIssues: [],
@@ -153,6 +155,7 @@ describe("S1-d report projection", () => {
     });
 
     expect(report.limitations).toEqual([...new Set(report.limitations)].sort());
+    expect(report.limitations.indexOf("Z_LIMITATION")).toBeLessThan(report.limitations.indexOf("a_LIMITATION"));
     expect(report.limitations).toContain("Z_LIMITATION");
     expect(report.limitations).toContain("CHANGESET_COMPLETENESS_NOT_VERIFIED");
     expect(report.limitations).toContain("OWNER_AUTHORITY_NOT_PROVEN");
