@@ -1,13 +1,8 @@
 import type { ChangedPath } from "./contract.js";
-import { compareUtf8, isPlainRecord } from "./shared-utils.js";
+import { compareUtf8, hasExactKeys, isPlainRecord } from "./shared-utils.js";
 
 const MAX_PATH_BYTES = 1_024;
 const MAX_ENTRIES = 128;
-
-function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
-  const keys = Reflect.ownKeys(value);
-  return keys.length === expected.length && keys.every((key) => typeof key === "string" && expected.includes(key)) && expected.every((key) => Object.hasOwn(value, key));
-}
 
 function isSafePath(value: unknown): value is string {
   if (typeof value !== "string" || value.length === 0 || Buffer.byteLength(value, "utf8") > MAX_PATH_BYTES) {

@@ -78,10 +78,12 @@ describe("evaluateS1c", () => {
     expect(result.diagnostics.map((item) => item.code)).toEqual(["S1A_BASELINE_INVALID", "OWNER_AUTHORITY_NOT_VERIFIED"]);
   });
   it("nonreadyBaselineRetainsS1bStatus", async () => {
-    const value = await input();
+    const ref = { evidenceId: "ev-1", type: "test", taskRef: { artifactId: "task-1", revision: "R1" }, scopeKey: "scope-1", issuerId: "i", originId: "o", provenanceClass: "SELF_DECLARED", reportedExecutionState: "EXECUTED", reportedOutcome: "PASS" } as const;
+    const value = await input(undefined, [ref]);
     const baseline = { ...value.baseline, identityStatus: "UNKNOWN" as const, identityCandidateReady: false, checks: value.baseline.checks.map((check) => check.outcome === "MATCH" ? { ...check, outcome: "UNKNOWN" as const, category: "CHECK_INCOMPLETE" as const } : check) };
     const result = evaluateS1c({ ...value, baseline });
     expect(result.diagnostics.map((item) => item.code)).toEqual(["S1A_BASELINE_NOT_READY", "S1B_BASELINE_UNKNOWN", "OWNER_AUTHORITY_NOT_VERIFIED"]);
+    expect(result.reportedEvidenceClaims).toEqual([{ evidenceId: "ev-1", reportedOutcome: "PASS", reportedExecutionState: "EXECUTED" }]);
   });
   it("invalidOrOversizePlanBytesDoesNotStopEvidence", async () => {
     const value = await input();

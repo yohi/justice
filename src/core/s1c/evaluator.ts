@@ -6,6 +6,7 @@ import { MAX_PLAN_BYTES, S1C_LIMITATIONS, type S1cDiagnostic, type S1cInput, typ
 import { compareCandidatePaths, inspectChangeSet } from "./path-rules.js";
 import { extractTaskScopePolicy } from "./policy.js";
 import { compareUtf8, isPlainRecord } from "./shared-utils.js";
+import type { BindingResult } from "../s1b/contract.js";
 
 const PRIORITY = ["S1C_INPUT_INVALID", "S1A_BASELINE_INVALID", "S1A_BASELINE_NOT_READY", "PLAN_BYTES_INVALID", "PLAN_IDENTITY_MISMATCH", "SCOPE_POLICY_INVALID", "SCOPE_POLICY_REFERENCE_MISMATCH", "SCOPE_POLICY_UNDEFINED", "CHANGESET_INVALID", "CHANGESET_UNAVAILABLE", "OUTSIDE_CANDIDATE_SCOPE", "S1B_INPUT_REJECTED", "S1B_BASELINE_UNKNOWN", "S1B_BINDING_MISMATCH", "AC_EVIDENCE_REF_MISSING", "OWNER_AUTHORITY_NOT_VERIFIED"] as const;
 const INPUT_KEYS = ["schemaVersion", "baseline", "planBytes", "changeSet", "evidenceRefs"] as const;
@@ -37,6 +38,14 @@ function diagnosticKey(item: S1cDiagnostic): string {
   return "";
 }
 
+function toReportedClaim(binding: BindingResult): S1cResult["reportedEvidenceClaims"][number] {
+  return {
+    evidenceId: binding.evidenceId,
+    ...(binding.reportedOutcome !== undefined ? { reportedOutcome: binding.reportedOutcome } : {}),
+    reportedExecutionState: binding.reportedExecutionState,
+  };
+}
+
 function freezeResult(comparison: S1cResult["candidateScopeComparison"], diagnostics: readonly S1cDiagnostic[], claims: S1cResult["reportedEvidenceClaims"] = []): S1cResult {
   const unique = new Map<string, S1cDiagnostic>();
   for (const item of diagnostics) {
@@ -63,11 +72,11 @@ function collectEvidence(diagnostics: S1cDiagnostic[], claims: S1cResult["report
     case "INPUT_REJECTED": diagnostics.push({ code: "S1B_INPUT_REJECTED" }); return;
     case "BASELINE_UNKNOWN":
       diagnostics.push({ code: "S1B_BASELINE_UNKNOWN" });
-      for (const binding of result.bindingResults) claims.push({ evidenceId: binding.evidenceId, ...(binding.reportedOutcome !== undefined ? { reportedOutcome: binding.reportedOutcome } : {}), reportedExecutionState: binding.reportedExecutionState });
+      for (const binding of result.bindingResults) claims.push(toReportedClaim(binding));
       return;
     case "EVALUATED":
       for (const binding of result.bindingResults) {
-        claims.push({ evidenceId: binding.evidenceId, ...(binding.reportedOutcome !== undefined ? { reportedOutcome: binding.reportedOutcome } : {}), reportedExecutionState: binding.reportedExecutionState });
+        claims.push(toReportedClaim(binding));
         if (binding.bindingStatus !== "MISMATCH" || binding.reasonCodes.length === 0) continue;
         diagnostics.push({ code: "S1B_BINDING_MISMATCH", evidenceId: binding.evidenceId, bindingReasonCodes: binding.reasonCodes });
       }

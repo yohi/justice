@@ -2,7 +2,7 @@ import { isSafeIdentifier, type SelectedArtifactRef } from "../s1a/contract.js";
 import { parseStrictJson } from "../s1a/strict-json.js";
 import { MAX_PLAN_BYTES, type TaskScopePolicy } from "./contract.js";
 import { validateAllowedPaths } from "./path-rules.js";
-import { isRecord } from "./shared-utils.js";
+import { hasExactKeys, isRecord } from "./shared-utils.js";
 
 const MAX_POLICY_BYTES = 65_536;
 const MAX_POLICY_BLOCKS = 128;
@@ -19,11 +19,6 @@ type PolicyReferences = Readonly<{
 
 type Fence = Readonly<{ character: "`" | "~"; length: number }>;
 type StrictLine = Readonly<{ content: string; endingBytes: number }>;
-
-function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value);
-  return actual.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
-}
 
 function isIgnoredPrefix(line: string): boolean {
   return /^(?: {4,}|\t| {0,3}>| {0,3}(?:[-+*]|\d+[.)])(?:[ \t]|$))/.test(line);
