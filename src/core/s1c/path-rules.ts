@@ -1,13 +1,8 @@
 import type { ChangedPath } from "./contract.js";
+import { compareUtf8, isPlainRecord } from "./shared-utils.js";
 
 const MAX_PATH_BYTES = 1_024;
 const MAX_ENTRIES = 128;
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
 
 function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
   const keys = Reflect.ownKeys(value);
@@ -34,10 +29,6 @@ function isAllowedPattern(value: unknown): value is string {
   const directoryPattern = value.endsWith("/**");
   const path = directoryPattern ? value.slice(0, -3) : value;
   return isSafePath(path) && !path.includes("*");
-}
-
-function compareUtf8(left: string, right: string): number {
-  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
 }
 
 function snapshotDenseArray(value: unknown): unknown[] | null {

@@ -6,6 +6,8 @@ import type {
   ReportedOutcome,
 } from "../s1b/contract.js";
 
+export const MAX_PLAN_BYTES = 8_388_608;
+
 export type CandidateScopeComparison =
   | "WITHIN_CANDIDATE_SCOPE"
   | "OUTSIDE_CANDIDATE_SCOPE"

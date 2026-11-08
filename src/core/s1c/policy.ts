@@ -1,9 +1,9 @@
 import { isSafeIdentifier, type SelectedArtifactRef } from "../s1a/contract.js";
 import { parseStrictJson } from "../s1a/strict-json.js";
-import type { TaskScopePolicy } from "./contract.js";
+import { MAX_PLAN_BYTES, type TaskScopePolicy } from "./contract.js";
 import { validateAllowedPaths } from "./path-rules.js";
+import { isRecord } from "./shared-utils.js";
 
-const MAX_PLAN_BYTES = 8_388_608;
 const MAX_POLICY_BYTES = 65_536;
 const MAX_POLICY_BLOCKS = 128;
 const HEADING = "## Justice S1-c Task Scope Policies";
@@ -19,12 +19,6 @@ type PolicyReferences = Readonly<{
 
 type Fence = Readonly<{ character: "`" | "~"; length: number }>;
 type StrictLine = Readonly<{ content: string; endingBytes: number }>;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
 
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   const actual = Object.keys(value);

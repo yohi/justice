@@ -2,22 +2,17 @@ import { createHash } from "node:crypto";
 import { inspectBaseline } from "../s1b/baseline.js";
 import { bindEvidence } from "../s1b/binder.js";
 import type { LoaderResult, SelectedArtifactRef } from "../s1a/contract.js";
-import { S1C_LIMITATIONS, type S1cDiagnostic, type S1cInput, type S1cResult } from "./contract.js";
+import { MAX_PLAN_BYTES, S1C_LIMITATIONS, type S1cDiagnostic, type S1cInput, type S1cResult } from "./contract.js";
 import { compareCandidatePaths, inspectChangeSet } from "./path-rules.js";
 import { extractTaskScopePolicy } from "./policy.js";
+import { compareUtf8, isPlainRecord } from "./shared-utils.js";
 
 const PRIORITY = ["S1C_INPUT_INVALID", "S1A_BASELINE_INVALID", "S1A_BASELINE_NOT_READY", "PLAN_BYTES_INVALID", "PLAN_IDENTITY_MISMATCH", "SCOPE_POLICY_INVALID", "SCOPE_POLICY_REFERENCE_MISMATCH", "SCOPE_POLICY_UNDEFINED", "CHANGESET_INVALID", "CHANGESET_UNAVAILABLE", "OUTSIDE_CANDIDATE_SCOPE", "S1B_INPUT_REJECTED", "S1B_BASELINE_UNKNOWN", "S1B_BINDING_MISMATCH", "AC_EVIDENCE_REF_MISSING", "OWNER_AUTHORITY_NOT_VERIFIED"] as const;
 const INPUT_KEYS = ["schemaVersion", "baseline", "planBytes", "changeSet", "evidenceRefs"] as const;
 
-function record(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
-
 function readInput(value: unknown): Readonly<{ valid: boolean; baseline: unknown; planBytes: unknown; changeSet: unknown; evidenceRefs: unknown }> {
   try {
-    if (!record(value)) return { valid: false, baseline: undefined, planBytes: undefined, changeSet: undefined, evidenceRefs: undefined };
+    if (!isPlainRecord(value)) return { valid: false, baseline: undefined, planBytes: undefined, changeSet: undefined, evidenceRefs: undefined };
     const keys = Reflect.ownKeys(value);
     const descriptors = Object.getOwnPropertyDescriptors(value);
     const valid = keys.length === INPUT_KEYS.length && keys.every((key) => typeof key === "string" && INPUT_KEYS.includes(key as typeof INPUT_KEYS[number])) && INPUT_KEYS.every((key) => Object.hasOwn(value, key) && descriptors[key] !== undefined && "value" in descriptors[key]!) && descriptors.schemaVersion?.value === "justice-s1c-input-v1";
@@ -33,10 +28,6 @@ function selected(refs: readonly SelectedArtifactRef[]): Readonly<{ plan: Select
   const plan = plans[0];
   const task = tasks[0];
   return plans.length === 1 && tasks.length === 1 && plan !== undefined && task !== undefined ? { plan, task } : null;
-}
-
-function compareUtf8(left: string, right: string): number {
-  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
 }
 
 function diagnosticKey(item: S1cDiagnostic): string {
@@ -110,7 +101,7 @@ export function evaluateS1c(input: S1cInput): S1cResult {
   let policy: ReturnType<typeof extractTaskScopePolicy> | null = null;
   let planBytes: Uint8Array | null = null;
   try {
-    if (envelope.planBytes instanceof Uint8Array && envelope.planBytes.byteLength <= 8_388_608) {
+    if (envelope.planBytes instanceof Uint8Array && envelope.planBytes.byteLength <= MAX_PLAN_BYTES) {
       planBytes = envelope.planBytes;
     }
   } catch {
