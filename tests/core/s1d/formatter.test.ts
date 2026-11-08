@@ -93,6 +93,91 @@ describe("S1-d formatter", () => {
     expect(withheld).not.toContain("issuer-1");
   });
 
+  it("rendersLevelAInputIssuesInSourceOrderWithoutInventingIssues", () => {
+    const report: S1dReportV1 = {
+      ...emptyReport,
+      inputIssues: [
+        { source: "evidence", code: "INPUT_UTF8_INVALID" },
+        { source: "changeset", code: "INPUT_JSON_INVALID" },
+      ],
+    };
+
+    const text = formatText(report);
+    const evidenceIssue = text.indexOf("Input issue: evidence INPUT_UTF8_INVALID");
+    const changesetIssue = text.indexOf("Input issue: changeset INPUT_JSON_INVALID");
+    expect(evidenceIssue).toBeGreaterThanOrEqual(0);
+    expect(changesetIssue).toBeGreaterThan(evidenceIssue);
+    expect(formatText(emptyReport)).not.toContain("Input issue:");
+  });
+
+  it("rendersS1bRejectionBindingReasonsAndReportedClaimsAsUnverified", () => {
+    const report: S1dReportV1 = {
+      ...emptyReport,
+      stages: {
+        ...emptyReport.stages,
+        s1b: { state: "EVALUATED", result: {
+          schemaVersion: "justice-s1b-result-v1",
+          evaluationStatus: "INPUT_REJECTED",
+          rejectionReasonCode: "DUPLICATE_EVIDENCE_ID",
+          bindingResults: [{
+            evidenceId: "evidence-001",
+            bindingStatus: "MISMATCH",
+            reasonCodes: ["TASK_REVISION_MISMATCH"],
+            reportedExecutionState: "EXECUTED",
+            reportedOutcome: "PASS",
+            authenticityStatus: "NOT_VERIFIED",
+            executionVerificationStatus: "NOT_VERIFIED",
+          }],
+          coverageResults: [],
+          coverageAssessmentStatus: "UNKNOWN",
+          authenticityStatus: "NOT_VERIFIED",
+          executionVerificationStatus: "NOT_VERIFIED",
+          limitations: ["OWNER_APPROVAL_NOT_PROVEN", "EVIDENCE_AUTHENTICITY_NOT_VERIFIED", "HOST_EXECUTION_NOT_VERIFIED"],
+        } },
+      },
+    };
+
+    const text = formatText(report);
+    expect(text).toContain("rejection reason: DUPLICATE_EVIDENCE_ID");
+    expect(text).toContain("evidence evidence-001: MISMATCH\n    binding reasons: TASK_REVISION_MISMATCH");
+    expect(text).toContain("reported execution (unverified claim): EXECUTED");
+    expect(text).toContain("reported outcome (unverified claim): PASS");
+    expect(text).toContain("authenticity: NOT_VERIFIED");
+    expect(text).toContain("execution verification: NOT_VERIFIED");
+    expect(text).not.toContain("verified PASS");
+  });
+
+  it("rendersS1cBindingReasonCodesBesideTheirEvidenceId", () => {
+    const report: S1dReportV1 = {
+      ...emptyReport,
+      stages: {
+        ...emptyReport.stages,
+        s1c: { state: "EVALUATED", result: {
+          schemaVersion: "justice-s1c-result-v1",
+          formalVerdict: "UNKNOWN",
+          candidateScopeComparison: "UNKNOWN",
+          ownerAuthorityVerification: "NOT_VERIFIED_BY_S1C",
+          reportedEvidenceClaims: [{
+            evidenceId: "evidence-001",
+            reportedExecutionState: "UNKNOWN",
+            reportedOutcome: "PASS",
+          }],
+          diagnostics: [{
+            code: "S1B_BINDING_MISMATCH",
+            evidenceId: "evidence-001",
+            bindingReasonCodes: ["TASK_REVISION_MISMATCH"],
+          }],
+          limitations: ["OWNER_APPROVAL_NOT_PROVEN", "SUPERSESSION_NOT_CHECKED", "CHANGESET_COMPLETENESS_NOT_VERIFIED", "EVIDENCE_AUTHENTICITY_NOT_VERIFIED", "HOST_EXECUTION_NOT_VERIFIED"],
+        } },
+      },
+    };
+
+    const text = formatText(report);
+    expect(text).toContain("Finding: S1B_BINDING_MISMATCH evidence-001 (TASK_REVISION_MISMATCH)");
+    expect(text).toContain("reported evidence evidence-001 (unverified claim): execution=UNKNOWN; outcome=PASS");
+    expect(text).toContain("Formal verdict: UNKNOWN");
+  });
+
   it("escapesControlCharactersAndDoesNotLeakHostPath", () => {
     const report: S1dReportV1 = {
       ...emptyReport,

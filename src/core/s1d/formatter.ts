@@ -36,9 +36,17 @@ function s1aLines(result: LoaderResult): readonly string[] {
 function s1bLines(result: BinderResult): readonly string[] {
   return [
     `  evaluation: ${result.evaluationStatus}`,
+    ...(result.rejectionReasonCode === undefined ? [] : [`  rejection reason: ${result.rejectionReasonCode}`]),
     `  authenticity: ${result.authenticityStatus}`,
     `  execution verification: ${result.executionVerificationStatus}`,
-    ...result.bindingResults.map((binding) => `  evidence ${oneLine(binding.evidenceId)}: ${binding.bindingStatus}; authenticity=${binding.authenticityStatus}; execution=${binding.executionVerificationStatus}`),
+    ...result.bindingResults.map((binding) => [
+      `  evidence ${oneLine(binding.evidenceId)}: ${binding.bindingStatus}`,
+      ...(binding.reasonCodes.length > 0 ? [`    binding reasons: ${binding.reasonCodes.join(", ")}`] : []),
+      `    reported execution (unverified claim): ${binding.reportedExecutionState}`,
+      ...(binding.reportedOutcome === undefined ? [] : [`    reported outcome (unverified claim): ${binding.reportedOutcome}`]),
+      `    authenticity: ${binding.authenticityStatus}`,
+      `    execution verification: ${binding.executionVerificationStatus}`,
+    ].join("\n")),
     ...result.coverageResults.map((coverage) => `  AC ${oneLine(coverage.acRef.artifactId)} coverage: ${coverage.coverageStatus}`),
     ...result.limitations.map((limitation) => `  limitation: ${oneLine(limitation)}`),
   ];
@@ -49,11 +57,11 @@ function s1cLines(result: S1cResult): readonly string[] {
     `  candidate scope: ${result.candidateScopeComparison}`,
     `  owner authority verification: ${result.ownerAuthorityVerification}`,
     `Formal verdict: ${result.formalVerdict}`,
-    ...result.reportedEvidenceClaims.map((claim) => `  reported evidence ${oneLine(claim.evidenceId)}: execution=${claim.reportedExecutionState}${claim.reportedOutcome === undefined ? "" : `; outcome=${claim.reportedOutcome}`}`),
+    ...result.reportedEvidenceClaims.map((claim) => `  reported evidence ${oneLine(claim.evidenceId)} (unverified claim): execution=${claim.reportedExecutionState}${claim.reportedOutcome === undefined ? "" : `; outcome=${claim.reportedOutcome}`}`),
     ...result.diagnostics.map((diagnostic) => diagnostic.code === "OUTSIDE_CANDIDATE_SCOPE"
       ? `Finding: ${diagnostic.code} ${oneLine(diagnostic.path)}`
       : diagnostic.code === "S1B_BINDING_MISMATCH"
-        ? `Finding: ${diagnostic.code} ${oneLine(diagnostic.evidenceId)}`
+        ? `Finding: ${diagnostic.code} ${oneLine(diagnostic.evidenceId)}${diagnostic.bindingReasonCodes.length === 0 ? "" : ` (${diagnostic.bindingReasonCodes.join(", ")})`}`
         : diagnostic.code === "AC_EVIDENCE_REF_MISSING"
           ? `Finding: ${diagnostic.code} ${oneLine(diagnostic.acId)}`
           : `Finding: ${diagnostic.code}`),
@@ -91,6 +99,7 @@ export function formatText(report: S1dReportV1): string {
     "Justice S1-d — READ_ONLY diagnostic",
     stageLine("S1-a", report.stages.s1a),
     ...(report.stages.s1a.state === "EVALUATED" ? s1aLines(report.stages.s1a.result) : []),
+    ...report.inputIssues.map((issue) => `Input issue: ${oneLine(issue.source)} ${oneLine(issue.code)}`),
     stageLine("S1-b", report.stages.s1b),
     ...(report.stages.s1b.state === "EVALUATED" ? s1bLines(report.stages.s1b.result) : []),
     stageLine("S1-c", report.stages.s1c),
