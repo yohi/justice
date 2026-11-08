@@ -25,8 +25,8 @@ function isIgnoredPrefix(line: string): boolean {
 }
 
 function headingLevel(line: string): 1 | 2 | null {
-  if (/^#(?:[ \t]+|$)/.test(line)) return 1;
-  if (/^##(?:[ \t]+|$)/.test(line)) return 2;
+  if (/^ {0,3}#(?:[ \t]+|$)/.test(line)) return 1;
+  if (/^ {0,3}##(?:[ \t]+|$)/.test(line)) return 2;
   return null;
 }
 

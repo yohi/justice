@@ -58,6 +58,12 @@ describe("extractTaskScopePolicy", () => {
     }
   });
 
+  test("indentedLevelOneOrTwoHeadingEndsActiveRegion", () => {
+    for (const headingLine of [" # Other Section", "  ## Appendix", "   # End", "   ## End"]) {
+      expect(extract(`${heading}\n${headingLine}\n${block()}`)).toEqual({ state: "UNDEFINED" });
+    }
+  });
+
   test("closedThenUnclosedInlineCommentsRemainOpen", () => {
     expect(extract(`${heading}\n<!-- x --> <!-- y\n${block()}\n-->`)).toEqual({ state: "UNDEFINED" });
   });
