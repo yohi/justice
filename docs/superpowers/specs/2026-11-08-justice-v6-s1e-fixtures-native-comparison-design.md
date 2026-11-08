@@ -123,13 +123,14 @@ S1-c policy tests need actual digest-pinned Plan bytes with its existing scoped-
 | N-01 | Selected Plan revision differs from TaskIntent | S1-a `REVISION_MISMATCH` |
 | N-02 | Stale/tampered Plan raw bytes and digest mismatch | S1-a identity contradiction; no promoted valid candidate scope |
 | N-03 | Evidence refers to Task-B while Task-A is selected | S1-b Task-binding mismatch; never treated as Task-A evidence |
-| N-04 | Mandatory selected AC artifact reference absent | S1-a `REQUIRED_AC_MISSING` or exact existing equivalent boundary |
+| N-04 | Manifest retains at least two mandatory ACs for the selected Task; TaskIntent omits exactly one of those AC refs while retaining at least one, with all other Manifest/Artifact identities valid | S1-a `REQUIRED_AC_MISSING`; do not conflate with deleting that AC from Manifest |
 | N-05 | Selected AC exists but supporting Evidence reference is missing | S1-b `MISSING_EVIDENCE` and applicable S1-c `AC_EVIDENCE_REF_MISSING` |
 | N-06 | Changed path outside selected Plan's candidate allowlist | S1-c `OUTSIDE_CANDIDATE_SCOPE`, not a formal FAIL |
 | N-07 | Self-declared `EXECUTED` and `PASS` Evidence | Reported claim retained, `authenticityStatus` and `executionVerificationStatus` remain `NOT_VERIFIED` |
 | N-08 | Manifest has an `approvalRef` but independent Owner authority is unproved | S1-a Owner authority NOT_PROVEN; S1-c formalVerdict UNKNOWN |
 | N-09 | Malformed Evidence value vs unreadable Evidence source | Distinguish evaluated `INPUT_REJECTED` from `NOT_EVALUATED`; do not promote fallback |
-| N-10 | Unavailable ChangeSet or source | `UNKNOWN` / `NOT_EVALUATED` as appropriate; never equate absence with zero changes |
+| N-10a | Parsed ChangeSet has `availability: "UNAVAILABLE"`; other prerequisites remain valid | S1-c `EVALUATED`, diagnostic `CHANGESET_UNAVAILABLE`, candidate scope `UNKNOWN` |
+| N-10b | ChangeSet source read fails; other prerequisites remain valid | S1-c `NOT_EVALUATED`, reason `CHANGESET_SOURCE_UNAVAILABLE` (input issue `INPUT_READ_FAILED`); not equivalent to N-10a |
 
 Expected output must be derived from existing code contracts and narrowed to the selected S1-d execution path during Implementation Plan work; no claim that all example cases already passed. Existing equivalent coverage is reused, not duplicated.
 
@@ -142,7 +143,7 @@ For S1-d fallback under Evidence source failure, compare `scopeFallback` separat
 - Do not turn S1-b coverage `MATCHED_REF_PRESENT` into AC completion or Evidence authenticity.
 - Keep claimant-provided execution status separate from observed execution evidence.
 - Do not equate CLI `exitCode: 0` with assurance PASS.
-- Repeated runs of deterministic fixtures should produce the same relevant diagnostic output, with no raw secret/path leakage.
+- Repeated runs of deterministic fixtures should produce the same relevant diagnostic output. Existing S1-c-validated repository-relative paths may be displayed in S1-d Text/JSON diagnostics; do not blanket-redact them. Host absolute paths, secrets, and raw exception strings must not be emitted in either format. Assert these conditions under existing S1-c input validation and S1-d Formatter behavior, without inventing a new redaction contract.
 - A normal fixture must not induce unrelated workflow dispatch or external writes; test only interfaces and absence-of-side-effect guarantees that can actually be observed in the authorized test scope.
 
 ## 6. Native-only capability comparison
