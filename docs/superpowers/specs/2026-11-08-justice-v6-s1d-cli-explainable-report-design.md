@@ -1,11 +1,13 @@
 # Justice v6 — S1-d Integrated CLI / Explainable Report
 
-> **Design:** R0.1 — documented candidate
+> **Design:** R0.1.1 — F-001 / F-002 bounded correction candidate (supersedes Design R0.1 text only after Owner adoption)
+> **Source baseline:** `yohi/justice` commit `9d00ed7b03c28424a5a2d1fc19bf5bd509f587c8`, branch `feature/justice-v6-s1d-cli-explainable-report-design-20261108`
 > **Issue:** [#353](https://github.com/yohi/justice/issues/353)
 > **Decision:** `S1D_INTEGRATED_DIAGNOSTIC_CLI_WITH_PURE_REPORT_FORMATTER`
-> **Decision authority:** Human Owner approved the architecture direction in the brainstorming conversation on 2026-11-08 (JST). This document's details are proposals pending explicit Owner acceptance.
-> **Scope:** DESIGN_ONLY / READ_ONLY CLI specification. No code implementation, test execution, CI, Host Probe, Gate/HOLD change, or downstream task is authorized by this document.
-> **Dependency:** S1-a / S1-b / S1-c existing core contracts; final S1-e comparison remains separate.
+> **Decision authority:** Human Owner approved the architecture direction in the brainstorming conversation on 2026-11-08 (JST). The detailed design, including this correction, is not Owner-adopted.
+> **Scope:** DOCUMENT_ONLY / DESIGN_ONLY / READ_ONLY CLI specification. No source edits, implementation, tests, CI, Host Probe, Gate/HOLD change, or downstream task authorized.
+> **Dependency:** Existing S1-a / S1-b / S1-c core contracts; final S1-e comparison remains separate. Implementation Plan is not yet created.
+> **Correction limit:** F-001 (§5, §6, §8, §10) and F-002 (§7, §9, §10), plus directly necessary cross-references. No new review or fix loop.
 
 ## 1. Purpose, value, and stopping boundary
 
@@ -36,8 +38,9 @@ The design is based on these existing repository paths and types:
 - `src/core/s1a/loader.ts`: `loadS1aArtifacts(input, source)`; `LoaderResult`, including `identityStatus`, `identityCandidateReady`, `eligibleBaseline: false`, selected refs, checks, and limitations.
 - `src/runtime/s1a-cli.ts` and `src/runtime/s1a-read-only-fs.ts`: current `justice-s1a check` command and bounded, read-only filesystem adapter.
 - `src/core/s1b/binder.ts`: `bindEvidence({ schemaVersion: "justice-s1b-input-v1", baseline, evidenceRefs })`.
+- `src/core/s1b/validation.ts`: `inspectEvidenceRefs(unknown)` checks the **whole** Evidence set; `refs` is `null` when any Evidence entry is rejected.
 - `src/core/s1c/evaluator.ts`: `evaluateS1c({ schemaVersion: "justice-s1c-input-v1", baseline, planBytes, changeSet, evidenceRefs })`; `S1cResult` has `formalVerdict` and `candidateScopeComparison`.
-- `src/core/s1b/baseline.ts`: `inspectBaseline` is the shared existing validator for a candidate baseline.
+- `src/core/s1c/policy.ts` and `src/core/s1c/path-rules.ts`: existing exported `extractTaskScopePolicy`, `inspectChangeSet`, and `compareCandidatePaths` scope primitives; `src/core/s1b/baseline.ts`: existing `inspectBaseline`.
 
 **Non-negotiable meaning:**
 
@@ -48,7 +51,7 @@ The design is based on these existing repository paths and types:
 5. `ChangeSet.availability: PRESENT` only describes caller-provided paths; S1-d cannot assert that the list is a complete Git diff.
 6. Neither the manifest's approval reference nor claimed evidence provenance proves an independent owner trust boundary.
 
-S1-d does not modify S1-a/b/c contracts or their policy, evaluation, and diagnostic ordering.
+S1-d does not modify S1-a/b/c contracts, policies, evaluation ordering, or diagnostic codes. S1-d input recovery and report projection **do not** become new assurance authorities.
 
 ## 4. Runtime topology and responsibility separation
 
@@ -65,9 +68,11 @@ Integrated diagnostic orchestrator
     (1) S1-a loadS1aArtifacts()
     (2) S1-b bindEvidence()
     (3) S1-c evaluateS1c(), supplied the same S1-a Plan bytes
+    (4) scope-only fallback using existing S1-c primitives, only when
+        S1-c cannot be invoked because Evidence source was not decoded
            |
            v
-Immutable S1-d report projection
+Immutable S1-d report projection (includes declared provenance)
            |
            v
 Pure formatter: formatText() or formatJson()
@@ -80,14 +85,14 @@ Proposed future locations (not files created in this task):
 
 - `src/runtime/s1d-cli.ts`: argument parsing, stdout/stderr, process exit-code boundary.
 - `src/runtime/s1d-read-only-input.ts`: bounded file I/O, parsing, and captured S1-a read snapshots.
-- `src/core/s1d/report.ts`: immutable report construction from existing core outputs, without re-evaluating diagnostics.
+- `src/core/s1d/report.ts`: immutable report construction from existing core outputs and all-or-nothing validated provenance; no core diagnostic reimplementation.
 - `src/core/s1d/formatter.ts`: pure Text and canonical JSON rendering.
 - `tests/s1d/`: core-report and CLI fixture tests.
 - `package.json`: an eventual `justice-s1d` bin mapping and build inclusion, **only after separate implementation authorization**.
 
 The core-report functions receive data and return data; they do not import OpenCode, use the filesystem, execute commands, or persist output. The runtime boundary alone owns local I/O.
 
-## 5. CLI grammar and input specification
+## 5. CLI grammar and input specification — F-001
 
 ~~~bash
 justice-s1d diagnose \
@@ -104,12 +109,10 @@ justice-s1d diagnose \
 - Required flags: `--manifest`, `--manifest-sha256`, `--intent`, `--artifacts-root`, `--evidence`, and `--changeset`.
 - `--format` accepts exactly `text` or `json`, defaults to `text`; flags can appear in any order but cannot repeat. Unknown flags, missing values, extra positional arguments, and invalid digest syntax are usage errors.
 - The manifest, intent, and Artifact directory use S1-a's existing `LoaderInput` and `OwnerManifest` / `TaskIntent` schemas. A missing or malformed expected digest must not be replaced by hashing the caller's current file as the expected value.
-- The Evidence JSON file is a **raw JSON array** of existing `EvidenceRefV1` items (0–128). An empty array means *no supplied references*, not “execution was successful”. Reject non-array envelopes rather than interpreting them silently.
+- The Evidence JSON file is a **raw JSON array** of existing `EvidenceRefV1` items (0–128). An empty array means *no supplied references*, not “execution was successful”. A parsed non-array is **Core input/schema-invalid**, not a JSON syntax error; never interpret it as `[]`.
 - The ChangeSet JSON file is an existing `ChangeSet` value. For unavailable change data, the caller must explicitly provide `{"availability":"UNAVAILABLE"}`. An empty `PRESENT` changes array is a positive caller claim of no changes and is not interchangeable with `UNAVAILABLE`.
-- File content is read as bounded bytes then strict JSON where appropriate. Reuse `parseStrictJson` to reject duplicate keys and malformed JSON. Validate according to existing S1-a, S1-b, and S1-c contract rules instead of introducing permissive parallel validators.
-- Proposed I/O caps for **S1-d-only new files**: Evidence JSON ≤ 1,048,576 bytes and ChangeSet JSON ≤ 262,144 bytes. The existing S1-a per-input/per-artifact caps, S1-b EvidenceRef count cap, S1-c 128-entry ChangeSet validation, and 8,388,608-byte Plan cap remain authoritative. Byte caps are proposals for S1-d, not retroactive changes to S1-a/b/c.
-
-**Input failure distinction:** An unreadable or malformed Evidence file is **not** an empty Evidence array; an unreadable or malformed ChangeSet file is **not** `UNAVAILABLE`. These errors must be reported explicitly and must not be converted to plausible diagnostic data.
+- Read bounded bytes and decode strict UTF-8 **before** strict JSON syntax parsing (including duplicate keys/depth constraints). Existing `parseStrictJson` behavior is reused for syntax. Parsed values remain **untrusted `unknown`** until the existing S1-b/S1-c runtime validators have assessed them.
+- Proposed I/O caps for **S1-d-only new files**: Evidence JSON ≤ 1,048,576 bytes and ChangeSet JSON ≤ 262,144 bytes. Existing S1-a per-input/per-artifact limits, S1-b 128-EvidenceRef limit, S1-c 128-entry ChangeSet validation, and 8,388,608-byte Plan cap remain authoritative.
 
 ### 5.1 Plan bytes handoff without unbound second read
 
@@ -121,33 +124,105 @@ Design decision: inject a read-only `S1aReadOnlySource` wrapper that captures a 
 - If S1-a could not read that Plan, cannot identify it unambiguously, or the captured bytes are unavailable, mark S1-c `NOT_EVALUATED` with an explicit reason. Do not synthesize Plan bytes.
 - S1-c itself independently checks the Plan-byte SHA-256 against the S1-a selected expected and observed digest and requires the existing baseline readiness.
 - Use defensive copies or immutable ownership of captured bytes so a formatter or caller cannot mutate them between stages.
-- Snapshotting avoids an unnecessary re-read, but does not prove cross-path filesystem race freedom, owner origin, or atomicity of the entire directory tree. Preserve existing S1-a limitations and do not claim stronger host guarantees.
+- Snapshotting avoids an unnecessary re-read, but does not prove cross-path filesystem race freedom, owner origin, or atomicity of the entire directory tree. Preserve existing S1-a limitations.
 
-## 6. Evaluation and dependency behavior
+### 5.2 Two distinct kinds of new-input failure
 
-1. Validate CLI syntax, read the new bounded JSON inputs, and verify their envelope syntax. No process spawning or implicit Git operations.
-2. Run `loadS1aArtifacts()` on the given manifest, task intent, and Artifact root with the existing read-only source adapter and capture only bounded input bytes.
-3. Run `bindEvidence()` with the exact S1-a `LoaderResult` and provided EvidenceRefs, even if S1-a returns a non-ready candidate; the S1-b core decides between `EVALUATED`, `BASELINE_UNKNOWN`, and `INPUT_REJECTED`.
-4. If the captured Plan and necessary typed inputs exist, call `evaluateS1c()` with exactly the S1-a result, captured Plan bytes, explicit ChangeSet, and EvidenceRefs. S1-c performs its own S1-b binding internally; this is intentional reuse of the current contract, not new matching logic.
-5. Project the three raw results into a report and format it without changing their substantive statuses.
+**Level A — transport/decoding failure (no parsed value exists):** for each of `--evidence` and `--changeset` independently, classify in fixed precedence: `INPUT_READ_FAILED` (including nonregular/unsafe path), `INPUT_TOO_LARGE`, `INPUT_UTF8_INVALID`, `INPUT_JSON_INVALID` (syntax, duplicate keys, depth). These are S1-d **input issues**, not S1-b `INPUT_REJECTED` or S1-c `CHANGESET_INVALID`. No source data may be fabricated to invoke a dependent core. Continue any *independent* valid diagnosis (§6). Do not elevate partial results.
 
-The orchestration must **not** short-circuit a legitimate diagnostic merely because an earlier stage observed a mismatch; report all safe results that the current core can evaluate. Where inputs are absent, malformed, or unsafe to associate, the dependent stage is `NOT_EVALUATED` rather than false success or false failure.
+**Level B — parsed JSON, but Core schema/type/semantic invalid:** strict JSON parsing succeeds and yields an `unknown` value. Existing Core validation decides the outcome, including an Evidence non-array, illegal field, unsafe ID, duplicate Evidence ID, >128 entries, or an invalid ChangeSet shape/entry. `inspectEvidenceRefs` and `bindEvidence` may return S1-b `INPUT_REJECTED` with `rejectionReasonCode`; `evaluateS1c` may return `S1B_INPUT_REJECTED` and/or `CHANGESET_INVALID`. **Do not treat such outcomes as a fatal JSON parse failure.** Continue the other valid diagnostic branch.
 
-Stage state is separate from core outcome:
+To allow existing guarded Core runtime validation to report a parsed but schema-invalid value, a single narrowly documented untrusted-input adapter may pass that `unknown` into the already-defensive `bindEvidence` / `evaluateS1c` call boundary (with an explicit TypeScript assertion if required). This is **not** a claim that the value satisfies `EvidenceRefV1[]` or `ChangeSet`; all trusted report projection still requires successful `inspectEvidenceRefs` / Core validation. Do not create separate permissive schemas or change existing TypeScript Core contracts.
 
-- `EVALUATED`: the existing core function returned a result. Its result may still say `UNKNOWN`, `MISMATCH`, `INPUT_REJECTED`, or `BASELINE_UNKNOWN`.
-- `NOT_EVALUATED`: the existing core was not invoked because a documented precondition was unavailable; include a stable reason (`INPUT_UNREADABLE`, `INPUT_INVALID`, `PLAN_SNAPSHOT_UNAVAILABLE`, or `PREREQUISITE_UNAVAILABLE`).
+The `inputIssues` in §7 describe only Level A failures. Each source produces at most one issue (first failure by the fixed precedence), and issues are emitted in source order `evidence`, then `changeset`. Level B details remain in the existing Core results, without duplicating their validation logic.
 
-This separation avoids treating skipped work as observed failures.
+## 6. Evaluation order, independent continuation, and stage semantics — F-001
 
-## 7. Result model, semantic preservation, and formatting
+1. Parse CLI grammar. A grammar error is fatal (§8); no Core functions are called.
+2. Independently perform bounded reads, strict UTF-8 decoding, and strict JSON syntax parsing for Evidence and ChangeSet. Record Level A issues for each source without cancelling the other source. Do **not** translate a failure into `[]`, `UNAVAILABLE`, a fabricated Core result, or a success status.
+3. Execute S1-a `loadS1aArtifacts` using the existing read-only source, capturing bounded Plan bytes. Its own invalid/missing inputs are reported by the S1-a Core where possible.
+4. If Evidence has a parsed JSON value (whether Core-valid or Core-invalid), call S1-b `bindEvidence` with the exact S1-a `LoaderResult`; it alone yields `EVALUATED`, `BASELINE_UNKNOWN`, or `INPUT_REJECTED`. If Evidence has Level A failure, S1-b stage is `NOT_EVALUATED`.
+5. If Evidence and ChangeSet both have parsed JSON values and a uniquely associated captured Plan exists, invoke S1-c `evaluateS1c` with the exact S1-a baseline, Plan bytes, and both parsed values. Its built-in S1-b validation and ChangeSet inspector deliberately continue independently: an Evidence Core failure does **not** erase a valid candidate-scope comparison; a ChangeSet Core failure does **not** erase Evidence-related diagnostics. The Core may return `S1B_INPUT_REJECTED` / `CHANGESET_INVALID` alongside other diagnostics. Keep the returned `S1cResult` unmodified.
+6. If Evidence has a **Level A** failure, ChangeSet is parsed, and a valid Plan capture/baseline exists, S1-c cannot be called with valid full input. Keep S1-c `NOT_EVALUATED`, but optionally produce the explicitly separate `scopeFallback` (§7) using **only existing** `inspectBaseline`, `extractTaskScopePolicy`, `inspectChangeSet`, and `compareCandidatePaths`. Verify captured Plan association and SHA-256 against selected Plan's expected/observed digest before invoking those primitives. This fallback cannot produce an `S1cResult`, formal verdict, or Evidence diagnostic; it displays *candidate scope comparison only* and must state `NO_FORMAL_S1C_RESULT`.
+7. If ChangeSet has a **Level A** failure, Evidence may still yield a full S1-b Core result. S1-c is `NOT_EVALUATED`, and no ChangeSet comparison is claimed. Do not call S1-c with a made-up `UNAVAILABLE` ChangeSet. If both are Level A-invalid, retain S1-a and both input issues.
+8. Project immutable results, validated reported provenance (§7), input issues, and any scope-only fallback; render exactly one Text or JSON record (§8).
 
-The initial JSON representation is an S1-d **transport/report envelope** around the original core results, not a replacement for their schemas:
+**Stage state is separate from a Core result:**
+
+- `EVALUATED` means the actual corresponding Core returned a result. That result may contain `MISMATCH`, `UNKNOWN`, `INPUT_REJECTED`, or `CHANGESET_INVALID`.
+- `NOT_EVALUATED` means no corresponding Core result was computed. Stable `reason` is one of `EVIDENCE_SOURCE_UNAVAILABLE`, `CHANGESET_SOURCE_UNAVAILABLE`, `PLAN_SNAPSHOT_UNAVAILABLE`, `PREREQUISITE_UNAVAILABLE`, or `INPUT_SOURCE_UNAVAILABLE` (for S1-a failure outside its own recoverable result). No synthetic Core result is created.
+- `scopeFallback` is **not S1-c stage evaluation**. It is a clearly separated use of existing S1-c scope primitives when full S1-c input cannot be supplied. `state` is `EVALUATED` only when existing primitives established a valid comparison; otherwise `NOT_EVALUATED` with an existing-policy or prerequisite reason. This fallback is omitted when S1-c is `EVALUATED` or when only ChangeSet source is missing.
+- If no valid selected Plan bytes exist, S1-c `NOT_EVALUATED` even if S1-b returned a useful result. If S1-a's baseline is `NOT_READY` but the Plan capture exists, S1-c may still be invoked so its existing `S1A_BASELINE_NOT_READY` diagnostic can be preserved. Do not create a new authorization check.
+
+### 6.1 Required outcome matrix
+
+Here `E` = `EVALUATED`, `NE` = `NOT_EVALUATED`; `R` = JSON `justice-s1d-report-v1` or its Text equivalent; all lines end in `\n`. `scopeFallback` is only eligible with a valid captured Plan and parsed, valid ChangeSet.
+
+| Inputs / situation | S1-a | S1-b | S1-c | Other result | Exit | stdout |
+| --- | --- | --- | --- | --- | --- | --- |
+| All decodable and Core-valid; Plan captured | E | E | E | `formalVerdict: UNKNOWN` preserved | `0` | `R` |
+| Evidence parses but fails Core validation (invalid shape, duplicate ID, etc.), valid ChangeSet | E | E (`INPUT_REJECTED`) | E (`S1B_INPUT_REJECTED`; valid scope retained) | `provenance` withheld | `0` | `R` |
+| ChangeSet parses but fails Core validation, valid Evidence | E | E | E (`CHANGESET_INVALID`; evidence retained) | No candidate scope claimed | `0` | `R` |
+| Evidence Level A failure, valid ChangeSet | E | NE | NE | `inputIssues`; `scopeFallback` E when prerequisites valid | `3` | `R` |
+| ChangeSet Level A failure, valid Evidence | E | E | NE | `inputIssues`; no scope fallback | `3` | `R` |
+| Both new sources Level A-invalid | E | NE | NE | Two input issues; no invented input | `3` | `R` |
+| Plan missing/unbound, other inputs decodable | E | E | NE | `PLAN_SNAPSHOT_UNAVAILABLE`; no formal S1-c result | `3` | `R` |
+| Valid CLI but S1-a candidate mismatch, captured Plan exists | E | E (possibly `BASELINE_UNKNOWN`) | E (possibly `S1A_BASELINE_NOT_READY`) | Preserve every Core status | `0` | `R` |
+| Invalid CLI grammar | NE | NE | NE | Fatal error (§8), no report | `64` | `justice-s1d-error-v1` / Text fatal |
+| Unexpected internal failure | No guaranteed results | No guaranteed results | No guaranteed results | Fatal error (§8), no invented results | `70` | `justice-s1d-error-v1` / Text fatal |
+
+`0` is **pipeline execution completeness**, never a claim of diagnostic success, verified evidence, or acceptance. `3` indicates incomplete execution, not a formal assurance failure. Both Level A failures and Core-invalid Level B findings retain the independent diagnostics as shown.
+
+## 7. Report model, declared Evidence provenance, and formatting — F-002
+
+The initial JSON representation is an S1-d **report envelope** around the **unchanged** Core results, not a replacement for their schemas:
 
 ~~~typescript
 type Stage<T> =
   | Readonly<{ state: "EVALUATED"; result: T }>
-  | Readonly<{ state: "NOT_EVALUATED"; reason: string }>;
+  | Readonly<{ state: "NOT_EVALUATED"; reason: StageSkipReason }>;
+
+type InputIssue = Readonly<{
+  source: "evidence" | "changeset";
+  code: "INPUT_READ_FAILED" | "INPUT_TOO_LARGE" | "INPUT_UTF8_INVALID" | "INPUT_JSON_INVALID";
+}>;
+
+type EvidenceProvenanceClaim = Readonly<{
+  evidenceId: string;
+  issuerId: string;
+  originId: string;
+  provenanceClass: ProvenanceClass; // existing EvidenceRefV1 union
+}>;
+
+type ProvenanceProjection =
+  | Readonly<{
+      state: "CLAIMS_AVAILABLE";
+      validation: "ALL_EVIDENCE_REFS_STRUCTURALLY_VALID";
+      verification: "NOT_VERIFIED";
+      claims: readonly EvidenceProvenanceClaim[];
+    }>
+  | Readonly<{
+      state: "WITHHELD";
+      reason: "EVIDENCE_SOURCE_UNAVAILABLE" | "EVIDENCE_SET_INVALID" |
+        "BINDING_NOT_AVAILABLE" | "BINDING_INCONSISTENT";
+      claims: readonly []; // never emit a valid-looking partial projection
+    }>;
+
+type ScopeFallback =
+  | Readonly<{
+      state: "EVALUATED";
+      provenance: "S1C_EXISTING_SCOPE_PRIMITIVES";
+      candidateScopeComparison: "WITHIN_CANDIDATE_SCOPE" | "OUTSIDE_CANDIDATE_SCOPE";
+      outsidePaths: readonly string[];
+      formalVerdictAvailable: false;
+      limitation: "NO_FORMAL_S1C_RESULT";
+    }>
+  | Readonly<{
+      state: "NOT_EVALUATED";
+      reason: "PREREQUISITE_UNAVAILABLE" | "PLAN_SNAPSHOT_UNAVAILABLE" |
+        "SCOPE_POLICY_UNDEFINED" | "SCOPE_POLICY_INVALID" |
+        "SCOPE_POLICY_REFERENCE_MISMATCH" | "CHANGESET_INVALID";
+    }>;
 
 type S1dReportV1 = Readonly<{
   schemaVersion: "justice-s1d-report-v1";
@@ -158,20 +233,38 @@ type S1dReportV1 = Readonly<{
     s1b: Stage<BinderResult>;
     s1c: Stage<S1cResult>;
   }>;
+  inputIssues: readonly InputIssue[];
+  provenance: ProvenanceProjection;
+  scopeFallback?: ScopeFallback;
   limitations: readonly string[];
 }>;
 ~~~
 
-Normative requirements:
+`StageSkipReason` in this document denotes the fixed §6 list of skip reasons, not arbitrary error text. All new report-only types are **proposed** and do not change existing Core types.
 
-- Preserve `LoaderResult`, `BinderResult`, and `S1cResult` as returned, including unknowns, reason codes, Evidence IDs, candidate-scope comparison, reported claims, and limitations. Do not invent a cross-stage formal PASS/FAIL.
-- The report-level `limitations` is the deterministic, deduplicated, lexically ordered union of present stage limitations plus any S1-d-specific boundary limitation. It does not replace the per-stage arrays.
-- JSON uses deterministic property ordering and stable, newline-terminated serialization. Do not include invocation time, random IDs, environment variables, process IDs, absolute host paths, or raw unvalidated input bytes. Do not echo arbitrary CLI arguments on error.
-- Text is a projection of that same report envelope: stage run state, identity/binding/candidate-scope findings, diagnostics with bounded identifier/path references, reported-versus-verified distinction, and explicit limitations. Text and JSON may differ in presentation, **not facts**.
-- Output escaping must prevent newline/control-character spoofing. Only normalized/validated relative paths, stable IDs, and reason codes may appear; never print raw untrusted JSON or unexpected exception messages.
-- `formatText(report)` and `formatJson(report)` must be pure: same input, byte-identical output, no I/O, clock, global process state, or policy decisions.
+### 7.1 Provenance projection is all-or-nothing and declarative
 
-Example **illustrative**, not executed or an assertion of approval:
+`BinderResult` contains `evidenceId`, binding status, reported execution/outcome, and verification limitations, but **not** `issuerId`, `originId`, `provenanceClass`, or the complete original `EvidenceRefV1`. S1-d therefore adds a **report-only** view, never a field to `BinderResult`.
+
+1. Run the existing `inspectEvidenceRefs(parsedEvidenceUnknown)` against the **entire** decoded Evidence JSON array. Require `issueCodes.length === 0` **and** `refs !== null`; ensure that the S1-b stage returned a result whose `evaluationStatus` is `EVALUATED` or `BASELINE_UNKNOWN` (not `INPUT_REJECTED`). These are the only conditions for `CLAIMS_AVAILABLE`.
+2. Construct `EvidenceProvenanceClaim` solely from that validator's canonical `refs`, not by copying individual fields from unvalidated raw JSON or a partially accepted list. Copy the four exact fields `evidenceId`, `issuerId`, `originId`, and `provenanceClass` without adding claims about their accuracy. Sort lexically by `evidenceId` and make a defensive immutable snapshot.
+3. Cross-check that each projected `evidenceId` is present **exactly once** in that run's S1-b `bindingResults`, and that the two sets are identical. If the binding result is unexpectedly inconsistent, mark the entire projection `WITHHELD` with reason `BINDING_INCONSISTENT` and preserve the unmodified Core result; do not fill missing IDs or issue partial projections. For `BASELINE_UNKNOWN`, the original binding results remain `UNKNOWN`; only the reported source IDs can be shown.
+4. If the source has Level A failure, emit `WITHHELD/EVIDENCE_SOURCE_UNAVAILABLE`. If Evidence-set validation fails, emit `WITHHELD/EVIDENCE_SET_INVALID`. If S1-b is `NOT_EVALUATED` or returns `INPUT_REJECTED` for an unrelated baseline defect, emit `WITHHELD/BINDING_NOT_AVAILABLE`. In every withheld case use **empty** claims; distinguish malformed Evidence from a binding-stage limitation. Never publish fields from valid-looking entries inside an invalid batch.
+5. A structurally valid **empty** Evidence array yields `CLAIMS_AVAILABLE` with `claims: []`. This says only “no declarations supplied”; it is not a successful test or AC satisfaction.
+
+The words `issuerId`, `originId`, and `provenanceClass` refer to **reported source metadata**. `validation: ALL_EVIDENCE_REFS_STRUCTURALLY_VALID` validates only form, supported enum values, and IDs; `verification: NOT_VERIFIED` explicitly denies independent authenticity/provenance confirmation. These claims cannot establish Owner approval, host execution, or Evidence trust even when `provenanceClass` is `FIXTURE_OBSERVATION` or `UNVERIFIED_EXTERNAL`.
+
+### 7.2 Text / JSON semantic parity
+
+- Preserve `LoaderResult`, `BinderResult`, and `S1cResult` exactly as returned, including UNKNOWN, reason codes, Evidence IDs, diagnostics, candidate-scope comparison, reported claims, and limitations. No cross-stage formal PASS/FAIL.
+- JSON uses deterministic property ordering, stable array ordering, and exactly one newline-terminated record. Provenance is separate from `stages.s1b.result`; report-only field names cannot masquerade as Core proof.
+- Text renders the **same** reported provenance claims with labels `reported issuer`, `reported origin`, `reported provenance class`, and `authenticity not verified`; if withheld, show `Evidence source claims: WITHHELD (reason)` rather than any partial IDs.
+- A scope-only fallback is visibly labeled `candidate scope only (S1-c full evaluation NOT_EVALUATED)`. Its `outsidePaths` are derived from the existing S1-c primitives and are **not** proof of ChangeSet completeness. It does not print `Formal verdict: UNKNOWN`, because no `S1cResult` exists; print `Formal verdict: NOT_EVALUATED` as a presentation label.
+- The report-level `limitations` is the deterministic, deduplicated, lexically ordered union of evaluated stage limitations plus relevant S1-d boundaries including `OWNER_AUTHORITY_NOT_PROVEN`, `DECLARED_PROVENANCE_NOT_VERIFIED`, and, for fallback, `NO_FORMAL_S1C_RESULT`; it does not erase stage-native limitations.
+- Do not include invocation time, random IDs, environment variables, process IDs, absolute host paths, or raw unvalidated input bytes. Escape every textual identifier/path to prevent control-character spoofing. No unbounded raw JSON dumps or arbitrary exception strings.
+- `formatText(report)` and `formatJson(report)` are pure: the same immutable input yields byte-identical output without filesystem, clock, process state, network, or policy decisions.
+
+Illustrative only (not executed):
 
 ~~~text
 Justice S1-d — READ_ONLY diagnostic
@@ -180,70 +273,96 @@ S1-b: EVALUATED  evaluation=EVALUATED  authenticity=NOT_VERIFIED
 S1-c: EVALUATED  candidate_scope=OUTSIDE_CANDIDATE_SCOPE
 Formal verdict: UNKNOWN (Owner authority not verified)
 Finding: OUTSIDE_CANDIDATE_SCOPE src/example.ts
-Limits: evidence authenticity, host execution, ChangeSet completeness,
-        Owner approval/supersession, filesystem race freedom not proven
+Evidence source claims: 1 structurally valid, NOT VERIFIED
+  evidence=evidence-001 reported issuer=issuer-001 reported origin=origin-001
+  reported provenance class=SELF_DECLARED; authenticity not verified
 This diagnostic is not an acceptance or a Gate decision.
 ~~~
 
-The “Formal verdict” line is emitted only from an actual evaluated S1-c result. For a skipped stage, say “Formal verdict: NOT_EVALUATED” as a presentation label, **never** fabricate an `S1cResult.formalVerdict` field.
+## 8. Exit codes, stdout, and fatal machine-readable errors — F-001
 
-## 8. Process exit codes and CLI success
+Process exit status describes **CLI execution**, never assurance or Gate approval. The §6.1 matrix is normative.
 
-Process status describes **CLI execution only**; it is not an assurance or Gate verdict.
-
-| Code | Meaning | Required behavior |
+| Code | Meaning | stdout |
 | --- | --- | --- |
-| `0` | Invocation was valid and all three core stages returned results | Findings, `MISMATCH`, and formal `UNKNOWN` may still be present |
-| `3` | Incomplete diagnostic due to unavailable/unsafe-to-associate prerequisite | Mark skipped stage(s), preserve available diagnostics |
-| `64` | Invalid command line/flag syntax | Bounded, safe usage diagnostic; no implied core result |
-| `65` | Malformed or over-limit new Evidence/ChangeSet JSON input | Explicit invalid-input diagnostic; do not fabricate `[]` or `UNAVAILABLE` |
-| `70` | Unexpected internal failure | Safe generic error; no raw stack trace/host path |
+| `0` | Valid invocation; all three diagnostic Core stages returned a result, even if their outcomes contain `UNKNOWN`, `INPUT_REJECTED`, or `CHANGESET_INVALID` | One `S1dReportV1` (or Text equivalent) |
+| `3` | At least one stage `NOT_EVALUATED` because the required input was not decodable, associated, or otherwise safely available | One **partial** `S1dReportV1` including input issues/skipped reasons and independent results |
+| `64` | Fatal CLI grammar/flag error | One bounded `justice-s1d-error-v1` (or Text equivalent) |
+| `70` | Fatal unexpected internal error; no reliable structured report can be produced | One bounded `justice-s1d-error-v1` (or Text equivalent) |
 
-S1-a's existing `justice-s1a check` exit-code behavior remains unchanged. In particular, `justice-s1d`'s `0` means that the diagnostic pipeline ran, **not** that Identity is matched or formal assurance passed. A machine consumer must inspect the JSON stage values and may not interpret exit code alone as Gate approval.
+Previously proposed `65` for malformed or over-limit Evidence/ChangeSet JSON is **withdrawn**: per-input Level A failure now returns `3` while allowing independent diagnosis. The existing `justice-s1a check` exit codes are not changed.
 
-For malformed/usage/internal errors that prevent a report envelope from being constructed, emit a bounded machine-readable or text error record according to `--format` when valid; no synthetic stage success. Exactly one final output record on stdout, ending with a newline. No files are generated.
+Normative fatal JSON (not a report envelope, no fabricated stages):
 
-## 9. Threat model, read-only guarantees, and limits
+~~~typescript
+type S1dFatalErrorV1 = Readonly<{
+  schemaVersion: "justice-s1d-error-v1";
+  operation: "diagnose";
+  status: "ERROR";
+  error: Readonly<{
+    category: "CLI_USAGE" | "INTERNAL_FAILURE";
+    code: "CLI_ARGUMENT_INVALID" | "UNEXPECTED_INTERNAL_ERROR";
+  }>;
+}>;
+~~~
 
-- Local paths and JSON are untrusted. Reuse `createS1aReadOnlySource()`; reject unsafe/nonregular/symlink traversal according to existing adapter behavior, never relax it for S1-d.
-- Maintain strict count, byte, and depth limits; do not perform unbounded file reads, uncontrolled recursion, or unrestricted report expansion. Zero/empty cases must retain their precise semantics.
-- Report provenance precisely: agent-reported EXECUTED/PASS remains reported; owner authority, external evidence authenticity, actual host execution, ChangeSet completeness, supersession, and full filesystem race freedom remain unverified.
-- Runtime operations are limited to bounded local reads, in-process calculation, stdout/error reporting, and process exit. No write to input files, cache, runtime settings, Git tree, issue, PR, or external service. No subprocess, network request, plugin action, task execution, review, fix, or Gate/HOLD mutation.
-- A serious input safety violation prevents the affected read/diagnostic operation (fail closed for that action), but unrelated already-obtained safe diagnostic results can still be explained. Do not create a new workflow stop or approval gate.
+~~~json
+{"schemaVersion":"justice-s1d-error-v1","operation":"diagnose","status":"ERROR","error":{"category":"CLI_USAGE","code":"CLI_ARGUMENT_INVALID"}}
+~~~
 
-## 10. Acceptance fixtures and test design (future implementation only)
+- For `--format json` parsed unambiguously, emit only this machine-readable object + `\n`. For `text` or an invalid/ambiguous `--format`, use a fixed, sanitized one-line Text fatal message + `\n`; do not guess format from untrusted content.
+- `64`: `CLI_USAGE/CLI_ARGUMENT_INVALID`; `70`: `INTERNAL_FAILURE/UNEXPECTED_INTERNAL_ERROR`. No path, stack, user-supplied argument, environment string, arbitrary exception message, or raw Evidence content.
+- Exactly **one** stdout final record per invocation (report or fatal), newline-terminated. Stderr is empty under the designed standard path; no intermediate result is emitted as a second record. Any unexpected formatter failure must use a fixed safe fatal fallback rather than leaking a partial report.
+- A syntactically parsed but invalid Evidence/ChangeSet is a normal Core rejection, not a fatal exit; it can yield exit `0` when all three stages ran. Level A failure yields `3` with a normal partial report. Never translate these into an assurance PASS.
+
+## 9. Trust, security, and read-only limits — F-002
+
+- Local paths and JSON are untrusted. Reuse `createS1aReadOnlySource()`; reject unsafe/nonregular/symlink traversal according to existing adapter behavior, never relax it for S1-d. Preserve size/count/depth limits and bounded output.
+- Evidence source metadata is **input-supplied declaration**, even when every field passed `inspectEvidenceRefs`. `issuerId`, `originId`, and `provenanceClass` do not imply identity proof, signer verification, source authenticity, or execution observation. The report's `NOT_VERIFIED` tag remains visible in both Text and JSON.
+- A partly invalid Evidence batch yields **no provenance claims**; an unreadable/undecodable Evidence source yields **no claims** and never a synthetic empty array. No fallback may reconstruct issuer/origin from `BinderResult` because those fields do not exist there.
+- The fallback scope projection can only use already validated and bound Plan bytes, the parsed and valid ChangeSet, and existing S1-c exported primitives. It is not a new formal evaluation or a way around `S1cResult.formalVerdict: UNKNOWN`.
+- Report provenance precisely: agent-reported `EXECUTED`/`PASS` remains reported; Owner authority, external Evidence authenticity, actual host execution, ChangeSet completeness, supersession, and full filesystem race freedom remain unverified.
+- Runtime operations are limited to bounded local reads, in-process calculation, stdout/error reporting, and process exit. No input modification, cache writes, Git operations, network, subprocess, runtime setting mutation, Task/Review/Fix, or Gate/HOLD change.
+- A serious input safety violation prevents the affected read/diagnostic operation (fail closed for that action), but independent safely obtained results can still be explained. Do not create a new workflow stop or approval gate.
+
+## 10. Minimum acceptance test design — F-001 and F-002 (future implementation only)
 
 | Case | Expected observable outcome |
 | --- | --- |
-| Same fixed Fixture run twice | Byte-identical Text/JSON per format; stable stage order and reason order |
-| All S1-a identity checks match, valid Evidence, in-scope ChangeSet | All stages run; `formalVerdict` remains `UNKNOWN`, not PASS |
-| S1-a manifest digest mismatch | Mismatch is preserved; dependent diagnostics are unknown/not evaluated as the existing cores require |
-| Plan bytes missing, changed, or not traceable to manifest selection | No synthesized Plan; S1-c skipped or existing S1-c identity mismatch returned, with explicit reason |
-| Evidence matches a Task and AC | Binding match/reference coverage only; no inferred execution success or AC satisfaction |
-| Evidence misbound to another Task/Revision/Scope/AC | Existing S1-b reason codes and S1-c binding diagnostics visible |
-| Evidence is empty | Missing coverage is distinguishable from successful execution |
-| Invalid/duplicate/oversized Evidence JSON | Explicit invalid input; never silently substitute an empty list |
-| `{"availability":"UNAVAILABLE"}` ChangeSet | Existing S1-c `CHANGESET_UNAVAILABLE` / unknown scope semantics |
-| Outside-scope changed path or rename | Existing path diagnostics; formal verdict remains unknown |
-| No S1-c scope policy | `SCOPE_POLICY_UNDEFINED` is visible, not a guessed allowlist |
-| Invalid/over-limit ChangeSet | Explicit input error or existing invalid diagnostics; not treated as “no changes” |
-| Unreadable file, symlink, traversal attempt | Safe bounded diagnostic; no unsafe dereference or host path leak |
-| Unexpected formatter/adapter error | Safe error record; no source mutation |
-| Normal / negative-diagnostic / incomplete runs | Exit code distinguishes execution completion from inability to execute, never functions as approval |
-| Observable side effects | No writes, subprocess, network, Task/Review/Fix/Gate activity |
+| Same fixed Fixture run twice | Byte-identical Text/JSON per format, stable status and provenance ordering |
+| All inputs valid, S1-a ready, within/outside candidate scope | All stages `EVALUATED`, exit `0`, one report record; `formalVerdict` remains `UNKNOWN` |
+| Evidence strict JSON parsed but violates Core schema (non-array, duplicate ID, bad provenanceClass, >128) | S1-b `INPUT_REJECTED`; S1-c `S1B_INPUT_REJECTED`; valid Scope remains available; exit `0`; provenance `WITHHELD` with no partial claims |
+| ChangeSet strict JSON parsed but Core-invalid (bad shape or invalid entry) | S1-b retains valid Evidence binding/coverage; S1-c emits `CHANGESET_INVALID`; exit `0`, candidate Scope unknown, Evidence provenance retained only if fully valid |
+| Evidence read error, oversize, invalid UTF-8, invalid JSON or duplicate JSON key (separate cases) | S1-b/S1-c `NOT_EVALUATED`; `inputIssues` source=`evidence`; valid Plan+ChangeSet scope-only fallback evaluated; exit `3`; one partial report, no invented Evidence |
+| ChangeSet read error, oversize, invalid UTF-8, invalid JSON or duplicate key (separate cases) | S1-b `EVALUATED` with genuine Evidence result; S1-c `NOT_EVALUATED`; no scope fallback; exit `3`; one partial report, no invented `UNAVAILABLE` |
+| Both new files undecodable | S1-a report retained, two distinct input issues, S1-b/S1-c skipped, exit `3` |
+| Missing/bad Plan snapshot or non-ready S1-a | Existing S1-a findings retained; S1-c run only if original prerequisites exist, otherwise `NOT_EVALUATED` and explicit reason; no fake formal result |
+| Valid but empty Evidence array | `CLAIMS_AVAILABLE` with zero claims; no claimed execution success or AC satisfaction |
+| Two valid EvidenceRefs with distinct declared issuer/origin/provenance | JSON claims and Text claim rows match by Evidence ID and values, sorted deterministically; both label declarations as `NOT_VERIFIED` |
+| One malformed EvidenceRef among otherwise valid refs | `inspectEvidenceRefs` rejects entire batch; `provenance: WITHHELD` and `claims: []` for Text **and** JSON; no partial trusted metadata |
+| S1-b returns `BASELINE_UNKNOWN` with structurally valid evidence | Provenance may display declarations keyed to each S1-b Evidence ID, but binding status remains `UNKNOWN` and authenticity is unverified |
+| S1-b returns `INPUT_REJECTED` for any reason | No provenance from invalid or unassociated evidence; no inferred issuer/origin from BinderResult |
+| Evidence Core-invalid + ChangeSet Core-invalid simultaneously | Both `S1B_INPUT_REJECTED` and `CHANGESET_INVALID` surfaced by existing S1-c; no overwrite/suppression; exit `0` if all three invoked |
+| Out-of-scope rename / no S1-c scope policy | Existing path/policy semantics preserved; no invented formal PASS/FAIL |
+| Invalid CLI flags with `--format json` | Exit `64`, exact schema `justice-s1d-error-v1`, one stdout JSON record, no stages; safe literal error codes |
+| Unexpected internal error | Exit `70`, fixed safe JSON/Text fatal, no stack, path, or second output record |
+| Result formatting parity under hostile encoded input | No newline/control injection; JSON and Text contain identical statuses, Evidence IDs, reported sources, and verification limitations |
+| Read-only effects | No writes, subprocess, network, Task/Review/Fix/Gate activity |
 
-Minimum verification after **separate implementation authorization**: deterministic unit tests for report projection and formatter; mocked CLI and read-only source tests; integration tests using fixed S1-a/b/c fixtures; existing Bun test, typecheck, lint, and build commands. These are future acceptance criteria, **not tests executed while writing this design**.
+Future implementation verification, **not executed here**: deterministic core-report and formatter tests; mocked CLI/read-only-source tests; integration fixtures using existing S1-a/b/c; Bun test, typecheck, lint, and build. The Implementation Plan has not been created, so cross-document implementation-plan consistency remains a **future prerequisite**, not an assertion of current PASS.
 
-## 11. Scope and owner checkpoint
+## 11. Scope, residual risks, and Human Owner checkpoint
 
-**This documentation task is complete when** one Design R0.1 document is committed on the existing Issue #353 feature branch and read back from GitHub, with no other files modified. Unresolved observations do not expand the task automatically.
+**This limited documentation task stops when** F-001 and F-002 are reflected in this one Design R0.1.1 candidate and handed to the Human Owner. The original R0.1 GitHub commit and its identity must not be silently changed. No independent review, follow-up correction loop, GitHub write, or next task is automatically authorized.
 
-**Owner decisions already made:** integrated input-to-diagnostics CLI, existing-core reuse, pure formatter, Text/JSON, READ_ONLY, preservation of `formalVerdict: UNKNOWN` and other trust boundaries, no result-import mode in MVP.
+**Owner decisions already made:** Integrated input-to-diagnostics CLI, existing-core reuse, pure formatter, Text/JSON, READ_ONLY, preservation of `formalVerdict: UNKNOWN` and other trust boundaries, no result-import mode in MVP.
 
-**Design calls proposed here (not independently Owner approved):** specific CLI flag grammar, raw-array Evidence file format, mandatory explicit ChangeSet file, Plan-byte snapshot handoff, JSON v1 envelope, S1-d input byte caps, stage-state vocabulary, exit-code scheme, and suggested module layout.
+**Design calls proposed here (not independently Owner approved):** CLI flags, input byte caps, per-file Level A/Level B separation, scope-only fallback using S1-c primitives, JSON envelope with `inputIssues`/`provenance`/`scopeFallback`, exit codes `0/3/64/70`, all-or-nothing provenance policy, and suggested module layout.
 
-**Remaining risk:** current S1-a filesystem race limitation and the absence of independent Owner authorization, evidence authenticity, host execution verification, and ChangeSet completeness evidence. S1-d must display, not conceal, these boundaries.
+**Remaining risk:** The fallback and narrowly guarded untrusted parsed-input boundary need implementation-time verification against current Core invariants. S1-a filesystem race freedom, Owner authorization, Evidence authenticity, actual Host execution, ChangeSet completeness and supersession remain unproven. None are silently promoted to proof. Unknown/unevaluated cases are not observed failures.
 
-**Not authorized by this document:** source implementation, execution/CI/Host Probe, production use claim, Gate or HOLD release, formal Requirements adoption, external writes, automated reviews or fix loops, Implementation Plan initiation, or S2–S5 work.
+**Not authorized:** Source implementation, execution/tests/CI/Host Probe, production use claim, Gate/HOLD release, Requirements adoption, external/GitHub writes, automatic reviews or fix loops, Implementation Plan initiation, or S2–S5 work.
 
-After reading this Design R0.1, the Human Owner may adopt it or request **one bounded correction**. Do not generate an independent review chain merely because a new revision or Finding exists. Any subsequent plan or implementation activity requires a separately specified authorization.
+**Implementation-entry prerequisites:** Owner adoption of this detailed Design; a separately authorized Implementation Plan with confirmed agreement on terminology, types/interfaces, error behavior, tests and non-functional requirements; separately granted code-implementation authority. The missing plan is **NOT YET VERIFIED**, not a design/plan inconsistency that has already been observed.
+
+**Owner checkpoint:** Accept this Design R0.1.1 candidate, request a specifically bounded correction, or stop design work. New Findings or version changes do not automatically trigger re-review. After the requested document correction, **the task ends here**.
