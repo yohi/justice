@@ -3,6 +3,7 @@ import { bindEvidence } from "../../src/core/s1b/binder.js";
 import type { EvidenceRefV1 } from "../../src/core/s1b/contract.js";
 import { evaluateS1c } from "../../src/core/s1c/evaluator.js";
 import { loadS1aArtifacts } from "../../src/core/s1a/loader.js";
+import { createCapturedS1aSource } from "../../src/runtime/s1d-read-only-input.js";
 import type { S1aReadOnlySource } from "../../src/core/s1a/contract.js";
 import type { S1dReportV1 } from "../../src/core/s1d/contract.js";
 import { runS1dDiagnostic } from "../../src/runtime/s1d-diagnostic.js";
@@ -66,16 +67,6 @@ function unavailableEvidenceSource(source: S1aReadOnlySource): S1aReadOnlySource
   };
 }
 
-function parsed(source: S1aReadOnlySource, path: string, value: unknown): S1aReadOnlySource {
-  return {
-    ...source,
-    async readInputFile(inputPath: string, maxBytes: number): Promise<Uint8Array<ArrayBufferLike>> {
-      if (inputPath === path) return jsonBytes(value);
-      return source.readInputFile(inputPath, maxBytes);
-    },
-  };
-}
-
 describe("runS1dDiagnostic", () => {
   it("allCoreResultsPreserved", async () => {
     const context = await run();
@@ -115,15 +106,15 @@ describe("runS1dDiagnostic", () => {
 
   it("changesetLevelAOmitsFallback", async () => {
     const context = await setup();
-    const changeReadFailure = parsed(context.source, "changeset", undefined);
     const source: S1aReadOnlySource = {
-      ...changeReadFailure,
+      ...context.source,
       async readInputFile(path, maxBytes) {
-        if (path === "changeset") throw new Error("unavailable");
-        return changeReadFailure.readInputFile(path, maxBytes);
+        if (path === "changeset") throw Object.assign(new Error("over limit"), { kind: "over_limit" });
+        return context.source.readInputFile(path, maxBytes);
       },
     };
     const report = await runS1dDiagnostic(context.request, source);
+    expect(report.inputIssues).toEqual([{ source: "changeset", code: "INPUT_TOO_LARGE" }]);
     expect(report.stages.s1b.state).toBe("EVALUATED");
     expect(report.stages.s1c).toEqual({ state: "NOT_EVALUATED", reason: "CHANGESET_SOURCE_UNAVAILABLE" });
     expect(report).not.toHaveProperty("scopeFallback");
@@ -138,16 +129,24 @@ describe("runS1dDiagnostic", () => {
     expect(report.stages.s1c.state).toBe("EVALUATED");
     expect(report.stages.s1c.state === "EVALUATED" && report.stages.s1c.result.diagnostics.map((item) => item.code)).toContain("S1A_BASELINE_NOT_READY");
     expect(report.stages.s1c.state === "EVALUATED" && report.stages.s1c.result.candidateScopeComparison).toBe("UNKNOWN");
+    expect(report).not.toHaveProperty("scopeFallback");
   });
 
   it("planDigestMismatchPreservesCoreBaselineDiagnostic", async () => {
-    const { report, selectedPlan } = await run([validEvidence], validChangeSet, true);
-    expect(selectedPlan).toBeDefined();
+    const context = await setup([validEvidence], validChangeSet, true);
+    const capturedSource = createCapturedS1aSource(context.source, context.request.loaderInput);
+    const baseline = await loadS1aArtifacts(context.request.loaderInput, capturedSource.source);
+    const snapshot = capturedSource.getPlanSnapshot(baseline);
+    expect(snapshot).not.toBeNull();
+    expect(snapshot).toBeInstanceOf(Uint8Array);
+    expect(snapshot).toEqual(context.selectedPlan);
+    const report = await runS1dDiagnostic(context.request, context.source);
     expect(report.stages.s1a.state === "EVALUATED" && report.stages.s1a.result.identityStatus).toBe("MISMATCH");
     expect(report.stages.s1b.state).toBe("EVALUATED");
     expect(report.stages.s1c.state).toBe("EVALUATED");
     expect(report.stages.s1c.state === "EVALUATED" && report.stages.s1c.result.diagnostics.map((item) => item.code)).toContain("S1A_BASELINE_NOT_READY");
     expect(report.stages.s1c.state === "EVALUATED" && report.stages.s1c.result.candidateScopeComparison).toBe("UNKNOWN");
+    expect(report.stages.s1c.state === "EVALUATED" && report.stages.s1c.result.formalVerdict).toBe("UNKNOWN");
     expect(report).not.toHaveProperty("scopeFallback");
   });
 
