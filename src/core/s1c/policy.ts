@@ -19,6 +19,15 @@ type PolicyReferences = Readonly<{
 
 type Fence = Readonly<{ character: "`" | "~"; length: number }>;
 type StrictLine = Readonly<{ content: string; endingBytes: number }>;
+type ParsedPolicy = PolicyReferences & Readonly<{ allowedPaths: readonly string[] }>;
+type BlockScanState = {
+  blockOpen: boolean;
+  blockLines: string[];
+  blockBytes: number;
+  lastBlockEndingBytes: number;
+  blockCount: number;
+  policies: ParsedPolicy[];
+};
 
 function isIgnoredPrefix(line: string): boolean {
   return /^(?: {4,}|\t| {0,3}>| {0,3}(?:[-+*]|\d+[.)])(?:[ \t]|$))/.test(line);
@@ -116,6 +125,39 @@ function refMismatch(policy: PolicyReferences, selected: Readonly<{ plan: Select
     policy.scopeKey !== selected.task.scopeKey;
 }
 
+function processBlockMarker(line: string, inRegion: boolean, state: BlockScanState): "CONTINUE" | "INVALID" | "NOT_MARKER" {
+  if (line !== BEGIN && line !== END) return "NOT_MARKER";
+  if (!inRegion) return "CONTINUE";
+  if (line === BEGIN) {
+    if (state.blockOpen) return "INVALID";
+    state.blockOpen = true;
+    state.blockLines = [];
+    state.blockBytes = 0;
+    state.lastBlockEndingBytes = 0;
+    state.blockCount += 1;
+    return state.blockCount > MAX_POLICY_BLOCKS ? "INVALID" : "CONTINUE";
+  }
+
+  if (!state.blockOpen) return "INVALID";
+  state.blockBytes -= state.lastBlockEndingBytes;
+  if (state.blockBytes > MAX_POLICY_BYTES) return "INVALID";
+  const policy = parsePolicy(new TextEncoder().encode(state.blockLines.join("\n")));
+  if (policy === null) return "INVALID";
+  state.policies.push(policy);
+  state.blockOpen = false;
+  state.blockLines = [];
+  return "CONTINUE";
+}
+
+function appendBlockLine(line: string, endingBytes: number, state: BlockScanState): "CONTINUE" | "INVALID" {
+  if (line.includes(MARKER_PREFIX)) return "INVALID";
+  state.blockLines.push(line);
+  state.blockBytes += Buffer.byteLength(line, "utf8") + endingBytes;
+  state.lastBlockEndingBytes = endingBytes;
+  return state.blockBytes - endingBytes > MAX_POLICY_BYTES ? "INVALID" : "CONTINUE";
+}
+
+/** Extracts the unique, validated scope policy bound to the selected Plan and Task. */
 export function extractTaskScopePolicy(
   planBytes: Uint8Array,
   selected: Readonly<{ plan: SelectedArtifactRef; task: SelectedArtifactRef }>,
@@ -127,12 +169,14 @@ export function extractTaskScopePolicy(
   let inComment = false;
   let inRegion = false;
   let headingCount = 0;
-  let blockOpen = false;
-  let blockLines: string[] = [];
-  let blockBytes = 0;
-  let lastBlockEndingBytes = 0;
-  let blockCount = 0;
-  const policies: (PolicyReferences & Readonly<{ allowedPaths: readonly string[] }>)[] = [];
+  const blocks: BlockScanState = {
+    blockOpen: false,
+    blockLines: [],
+    blockBytes: 0,
+    lastBlockEndingBytes: 0,
+    blockCount: 0,
+    policies: [],
+  };
 
   for (const { content: line, endingBytes } of lines) {
     if (fence !== null) {
@@ -144,35 +188,14 @@ export function extractTaskScopePolicy(
       inComment = updateCommentState(line, true).isOpen;
       continue;
     }
-    if (line === BEGIN || line === END) {
-      if (!inRegion) continue;
-      if (line === BEGIN) {
-        if (blockOpen) return { state: "INVALID" };
-        blockOpen = true;
-        blockLines = [];
-        blockBytes = 0;
-        lastBlockEndingBytes = 0;
-        blockCount += 1;
-        if (blockCount > MAX_POLICY_BLOCKS) return { state: "INVALID" };
-      } else {
-        if (!blockOpen) return { state: "INVALID" };
-        blockBytes -= lastBlockEndingBytes;
-        if (blockBytes > MAX_POLICY_BYTES) return { state: "INVALID" };
-        const json = parsePolicy(new TextEncoder().encode(blockLines.join("\n")));
-        if (json === null) return { state: "INVALID" };
-        policies.push(json);
-        blockOpen = false;
-        blockLines = [];
-      }
+    const markerResult = processBlockMarker(line, inRegion, blocks);
+    if (markerResult === "INVALID") return { state: "INVALID" };
+    if (markerResult === "CONTINUE") {
       continue;
     }
 
-    if (blockOpen) {
-      if (line.includes(MARKER_PREFIX)) return { state: "INVALID" };
-      blockLines.push(line);
-      blockBytes += Buffer.byteLength(line, "utf8") + endingBytes;
-      lastBlockEndingBytes = endingBytes;
-      if (blockBytes - endingBytes > MAX_POLICY_BYTES) return { state: "INVALID" };
+    if (blocks.blockOpen) {
+      if (appendBlockLine(line, endingBytes, blocks) === "INVALID") return { state: "INVALID" };
       continue;
     }
 
@@ -196,10 +219,10 @@ export function extractTaskScopePolicy(
     inComment = comment.isOpen;
   }
 
-  if (blockOpen) return { state: "INVALID" };
-  const selectedPolicies = policies.filter((policy) => policy.taskRef.artifactId === selected.task.artifactId);
+  if (blocks.blockOpen) return { state: "INVALID" };
+  const selectedPolicies = blocks.policies.filter((policy) => policy.taskRef.artifactId === selected.task.artifactId);
   const taskIds = new Set<string>();
-  for (const policy of policies) {
+  for (const policy of blocks.policies) {
     if (taskIds.has(policy.taskRef.artifactId)) return { state: "INVALID" };
     taskIds.add(policy.taskRef.artifactId);
   }

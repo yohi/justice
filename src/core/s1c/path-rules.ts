@@ -38,6 +38,7 @@ function snapshotDenseArray(value: unknown): unknown[] | null {
   return items;
 }
 
+/** Validates and snapshots a bounded list of repository-relative allowlist patterns. */
 export function validateAllowedPaths(value: unknown): readonly string[] | null {
   const items = snapshotDenseArray(value);
   if (items === null) return null;
@@ -76,6 +77,7 @@ function validateChange(value: unknown): ChangedPath | null {
   }
 }
 
+/** Validates a complete ChangeSet and returns its touched paths without partial acceptance. */
 export function inspectChangeSet(
   value: unknown,
 ): { state: "PRESENT"; touchedPaths: readonly string[] } | { state: "UNAVAILABLE" } | { state: "INVALID" } {
@@ -105,6 +107,7 @@ function isWithin(path: string, allowlist: readonly string[]): boolean {
   );
 }
 
+/** Compares validated touched paths with an allowlist and returns sorted outside paths. */
 export function compareCandidatePaths(
   allowlist: readonly string[],
   touchedPaths: readonly string[],

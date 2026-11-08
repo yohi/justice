@@ -86,6 +86,67 @@ function collectEvidence(diagnostics: S1cDiagnostic[], claims: S1cResult["report
   }
 }
 
+function resolvePlanBytes(envelope: ReturnType<typeof readInput>, diagnostics: S1cDiagnostic[]): Uint8Array | null {
+  try {
+    if (envelope.planBytes instanceof Uint8Array && envelope.planBytes.byteLength <= MAX_PLAN_BYTES) {
+      return envelope.planBytes;
+    }
+  } catch {
+    diagnostics.push({ code: "PLAN_BYTES_INVALID" });
+    return null;
+  }
+  diagnostics.push({ code: "PLAN_BYTES_INVALID" });
+  return null;
+}
+
+function evaluatePlanIdentity(
+  baseline: LoaderResult,
+  planBytes: Uint8Array,
+  diagnostics: S1cDiagnostic[],
+): ReturnType<typeof extractTaskScopePolicy> | null {
+  const refs = selected(baseline.selectedRefs);
+  if (refs === null) {
+    diagnostics.push({ code: "PLAN_IDENTITY_MISMATCH" });
+    return null;
+  }
+
+  let digest: string;
+  try {
+    digest = createHash("sha256").update(planBytes).digest("hex");
+  } catch {
+    diagnostics.push({ code: "PLAN_BYTES_INVALID" });
+    return null;
+  }
+  if (digest !== refs.plan.expectedDigest || digest !== refs.plan.observedDigest || refs.plan.digestOutcome !== "MATCH") {
+    diagnostics.push({ code: "PLAN_IDENTITY_MISMATCH" });
+    return null;
+  }
+
+  try {
+    return extractTaskScopePolicy(planBytes, refs);
+  } catch {
+    diagnostics.push({ code: "SCOPE_POLICY_INVALID" });
+    return null;
+  }
+}
+
+function compareScope(
+  policy: ReturnType<typeof extractTaskScopePolicy> | null,
+  changes: ReturnType<typeof inspectChangeSet>,
+  diagnostics: S1cDiagnostic[],
+): S1cResult["candidateScopeComparison"] {
+  if (policy?.state !== "READY" || changes.state !== "PRESENT") return "UNKNOWN";
+  try {
+    const result = compareCandidatePaths(policy.policy.allowedPaths, changes.touchedPaths);
+    for (const path of result.outsidePaths) diagnostics.push({ code: "OUTSIDE_CANDIDATE_SCOPE", path });
+    return result.comparison;
+  } catch {
+    diagnostics.push({ code: "CHANGESET_INVALID" });
+    return "UNKNOWN";
+  }
+}
+
+/** Evaluates candidate scope and evidence diagnostics without asserting Owner authority. */
 export function evaluateS1c(input: S1cInput): S1cResult {
   const envelope = readInput(input);
   const diagnostics: S1cDiagnostic[] = [];
@@ -106,53 +167,11 @@ export function evaluateS1c(input: S1cInput): S1cResult {
 
   const baseline = envelope.baseline as unknown as LoaderResult;
   collectEvidence(diagnostics, claims, baseline, envelope.evidenceRefs);
-  let comparison: S1cResult["candidateScopeComparison"] = "UNKNOWN";
-  let policy: ReturnType<typeof extractTaskScopePolicy> | null = null;
-  let planBytes: Uint8Array | null = null;
-  try {
-    if (envelope.planBytes instanceof Uint8Array && envelope.planBytes.byteLength <= MAX_PLAN_BYTES) {
-      planBytes = envelope.planBytes;
-    }
-  } catch {
-    planBytes = null;
-  }
-  if (planBytes === null) {
-    diagnostics.push({ code: "PLAN_BYTES_INVALID" });
-  }
-  if (planBytes !== null) {
-    const refs = selected(baseline.selectedRefs);
-    if (refs === null) diagnostics.push({ code: "PLAN_IDENTITY_MISMATCH" });
-    else {
-      let digest: string | null;
-      try {
-        digest = createHash("sha256").update(planBytes).digest("hex");
-      } catch {
-        diagnostics.push({ code: "PLAN_BYTES_INVALID" });
-        digest = null;
-      }
-      if (digest !== null && (digest !== refs.plan.expectedDigest || digest !== refs.plan.observedDigest || refs.plan.digestOutcome !== "MATCH")) {
-        diagnostics.push({ code: "PLAN_IDENTITY_MISMATCH" });
-      } else if (digest !== null) {
-        try {
-          policy = extractTaskScopePolicy(planBytes, refs);
-        } catch {
-          diagnostics.push({ code: "SCOPE_POLICY_INVALID" });
-        }
-        if (policy?.state === "UNDEFINED") diagnostics.push({ code: "SCOPE_POLICY_UNDEFINED" });
-        else if (policy?.state === "INVALID") diagnostics.push({ code: "SCOPE_POLICY_INVALID" });
-        else if (policy?.state === "REFERENCE_MISMATCH") diagnostics.push({ code: "SCOPE_POLICY_REFERENCE_MISMATCH" });
-      }
-    }
-  }
-  if (policy?.state === "READY" && changes.state === "PRESENT") {
-    try {
-      const result = compareCandidatePaths(policy.policy.allowedPaths, changes.touchedPaths);
-      comparison = result.comparison;
-      for (const path of result.outsidePaths) diagnostics.push({ code: "OUTSIDE_CANDIDATE_SCOPE", path });
-    } catch {
-      diagnostics.push({ code: "CHANGESET_INVALID" });
-      comparison = "UNKNOWN";
-    }
-  }
+  const planBytes = resolvePlanBytes(envelope, diagnostics);
+  const policy = planBytes === null ? null : evaluatePlanIdentity(baseline, planBytes, diagnostics);
+  if (policy?.state === "UNDEFINED") diagnostics.push({ code: "SCOPE_POLICY_UNDEFINED" });
+  else if (policy?.state === "INVALID") diagnostics.push({ code: "SCOPE_POLICY_INVALID" });
+  else if (policy?.state === "REFERENCE_MISMATCH") diagnostics.push({ code: "SCOPE_POLICY_REFERENCE_MISMATCH" });
+  const comparison = compareScope(policy, changes, diagnostics);
   return freezeResult(comparison, diagnostics, claims);
 }

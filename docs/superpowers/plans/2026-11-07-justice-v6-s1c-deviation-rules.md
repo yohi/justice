@@ -44,10 +44,12 @@
 | File | Change | Responsibility |
 | --- | --- | --- |
 | `src/core/s1c/contract.ts` | Create | Import shared types; define strict S1-c input/result/diagnostic and pure helper types |
+| `src/core/s1c/shared-utils.ts` | Create | Shared record-key validation and UTF-8 byte ordering helpers |
 | `src/core/s1c/path-rules.ts` | Create | Validate ChangeSet and safe paths/allowlist; pure candidate path comparison |
 | `src/core/s1c/policy.ts` | Create | Recognize active Markdown Policy section; atomically parse/validate bounded JSON blocks |
 | `src/core/s1c/evaluator.ts` | Create | Envelope/shared baseline gate; Plan digest; independent Scope/Evidence branches; sorted immutable result |
 | `tests/core/s1c/path-rules.test.ts` | Create | Task 1 unit tests |
+| `tests/core/s1c/shared-utils.test.ts` | Create | Shared utility unit tests |
 | `tests/core/s1c/policy.test.ts` | Create | Task 2 unit tests |
 | `tests/core/s1c/evaluator.test.ts` | Create | Task 3 independent-branch and trust tests |
 | `tests/helpers/s1c-fixtures.ts` | Create | Build a real S1-a ready baseline with Plan artifact bytes matching the embedded Policy |
@@ -59,12 +61,18 @@ Do not edit `src/core/s1a/`, `src/core/s1b/`, existing S1-a/b tests, package dep
 
 **Files:**
 - Create: `src/core/s1c/contract.ts`
+- Create: `src/core/s1c/shared-utils.ts`
 - Create: `src/core/s1c/path-rules.ts`
 - Test: `tests/core/s1c/path-rules.test.ts`
+- Test: `tests/core/s1c/shared-utils.test.ts`
 
 **Interfaces:**
 - Import `LoaderResult`, `SelectedArtifactRef` from `../s1a/contract.js`; `EvidenceRefV1`, `BindingReasonCode` from `../s1b/contract.js`.
 - Export `S1cInput`, `S1cResult`, `S1cDiagnostic`, `DiagnosticCode`, `CandidateScopeComparison`, `DeviationVerdict`, `ChangeSet`, `ChangedPath`, `TaskScopePolicy`, and the frozen `S1C_LIMITATIONS` constant from `contract.ts`. Use the discriminated diagnostic union **exactly** as in Design §5; the binding mismatch arm requires `bindingReasonCodes: readonly BindingReasonCode[]`. Set `S1cResult.limitations` to `typeof S1C_LIMITATIONS` (mandatory fixed tuple), not `readonly string[]`.
+- Export from `shared-utils.ts`:
+  - `isPlainRecord(value: unknown): value is Record<string, unknown>`
+  - `hasExactKeys(value: unknown, expected: readonly string[]): value is Record<string, unknown>`
+  - `compareUtf8(left: string, right: string): number`
 - Export from `path-rules.ts`:
   - `validateAllowedPaths(value: unknown): readonly string[] | null`
   - `inspectChangeSet(value: unknown): {state:'PRESENT'; touchedPaths:readonly string[]} | {state:'UNAVAILABLE'} | {state:'INVALID'}`
@@ -79,7 +87,7 @@ Do not edit `src/core/s1a/`, `src/core/s1b/`, existing S1-a/b tests, package dep
   - `limitsAndPathSafety`: 129 changes, 129 allowlist entries, >1,024-byte path, `.`/`..`, double slash, backslash, leading slash, URL/drive syntax, and unsupported wildcard reject.
   - `permutationAndDuplicatePaths`: same set in different order gives the same sorted unique `outsidePaths`, sorted by UTF-8 byte order.
 - [ ] **Step 2: Run only the Task 1 test when implementation is authorized.** `bun run vitest run tests/core/s1c/path-rules.test.ts` → expected FAIL because the module or exports are not yet implemented.
-- [ ] **Step 3: Implement contract types and `path-rules.ts`.** Require exact `availability`-dependent ChangeSet keys (`UNAVAILABLE` has no `changes`; `PRESENT` has dense `changes` array). ADD/MODIFY/DELETE require just `kind,path`; RENAME just `kind,oldPath,newPath`. Reject null, unknown keys, invalid enums/paths and sparse arrays. `/**` matches descendants only; don't normalize any input. Use `Buffer.compare(Buffer.from(a,'utf8'),Buffer.from(b,'utf8'))` for stable sorting; dedupe outside-path diagnostics only after validating the full collection.
+- [ ] **Step 3: Implement contract types, shared utilities, and `path-rules.ts`.** Add the `shared-utils.ts` functions listed above. Require exact `availability`-dependent ChangeSet keys (`UNAVAILABLE` has no `changes`; `PRESENT` has dense `changes` array). ADD/MODIFY/DELETE require just `kind,path`; RENAME just `kind,oldPath,newPath`. Reject null, unknown keys, invalid enums/paths and sparse arrays. `/**` matches descendants only; don't normalize any input. Use `Buffer.compare(Buffer.from(a,'utf8'),Buffer.from(b,'utf8'))` for stable sorting; dedupe outside-path diagnostics only after validating the full collection.
 - [ ] **Step 4: Rerun the Task 1 test.** `bun run vitest run tests/core/s1c/path-rules.test.ts` → expected PASS. (This parenthetical records the status during the original planning Task; it does not describe the current follow-up verification.)
 - [ ] **Step 5: Stop Task 1 at its verified contract.** When separately permitted to write Git commits, stage only its listed files and commit `feat(s1c): add bounded path comparison contract`. No push/review/next Task is implicit in this step.
 
@@ -98,12 +106,13 @@ Do not edit `src/core/s1a/`, `src/core/s1b/`, existing S1-a/b tests, package dep
   - `singleExactActiveSectionAndBlock`: a column-zero `## Justice S1-c Task Scope Policies`, exact marker pair, and `{schemaVersion:'justice-s1c-task-scope-v1',planRef:{artifactId:'plan-1',revision:'R1'},taskRef:{artifactId:'task-1',revision:'R1'},scopeKey:'scope-1',allowedPaths:['src/core/s1c/**']}` → `READY`.
   - `policyExamplesAreNotActive`: the same heading/marker/JSON only in fenced `text` or `json`, `~~~` fence, blockquote, four-space indented code or ordinary HTML comment → `UNDEFINED`.
   - `mixedMarkdownOnlyActiveSectionCounts`: a fenced fake section before one active section plus quoted/indented fake markers inside it do not add Policy blocks; exact active block is selected.
-  - `unpairedNestedAlteredOrDuplicateMarkers`: malformed markers within active region, crossing its ending `# ` or `## ` heading, duplicated active heading or duplicate selected-Task blocks → `INVALID`.
+  - `unpairedNestedAlteredOrDuplicateMarkers`: malformed markers within active region, crossing its ending ATX H1/H2 heading, duplicated active heading or duplicate selected-Task blocks → `INVALID`.
+  - `indentedLevelOneOrTwoHeadingEndsActiveRegion`: ATX H1/H2 headings with zero to three leading spaces, including headings containing only `#` or `##`, end the active region.
   - `atomicPolicyInvalidityAcrossTasks`: malformed JSON or invalid path in **another Task**'s active block invalidates the entire Policy set.
   - `unknownSelectedTaskIsUndefined`; `selectedRevisionOrPlanMismatchIsReferenceMismatch`; `validExplicitEmptyAllowlistReady`.
   - `utf8AndBounds`: invalid UTF-8, UTF-8 BOM, bare CR, duplicate JSON keys, >128 blocks, >65,536-byte JSON or >128 entries → `INVALID`; code fences with unmatched internal markers are ignored.
 - [ ] **Step 2: Run only Task 2 tests after implementation authorization.** `bun run vitest run tests/core/s1c/policy.test.ts` → expected FAIL for missing extractor.
-- [ ] **Step 3: Implement one bounded, deterministic line scanner.** Verify strict UTF-8/no BOM/bare CR, then track fenced-code state (≤3 leading spaces, matching backtick/tilde run and closer rules), ordinary HTML comments, and ignored quoted/indented/list lines. Only the exact column-zero H2 heading opens the active region; a later column-zero `# ` / `## ` ends it. Only full-line markers inside the active region open/close blocks. Use `parseStrictJson` to reject duplicate keys; strict field whitelist; validate every recognized block before selecting exactly one by Task artifact ID. For mismatched selected Task revision, Plan ID/revision or Scope choose `REFERENCE_MISMATCH`; no block for selected Task is `UNDEFINED`. Never echo an unsafe source line.
+- [ ] **Step 3: Implement one bounded, deterministic line scanner.** Verify strict UTF-8/no BOM/bare CR, then track fenced-code state (≤3 leading spaces, matching backtick/tilde run and closer rules), ordinary HTML comments, and ignored quoted/indented/list lines. Only the exact column-zero H2 heading opens the active region; a later valid ATX H1/H2 heading with zero to three leading spaces—including a heading containing only `#` or `##`—ends it. Only full-line markers inside the active region open/close blocks. Use `parseStrictJson` to reject duplicate keys; strict field whitelist; validate every recognized block before selecting exactly one by Task artifact ID. For mismatched selected Task revision, Plan ID/revision or Scope choose `REFERENCE_MISMATCH`; no block for selected Task is `UNDEFINED`. Never echo an unsafe source line.
 - [ ] **Step 4: Run Task 1 and 2 tests.** `bun run vitest run tests/core/s1c/path-rules.test.ts tests/core/s1c/policy.test.ts` → expected PASS.
 - [ ] **Step 5: Stop Task 2 at its extractor contract.** If separately authorized to commit, stage only `policy.ts` and `policy.test.ts` and commit `feat(s1c): extract unambiguous task scope from plan`.
 
