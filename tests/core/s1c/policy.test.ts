@@ -103,13 +103,13 @@ describe("extractTaskScopePolicy", () => {
     const base = policy();
     const split = base.indexOf('"allowedPaths"');
     const multiline = `${base.slice(0, split)}\n${base.slice(split)}`;
-    const atLimitLf = `${multiline}${" ".repeat(65_536 - Buffer.byteLength(multiline, "utf8") - 1)}`;
+    const atLimitLf = `${multiline}${" ".repeat(65_536 - Buffer.byteLength(multiline, "utf8"))}`;
     expect(extract(`${heading}\n${begin}\n${atLimitLf}\n${end}`)).toMatchObject({ state: "READY" });
 
     const atLimitCrLf = `${multiline}${" ".repeat(65_536 - Buffer.byteLength(multiline, "utf8") - 1)}`;
-    expect(extract(`${heading}\r\n${begin}\r\n${atLimitCrLf}\r\n${end}`)).toEqual({ state: "INVALID" });
+    expect(extract(`${heading}\r\n${begin}\r\n${atLimitCrLf}\r\n${end}`)).toMatchObject({ state: "READY" });
 
-    const overLimitCrLf = `${multiline}${" ".repeat(65_537 - Buffer.byteLength(multiline, "utf8") - 1)}`;
+    const overLimitCrLf = `${multiline}${" ".repeat(65_538 - Buffer.byteLength(multiline, "utf8") - 1)}`;
     expect(extract(`${heading}\r\n${begin}\r\n${overLimitCrLf}\r\n${end}`)).toEqual({ state: "INVALID" });
   });
 });

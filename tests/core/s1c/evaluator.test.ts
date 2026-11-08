@@ -173,11 +173,17 @@ describe("evaluateS1c", () => {
     expect(result.candidateScopeComparison).toBe("UNKNOWN");
   });
 
-  it("containsPlanByteInspectionFailureAsInvalid", async () => {
+  it("containsPlanByteInspectionFailureAsPlanBytesInvalid", async () => {
     const value = await input();
-    const hostileBytes = new Proxy(new Uint8Array(), {});
+    const hostileBytes = new Proxy(new Uint8Array(), {
+      get(target, property) {
+        if (property === "byteLength") throw new Error("uninspectable plan bytes");
+        return Reflect.get(target, property, target);
+      },
+    });
     const planResult = evaluateS1c({ ...value, planBytes: hostileBytes });
-    expect(planResult.diagnostics.map((item) => item.code)).toContain("CHANGESET_INVALID");
+    expect(planResult.diagnostics.map((item) => item.code)).toContain("PLAN_BYTES_INVALID");
+    expect(planResult.diagnostics.map((item) => item.code)).not.toContain("CHANGESET_INVALID");
     expect(planResult.candidateScopeComparison).toBe("UNKNOWN");
   });
   it("limitationsFixedForEveryOutcome", async () => {

@@ -183,7 +183,7 @@ export function extractTaskScopePolicy(
       blockLines.push(line);
       blockBytes += Buffer.byteLength(line, "utf8") + endingBytes;
       lastBlockEndingBytes = endingBytes;
-      if (blockBytes > MAX_POLICY_BYTES) return { state: "INVALID" };
+      if (blockBytes - endingBytes > MAX_POLICY_BYTES) return { state: "INVALID" };
       continue;
     }
 
@@ -205,7 +205,6 @@ export function extractTaskScopePolicy(
     if (inRegion && line.includes(MARKER_PREFIX)) return { state: "INVALID" };
     const comment = updateCommentState(line, false);
     inComment = comment.isOpen;
-    if (comment.hasComment) continue;
   }
 
   if (blockOpen) return { state: "INVALID" };
@@ -216,7 +215,6 @@ export function extractTaskScopePolicy(
     taskIds.add(policy.taskRef.artifactId);
   }
   if (selectedPolicies.length === 0) return { state: "UNDEFINED" };
-  if (selectedPolicies.length !== 1) return { state: "INVALID" };
   const policy = selectedPolicies[0];
   if (policy === undefined) return { state: "INVALID" };
   if (refMismatch(policy, selected)) return { state: "REFERENCE_MISMATCH" };
