@@ -79,16 +79,16 @@ Do not edit `src/core/s1a/`, `src/core/s1b/`, existing S1-a/b tests, package dep
   - `compareCandidatePaths(allowlist: readonly string[], touchedPaths: readonly string[]): {comparison:'WITHIN_CANDIDATE_SCOPE'|'OUTSIDE_CANDIDATE_SCOPE'; outsidePaths: readonly string[]}`
 - `compareCandidatePaths` is a pure comparator: it does **not** issue `NO_DEVIATION_DETECTED` as an authorized runtime verdict.
 
-- [ ] **Step 1: Write failing tests in `tests/core/s1c/path-rules.test.ts`.** Name and assert:
+- [ ] **Step 1: Write failing tests in `tests/core/s1c/path-rules.test.ts` and `tests/core/s1c/shared-utils.test.ts`.** In `shared-utils.test.ts`, cover plain/null-prototype records versus arrays/class instances, exact own keys including non-enumerable and symbol keys, and UTF-8 byte ordering including equality. In `path-rules.test.ts`, name and assert:
   - `exactAndDirectoryPrefixAreCaseSensitive`: `['src/core/s1c/**', 'docs/plan.md']` accepts `src/core/s1c/rules.ts` and `docs/plan.md` but rejects `src/core/s1b/rules.ts`, `src/core/s1c`, and `SRC/core/s1c/rules.ts`.
   - `renameChecksBothEndpoints`: `RENAME` from `src/core/s1b/x.ts` to `src/core/s1c/x.ts` reports exactly the outside *old* path.
   - `emptyAllowlistDiffersFromUnavailablePolicy`: `[]` plus `src/core/s1c/x.ts` is `OUTSIDE_CANDIDATE_SCOPE`; empty `PRESENT` changes yield `WITHIN_CANDIDATE_SCOPE` **for that snapshot**.
   - `changeSetRejectsWholeCollection`: valid and invalid changes together (`../secret`, absolute path, unexpected field, or sparse array) produce `{state:'INVALID'}`, not a valid subset.
   - `limitsAndPathSafety`: 129 changes, 129 allowlist entries, >1,024-byte path, `.`/`..`, double slash, backslash, leading slash, URL/drive syntax, and unsupported wildcard reject.
   - `permutationAndDuplicatePaths`: same set in different order gives the same sorted unique `outsidePaths`, sorted by UTF-8 byte order.
-- [ ] **Step 2: Run only the Task 1 test when implementation is authorized.** `bun run vitest run tests/core/s1c/path-rules.test.ts` → expected FAIL because the module or exports are not yet implemented.
+- [ ] **Step 2: Run only the Task 1 tests when implementation is authorized.** `bun run vitest run tests/core/s1c/path-rules.test.ts tests/core/s1c/shared-utils.test.ts` → expected FAIL because the modules or exports are not yet implemented.
 - [ ] **Step 3: Implement contract types, shared utilities, and `path-rules.ts`.** Add the `shared-utils.ts` functions listed above. Require exact `availability`-dependent ChangeSet keys (`UNAVAILABLE` has no `changes`; `PRESENT` has dense `changes` array). ADD/MODIFY/DELETE require just `kind,path`; RENAME just `kind,oldPath,newPath`. Reject null, unknown keys, invalid enums/paths and sparse arrays. `/**` matches descendants only; don't normalize any input. Use `Buffer.compare(Buffer.from(a,'utf8'),Buffer.from(b,'utf8'))` for stable sorting; dedupe outside-path diagnostics only after validating the full collection.
-- [ ] **Step 4: Rerun the Task 1 test.** `bun run vitest run tests/core/s1c/path-rules.test.ts` → expected PASS. (This parenthetical records the status during the original planning Task; it does not describe the current follow-up verification.)
+- [ ] **Step 4: Rerun the Task 1 tests.** `bun run vitest run tests/core/s1c/path-rules.test.ts tests/core/s1c/shared-utils.test.ts` → expected PASS. (This parenthetical records the status during the original planning Task; it does not describe the current follow-up verification.)
 - [ ] **Step 5: Stop Task 1 at its verified contract.** When separately permitted to write Git commits, stage only its listed files and commit `feat(s1c): add bounded path comparison contract`. No push/review/next Task is implicit in this step.
 
 ### Task 2: Exact-Plan Policy Extraction

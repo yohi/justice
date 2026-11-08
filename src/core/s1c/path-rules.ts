@@ -23,7 +23,7 @@ function isAllowedPattern(value: unknown): value is string {
   if (typeof value !== "string") return false;
   const directoryPattern = value.endsWith("/**");
   const path = directoryPattern ? value.slice(0, -3) : value;
-  return isSafePath(path) && !path.includes("*");
+  return isSafePath(path);
 }
 
 function snapshotDenseArray(value: unknown): unknown[] | null {

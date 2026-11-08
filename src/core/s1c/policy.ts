@@ -55,19 +55,17 @@ function closesFence(line: string, fence: Fence): boolean {
   return run !== undefined && run[0] === fence.character && run.length >= fence.length;
 }
 
-function updateCommentState(line: string, initiallyOpen: boolean): { readonly isOpen: boolean; readonly hasComment: boolean } {
+function updateCommentState(line: string, initiallyOpen: boolean): boolean {
   let isOpen = initiallyOpen;
-  let hasComment = initiallyOpen;
   let cursor = 0;
   while (cursor < line.length) {
     const delimiter = isOpen ? "-->" : "<!--";
     const position = line.indexOf(delimiter, cursor);
     if (position === -1) break;
-    hasComment = true;
     cursor = position + delimiter.length;
     isOpen = !isOpen;
   }
-  return { isOpen, hasComment };
+  return isOpen;
 }
 
 function isPolicyRef(value: unknown): value is Readonly<{ artifactId: string; revision: string }> {
@@ -111,10 +109,12 @@ function strictLines(bytes: Uint8Array): readonly StrictLine[] | null {
   return text.split("\n").map((line, index, lines) => {
     const hasLineFeed = index < lines.length - 1;
     const hasCarriageReturn = hasLineFeed && line.endsWith("\r");
-    return {
-      content: hasCarriageReturn ? line.slice(0, -1) : line,
-      endingBytes: hasLineFeed ? (hasCarriageReturn ? 2 : 1) : 0,
-    };
+    let endingBytes = 0;
+    if (hasLineFeed) {
+      endingBytes = 1;
+      if (hasCarriageReturn) endingBytes += 1;
+    }
+    return { content: hasCarriageReturn ? line.slice(0, -1) : line, endingBytes };
   });
 }
 
@@ -185,7 +185,7 @@ export function extractTaskScopePolicy(
     }
     if (inComment) {
       if (line === BEGIN || line === END) continue;
-      inComment = updateCommentState(line, true).isOpen;
+      inComment = updateCommentState(line, true);
       continue;
     }
     const markerResult = processBlockMarker(line, inRegion, blocks);
@@ -215,8 +215,7 @@ export function extractTaskScopePolicy(
     if (inRegion && headingLevel(line) !== null) inRegion = false;
 
     if (inRegion && line.includes(MARKER_PREFIX)) return { state: "INVALID" };
-    const comment = updateCommentState(line, false);
-    inComment = comment.isOpen;
+    inComment = updateCommentState(line, false);
   }
 
   if (blocks.blockOpen) return { state: "INVALID" };
