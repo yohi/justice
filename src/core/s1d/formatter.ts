@@ -4,13 +4,13 @@ import type { BinderResult } from "../s1b/contract.js";
 import type { S1cResult } from "../s1c/contract.js";
 
 function oneLine(value: string): string {
-  const escapedControls = [...value].map((character) => {
+  const redactedPaths = value.replace(/(^|[\s"'=:([])\/[^\s)\]]*/g, "$1[absolute path redacted]");
+  return [...redactedPaths].map((character) => {
     const codePoint = character.codePointAt(0) ?? 0;
     return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f)
       ? `\\u${codePoint.toString(16).padStart(4, "0")}`
       : character;
   }).join("");
-  return escapedControls.replace(/(^|[\s"'=(])\/[^\s)]*/g, "$1[absolute path redacted]");
 }
 
 function stageLine<T>(name: string, stage: Stage<T>): string {

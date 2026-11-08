@@ -28,6 +28,23 @@ describe("S1-d formatter", () => {
     expect(text.endsWith("\n") && !text.endsWith("\n\n")).toBe(true);
   });
 
+  it("preservesCanonicalJsonFieldOrderAndOptionalFallback", () => {
+    const omitted = JSON.parse(formatJson(emptyReport));
+    const supplied = JSON.parse(formatJson({
+      ...emptyReport,
+      scopeFallback: { state: "NOT_EVALUATED", reason: "PREREQUISITE_UNAVAILABLE" },
+    }));
+
+    expect(Object.keys(omitted)).toEqual([
+      "schemaVersion", "operation", "readOnly", "stages", "inputIssues", "provenance", "limitations",
+    ]);
+    expect(Object.hasOwn(omitted, "scopeFallback")).toBe(false);
+    expect(Object.keys(supplied)).toEqual([
+      "schemaVersion", "operation", "readOnly", "stages", "inputIssues", "provenance", "scopeFallback", "limitations",
+    ]);
+    expect(supplied["scopeFallback"]).toEqual({ state: "NOT_EVALUATED", reason: "PREREQUISITE_UNAVAILABLE" });
+  });
+
   it("rendersUnknownWithoutPromotingToPass", () => {
     const report: S1dReportV1 = {
       ...emptyReport,
@@ -87,7 +104,12 @@ describe("S1-d formatter", () => {
           candidateScopeComparison: "OUTSIDE_CANDIDATE_SCOPE",
           ownerAuthorityVerification: "NOT_VERIFIED_BY_S1C",
           reportedEvidenceClaims: [],
-          diagnostics: [{ code: "OUTSIDE_CANDIDATE_SCOPE", path: "src/ok.ts\nS1-a: PASS /home/private/secret.ts" }],
+          diagnostics: [
+            { code: "OUTSIDE_CANDIDATE_SCOPE", path: "src/ok.ts\n/home/private/secret.ts" },
+            { code: "OUTSIDE_CANDIDATE_SCOPE", path: "src/x.ts\t/etc/passwd" },
+            { code: "OUTSIDE_CANDIDATE_SCOPE", path: "path:/home/x" },
+            { code: "OUTSIDE_CANDIDATE_SCOPE", path: "[/home/x]" },
+          ],
           limitations: ["OWNER_APPROVAL_NOT_PROVEN", "SUPERSESSION_NOT_CHECKED", "CHANGESET_COMPLETENESS_NOT_VERIFIED", "EVIDENCE_AUTHENTICITY_NOT_VERIFIED", "HOST_EXECUTION_NOT_VERIFIED"],
         } },
       },
@@ -96,6 +118,8 @@ describe("S1-d formatter", () => {
 
     expect(text.split("\n").some((line) => line.startsWith("S1-a: PASS"))).toBe(false);
     expect(text).not.toContain("/home/private");
+    expect(text).not.toContain("/etc/passwd");
+    expect(text).not.toContain("/home/x");
     expect(text).not.toContain("stack");
     expect(text).toContain("\\u000a");
   });
