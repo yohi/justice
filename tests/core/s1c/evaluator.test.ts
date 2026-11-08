@@ -43,6 +43,18 @@ describe("evaluateS1c", () => {
       expect(result.formalVerdict).toBe("UNKNOWN");
     }
   });
+  it("rejectsEnvelopeWhenReflectionThrows", async () => {
+    const hostile = new Proxy({}, {
+      getPrototypeOf() {
+        throw new Error("uninspectable envelope");
+      },
+    });
+    const result = evaluateS1c(hostile as S1cInput);
+    expect(result.diagnostics.map((item) => item.code)).toEqual([
+      "S1C_INPUT_INVALID",
+      "OWNER_AUTHORITY_NOT_VERIFIED",
+    ]);
+  });
   it("absentEnvelopeSlotRejectsBothBranches", async () => {
     const value = await input();
     const { evidenceRefs, ...missing } = value;
@@ -148,6 +160,25 @@ describe("evaluateS1c", () => {
     const project = (result: ReturnType<typeof evaluateS1c>) => result.diagnostics.filter((item) => item.code === "OUTSIDE_CANDIDATE_SCOPE");
     expect(project(evaluateS1c(first))).toEqual(project(evaluateS1c(second)));
     expect(project(evaluateS1c(first))).toEqual([{ code: "OUTSIDE_CANDIDATE_SCOPE", path: "a/out.ts" }, { code: "OUTSIDE_CANDIDATE_SCOPE", path: "z/out.ts" }]);
+  });
+  it("containsChangeSetInspectionFailureAsInvalid", async () => {
+    const value = await input();
+    const changeSet = new Proxy({}, {
+      getPrototypeOf() {
+        throw new Error("uninspectable change set");
+      },
+    });
+    const result = evaluateS1c({ ...value, changeSet } as S1cInput);
+    expect(result.diagnostics.map((item) => item.code)).toContain("CHANGESET_INVALID");
+    expect(result.candidateScopeComparison).toBe("UNKNOWN");
+  });
+
+  it("containsPlanByteInspectionFailureAsInvalid", async () => {
+    const value = await input();
+    const hostileBytes = new Proxy(new Uint8Array(), {});
+    const planResult = evaluateS1c({ ...value, planBytes: hostileBytes });
+    expect(planResult.diagnostics.map((item) => item.code)).toContain("CHANGESET_INVALID");
+    expect(planResult.candidateScopeComparison).toBe("UNKNOWN");
   });
   it("limitationsFixedForEveryOutcome", async () => {
     const result = evaluateS1c({} as S1cInput);

@@ -68,6 +68,11 @@ describe("extractTaskScopePolicy", () => {
     expect(extract(`${heading}\n${block(policy("task-2"))}\n${block(policy("task-2"))}`)).toEqual({ state: "INVALID" });
   });
 
+  test("rejectsMarkerPrefixEmbeddedInsidePolicyBlock", () => {
+    expect(extract(`${heading}\n${begin}\n${policy()}\n<!-- justice:s1c-task-scope:unexpected -->\n${end}`))
+      .toEqual({ state: "INVALID" });
+  });
+
   test("unknownSelectedTaskIsUndefined", () => {
     expect(extract(`${heading}\n${block(policy("task-2"))}`)).toEqual({ state: "UNDEFINED" });
   });

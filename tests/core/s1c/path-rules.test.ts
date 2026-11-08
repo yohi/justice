@@ -39,6 +39,11 @@ describe("S1-c path rules", () => {
     expect(inspectChangeSet({ availability: "PRESENT", changes: sparse })).toEqual({ state: "INVALID" });
   });
 
+  test("changeSetRejectsUnknownChangeKinds", () => {
+    expect(inspectChangeSet({ availability: "PRESENT", changes: [{ kind: "COPY", path: "src/a.ts" }] }))
+      .toEqual({ state: "INVALID" });
+  });
+
   test("rejectsUnknownOwnKeysOnChangeSetsAndEveryChangedPathKind", () => {
     for (const key of ["unexpected", Symbol("unexpected")]) {
       for (const availability of ["PRESENT", "UNAVAILABLE"] as const) {
