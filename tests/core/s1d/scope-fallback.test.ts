@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LoaderResult } from "../../../src/core/s1a/contract.js";
 import { loadS1aArtifacts } from "../../../src/core/s1a/loader.js";
+import * as pathRules from "../../../src/core/s1c/path-rules.js";
 import { computeScopeFallback } from "../../../src/core/s1d/scope-fallback.js";
 import { jsonBytes, s1aFixture, sha256 } from "../../helpers/s1a-fixtures.js";
 
@@ -11,7 +12,10 @@ const planText = [
   "<!-- justice:s1c-task-scope:end -->",
 ].join("\n");
 
-async function fixture(plan = new TextEncoder().encode(planText)): Promise<{
+async function fixture(
+  plan = new TextEncoder().encode(planText),
+  expectedPlan = plan,
+): Promise<{
   readonly baseline: LoaderResult;
   readonly plan: Uint8Array;
   readonly changeSet: unknown;
@@ -20,7 +24,7 @@ async function fixture(plan = new TextEncoder().encode(planText)): Promise<{
   const manifest = {
     ...base.manifest,
     artifacts: base.manifest.artifacts.map((ref) => ref.artifactId === "plan-1"
-      ? { ...ref, digest: { algorithm: "sha256" as const, hex: sha256(plan) } }
+      ? { ...ref, digest: { algorithm: "sha256" as const, hex: sha256(expectedPlan) } }
       : ref),
   };
   const source = {
@@ -42,6 +46,8 @@ async function fixture(plan = new TextEncoder().encode(planText)): Promise<{
 }
 
 describe("computeScopeFallback", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it("readyCandidateReturnsScopeOnly", async () => {
     const { baseline, plan, changeSet } = await fixture();
     const result = computeScopeFallback(baseline, plan, changeSet);
@@ -57,6 +63,7 @@ describe("computeScopeFallback", () => {
 
   it("nonreadyBaselineShortCircuitsBeforePathComparison", async () => {
     const { baseline } = await fixture();
+    const compareSpy = vi.spyOn(pathRules, "compareCandidatePaths");
     const notReady = { ...baseline, identityStatus: "MISMATCH" as const, identityCandidateReady: false,
       checks: baseline.checks.map((check) => check.outcome === "MATCH"
         ? { ...check, outcome: "MISMATCH" as const, category: "OBSERVED_CONTRADICTION" as const }
@@ -64,6 +71,10 @@ describe("computeScopeFallback", () => {
     expect(computeScopeFallback(notReady, new TextEncoder().encode("safely captured"), {
       availability: "PRESENT", changes: [],
     })).toEqual({ state: "NOT_EVALUATED", reason: "PREREQUISITE_UNAVAILABLE" });
+    const malformed: LoaderResult = { ...baseline, identityStatus: "MISMATCH" };
+    expect(computeScopeFallback(malformed, null, { availability: "PRESENT", changes: [] }))
+      .toEqual({ state: "NOT_EVALUATED", reason: "PREREQUISITE_UNAVAILABLE" });
+    expect(compareSpy).not.toHaveBeenCalled();
   });
 
   it("invalidAndUnavailableChangeSetDoNotCompare", async () => {
@@ -82,6 +93,15 @@ describe("computeScopeFallback", () => {
     expect(sha256(changed)).not.toBe(sha256(plan));
     expect(computeScopeFallback(baseline, changed, changeSet))
       .toEqual({ state: "NOT_EVALUATED", reason: "PLAN_SNAPSHOT_UNAVAILABLE" });
+    const capturedPlan = new TextEncoder().encode(planText);
+    const expectedPlan = new TextEncoder().encode("different approved Plan bytes");
+    const mismatched = await fixture(capturedPlan, expectedPlan);
+    const compareSpy = vi.spyOn(pathRules, "compareCandidatePaths");
+    expect(mismatched.baseline.selectedRefs.find((ref) => ref.kind === "plan")?.digestOutcome)
+      .toBe("MISMATCH");
+    expect(computeScopeFallback(mismatched.baseline, capturedPlan, mismatched.changeSet))
+      .toEqual({ state: "NOT_EVALUATED", reason: "PREREQUISITE_UNAVAILABLE" });
+    expect(compareSpy).not.toHaveBeenCalled();
   });
 
   it("policyNotReadyMapsExistingReasons", async () => {
