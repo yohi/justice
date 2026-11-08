@@ -2,8 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` or `superpowers:executing-plans` **only after separate Human Owner implementation authorization**. Steps use checkbox (`- [ ]`) syntax for tracking; **none of these steps has been executed**.
 >
-> **Planning status:** `PLAN_DRAFT / DESIGN_OWNER_ADOPTION_PENDING / IMPLEMENTATION_NOT_AUTHORIZED`.
-> **Reference identity:** `yohi/justice`, Issue #353; Design branch `feature/justice-v6-s1d-cli-explainable-report-design-20261108`, reviewed Design HEAD `6235a65633ef892626a3b33cafd65ef712b38fe1`. If branch HEAD changes, an implementer must compare the design before execution; do not silently substitute a different specification.
+> **Planning status:** `PLAN_DRAFT / F-003_ALIGNED_CANDIDATE / DESIGN_OWNER_ADOPTION_PENDING / IMPLEMENTATION_NOT_AUTHORIZED`.
+> **Reference identity:** `yohi/justice`, Issue #353; Design branch `feature/justice-v6-s1d-cli-explainable-report-design-20261108`, reviewed repository HEAD `573190cf19a6bff4971468f4d58da51ade90c84d`. This candidate Plan is aligned locally with the simultaneously corrected Design (§§5.1, 6, 6.1, 7, 10); neither local correction is a GitHub commit. If the branch advances, an implementer must reconcile the authorized versions before execution.
 
 **Goal:** Integrate existing S1-a, S1-b and S1-c READ_ONLY diagnostics behind one local `justice-s1d diagnose` command, with deterministic, explainable Text/JSON output and no promotion of candidate findings to formal assurance approval.
 
@@ -11,7 +11,7 @@
 
 **Tech Stack:** TypeScript ES2022 (strict), Node runtime adapters, Bun, Vitest, Node crypto, existing S1-a strict JSON and file-source abstractions. No new runtime dependency, server, network service, or database.
 
-**Spec:** `docs/superpowers/specs/2026-11-08-justice-v6-s1d-cli-explainable-report-design.md` at GitHub commit `6235a65633ef892626a3b33cafd65ef712b38fe1` (§1–§11). This plan is a **candidate**, not a substitute for formal Owner adoption of that detailed Design.
+**Spec:** `docs/superpowers/specs/2026-11-08-justice-v6-s1d-cli-explainable-report-design.md` (§1–§11), the **F-003-aligned local Design R0.1.1 candidate** provided alongside this Plan; the reviewed GitHub HEAD before local corrections is `573190cf19a6bff4971468f4d58da51ade90c84d`. Do not execute this candidate against the uncorrected GitHub Design; neither document has formal Owner adoption.
 
 ## Global Constraints
 
@@ -21,6 +21,7 @@
 - Read-only: bounded local reads, in-process computation, one newline-terminated stdout record and process exit only. No Git/host probe/subprocess/network, file writes, Task/Review/Fix dispatch or Gate/HOLD mutation.
 - Level A failures (`INPUT_READ_FAILED`, `INPUT_TOO_LARGE`, `INPUT_UTF8_INVALID`, `INPUT_JSON_INVALID`) are **not** Level B (`S1-b INPUT_REJECTED`, S1-c `CHANGESET_INVALID`). Never fabricate `[]`, `UNAVAILABLE`, `S1cResult`, or formal approval.
 - Stage `EVALUATED` means a core returned a result; it does **not** imply PASS. Core `formalVerdict: UNKNOWN`, `ownerAuthorityStatus: NOT_PROVEN`, `eligibleBaseline: false` and evidence `NOT_VERIFIED` retain their meaning.
+- `getPlanSnapshot(result: LoaderResult): Uint8Array | null` returns **safely captured and uniquely associated** same-run Plan bytes regardless of expected Digest match; it returns `null` only for missing/unreadable/unassociated/ambiguous Plan, never just for a Digest mismatch. With both JSON inputs parsed, a non-null snapshot is sufficient to call existing S1-c, including to preserve `S1A_BASELINE_NOT_READY` on a mismatched Plan. A stronger Digest match (plus baseline `READY`, ChangeSet `PRESENT`, Scope Policy `READY`) is required for evaluating `scopeFallback`.
 - `scopeFallback` must be present **iff** Evidence has Level A failure **and** ChangeSet has a parsed JSON value; its state may be `NOT_EVALUATED`; no fallback when ChangeSet Level A fails. Fallback does **not** constitute S1-c Core evaluation.
 - Provenance is the complete, structurally valid, ID-associated **declaration** from `inspectEvidenceRefs`, not an authenticity check. Never expose a partial provenance set from invalid Evidence.
 - Valid invocation with all three Core results: exit `0`, including negative or unknown findings. Partial stage: exit `3`. CLI usage fatal: `64`. Internal fatal: `70`. Never infer approval from exit code.
@@ -53,7 +54,7 @@ No existing S1-a/b/c source or tests are modified by this plan. Source paths and
 
 1. An Evidence source with malformed UTF-8 **and** a valid in-scope ChangeSet should produce one input issue, a conditional fallback and no S1-c formal result (Tasks 3–5).
 2. A parsed Evidence object masquerading as an array must reach existing S1-b `INPUT_REJECTED`, while valid Scope remains visible in existing S1-c, not become a Level A parse failure (Tasks 3, 5).
-3. S1-a baseline `NOT_READY` with captured Plan and Evidence Level A must not run fallback path comparison; `scopeFallback` must still be present with `PREREQUISITE_UNAVAILABLE` (Tasks 4–5).
+3. S1-a baseline `NOT_READY` (including an expected Plan Digest mismatch) with safely captured/associated Plan and Evidence Level A must not run fallback path comparison; `scopeFallback` remains present with `PREREQUISITE_UNAVAILABLE` (Tasks 3–5). When both JSON inputs parse, the same mismatch must instead permit a full S1-c Core call (Task 5).
 4. A single invalid `EvidenceRefV1` mixed with valid records must suppress **all** declared provenance, including otherwise plausible issuer IDs (Task 1).
 5. Ambiguous `--format` and hostile control characters or host paths must not inject another stdout record, leak paths, or silently return success (Tasks 2 and 6).
 
@@ -114,7 +115,7 @@ No existing S1-a/b/c source or tests are modified by this plan. Source paths and
   function createCapturedS1aSource(source: S1aReadOnlySource,
     input: LoaderInput): Readonly<{
       source: S1aReadOnlySource;
-      getPlanSnapshot(result: LoaderResult): Uint8Array|null;
+      getPlanSnapshot(result: LoaderResult): Uint8Array|null; // associated read-only bytes, NOT digest-verified
     }>;
   ```
 
@@ -122,10 +123,11 @@ No existing S1-a/b/c source or tests are modified by this plan. Source paths and
   - `classifiesReadOversizeUtf8AndJsonIndependently`: injected `readInputFile` rejects/overflows, returns malformed UTF-8 or duplicate JSON keys; the exact issue code is `INPUT_READ_FAILED`, `INPUT_TOO_LARGE`, `INPUT_UTF8_INVALID`, `INPUT_JSON_INVALID` respectively; no fake parsed `[]`/`UNAVAILABLE`.
   - `keepsCoreInvalidJsonAsParsedUnknown`: a syntactically valid object for Evidence or invalid `PRESENT` shape for ChangeSet returns `PARSED`, not Level A failure.
   - `capturesOnlySelectedPlanWithoutReread`: use `s1aFixture()` and a digest-pinned Plan; S1-a makes each expected read once, snapshot equals original Plan bytes and is defensively copied.
-  - `rejectsUnboundOrChangedPlanSnapshot`: missing selection, duplicate/non-selected Plan, wrong digest, or changed byte copy yields `null`; the adapter never opens an alternate Plan path.
+  - `retainsSafelyCapturedMismatchedPlan`: S1-a observes a Plan `ARTIFACT_DIGEST_MISMATCH` and reports baseline `NOT_READY`, but the Plan bytes were read once, safely associated to the unique selected Plan; `getPlanSnapshot(result)` returns a copy **not null**, even though SHA-256 differs from `expectedDigest`. Do not label it verified or read it a second time.
+  - `rejectsMissingUnboundOrAmbiguousPlanSnapshot`: absent/unreadable capture, no uniquely selected Plan or an association inconsistency yields `null`; a changed/unsafe capture must not be substituted with bytes from a second path. **Expected Digest mismatch alone is not among these null conditions.**
   - `doesNotBypassReadOnlyFilesystemGuards`: injected unsafe path, symlink rejection or `changed_during_read` is an input failure, never followed by writable or subprocess fallback.
 - [ ] **Step 2: Run** `bun run vitest run tests/runtime/s1d-read-only-input.test.ts`. Expected initially **FAIL**.
-- [ ] **Step 3: Implement** `readS1dJsonInput` using `source.readInputFile` with Evidence cap 1,048,576 / ChangeSet cap 262,144, strict UTF-8 decoder **before** `parseStrictJson`; honor size checks even for mocked sources; classify only fixed Level A codes and sanitize exceptions. Implement the wrapper around the *same* S1-a source; retain the manifest's exact read snapshot, derive the unique Plan path via `parseOwnerManifest` after S1-a digest verification, capture only that artifact's bytes, and require selected `artifactId`/digest consistency. Do not introduce an independent `--plan` read.
+- [ ] **Step 3: Implement** `readS1dJsonInput` using `source.readInputFile` with Evidence cap 1,048,576 / ChangeSet cap 262,144, strict UTF-8 decoder **before** `parseStrictJson`; honor size checks even for mocked sources; classify only fixed Level A codes and sanitize exceptions. Implement the wrapper around the *same* S1-a source; retain the manifest's exact read snapshot, derive the unique Plan path via `parseOwnerManifest` after S1-a manifest digest verification, capture only that artifact's bytes, and require unique selected `artifactId`/manifest path **association**. Preserve copied bytes if the S1-a selected Plan has a mismatched *artifact* Digest: `getPlanSnapshot` checks association, **not** artifact Digest equality, and returns `null` only for missing/unreadable/ambiguous/unbound capture. Do not introduce an independent `--plan` read.
 - [ ] **Step 4: Run** `bun run vitest run tests/runtime/s1d-read-only-input.test.ts`. Expected **PASS**.
 - [ ] **Step 5: Commit** `git add src/runtime/s1d-read-only-input.ts tests/runtime/s1d-read-only-input.test.ts && git commit -m "feat(justice): add bounded S1-d inputs and Plan snapshot"` (future authorized execution only).
 
@@ -134,14 +136,14 @@ No existing S1-a/b/c source or tests are modified by this plan. Source paths and
 **Files:** Create `src/core/s1d/scope-fallback.ts`, `tests/core/s1d/scope-fallback.test.ts`.
 
 **Interfaces:**
-- Consumes: Task 1 `ScopeFallback`; existing `inspectBaseline`, `inspectChangeSet`, `extractTaskScopePolicy`, `compareCandidatePaths`, `LoaderResult` and Plan SHA-256 metadata.
+- Consumes: Task 1 `ScopeFallback`; existing `inspectBaseline`, `inspectChangeSet`, `extractTaskScopePolicy`, `compareCandidatePaths`, `LoaderResult` and Plan SHA-256 metadata. Task 3 passes associated snapshot bytes, **not** a digest-verified Plan.
 - Produces: `computeScopeFallback(baseline: LoaderResult, planBytes: Uint8Array|null, parsedChangeSet: unknown): ScopeFallback`. Caller is responsible for invoking it **iff** Evidence Level A and ChangeSet parsed; helper never invokes `evaluateS1c` or `bindEvidence`.
 
 - [ ] **Step 1: Write failing tests**:
   - `readyCandidateReturnsScopeOnly`: READY baseline, digest-matched Plan, valid `PRESENT` ChangeSet and READY policy -> `EVALUATED`, `provenance: 'S1C_EXISTING_SCOPE_PRIMITIVES'`, correct comparison/outside paths, `formalVerdictAvailable:false`, `limitation:'NO_FORMAL_S1C_RESULT'`.
-  - `nonreadyBaselineShortCircuitsBeforePathComparison`: NOT_READY (even if Plan captured) or malformed baseline -> `NOT_EVALUATED/PREREQUISITE_UNAVAILABLE`, no `outsidePaths`; spy asserts `compareCandidatePaths` not invoked.
+  - `nonreadyBaselineShortCircuitsBeforePathComparison`: NOT_READY (including a Plan Digest mismatch with safely captured bytes) or malformed baseline -> `NOT_EVALUATED/PREREQUISITE_UNAVAILABLE`, no `outsidePaths`; spy asserts `compareCandidatePaths` not invoked.
   - `invalidAndUnavailableChangeSetDoNotCompare`: parsed invalid -> `CHANGESET_INVALID`, explicit unavailable -> `CHANGESET_UNAVAILABLE`.
-  - `missingOrDigestMismatchedSnapshotIsNotEvaluated`: READY baseline but no unique/verified Plan -> `PLAN_SNAPSHOT_UNAVAILABLE`.
+  - `missingOrDigestMismatchedSnapshotIsNotEvaluated`: with baseline `READY`, absent/unbound Plan or bytes that fail the fallback's SHA-256 equality check -> `NOT_EVALUATED/PLAN_SNAPSHOT_UNAVAILABLE`; with a genuine S1-a Plan mismatch and thus baseline `NOT_READY`, the *earlier* `PREREQUISITE_UNAVAILABLE` reason takes precedence. No caller discards the associated bytes merely for mismatch.
   - `policyNotReadyMapsExistingReasons`: `UNDEFINED`, `INVALID`, `REFERENCE_MISMATCH` -> exact `SCOPE_POLICY_*` `NOT_EVALUATED` reasons.
 - [ ] **Step 2: Run** `bun run vitest run tests/core/s1d/scope-fallback.test.ts`. Expected initially **FAIL**.
 - [ ] **Step 3: Implement** the exact §6 fixed order: `inspectBaseline === READY` → `inspectChangeSet === PRESENT` → selected Plan presence and both digest matches → `extractTaskScopePolicy === READY` → `compareCandidatePaths`. Return only `ScopeFallback`; no new evaluator, diagnostic reordering, formal verdict or authority inference.
@@ -173,10 +175,12 @@ No existing S1-a/b/c source or tests are modified by this plan. Source paths and
   - `evidenceLevelAScopeFallbackPresenceRule`: Evidence Level A and parsed ChangeSet -> S1-b/S1-c `NOT_EVALUATED`, exactly one fallback, correct `EVALUATED` or `NOT_EVALUATED` depending on Task 4 preconditions; never create an S1-c result.
   - `changesetLevelAOmitsFallback`: ChangeSet Level A, Evidence parsed -> S1-b genuine result, S1-c skipped, fallback property **absent**; both Level A -> two ordered issues and no fallback.
   - `notReadyBaselineWithCapturedPlanStillInvokesS1c`: both new sources parsed -> actual S1-c returns `S1A_BASELINE_NOT_READY`, no scope verdict, no fallback.
-  - `missingPlanAllowsS1bOnly`: Evidence parsed and no safely associated Plan -> S1-b evaluated, S1-c skipped with `PLAN_SNAPSHOT_UNAVAILABLE`; no fake Plan bytes.
+  - `planDigestMismatchPreservesCoreBaselineDiagnostic`: inject a same-run safely captured/associated Plan whose observed digest differs from its expected digest; assert `getPlanSnapshot` remains non-null, S1-a reports `MISMATCH`/baseline `NOT_READY`, S1-b returns its actual Core result, **S1-c stage is `EVALUATED`** with `S1A_BASELINE_NOT_READY`, candidate Scope `UNKNOWN`, `formalVerdict: UNKNOWN`, **no** `scopeFallback`, exit mapping `0` (Task 6). No `PLAN_SNAPSHOT_UNAVAILABLE` substitution.
+  - `planDigestMismatchWithEvidenceLevelAKeepsFallbackUnevaluated`: same Plan mismatch, Evidence Level A and parsed ChangeSet -> S1-c `NOT_EVALUATED`, `scopeFallback` **present/NOT_EVALUATED** with `PREREQUISITE_UNAVAILABLE`, no path comparison; exit mapping `3` (Task 6).
+  - `missingPlanAllowsS1bOnly`: Evidence parsed and no safely captured/associated Plan -> S1-b evaluated, S1-c skipped with `PLAN_SNAPSHOT_UNAVAILABLE`; no fake Plan bytes. This differs from a Plan Digest mismatch.
   - `evidenceProvenanceInvalidWithholdsAll`: valid-looking issuer among invalid refs never projects even one source claim.
 - [ ] **Step 2: Run** `bun run vitest run tests/runtime/s1d-diagnostic.test.ts`. Expected initially **FAIL**.
-- [ ] **Step 3: Implement** the §6 fixed dispatch order: read new sources independently, invoke S1-a with captured source, invoke S1-b whenever Evidence parsed, invoke S1-c whenever both parsed and a Plan snapshot exists (including non-ready S1-a or Core-invalid Level B values), otherwise assign fixed skip reasons. Only if Evidence Level A + ChangeSet parsed compute the Task 4 fallback; `scopeFallback` must otherwise be **omitted**. Preserve core result ordering and report-only provenance from Task 1. A narrow TypeScript assertion at existing defensive Core boundaries is allowed for parsed `unknown`, not a claim that input has been validated.
+- [ ] **Step 3: Implement** the §6 fixed dispatch order: read new sources independently, invoke S1-a with captured source, invoke S1-b whenever Evidence parsed, invoke S1-c whenever both parsed and a **safely captured/uniquely associated** Plan snapshot exists **without requiring a matching expected Digest** (including an S1-a Plan Digest mismatch, a non-ready S1-a or Core-invalid Level B values), otherwise assign fixed skip reasons. The existing evaluator, not S1-d, produces `S1A_BASELINE_NOT_READY`/Scope `UNKNOWN` before Plan-byte digest checking for a non-ready baseline. Only if Evidence Level A + ChangeSet parsed compute the Task 4 fallback; `scopeFallback` must otherwise be **omitted**. Preserve core result ordering and report-only provenance from Task 1. A narrow TypeScript assertion at existing defensive Core boundaries is allowed for parsed `unknown`, not a claim that input has been validated.
 - [ ] **Step 4: Run** `bun run vitest run tests/runtime/s1d-diagnostic.test.ts`. Expected **PASS**.
 - [ ] **Step 5: Commit** `git add src/runtime/s1d-diagnostic.ts tests/runtime/s1d-diagnostic.test.ts && git commit -m "feat(justice): orchestrate S1-a–c READ_ONLY diagnostics"` (future authorized execution only).
 
@@ -214,16 +218,16 @@ No existing S1-a/b/c source or tests are modified by this plan. Source paths and
 | Design sections | Implementation tasks | Evidence at completion |
 | --- | --- | --- |
 | §1, §2, §3, §4: Integrated CLI, exact core and trust semantics | 1, 3, 5, 6 | Native results preserved; pure/runtime boundary tested |
-| §5: CLI flags, bounded inputs, same-run Plan snapshot | 3, 6 | Parse/error and no-double-read tests |
+| §5 and §5.1: CLI flags, bounded inputs, same-run Plan association versus Digest match | 3, 5, 6 | Parse/error, no-double-read, mismatch-retention tests |
 | §5.2, §6: Level A/Level B and independent continuation | 3, 5 | Mixed failure matrix tests |
-| §6.1: READY / NOT_READY and fallback presence | 4, 5 | Scope-only and NOT_EVALUATED tests |
+| §6.1: READY / NOT_READY, ordinary Core mismatch diagnostics and fallback presence | 3, 4, 5 | S1-c EVALUATED on captured mismatched Plan; stricter fallback NOT_EVALUATED tests |
 | §7: Provenance, report contract, parity | 1, 2 | All-or-nothing claims and deterministic Text/JSON tests |
 | §8: Exit codes and fatal envelope | 2, 6 | Exit 0/3/64/70 and safe JSON/Text fatal tests |
 | §9: READ_ONLY and trust boundaries | 1–6 | No writes/host actions, original Core unchanged |
 | §10: Minimum acceptance cases | 1–6 | Targeted regression + one full repository check |
 | §11: Owner checkpoint | Outside implementation | Explicit human decision, not automated review or launch |
 
-**Definition of done for this plan-writing task (now):** The implementation plan file exists locally and records concrete paths, signatures, tests, check commands, and stop conditions without executing any of them. No GitHub mutation occurs.
+**Definition of done for the present F-003 document-only task:** This candidate Implementation Plan and the paired Design R0.1.1 have aligned Plan-snapshot association/Digest semantics and explicit tests in Tasks 3/5 without executing any planned step. No GitHub mutation occurs.
 
 **Future implementation entry gate (NOT MET by this plan alone):** Human Owner explicitly adopts the detailed S1-d Design, approves this plan and authorizes the exact implementation scope. The prior Issue's `CODE_IMPLEMENTATION_NOT_AUTHORIZED` status remains binding until separately changed by Owner authority. Do not initiate a follow-on task merely because this plan exists.
 
