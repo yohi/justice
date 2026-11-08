@@ -1,0 +1,115 @@
+# Justice v6 S1-e Fixture Acceptance & Native-only Comparison Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` or `superpowers:executing-plans` **only if the Human Owner separately authorizes implementation**. Steps use unchecked (`- [ ]`) checkboxes; **none has been executed**.
+>
+> **Planning status:** `PLAN_DRAFT / DESIGN_ADOPTED_BY_HUMAN_OWNER / IMPLEMENTATION_NOT_AUTHORIZED / GATE_HOLD_UNCHANGED`.
+> **Reference identity:** `yohi/justice`, Issue [#354](https://github.com/yohi/justice/issues/354), design branch `feature/justice-v6-s1e-fixtures-native-comparison-design-20261108`, reviewed HEAD `5b5e953606a629891c2f059cf4439bf6476e89e9`. The Human Owner adopted the Design in conversation on 2026-11-09 (JST). The existing GitHub Design file retains its prior “candidate” header; **do not change that file during this planning task**. If the branch advances before execution, stop and reconcile the approved identity with the Owner.
+
+**Goal:** Give the Human Owner an evidence-grounded S1 MVP functional-acceptance decision by exercising the existing S1-a–d diagnostics against minimal positive/negative/missing-input fixtures and comparing Native-only capabilities from existing sources, without executing Native-only workflows.
+
+**Architecture:** Reuse `runS1dDiagnostic(request, source)` and existing S1-a/b/c results; use one deterministic, in-memory fixture builder and a focused acceptance test file, with no production-code changes. Collect actual test observations and produce one sourced, three-layer Owner decision document; Native-only comparison is document/source/prior-evidence inspection, not a new run.
+
+**Tech Stack:** Existing TypeScript ESM, Bun, Vitest (`^4.1.1` in the inspected `package.json`), Node `crypto`, S1-a `S1aReadOnlySource`, existing S1-d Text/JSON formatters. No new dependencies, Host Adapter, persistent state or service.
+
+**Spec:** `docs/superpowers/specs/2026-11-08-justice-v6-s1e-fixtures-native-comparison-design.md` (Design R0.1 with F-001/F-002 corrections, pinned at HEAD above), especially §§3–10. This Plan implements only that Design; it cannot authorize implementation itself.
+
+## Global Constraints
+
+- Current authorization covers **this Implementation Plan's creation only**. Do not edit source/tests in the repository, execute tests/build/CI, run Host/Native-only probes, Commit/Push/PR, alter Gate/HOLD, or start subsequent tasks under this authorization.
+- During a later separately approved implementation, prefer **test-only** changes. Do not change `src/core/s1a/**`, `src/core/s1b/**`, `src/core/s1c/**`, `src/core/s1d/**`, `src/runtime/s1d-*.ts`, existing public contracts, or CLI semantics. An unexpectedly required production fix is a **stop and Owner decision**, not an implicit expansion.
+- Use `runS1dDiagnostic(request: DiagnosticRequest, source: S1aReadOnlySource): Promise<S1dReportV1>` as the cross-stage entry point. Use `formatText(report): string` and `formatJson(report): string` for report assertions. Existing S1-a, S1-b and S1-c core tests remain the source of unit-level detailed coverage.
+- Never elevate S1-a `identityStatus: 'MATCH'`, `identityCandidateReady`, or `eligibleBaseline: false` into Owner approval; S1-b `MATCHED_REF_PRESENT` into AC completion; S1-c candidate Scope into authorization; S1-c `formalVerdict: 'UNKNOWN'` into PASS/FAIL; or CLI exit `0` into assurance acceptance.
+- Distinguish parsed-but-invalid Evidence (`S1-b INPUT_REJECTED`) from an unreadable Evidence source (`S1-b NOT_EVALUATED`); distinguish parsed ChangeSet `{availability:'UNAVAILABLE'}` (`S1-c EVALUATED` with `CHANGESET_UNAVAILABLE`) from a source read failure (`S1-c NOT_EVALUATED`, `CHANGESET_SOURCE_UNAVAILABLE`).
+- For N-04, **keep at least two mandatory ACs in Manifest**, remove precisely one from TaskIntent and keep the other selected; keep all other Manifest/Artifact identities valid. The expected code is **`REQUIRED_AC_MISSING`**. Do not instead delete the AC from Manifest or supply an empty AC array.
+- Only S1-c-validated repository-relative changed paths may appear in Text/JSON findings. Host absolute paths, secret values and raw exception strings must not be printed. The existing formatter and input validators define the actual security contract; do not invent new redaction guarantees.
+- Fixed fixtures should be byte/digest reproducible. If an Artifact is intentionally tampered, distinguish a Digest mismatch from a separately pinned valid revision. Changing a Manifest requires a fresh expected Manifest SHA-256 for the test input.
+- Native-only comparison means **Superpowers + OpenCode V2 without Justice S1**. Use identified versioned official docs, inspected code and previously collected traces only. No Native execution, synthetic Native output, invented superiority or absence proof from missing documentation.
+- Keep Functional Acceptance, Native Capability Comparison and Operational Effectiveness separate. Real-development true/false-positive rates, time, cost and Owner burden remain `NOT_MEASURED` in S1.
+- Make one bounded evidence collection and one Human Owner decision checkpoint. No automatic independent reviews, new Finding hunts, revision loops, next Task, S2 work or external writes. Commits/Push remain a separate approval even if implementation is later authorized.
+
+## File map and boundaries
+
+| File | Future action (not authorized now) | Responsibility |
+| --- | --- | --- |
+| `tests/runtime/s1e-acceptance.test.ts` | **Create**, only if existing tests do not already supply the cross-stage assertion | In-memory 1 Design / 1 Plan / 2 Tasks / ≥2 mandatory AC fixture; P-01 and N-01…N-10b cross-stage cases; Text/JSON boundary assertions |
+| `docs/superpowers/acceptance/justice-v6-s1e-mvp-acceptance.md` | **Create**, when a separate evidence/reporting step is authorized | One bounded artifact containing observed fixture results, sourced Native capability matrix and unmeasured operational outcomes |
+| Existing `tests/helpers/s1a-fixtures.ts`; `tests/core/s1a/`, `tests/core/s1b/`, `tests/core/s1c/`, `tests/core/s1d/`; `tests/runtime/s1d-diagnostic.test.ts`, `tests/runtime/s1d-cli.test.ts` | **Read/reuse only** | Baseline fixture support, unit behavior and safe CLI/report contract; no copy/rewrite of existing tests |
+| Existing `src/core/s1a/`, `src/core/s1b/`, `src/core/s1c/`, `src/core/s1d/`, `src/runtime/s1d-*.ts` | **Read only** | Keep production interfaces unchanged |
+
+The single test file should hold the fixture factory locally. Do not create a general-purpose test harness or new shared library merely to support these bounded cases. If existing tests already cover a case, document their exact test and add only the minimal cross-stage check that is still missing.
+
+## Review Focus — five specific failure modes pinned to tasks
+
+This is a planning coverage checklist, **not** an independent review request.
+
+1. **N-04 missing required AC:** Manifest still contains `ac-1` and `ac-2`, but TaskIntent selects only `ac-1`; expect `REQUIRED_AC_MISSING`, not an empty-AC schema error (Task 1, `s1eMissingMandatoryAc`).
+2. **N-10 two kinds of missing ChangeSet:** Parsed `{availability:'UNAVAILABLE'}` must still evaluate S1-c; source read error must leave S1-c unevaluated (Task 2, `s1eUnavailableChangeSetIsEvaluated`, `s1eUnreadableChangeSetIsNotEvaluated`).
+3. **Evidence validity is not source availability:** Parsed invalid Evidence is Level B and may preserve candidate-scope comparison, whereas a source read error is Level A and may produce scope-only fallback without a formal S1-c result (Task 2, `s1eInvalidEvidenceIsLevelB`, `s1eUnreadableEvidenceIsLevelA`).
+4. **Untrusted path/error output:** Validated `docs/outside.ts` can appear, but `/home/private/secret.txt`, a secret marker and the raw thrown error message must not appear in Text or JSON (Task 2, `s1eReportOutputRespectsSafePathBoundary`).
+5. **Unproved success:** Even a completely matching positive fixture with declared Evidence `PASS` must keep S1-a Owner authority unproved, S1-b authenticity/execution unverified, and S1-c formal verdict UNKNOWN (Task 1, `s1ePositiveKeepsAuthorityUnknown`).
+
+---
+
+### Task 1: Reproducible cross-stage fixture and core acceptance
+
+**Files:** Create `tests/runtime/s1e-acceptance.test.ts`; inspect/reuse existing tests and `tests/helpers/s1a-fixtures.ts`. No production source changes.
+
+**Interfaces:**
+- Consumes: `s1aFixture()`, `jsonBytes()`, `sha256()` from `tests/helpers/s1a-fixtures.ts`; existing `OwnerManifest`, `TaskIntent`, `S1aReadOnlySource`, `EvidenceRefV1`, `ChangeSet`, and `DiagnosticRequest` types; `runS1dDiagnostic(request, source): Promise<S1dReportV1>`.
+- Produces: one file-local `makeS1eFixture()` returning an in-memory `{request, source, manifest, intent, planBytes, evidenceRefs, changeSet}` setup. This is a test fixture, **not** a new exported production API. Make each case mutate one deliberate dimension, then re-pin only those digests that are supposed to remain valid.
+- Base setup: 1 Design (`design-1`), 1 Plan (`plan-1`), selected Task-A (`task-1`), unselected Task-B (`task-2`) with Plan parent, and two mandatory ACs (`ac-1`, `ac-2`) parented to Task-A. Reuse the existing two ACs from `s1aFixture()`, add Task-B bytes + Manifest entry with a valid digest, and recompute expected Manifest SHA-256. Add the existing S1-c Plan policy block with `schemaVersion: 'justice-s1c-task-scope-v1'`, selected `planRef`/`taskRef`, `scopeKey: 'scope-1'`, `allowedPaths: ['src/**']`; pin its exact bytes/digest. Provide two AC-associated Evidence refs, both for Task-A, so P-01 does not accidentally trigger a missing-AC diagnostic. Valid ChangeSet: `{availability:'PRESENT',changes:[{kind:'ADD',path:'src/a.ts'}]}`. Keep Source reads entirely injected and local.
+
+- [ ] **Step 1 — Write P-01 and authority assertions:** `s1ePositiveKeepsAuthorityUnknown` calls `runS1dDiagnostic` with the base fixture. Assert all stages are `EVALUATED`; S1-a identity is `MATCH` but `ownerAuthorityStatus === 'NOT_PROVEN'` and `eligibleBaseline === false`; S1-b selected Evidence bindings are `MATCH`, both ACs have `MATCHED_REF_PRESENT`, and authenticity/execution verification are `NOT_VERIFIED`; S1-c candidate Scope is `WITHIN_CANDIDATE_SCOPE`, `formalVerdict === 'UNKNOWN'`. Assert no `OUTSIDE_CANDIDATE_SCOPE`, `S1B_BINDING_MISMATCH` or `AC_EVIDENCE_REF_MISSING`. Do not require an empty diagnostics list because `OWNER_AUTHORITY_NOT_VERIFIED` is legitimate.
+- [ ] **Step 2 — Write Identity cases:** `s1eStalePlanRevision` (N-01) sets only TaskIntent Plan revision to `R2`, retains Manifest R1, and asserts S1-a checks contain `REVISION_MISMATCH`; `s1eTamperedPlanBytes` (N-02) changes raw Plan bytes *without* updating its Manifest digest and asserts an S1-a Plan Artifact digest mismatch without a promoted candidate-scope success. In both cases, assert no Owner approval.
+- [ ] **Step 3 — Write Evidence/AC cases:** `s1eWrongTaskEvidence` (N-03) points an AC-associated ref to Task-B, asserting S1-b binding `MISMATCH` with `TASK_NOT_SELECTED` (and any additional valid existing reason), while Task-A coverage is not falsely matched. `s1eMissingMandatoryAc` (N-04) leaves both mandatory AC entries in Manifest but TaskIntent selects only one, asserting S1-a `REQUIRED_AC_MISSING`; explicitly confirm the other identities/digests were not altered. `s1eAcWithoutEvidence` (N-05) retains both selected ACs but removes evidence for one, asserting that AC has `MISSING_EVIDENCE` and S1-c reports `AC_EVIDENCE_REF_MISSING` for it.
+- [ ] **Step 4 — Write Scope and claim cases:** `s1eOutsideCandidateScope` (N-06) changes an otherwise valid ChangeSet path to `docs/outside.ts`, asserting S1-c `OUTSIDE_CANDIDATE_SCOPE` contains that exact validated relative path and `formalVerdict === 'UNKNOWN'`. `s1eSelfDeclaredPassIsUnverified` (N-07) provides `provenanceClass:'SELF_DECLARED'`, `reportedExecutionState:'EXECUTED'`, `reportedOutcome:'PASS'`; assert reported claims remain accessible but S1-b authenticity and execution verification stay `NOT_VERIFIED`. `s1eApprovalRefNeverProvesAuthority` (N-08) keeps a non-empty Manifest `approvalRef` but confirms `ownerAuthorityStatus:'NOT_PROVEN'`, `eligibleBaseline:false` and S1-c `formalVerdict:'UNKNOWN'`.
+- [ ] **Step 5 — Execute only after separate authorization:** `bun run vitest run tests/runtime/s1e-acceptance.test.ts` (targeted). Expected: each added assertion is observed PASS. A failing or absent test must be recorded as such; no blanket PASS inference from source presence.
+- [ ] **Step 6 — Scope/identity checkpoint:** confirm `git diff --name-only` (future authorized execution) lists only the permitted test file; do not silently change existing production code or create a follow-on fix task. Commit/Push only if separately authorized.
+
+### Task 2: Missing-input and safe Text/JSON reporting acceptance
+
+**Files:** Extend only `tests/runtime/s1e-acceptance.test.ts` from Task 1; reuse existing S1-d formatter and runtime tests. No new runtime/CLI functionality.
+
+**Interfaces:**
+- Consumes: the Task 1 local fixture builder; `runS1dDiagnostic`, `formatText(report): string`, `formatJson(report): string`, the existing `S1dReportV1['stages']` and `InputIssue` contracts.
+- Produces: independently runnable named assertions for N-09, N-10a/b, determinism, safe reporting and bounded read-only behavior. There is **no** new report schema and no fake S1-c result.
+
+- [ ] **Step 1 — Distinguish Level B/Level A Evidence:** `s1eInvalidEvidenceIsLevelB` (N-09a) returns parsed, structurally invalid Evidence such as `{invalid:true}`; assert S1-b is `EVALUATED` with `evaluationStatus:'INPUT_REJECTED'`, while S1-c is still `EVALUATED`, can retain valid candidate Scope, and reports `S1B_INPUT_REJECTED`. `s1eUnreadableEvidenceIsLevelA` (N-09b) makes the injected source throw for Evidence; assert `inputIssues:[{source:'evidence',code:'INPUT_READ_FAILED'}]`, S1-b `NOT_EVALUATED/EVIDENCE_SOURCE_UNAVAILABLE`, S1-c `NOT_EVALUATED/PREREQUISITE_UNAVAILABLE`, and, with the valid Plan/ChangeSet, `scopeFallback` is `EVALUATED` with `formalVerdictAvailable:false`. Do not fabricate a formal S1-c verdict for this branch.
+- [ ] **Step 2 — Distinguish ChangeSet availability from I/O failure:** `s1eUnavailableChangeSetIsEvaluated` (N-10a) supplies parsed `{availability:'UNAVAILABLE'}`; assert S1-c `EVALUATED`, diagnostic `CHANGESET_UNAVAILABLE`, candidate Scope `UNKNOWN`, `formalVerdict:'UNKNOWN'`. `s1eUnreadableChangeSetIsNotEvaluated` (N-10b) makes only the ChangeSet read throw; assert `inputIssues:[{source:'changeset',code:'INPUT_READ_FAILED'}]`, S1-b `EVALUATED`, S1-c `{state:'NOT_EVALUATED',reason:'CHANGESET_SOURCE_UNAVAILABLE'}`, with **no** `scopeFallback`. Neither case means an empty change list.
+- [ ] **Step 3 — Text/JSON and non-leakage:** `s1eReportOutputRespectsSafePathBoundary` checks both `formatText` and `formatJson` from a valid N-06 result include validated `docs/outside.ts`. For a **separate** injected invalid absolute changed path (`/home/private/secret.txt`), assert existing ChangeSet validation rejects it and neither report exposes the absolute path. For a **separate** injected read failure with a secret/stack marker in the thrown Error, assert reports contain only the existing safe issue/reason codes, not the raw exception or secret marker. Do **not** pass fabricated unsafe `S1dReportV1` objects directly to `formatJson` and infer stronger safety than the validated pipeline provides.
+- [ ] **Step 4 — Repeatability and bounded read-only observation:** `s1eDeterministicOutputAndNoUnrequestedActions` runs the same injected fixture twice and asserts byte-identical Text/JSON strings; assert the injected `S1aReadOnlySource` only receives the expected bounded reads. Reuse `tests/runtime/s1d-cli.test.ts::noRuntimeSideEffects` for existing CLI boundaries; do not claim that a pure injected fixture proves all Host environments safe.
+- [ ] **Step 5 — Execute only after separate authorization:** `bun run vitest run tests/runtime/s1e-acceptance.test.ts tests/runtime/s1d-diagnostic.test.ts tests/runtime/s1d-cli.test.ts tests/core/s1d/formatter.test.ts`. Expected: all added and reused assertions PASS with exact observed counts; on failure capture the test name/output and stop the affected acceptance claim.
+- [ ] **Step 6 — Existing-core regression only if separately authorized:** `bun run vitest run tests/core/s1a tests/core/s1b tests/core/s1c tests/core/s1d`. Capture observed results. Do **not** expand this into a new Build/CI/Host/Native execution mandate, and do not auto-start revisions or independent reviews.
+
+### Task 3: Sourced Native capability comparison and Owner acceptance packet
+
+**Files:** Create `docs/superpowers/acceptance/justice-v6-s1e-mvp-acceptance.md` as a **single future report**; no executable comparison harness, service or source-code changes.
+
+**Interfaces:**
+- Consumes: tested exact repository HEAD, fixed fixture identities and actual output from Tasks 1–2, existing S1-a–d tests where reused, and **existing** primary Native-only sources (versioned Superpowers/OpenCode V2 docs, identified source commit, previously recorded traces).
+- Produces: three independently labeled report sections: `Functional Acceptance`, `Native Capability Comparison`, `Operational Effectiveness`; Human Owner decision options and residual-risk statement. This is a **documented decision input**, not a new runtime approval object or Gate state.
+
+- [ ] **Step 1 — Initialize the record conservatively:** add a case table containing P-01, N-01…N-09b, N-10a, N-10b; columns: case ID, test name, fixture bytes/digest or stable snapshot reference, tested HEAD, expected fields, observed fields, command/run evidence, outcome. Default every unrun entry to `NOT_EXECUTED`; represent `TEST_ABSENT`, `NOT_COLLECTED`, `SKIPPED_UNPROVEN`, `OBSERVED_PASS`, and `OBSERVED_FAIL` distinctly. A committed test file is not an executed observation.
+- [ ] **Step 2 — Transcribe only actual evidence:** after separately approved tests, record exact command, run timestamp/environment, executed tests, observed PASS/FAIL/skipped count, and the failure(s) if any. Link existing unit-test evidence only when it applies to the same checked identity; state the difference between executed evidence and source inspection. Do not invent metrics or change the test outcome to make the MVP pass.
+- [ ] **Step 3 — Build the bounded Native-only matrix** for 8 dimensions: (1) Artifact ID/Revision/Digest association, (2) wrong-Task/AC/Evidence binding, (3) missing Evidence vs AC satisfaction/self-report, (4) candidate Scope out-of-path reporting, (5) execution claims vs verified execution, (6) Owner authority unknown, (7) explainable deterministic Text/JSON, (8) no unexpected read-only workflow dispatch. For each dimension capture Native version/commit, exact official doc/source/prior observation URL/path, applicable conditions and timestamp, evidence class(es) `IMPLEMENTATION_CONFIRMED` / `DOCUMENTED` / `PREVIOUSLY_OBSERVED` / `UNKNOWN`, and Justice's corresponding fixture/result. If a version, source or equivalent scenario cannot be established, state `UNKNOWN` or not directly comparable. **Do not run Native or infer nonexistence from documentation silence**.
+- [ ] **Step 4 — Separate operational effectiveness:** mark real-development detection/false-positive improvement, execution time, cost and Human Owner burden `NOT_MEASURED`. Fixture-based false-positive/false-negative observations, if recorded, are *only counts against the explicitly enumerated static cases*, not real-world rates or causal superiority.
+- [ ] **Step 5 — Trace M1–M5 and present an Owner checkpoint:** map M1 to P-01/N-01/N-02/N-04; M2 to N-03/N-05/N-07; M3 to N-01/N-02/N-04/N-05/N-06/N-10a/b; M4 to the bounded no-side-effect checks; M5 to Text/JSON assertions and the sourced comparison. Distinguish observed failure, not executed, insufficient Native evidence, and genuine safety failure. Offer Human Owner `ACCEPT_S1_MVP`, `ACCEPT_WITH_LIMITATIONS`, `DEFER`, or `REJECT` as *decision options only*, not automatic new product status fields.
+- [ ] **Step 6 — Stop at this artifact:** report achieved coverage, residual risk, unapproved areas and Owner decision options. Do not trigger S2, automated review, correction cycles, Gate changes, Commit/Push/PR or more discovery. Any safety-relevant false acceptance/authority promotion halts **the affected acceptance decision** for Owner disposition; minor or unproven Findings do not mechanically block all independent progress.
+
+## Completion criteria and explicit stopping rule
+
+This Plan's **creation task** is complete when a readable Implementation Plan exists, is internally consistent with the adopted Design and source contract names, and has been provided to the Human Owner. **This is not S1-e functional acceptance.**
+
+In a later separately approved execution, report S1 functional acceptance as a candidate only if the required cross-stage cases were actually exercised with identified HEAD/fixtures, their expected safety boundaries held, and the Native capability evidence is traceable. Unknown Native capabilities and unmeasured operational improvements must remain unknown/unmeasured, not blockers invented after the fact.
+
+**Stop without expanding authority** if production contract changes, security/authority promotion, unapproved Host/Native execution, a changed HEAD that defeats the fixed baseline, or a major observed false acceptance would be needed to complete the approved work. Return to the Human Owner for a choice instead of creating automatic tasks or review loops.
+
+## Plan-author self-check (static only, no tests or external writes)
+
+- [x] All Design §§3–10 and P-01 / N-01…N-10b have a mapped test or evidence step.
+- [x] All referenced source interfaces and diagnostic literals match the read-only repository inspection at HEAD `5b5e9536`; the newly named test fixture factory is explicitly **test-local**, not a production API.
+- [x] The two N-10 error paths and N-04 Manifest/TaskIntent difference are explicit; safe path display vs forbidden leaks is bounded to existing validators/formatters.
+- [x] Native-only new execution and real-development A/B remain excluded; Operational Effectiveness is not silently promoted.
+- [x] No production files, existing contracts, implementation, tests, GitHub branches, Commit/Push/PR, Gate/HOLD, independent reviews or subsequent tasks were modified or executed in creating this Plan.
+
+**Human Owner checkpoint:** Review this Plan as the sole output of the current authorized task. Plan adoption, code/test execution, evidence collection, GitHub writing and S2 work each require separate explicit authorization. **Here the planning task may end.**
