@@ -121,6 +121,20 @@ describe("S1-d report projection", () => {
     expect(unknownProjection).toMatchObject({ state: "CLAIMS_AVAILABLE", verification: "NOT_VERIFIED", claims: [{ evidenceId: "declared" }] });
   });
 
+  it("withholdsClaimsWhenBindingWasNotEvaluated", async () => {
+    const refs = [evidence("declared")];
+    const projection = projectProvenance(
+      { state: "PARSED", value: refs },
+      { state: "NOT_EVALUATED", reason: "EVIDENCE_SOURCE_UNAVAILABLE" },
+    );
+
+    expect(projection).toEqual({
+      state: "WITHHELD",
+      reason: "BINDING_NOT_AVAILABLE",
+      claims: [],
+    });
+  });
+
   it("unionsLimitationsAndPreservesCore", async () => {
     const s1b: Stage<BinderResult> = { state: "EVALUATED", result: await bound([]) };
     const coreResult: S1cResult = {

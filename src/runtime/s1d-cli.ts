@@ -84,7 +84,7 @@ export async function runS1dCli(
   }
 }
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   const source = createS1aReadOnlySource();
   const result = await runS1dCli(process.argv.slice(2), process.env, (request) => runS1dDiagnostic(request, source));
   process.stdout.write(result.stdout);

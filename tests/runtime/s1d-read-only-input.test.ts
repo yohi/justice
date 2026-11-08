@@ -32,6 +32,19 @@ describe("S1-d read-only input", () => {
     expect(await issueCode(source, "duplicate", "evidence")).toBe("INPUT_JSON_INVALID");
   });
 
+  it("classifiesSourceReportedOverLimitAsOversizedInput", async () => {
+    const source: S1aReadOnlySource = {
+      async readInputFile() {
+        throw Object.assign(new Error("over limit"), { kind: "over_limit" });
+      },
+      async readArtifact() {
+        throw Error("unused");
+      },
+    };
+
+    expect(await issueCode(source, "evidence", "evidence")).toBe("INPUT_TOO_LARGE");
+  });
+
   it("keepsCoreInvalidJsonAsParsedUnknown", async () => {
     const source: S1aReadOnlySource = {
       async readInputFile(path) { return jsonBytes(path === "evidence" ? { invalid: true } : { availability: "PRESENT", changes: "invalid" }); },
@@ -125,6 +138,25 @@ describe("S1-d read-only input", () => {
     const wrapped = createCapturedS1aSource(source, fixture.input);
     const result = await loadS1aArtifacts(fixture.input, wrapped.source);
     expect(guarded).toHaveBeenCalled();
+    expect(wrapped.getPlanSnapshot(result)).toBeNull();
+  });
+
+  it("doesNotCapturePlanWhenManifestCannotBeParsed", async () => {
+    const fixture = s1aFixture();
+    const source: S1aReadOnlySource = {
+      async readInputFile(path) {
+        return path === fixture.input.manifestPath
+          ? new TextEncoder().encode("not valid json")
+          : jsonBytes(fixture.intent);
+      },
+      async readArtifact() {
+        return new Uint8Array();
+      },
+    };
+    const wrapped = createCapturedS1aSource(source, fixture.input);
+    const result = await loadS1aArtifacts(fixture.input, wrapped.source);
+
+    expect(result.manifestDigestMatch).not.toBe(true);
     expect(wrapped.getPlanSnapshot(result)).toBeNull();
   });
 });

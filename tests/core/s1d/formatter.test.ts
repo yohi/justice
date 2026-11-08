@@ -70,6 +70,27 @@ describe("S1-d formatter", () => {
     expect(text).not.toContain("PASS");
   });
 
+  it("rendersEvaluatedScopeFallbackWithoutClaimingFormalVerdict", () => {
+    const report: S1dReportV1 = {
+      ...emptyReport,
+      scopeFallback: {
+        state: "EVALUATED",
+        provenance: "S1C_EXISTING_SCOPE_PRIMITIVES",
+        candidateScopeComparison: "OUTSIDE_CANDIDATE_SCOPE",
+        outsidePaths: ["docs/outside.md"],
+        formalVerdictAvailable: false,
+        limitation: "NO_FORMAL_S1C_RESULT",
+      },
+    };
+
+    const text = formatText(report);
+
+    expect(text).toContain("candidate scope only (S1-c full evaluation NOT_EVALUATED)");
+    expect(text).toContain("candidate scope: OUTSIDE_CANDIDATE_SCOPE");
+    expect(text).toContain("outside path: docs/outside.md");
+    expect(text).toContain("Formal verdict: NOT_EVALUATED");
+  });
+
   it("rendersProvenanceAsUnverifiedDeclaration", () => {
     const report: S1dReportV1 = {
       ...emptyReport,

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { S1aReadOnlySource } from "../../src/core/s1a/contract.js";
 import { runS1dDiagnostic } from "../../src/runtime/s1d-diagnostic.js";
-import { runS1dCli } from "../../src/runtime/s1d-cli.js";
+import { main, runS1dCli } from "../../src/runtime/s1d-cli.js";
 import { jsonBytes, s1aFixture, sha256 } from "../helpers/s1a-fixtures.js";
 
 const fixtureSource = (): Readonly<{ source: S1aReadOnlySource; argv: readonly string[] }> => {
@@ -24,6 +24,24 @@ const fixtureSource = (): Readonly<{ source: S1aReadOnlySource; argv: readonly s
 };
 
 describe("runS1dCli", () => {
+  it("mainWritesUsageFailureAndSetsProcessExitCode", async () => {
+    const originalArgv = process.argv;
+    const originalExitCode = process.exitCode;
+    const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    process.argv = ["node", "justice-s1d", "unknown"];
+
+    try {
+      await main();
+
+      expect(write).toHaveBeenCalledWith("Justice S1-d: fatal diagnostic error.\n");
+      expect(process.exitCode).toBe(64);
+    } finally {
+      process.argv = originalArgv;
+      process.exitCode = originalExitCode;
+      write.mockRestore();
+    }
+  });
+
   it("validDiagnoseTextAndJsonAreDeterministic", async () => {
     const { source, argv } = fixtureSource();
     const runDiagnostic = (request: Parameters<typeof runS1dDiagnostic>[0]) => runS1dDiagnostic(request, source);
