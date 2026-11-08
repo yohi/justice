@@ -12,6 +12,9 @@ an acceptance decision on the Owner's behalf.
 | Test file | `tests/runtime/s1e-acceptance.test.ts` |
 | Test file state | **Untracked and uncommitted** at execution time (`git status`: `?? tests/runtime/s1e-acceptance.test.ts`); nothing staged. HEAD alone does not reproduce the run; the exact bytes are identified by the SHA-256 below and exist only in the working tree until committed. |
 | Test file SHA-256 | `13359010b6d248b31c41b4b4e35e1539344fbd10a8be49d05427fd5513aeb44a` |
+| Post-run state (added after the run; does not replace the rows above) | The test file was later committed in `bec8099fabc77c5f26c6e641dcb87c20db322a85` (head of PR #370 at the time of this correction). The "uncommitted" statements in this section describe execution time only. |
+| Post-run identity | Git blob SHA `15d91baaafce2e237ca2480584c4ff467b926732`; SHA-256 `13359010b6d248b31c41b4b4e35e1539344fbd10a8be49d05427fd5513aeb44a`, identical to the executed bytes above. |
+| Post-run CI evidence (separate from the run above) | At `bec8099f`, the CI workflow run 42499467445 reported `tests/runtime/s1e-acceptance.test.ts (15 tests)` executed in its log, and the Coverage workflow run 42499467470 and the same head's other checks reported success (read-only inspection; no test was re-run for this correction). This is CI-environment evidence, not the host run recorded above. |
 | Command | `bun run vitest run tests/runtime/s1e-acceptance.test.ts --reporter=verbose` |
 | Run timestamp | 2026-11-08T16:10:58Z (host clock, UTC) |
 | Environment | Linux, Bun with vitest v4.1.1, repository root as working directory. The devcontainer was not used for this run. |
@@ -85,9 +88,11 @@ absence of external writes, dispatch, or Host side effects.
 
 ## 3. Native Capability Comparison
 
-Scope: Native-only means Superpowers plus oh-my-openagent (OmO) and OpenCode
-without Justice S1. No Native workflow was run and no instrumentation was
-added. Statements are based on local source or documentation snapshots only.
+Scope: Native-only means Superpowers + OpenCode V2 without Justice S1, as
+defined in Design section 6 and the Implementation Plan. oh-my-openagent (OmO)
+is not part of this baseline; earlier OmO observations are kept only in the
+separate supplementary subsection below and are not counted toward any
+dimension. No Native workflow was run and no instrumentation was added. Statements are based on local source or documentation snapshots only.
 Documentation silence is not treated as absence of a capability.
 
 Sources consulted (local snapshots, paths relative to `$HOME`):
@@ -95,11 +100,10 @@ Sources consulted (local snapshots, paths relative to `$HOME`):
 | Source | Path | Version or commit |
 | --- | --- | --- |
 | Superpowers (obra) | `program/oss/superpowers` | v6.4.2, commit `8ca22dba9a94f28898bbce59f2537ff4d87c747d` |
-| oh-my-openagent | `program/oss/oh-my-openagent` | package 5.1.2, 28 commits after `v5.1.2`, commit `9cc59fd9c1ec9a9f4c85c9f49ca22d13b6f2e0ab` |
 | OpenCode host (V2) | not available locally | UNKNOWN (only `@opencode-ai/plugin` 1.14.21 SDK is installed; it is not the host) |
 | Previous runtime traces | none used | not applicable |
 
-Applicability limit: which Superpowers, OmO, and OpenCode versions were active
+Applicability limit: which Superpowers and OpenCode versions were active
 in the Owner's real sessions is not established by these checkouts, so every
 statement below describes the identified checkout only. No source
 implementation (code path) was inspected; no row is `IMPLEMENTATION_CONFIRMED`.
@@ -107,18 +111,36 @@ No row is `PREVIOUSLY_OBSERVED`. Snapshot read date: 2026-11-08.
 
 | # | Dimension | Native reference | Evidence class | Verified claim and equivalence limit | Justice fixture result |
 | --- | --- | --- | --- | --- | --- |
-| 1 | Artifact ID, Revision, Digest association | Superpowers `skills/writing-plans/SKILL.md` and OmO `docs/guide/orchestration.md` | UNKNOWN | A text search for digest or checksum terms found only release-binary checksums (OmO `docs/guide/binary-install.md`) and an unrelated brainstorming helper script. No plan-artifact digest association was found in these snapshots. This is not proof of absence. Not directly comparable. | N-01, N-02: OBSERVED_PASS |
-| 2 | Task/AC/Evidence binding, wrong-task detection | OmO `docs/guide/orchestration.md` line 171 (evidence ledger per checkbox) | DOCUMENTED (partial) | Documents a per-checkbox ledger at `.omo/ulw-execute/ledger.jsonl`. Whether it detects Evidence bound to a different Task is UNKNOWN. Not directly comparable (checkbox-centric, not Task/AC identity). | N-03, N-05: OBSERVED_PASS |
-| 3 | Missing Evidence versus AC satisfaction or self-report | Superpowers `skills/verification-before-completion/SKILL.md` lines 10 to 33; OmO `docs/guide/orchestration.md` line 171 | DOCUMENTED | Superpowers documents a procedure requiring fresh verification output before success claims. OmO documents independent reviewer verification of a worker's done claim. Both are process rules for agents and reviewers. Whether a mechanical per-AC missing-evidence report exists is UNKNOWN. | N-05, N-07: OBSERVED_PASS |
-| 4 | Candidate Scope out-of-path reporting | Superpowers `skills/writing-plans/SKILL.md` lines 97 to 99 (per-task file list); `skills/subagent-driven-development/SKILL.md` line 8 (spec compliance review); OmO `docs/guide/orchestration.md` line 311 | DOCUMENTED (partial) | Plans list exact files and a review checks spec compliance. A mechanical changed-path versus allowlist report is UNKNOWN. Duplication with the review step is possible and not quantified. | N-06: OBSERVED_PASS |
-| 5 | Execution claims versus verified execution | Superpowers `skills/verification-before-completion/SKILL.md` lines 17 to 33; OmO `docs/guide/orchestration.md` line 171 | DOCUMENTED | Same sources as row 3. They govern agent behavior and review, not a recorded authenticity status field. Not directly comparable. | N-07: OBSERVED_PASS |
+| 1 | Artifact ID, Revision, Digest association | Superpowers `skills/writing-plans/SKILL.md` | UNKNOWN | A text search of the Superpowers snapshot for digest or checksum terms found only an unrelated brainstorming helper script. No plan-artifact digest association was found there. This is not proof of absence. OpenCode V2 was not inspected. Not directly comparable. | N-01, N-02: OBSERVED_PASS |
+| 2 | Task/AC/Evidence binding, wrong-task detection | none identified in the Superpowers snapshot | UNKNOWN | No Task/AC/Evidence binding check was identified in the consulted Superpowers material, and OpenCode V2 was not inspected. Not proof of absence. Not directly comparable. | N-03, N-05: OBSERVED_PASS |
+| 3 | Missing Evidence versus AC satisfaction or self-report | Superpowers `skills/verification-before-completion/SKILL.md` lines 10 to 33 | DOCUMENTED | Superpowers documents a procedure requiring fresh verification output before success claims. It is a process rule for agents. Whether a mechanical per-AC missing-evidence report exists is UNKNOWN. | N-05, N-07: OBSERVED_PASS |
+| 4 | Candidate Scope out-of-path reporting | Superpowers `skills/writing-plans/SKILL.md` lines 97 to 99 (per-task file list); `skills/subagent-driven-development/SKILL.md` line 8 (spec compliance review) | DOCUMENTED (partial) | Plans list exact files and a review checks spec compliance. A mechanical changed-path versus allowlist report is UNKNOWN. Duplication with the review step is possible and not quantified. | N-06: OBSERVED_PASS |
+| 5 | Execution claims versus verified execution | Superpowers `skills/verification-before-completion/SKILL.md` lines 17 to 33 | DOCUMENTED | Same source as row 3. It governs agent behavior and review, not a recorded authenticity status field. Not directly comparable. | N-07: OBSERVED_PASS |
 | 6 | Owner authority unknown representation | Superpowers `skills/brainstorming/SKILL.md` lines 44 to 49 | DOCUMENTED (partial) | Documents human approval steps before writing specs and plans. A representation of "approval reference present but authority unproven" is UNKNOWN. Not directly comparable. | N-08: OBSERVED_PASS |
-| 7 | Deterministic, explainable Text/JSON diagnostics | OmO `docs/guide/orchestration.md` line 171 (JSONL ledger) | UNKNOWN | A structured ledger is documented, but its determinism and diagnostic explainability for the compared scenarios are not established. Not directly comparable. | `s1eDeterministicOutputAndNoUnrequestedActions`, `s1eReportOutputRespectsSafePathBoundary`: OBSERVED_PASS |
+| 7 | Deterministic, explainable Text/JSON diagnostics | none identified in the Superpowers snapshot | UNKNOWN | No deterministic diagnostic output was identified in the consulted Superpowers material, and OpenCode V2 was not inspected. Not proof of absence. Not directly comparable. | `s1eDeterministicOutputAndNoUnrequestedActions`, `s1eReportOutputRespectsSafePathBoundary`: OBSERVED_PASS |
 | 8 | No unexpected read-only workflow dispatch | none identified | UNKNOWN | Native workflows dispatch subagents by design when invoked; no read-only diagnosis mode equivalent was identified or ruled out. Not directly comparable. | Injected-read spy only; M4 remains SKIPPED_UNPROVEN |
 
 No claim of Justice superiority, detection rate, or improvement is made. Rows
 marked DOCUMENTED may overlap with Justice functionality; the overlap is not
 measured here.
+
+### Historical / Supplementary Reference (not part of the Native-only baseline)
+
+An earlier draft of this packet also read a local oh-my-openagent checkout
+(package 5.1.2, 28 commits after `v5.1.2`, commit
+`9cc59fd9c1ec9a9f4c85c9f49ca22d13b6f2e0ab`, path `program/oss/oh-my-openagent`
+relative to `$HOME`). OmO is outside the Design section 6 baseline, so none of
+the following counts as a Superpowers + OpenCode V2 capability or as
+evidence for any dimension above. It is retained for context only.
+
+- `docs/guide/orchestration.md` line 171 documents a per-checkbox evidence
+  ledger (`.omo/ulw-execute/ledger.jsonl`) and independent reviewer
+  verification of a worker's done claim.
+- `docs/guide/orchestration.md` line 311 mentions exact files in scope.
+- `docs/guide/binary-install.md` contains only release-binary checksums.
+
+Because OmO is excluded, dimensions 2 and 7 are UNKNOWN and not directly
+comparable; they are not read as absence of Native capability.
 
 ## 4. Operational Effectiveness
 
@@ -152,14 +174,15 @@ acceptance or authority promotion), none observed.
 
 ## 6. Residual risks and unapproved areas
 
-- The test file is uncommitted. Reproducibility depends on retaining the file
-  matching the SHA-256 above.
+- The test file was uncommitted at execution time and is now committed in
+  `bec8099f` (Git blob and SHA-256 recorded in section 1). The CI evidence there
+  is separate from the recorded host run.
 - The run used the host runtime, not the devcontainer.
 - Case rows reflect assertions, not dumped runtime values.
 - M4 side effects outside the injected source, and Host behavior, are unproven.
-- The Native comparison rests on local snapshots of Superpowers v6.4.2 and OmO
-  5.1.2+28 and has no OpenCode V2 host version; it contains no implementation
-  inspection or prior traces.
+- The Native comparison rests on a local snapshot of Superpowers v6.4.2 and has
+  no OpenCode V2 host version; it contains no implementation inspection or
+  prior traces. OmO material is supplementary only.
 - Fixture coverage is a single Design, Plan, and two Tasks. It does not cover
   other shapes or real repositories.
 - Operational effectiveness is wholly unmeasured.
@@ -173,8 +196,8 @@ These are options only. The Owner chooses; this document does not.
 | Option | Meaning | Consistency with the evidence |
 | --- | --- | --- |
 | `ACCEPT_S1_MVP` | Accept S1 functional MVP as exercised | Evidence shows 15 of 15 tests passing with no observed failure or false acceptance; M4 and Native evidence gaps would be accepted as is |
-| `ACCEPT_WITH_LIMITATIONS` | Accept and record the limitations in section 6 | The evidence is most directly consistent with this option, given the unproven M4 areas, UNKNOWN Native dimensions, and the uncommitted test file |
-| `DEFER` | Postpone the decision pending more evidence, such as committing the test, a devcontainer run, or further Native sourcing | Consistent if the Owner wants the gaps closed first |
+| `ACCEPT_WITH_LIMITATIONS` | Accept and record the limitations in section 6 | The evidence is most directly consistent with this option, given the unproven M4 areas and UNKNOWN Native dimensions |
+| `DEFER` | Postpone the decision pending more evidence, such as a devcontainer run or further Native sourcing | Consistent if the Owner wants the gaps closed first |
 | `REJECT` | Do not accept S1 as MVP | No observed failure or safety failure supports this option |
 
 Stopping point: this artifact. No further work is triggered by it.
