@@ -143,7 +143,7 @@ For S1-d fallback under Evidence source failure, compare `scopeFallback` separat
 - Do not turn S1-b coverage `MATCHED_REF_PRESENT` into AC completion or Evidence authenticity.
 - Keep claimant-provided execution status separate from observed execution evidence.
 - Do not equate CLI `exitCode: 0` with assurance PASS.
-- Repeated runs of deterministic fixtures should produce the same relevant diagnostic output. Existing S1-c-validated repository-relative paths may be displayed in S1-d Text/JSON diagnostics; do not blanket-redact them. Host absolute paths, secrets, and raw exception strings must not be emitted in either format. Assert these conditions under existing S1-c input validation and S1-d Formatter behavior, without inventing a new redaction contract.
+- Repeated runs of deterministic fixtures should produce the same relevant diagnostic output. Existing S1-c-validated repository-relative paths and syntactically valid identifiers such as `issuerId`/`originId` may appear in S1-d Text/JSON; do not claim blanket non-output or secret redaction for these values. **Fixture precondition:** no secret values or markers are placed in any output-eligible identifier or validated relative path. Only for fixtures meeting that condition, verify the validated S1-d pipeline does not expose rejected Host absolute paths, raw exception strings or markers carried only by rejected inputs/thrown errors. Do not use fabricated unsafe reports to claim broader safety; retain existing S1-d Formatter behavior unchanged.
 - A normal fixture must not induce unrelated workflow dispatch or external writes; test only interfaces and absence-of-side-effect guarantees that can actually be observed in the authorized test scope.
 
 ## 6. Native-only capability comparison
@@ -182,7 +182,7 @@ Use previously collected Native evidence only. No live source instrumentation, e
 
 ### A. Functional Acceptance
 
-For each case record fixture identity/digest, target HEAD, test/command **actually executed**, assertion name, expected/observed diagnostic fields, and outcome. Allowed reporting statuses include:
+For each case record fixture identity/digest, target HEAD, the executed test file path and exact test-code identity (immutable content snapshot, or SHA-256 plus retrievable matching source/patch), execution-time working-tree state (staged, unstaged, and untracked paths), test/command **actually executed**, assertion name, expected/observed diagnostic fields, and outcome. Preserve the exact bytes or reconstructable patch of uncommitted tests: HEAD alone, or a hash without obtainable contents, cannot establish reproducibility. Allowed reporting statuses include:
 
 - `OBSERVED_PASS`: executed and assertion observed passing.
 - `OBSERVED_FAIL`: executed and assertion observed failing.
