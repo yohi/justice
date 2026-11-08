@@ -1,13 +1,13 @@
 # Justice v6 — S1-d Integrated CLI / Explainable Report
 
-> **Design:** R0.1.1 — F-001 / F-002 bounded correction candidate (supersedes Design R0.1 text only after Owner adoption)
-> **Source baseline:** `yohi/justice` commit `9d00ed7b03c28424a5a2d1fc19bf5bd509f587c8`, branch `feature/justice-v6-s1d-cli-explainable-report-design-20261108`
+> **Design:** R0.1.1 — F-001 / F-002 with F-001-A bounded consistency correction candidate (details not Owner-adopted)
+> **Source baseline:** `yohi/justice` Reviewed HEAD `dea31f40591161b8830aedadcd3c13d2dbdb19da`, branch `feature/justice-v6-s1d-cli-explainable-report-design-20261108`
 > **Issue:** [#353](https://github.com/yohi/justice/issues/353)
 > **Decision:** `S1D_INTEGRATED_DIAGNOSTIC_CLI_WITH_PURE_REPORT_FORMATTER`
 > **Decision authority:** Human Owner approved the architecture direction in the brainstorming conversation on 2026-11-08 (JST). The detailed design, including this correction, is not Owner-adopted.
 > **Scope:** DOCUMENT_ONLY / DESIGN_ONLY / READ_ONLY CLI specification. No source edits, implementation, tests, CI, Host Probe, Gate/HOLD change, or downstream task authorized.
 > **Dependency:** Existing S1-a / S1-b / S1-c core contracts; final S1-e comparison remains separate. Implementation Plan is not yet created.
-> **Correction limit:** F-001 (§5, §6, §8, §10) and F-002 (§7, §9, §10), plus directly necessary cross-references. No new review or fix loop.
+> **Correction limit:** F-001 and F-002 retained; F-001-A limited consistency correction in §6, §6.1, §7 and §10 (plus directly necessary metadata/checkpoint text). No new Architecture Decision, review or fix loop.
 
 ## 1. Purpose, value, and stopping boundary
 
@@ -143,31 +143,37 @@ The `inputIssues` in §7 describe only Level A failures. Each source produces at
 3. Execute S1-a `loadS1aArtifacts` using the existing read-only source, capturing bounded Plan bytes. Its own invalid/missing inputs are reported by the S1-a Core where possible.
 4. If Evidence has a parsed JSON value (whether Core-valid or Core-invalid), call S1-b `bindEvidence` with the exact S1-a `LoaderResult`; it alone yields `EVALUATED`, `BASELINE_UNKNOWN`, or `INPUT_REJECTED`. If Evidence has Level A failure, S1-b stage is `NOT_EVALUATED`.
 5. If Evidence and ChangeSet both have parsed JSON values and a uniquely associated captured Plan exists, invoke S1-c `evaluateS1c` with the exact S1-a baseline, Plan bytes, and both parsed values. Its built-in S1-b validation and ChangeSet inspector deliberately continue independently: an Evidence Core failure does **not** erase a valid candidate-scope comparison; a ChangeSet Core failure does **not** erase Evidence-related diagnostics. The Core may return `S1B_INPUT_REJECTED` / `CHANGESET_INVALID` alongside other diagnostics. Keep the returned `S1cResult` unmodified.
-6. If Evidence has a **Level A** failure, ChangeSet is parsed, and a valid Plan capture/baseline exists, S1-c cannot be called with valid full input. Keep S1-c `NOT_EVALUATED`, but optionally produce the explicitly separate `scopeFallback` (§7) using **only existing** `inspectBaseline`, `extractTaskScopePolicy`, `inspectChangeSet`, and `compareCandidatePaths`. Verify captured Plan association and SHA-256 against selected Plan's expected/observed digest before invoking those primitives. This fallback cannot produce an `S1cResult`, formal verdict, or Evidence diagnostic; it displays *candidate scope comparison only* and must state `NO_FORMAL_S1C_RESULT`.
-7. If ChangeSet has a **Level A** failure, Evidence may still yield a full S1-b Core result. S1-c is `NOT_EVALUATED`, and no ChangeSet comparison is claimed. Do not call S1-c with a made-up `UNAVAILABLE` ChangeSet. If both are Level A-invalid, retain S1-a and both input issues.
+6. If Evidence has a **Level A** failure and ChangeSet has a parsed JSON value (including Core-invalid or explicit `UNAVAILABLE`), the full S1-c input is unavailable: set the S1-c stage to `NOT_EVALUATED` and **MUST include exactly one** separate `scopeFallback` (§7). This presence rule applies even when the S1-a baseline is not `READY`, the captured Plan is unavailable, or the ChangeSet fails Core validation: those cases yield `scopeFallback.state: NOT_EVALUATED`, not an omitted field. Evaluate candidate scope **only** when `inspectBaseline` is `READY`, `inspectChangeSet` is `PRESENT`, the Plan snapshot is uniquely associated and digest-matched, and `extractTaskScopePolicy` is `READY`; then use existing `compareCandidatePaths` and set `scopeFallback.state: EVALUATED`. Use **only** existing S1-c scope primitives plus the existing required Plan SHA-256/association checks. Never produce an `S1cResult`, formal verdict, or Evidence diagnostic from the fallback; the fallback's evaluated form must state `NO_FORMAL_S1C_RESULT`.
+7. If ChangeSet has a **Level A** failure, Evidence may still yield a full S1-b Core result. S1-c is `NOT_EVALUATED`, and no ChangeSet comparison is claimed. `scopeFallback` **MUST be omitted** because no parsed ChangeSet exists, even when Evidence also has a Level A failure. Do not call S1-c with a made-up `UNAVAILABLE` ChangeSet. If both are Level A-invalid, retain S1-a and both input issues.
 8. Project immutable results, validated reported provenance (§7), input issues, and any scope-only fallback; render exactly one Text or JSON record (§8).
 
 **Stage state is separate from a Core result:**
 
 - `EVALUATED` means the actual corresponding Core returned a result. That result may contain `MISMATCH`, `UNKNOWN`, `INPUT_REJECTED`, or `CHANGESET_INVALID`.
 - `NOT_EVALUATED` means no corresponding Core result was computed. Stable `reason` is one of `EVIDENCE_SOURCE_UNAVAILABLE`, `CHANGESET_SOURCE_UNAVAILABLE`, `PLAN_SNAPSHOT_UNAVAILABLE`, `PREREQUISITE_UNAVAILABLE`, or `INPUT_SOURCE_UNAVAILABLE` (for S1-a failure outside its own recoverable result). No synthetic Core result is created.
-- `scopeFallback` is **not S1-c stage evaluation**. It is a clearly separated use of existing S1-c scope primitives when full S1-c input cannot be supplied. `state` is `EVALUATED` only when existing primitives established a valid comparison; otherwise `NOT_EVALUATED` with an existing-policy or prerequisite reason. This fallback is omitted when S1-c is `EVALUATED` or when only ChangeSet source is missing.
+- `scopeFallback` is **not S1-c stage evaluation**. In any constructible **partial report**, it is present **if and only if** Evidence has a Level A failure **and** ChangeSet has a parsed JSON value; S1-c is then `NOT_EVALUATED`. Fatal-error records (§8) never contain `scopeFallback`. For every other case (both parsed, or ChangeSet Level A failure), omit `scopeFallback` entirely, rather than emit `null` or an invented comparison. The fallback cannot change the S1-c stage state or existing S1-c diagnostic ordering.
+- **Fixed fallback decision order:** (a) `inspectBaseline` must be `READY`; otherwise fallback is `NOT_EVALUATED/PREREQUISITE_UNAVAILABLE` even when Plan bytes were captured (S1-c itself does not compare Scope for a `NOT_READY` baseline). (b) Run `inspectChangeSet` on parsed input: `INVALID` => `NOT_EVALUATED/CHANGESET_INVALID`; `UNAVAILABLE` => `NOT_EVALUATED/CHANGESET_UNAVAILABLE`; only `PRESENT` continues. (c) Require a unique selected Plan snapshot bound to the manifest, with bytes matching both selected `expectedDigest` and `observedDigest` and digest outcome `MATCH`; otherwise `NOT_EVALUATED/PLAN_SNAPSHOT_UNAVAILABLE`. (d) Use `extractTaskScopePolicy`; `UNDEFINED`, `INVALID`, and `REFERENCE_MISMATCH` each yield the corresponding `NOT_EVALUATED` reason. (e) Only for all prerequisites satisfied, use `compareCandidatePaths` to emit `EVALUATED` with the existing candidate comparison and `outsidePaths`. No fallback path asserts verified ChangeSet completeness or Owner approval.
 - If no valid selected Plan bytes exist, S1-c `NOT_EVALUATED` even if S1-b returned a useful result. If S1-a's baseline is `NOT_READY` but the Plan capture exists, S1-c may still be invoked so its existing `S1A_BASELINE_NOT_READY` diagnostic can be preserved. Do not create a new authorization check.
 
 ### 6.1 Required outcome matrix
 
-Here `E` = `EVALUATED`, `NE` = `NOT_EVALUATED`; `R` = JSON `justice-s1d-report-v1` or its Text equivalent; all lines end in `\n`. `scopeFallback` is only eligible with a valid captured Plan and parsed, valid ChangeSet.
+Here `E` = `EVALUATED`, `NE` = `NOT_EVALUATED`; `R` = JSON `justice-s1d-report-v1` or its Text equivalent; all lines end in `\n`. All rows assume a valid CLI invocation except the two fatal rows. **Scope-comparison expectations** in the `E` fallback case require S1-a `inspectBaseline: READY`, a uniquely captured/digest-matched Plan, a parsed Core-valid `ChangeSet` with `availability: PRESENT`, and a `READY` scope policy. When baseline is `NOT_READY`/`MALFORMED`, existing S1-c does not compare Scope, and the fallback must also not compare it. The fallback **presence rule** (§6) depends only on Evidence Level A failure plus parsed ChangeSet; successful Scope comparison requires the stricter prerequisites. All Level A rows that produce `R` also carry the respective `inputIssues`; no `R` implies acceptance or a fabricated formal verdict.
 
 | Inputs / situation | S1-a | S1-b | S1-c | Other result | Exit | stdout |
 | --- | --- | --- | --- | --- | --- | --- |
-| All decodable and Core-valid; Plan captured | E | E | E | `formalVerdict: UNKNOWN` preserved | `0` | `R` |
-| Evidence parses but fails Core validation (invalid shape, duplicate ID, etc.), valid ChangeSet | E | E (`INPUT_REJECTED`) | E (`S1B_INPUT_REJECTED`; valid scope retained) | `provenance` withheld | `0` | `R` |
-| ChangeSet parses but fails Core validation, valid Evidence | E | E | E (`CHANGESET_INVALID`; evidence retained) | No candidate scope claimed | `0` | `R` |
-| Evidence Level A failure, valid ChangeSet | E | NE | NE | `inputIssues`; `scopeFallback` E when prerequisites valid | `3` | `R` |
-| ChangeSet Level A failure, valid Evidence | E | E | NE | `inputIssues`; no scope fallback | `3` | `R` |
-| Both new sources Level A-invalid | E | NE | NE | Two input issues; no invented input | `3` | `R` |
-| Plan missing/unbound, other inputs decodable | E | E | NE | `PLAN_SNAPSHOT_UNAVAILABLE`; no formal S1-c result | `3` | `R` |
-| Valid CLI but S1-a candidate mismatch, captured Plan exists | E | E (possibly `BASELINE_UNKNOWN`) | E (possibly `S1A_BASELINE_NOT_READY`) | Preserve every Core status | `0` | `R` |
+| All decodable and Core-valid; Plan captured; baseline `READY` | E | E | E | `formalVerdict: UNKNOWN` preserved; actual scope per Core | `0` | `R` |
+| Evidence parses but fails Core validation; baseline `READY`, valid `PRESENT` ChangeSet/policy/Plan | E | E (`INPUT_REJECTED`) | E (`S1B_INPUT_REJECTED`; valid scope retained) | `provenance` withheld; fallback **omitted** | `0` | `R` |
+| ChangeSet parses but fails Core validation; valid Evidence | E | E | E (`CHANGESET_INVALID`; evidence retained) | No candidate scope claimed; fallback **omitted** | `0` | `R` |
+| Evidence Level A failure; parsed `PRESENT` ChangeSet; baseline `READY`, Plan and policy `READY` | E | NE | NE | `inputIssues`; fallback **present/E**, candidate scope only, no formal verdict | `3` | `R` |
+| Evidence Level A failure; parsed `PRESENT` ChangeSet; baseline `NOT_READY` | E | NE | NE | fallback **present/NE** (`PREREQUISITE_UNAVAILABLE`); no scope comparison even if Plan captured | `3` | `R` |
+| Evidence Level A failure; parsed `PRESENT` ChangeSet; baseline `READY` but Plan snapshot missing/unbound | E | NE | NE | fallback **present/NE** (`PLAN_SNAPSHOT_UNAVAILABLE`); no scope comparison | `3` | `R` |
+| Evidence Level A failure; parsed `PRESENT` ChangeSet; baseline/Plan `READY`, scope policy not `READY` | E | NE | NE | fallback **present/NE** (`SCOPE_POLICY_UNDEFINED` / `SCOPE_POLICY_INVALID` / `SCOPE_POLICY_REFERENCE_MISMATCH`) | `3` | `R` |
+| Evidence Level A failure; parsed ChangeSet explicitly `UNAVAILABLE`; baseline `READY` | E | NE | NE | fallback **present/NE** (`CHANGESET_UNAVAILABLE`) | `3` | `R` |
+| Evidence Level A failure; parsed Core-invalid ChangeSet; baseline `READY` | E | NE | NE | fallback **present/NE** (`CHANGESET_INVALID`) | `3` | `R` |
+| ChangeSet Level A failure, valid Evidence | E | E | NE | `inputIssues`; fallback **omitted** | `3` | `R` |
+| Both new sources Level A-invalid | E | NE | NE | Two input issues; fallback **omitted**, no invented input | `3` | `R` |
+| Plan missing/unbound, both new inputs decodable | E | E | NE | `PLAN_SNAPSHOT_UNAVAILABLE`; fallback **omitted** | `3` | `R` |
+| Valid CLI but S1-a candidate mismatch, Plan captured, both inputs parsed | E | E (possibly `BASELINE_UNKNOWN`) | E (possibly `S1A_BASELINE_NOT_READY`) | Actual S1-c Scope `UNKNOWN` when baseline `NOT_READY`; fallback **omitted** | `0` | `R` |
 | Invalid CLI grammar | NE | NE | NE | Fatal error (§8), no report | `64` | `justice-s1d-error-v1` / Text fatal |
 | Unexpected internal failure | No guaranteed results | No guaranteed results | No guaranteed results | Fatal error (§8), no invented results | `70` | `justice-s1d-error-v1` / Text fatal |
 
@@ -221,7 +227,7 @@ type ScopeFallback =
       state: "NOT_EVALUATED";
       reason: "PREREQUISITE_UNAVAILABLE" | "PLAN_SNAPSHOT_UNAVAILABLE" |
         "SCOPE_POLICY_UNDEFINED" | "SCOPE_POLICY_INVALID" |
-        "SCOPE_POLICY_REFERENCE_MISMATCH" | "CHANGESET_INVALID";
+        "SCOPE_POLICY_REFERENCE_MISMATCH" | "CHANGESET_INVALID" | "CHANGESET_UNAVAILABLE";
     }>;
 
 type S1dReportV1 = Readonly<{
@@ -235,12 +241,12 @@ type S1dReportV1 = Readonly<{
   }>;
   inputIssues: readonly InputIssue[];
   provenance: ProvenanceProjection;
-  scopeFallback?: ScopeFallback;
+  scopeFallback?: ScopeFallback; // required iff Evidence Level A and ChangeSet parsed; omitted otherwise
   limitations: readonly string[];
 }>;
 ~~~
 
-`StageSkipReason` in this document denotes the fixed §6 list of skip reasons, not arbitrary error text. All new report-only types are **proposed** and do not change existing Core types.
+`StageSkipReason` in this document denotes the fixed §6 list of skip reasons, not arbitrary error text. `scopeFallback?` represents **conditional field presence**, not optional execution under the trigger: with Evidence Level A failure and parsed ChangeSet, emit exactly one `ScopeFallback` whose state follows the fixed §6 decision order; otherwise omit the field entirely. `NOT_EVALUATED` requires a listed reason and must not carry `candidateScopeComparison`, `outsidePaths`, or `formalVerdictAvailable`. An `EVALUATED` fallback is allowed only after the existing primitives established an actual candidate-scope comparison; its `formalVerdictAvailable` stays `false`. These are report-only types; no Core type or evaluator order changes.
 
 ### 7.1 Provenance projection is all-or-nothing and declarative
 
@@ -259,7 +265,7 @@ The words `issuerId`, `originId`, and `provenanceClass` refer to **reported sour
 - Preserve `LoaderResult`, `BinderResult`, and `S1cResult` exactly as returned, including UNKNOWN, reason codes, Evidence IDs, diagnostics, candidate-scope comparison, reported claims, and limitations. No cross-stage formal PASS/FAIL.
 - JSON uses deterministic property ordering, stable array ordering, and exactly one newline-terminated record. Provenance is separate from `stages.s1b.result`; report-only field names cannot masquerade as Core proof.
 - Text renders the **same** reported provenance claims with labels `reported issuer`, `reported origin`, `reported provenance class`, and `authenticity not verified`; if withheld, show `Evidence source claims: WITHHELD (reason)` rather than any partial IDs.
-- A scope-only fallback is visibly labeled `candidate scope only (S1-c full evaluation NOT_EVALUATED)`. Its `outsidePaths` are derived from the existing S1-c primitives and are **not** proof of ChangeSet completeness. It does not print `Formal verdict: UNKNOWN`, because no `S1cResult` exists; print `Formal verdict: NOT_EVALUATED` as a presentation label.
+- If fallback `EVALUATED`, Text visibly labels it `candidate scope only (S1-c full evaluation NOT_EVALUATED)` and renders the validated `outsidePaths`. If fallback `NOT_EVALUATED`, Text reports `candidate scope only: NOT_EVALUATED (reason)` with **no** path comparison, including on S1-a baseline `NOT_READY`. In both forms, the formatter prints `Formal verdict: NOT_EVALUATED` as a **presentation label only**, because no `S1cResult` exists; never print a synthetic `formalVerdict: UNKNOWN`. An `EVALUATED` fallback is not proof of ChangeSet completeness.
 - The report-level `limitations` is the deterministic, deduplicated, lexically ordered union of evaluated stage limitations plus relevant S1-d boundaries including `OWNER_AUTHORITY_NOT_PROVEN`, `DECLARED_PROVENANCE_NOT_VERIFIED`, and, for fallback, `NO_FORMAL_S1C_RESULT`; it does not erase stage-native limitations.
 - Do not include invocation time, random IDs, environment variables, process IDs, absolute host paths, or raw unvalidated input bytes. Escape every textual identifier/path to prevent control-character spoofing. No unbounded raw JSON dumps or arbitrary exception strings.
 - `formatText(report)` and `formatJson(report)` are pure: the same immutable input yields byte-identical output without filesystem, clock, process state, network, or policy decisions.
@@ -333,10 +339,16 @@ type S1dFatalErrorV1 = Readonly<{
 | All inputs valid, S1-a ready, within/outside candidate scope | All stages `EVALUATED`, exit `0`, one report record; `formalVerdict` remains `UNKNOWN` |
 | Evidence strict JSON parsed but violates Core schema (non-array, duplicate ID, bad provenanceClass, >128) | S1-b `INPUT_REJECTED`; S1-c `S1B_INPUT_REJECTED`; valid Scope remains available; exit `0`; provenance `WITHHELD` with no partial claims |
 | ChangeSet strict JSON parsed but Core-invalid (bad shape or invalid entry) | S1-b retains valid Evidence binding/coverage; S1-c emits `CHANGESET_INVALID`; exit `0`, candidate Scope unknown, Evidence provenance retained only if fully valid |
-| Evidence read error, oversize, invalid UTF-8, invalid JSON or duplicate JSON key (separate cases) | S1-b/S1-c `NOT_EVALUATED`; `inputIssues` source=`evidence`; valid Plan+ChangeSet scope-only fallback evaluated; exit `3`; one partial report, no invented Evidence |
-| ChangeSet read error, oversize, invalid UTF-8, invalid JSON or duplicate key (separate cases) | S1-b `EVALUATED` with genuine Evidence result; S1-c `NOT_EVALUATED`; no scope fallback; exit `3`; one partial report, no invented `UNAVAILABLE` |
+| Evidence read error, oversize, invalid UTF-8, invalid JSON or duplicate JSON key (separate cases); baseline `READY` with captured Plan, `PRESENT` valid ChangeSet and `READY` policy | S1-b/S1-c `NOT_EVALUATED`; fallback **required/EVALUATED** with valid candidate-scope comparison, exit `3`, one partial report; no invented Evidence |
+| ChangeSet read error, oversize, invalid UTF-8, invalid JSON or duplicate key (separate cases) | S1-b `EVALUATED` with genuine Evidence result; S1-c `NOT_EVALUATED`; fallback **omitted**; exit `3`; one partial report, no invented `UNAVAILABLE` |
+| Evidence Level A, ChangeSet valid `PRESENT`, baseline `NOT_READY` despite a captured Plan | Fallback **present/NOT_EVALUATED** (`PREREQUISITE_UNAVAILABLE`), no `compareCandidatePaths` call, no `outsidePaths`; S1-c `NOT_EVALUATED`; exit `3`; one partial `R` |
+| Evidence Level A, ChangeSet valid `PRESENT`, baseline `READY`, Plan bytes/association missing | Fallback **present/NOT_EVALUATED** (`PLAN_SNAPSHOT_UNAVAILABLE`), no scope comparison; exit `3`; one partial `R` |
+| Evidence Level A, ChangeSet valid `PRESENT`, baseline and Plan `READY`, policy `UNDEFINED`/`INVALID`/`REFERENCE_MISMATCH` | Fallback **present/NOT_EVALUATED** with respective policy reason, no candidate scope or formal verdict; exit `3`; one partial `R` |
+| Evidence Level A, ChangeSet parsed `UNAVAILABLE` or Core-invalid with baseline `READY` (separate cases) | Fallback **present/NOT_EVALUATED** with `CHANGESET_UNAVAILABLE` or `CHANGESET_INVALID` respectively; no synthetic `PRESENT`; exit `3`; one partial `R` |
+| Evidence Level A and ChangeSet Level A simultaneously | Fallback **omitted**; S1-b/S1-c `NOT_EVALUATED`, both input issues retained, exit `3`; one partial `R` |
+| Evidence Core-invalid (Level B), ChangeSet valid; baseline `NOT_READY` | S1-b returns `INPUT_REJECTED`; S1-c runs and preserves existing `S1A_BASELINE_NOT_READY` with candidate Scope `UNKNOWN`; fallback **omitted**, exit `0` |
 | Both new files undecodable | S1-a report retained, two distinct input issues, S1-b/S1-c skipped, exit `3` |
-| Missing/bad Plan snapshot or non-ready S1-a | Existing S1-a findings retained; S1-c run only if original prerequisites exist, otherwise `NOT_EVALUATED` and explicit reason; no fake formal result |
+| Missing/bad Plan snapshot or non-ready S1-a | Existing S1-a findings retained; when both inputs parse **and Plan bytes are captured**, S1-c runs with its unchanged precondition/order and returns `S1A_BASELINE_NOT_READY` with Scope `UNKNOWN` for non-ready S1-a; fallback is omitted. When Plan bytes are missing, S1-c is `NOT_EVALUATED`. When Evidence is Level A and ChangeSet parses, fallback is **present/NOT_EVALUATED** with `PREREQUISITE_UNAVAILABLE` for non-ready baseline, or `PLAN_SNAPSHOT_UNAVAILABLE` for missing/bad snapshot after a ready baseline. No fake formal result |
 | Valid but empty Evidence array | `CLAIMS_AVAILABLE` with zero claims; no claimed execution success or AC satisfaction |
 | Two valid EvidenceRefs with distinct declared issuer/origin/provenance | JSON claims and Text claim rows match by Evidence ID and values, sorted deterministically; both label declarations as `NOT_VERIFIED` |
 | One malformed EvidenceRef among otherwise valid refs | `inspectEvidenceRefs` rejects entire batch; `provenance: WITHHELD` and `claims: []` for Text **and** JSON; no partial trusted metadata |
@@ -353,11 +365,11 @@ Future implementation verification, **not executed here**: deterministic core-re
 
 ## 11. Scope, residual risks, and Human Owner checkpoint
 
-**This limited documentation task stops when** F-001 and F-002 are reflected in this one Design R0.1.1 candidate and handed to the Human Owner. The original R0.1 GitHub commit and its identity must not be silently changed. No independent review, follow-up correction loop, GitHub write, or next task is automatically authorized.
+**This limited documentation task stops when** F-001-A is reconciled in this one Design R0.1.1 candidate while preserving F-001 and F-002, and the result is handed to the Human Owner. The original R0.1 GitHub commit and its identity must not be silently changed. No independent review, follow-up correction loop, GitHub write, or next task is automatically authorized.
 
 **Owner decisions already made:** Integrated input-to-diagnostics CLI, existing-core reuse, pure formatter, Text/JSON, READ_ONLY, preservation of `formalVerdict: UNKNOWN` and other trust boundaries, no result-import mode in MVP.
 
-**Design calls proposed here (not independently Owner approved):** CLI flags, input byte caps, per-file Level A/Level B separation, scope-only fallback using S1-c primitives, JSON envelope with `inputIssues`/`provenance`/`scopeFallback`, exit codes `0/3/64/70`, all-or-nothing provenance policy, and suggested module layout.
+**Design calls proposed here (not independently Owner approved):** CLI flags, input byte caps, per-file Level A/Level B separation, the now-deterministic presence and evaluation rules for scope-only fallback using S1-c primitives, JSON envelope with `inputIssues`/`provenance`/`scopeFallback`, exit codes `0/3/64/70`, all-or-nothing provenance policy, and suggested module layout.
 
 **Remaining risk:** The fallback and narrowly guarded untrusted parsed-input boundary need implementation-time verification against current Core invariants. S1-a filesystem race freedom, Owner authorization, Evidence authenticity, actual Host execution, ChangeSet completeness and supersession remain unproven. None are silently promoted to proof. Unknown/unevaluated cases are not observed failures.
 
@@ -365,4 +377,4 @@ Future implementation verification, **not executed here**: deterministic core-re
 
 **Implementation-entry prerequisites:** Owner adoption of this detailed Design; a separately authorized Implementation Plan with confirmed agreement on terminology, types/interfaces, error behavior, tests and non-functional requirements; separately granted code-implementation authority. The missing plan is **NOT YET VERIFIED**, not a design/plan inconsistency that has already been observed.
 
-**Owner checkpoint:** Accept this Design R0.1.1 candidate, request a specifically bounded correction, or stop design work. New Findings or version changes do not automatically trigger re-review. After the requested document correction, **the task ends here**.
+**Owner checkpoint:** Decide whether to adopt the F-001-A-limited Design R0.1.1 candidate, request a specifically bounded correction, or stop design work. New Findings or version changes do not automatically trigger re-review. After the requested document correction, **the task ends here**.
