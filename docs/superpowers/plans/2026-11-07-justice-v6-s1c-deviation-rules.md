@@ -8,9 +8,9 @@
 
 **Tech Stack:** TypeScript (ES2022/ESNext), Node `node:crypto`, existing S1-a `parseStrictJson`, S1-b `inspectBaseline`/`bindEvidence`, Bun, Vitest. No new dependencies, Host adapter, service, or persistent state.
 
-**Spec:** `docs/superpowers/specs/2026-11-07-justice-v6-s1c-deviation-rules-design.md` at immutable commit `93b4c01931d9f3769c039b4e9b12c128d11a424a`, Git Blob SHA-1 `dd9a8afe83e4a08c3d4c047999efa212372bcc96` (Design R0.1.1 incorporating F001–F006; Human Owner adopted with limitations in this conversation). Branch locator: `feature/justice-v6-s1c-deviation-rules-design-20261107`. The Design file still contains its historical `R0.1.1_OWNER_DECISION_PENDING` status text; this reference does not assert that GitHub records the adoption decision. Issue: https://github.com/yohi/justice/issues/352.
+**Spec:** `docs/superpowers/specs/2026-11-07-justice-v6-s1c-deviation-rules-design.md` at immutable commit `4bad21ea7c79b43acae22423ea135279fff4577b`, Git Blob SHA-1 `dc1adc92e5c595508992b5e3f6fa72fcc57f4e88` (Design R0.1.1; Human Owner explicitly adopted this exact identity with limitations in the ChatGPT conversation). Branch locator: `feature/justice-v6-s1c-deviation-rules-implementation-20261107`. The Design file retains its historical `R0.1.1_OWNER_DECISION_PENDING` status text; this reference does not claim independent GitHub verification of Owner adoption. Issue: https://github.com/yohi/justice/issues/352.
 
-**Document/authority status:** Original R0.1 was adopted with limitations. The referenced R0.1.1 is committed but is still labeled `R0.1.1_OWNER_DECISION_PENDING`. This plan is a **DOCUMENT_ONLY implementation proposal** using that correction as a conditional technical input. **STOP before any code/test/commit unless Human Owner explicitly adopts or accepts R0.1.1 as the implementation basis and authorizes the bounded implementation.** The pre-existing D-3 permission to prepare an Implementation Plan does not authorize its execution. No GitHub writes are authorized by this planning request.
+**Document/authority status:** Original R0.1 was adopted with limitations. The Human Owner explicitly adopted the referenced R0.1.1 identity as the implementation basis and authorized the bounded implementation in the current conversation. This plan is therefore an implementation plan, not a `DOCUMENT_ONLY` proposal. The authorization covers only the S1-c scope and constraints recorded here; it does not authorize S2–S5, Host integration, approval mechanisms, or other excluded work. The current follow-up authorization is limited to (a) recognizing valid 0–3-space-indented ATX H1/H2 headings when ending the active Policy region and adding its regression test, and (b) clarifying the authorization wording in this plan. It also covers repository verification and commit/push of these correction changes only. It does not override or newly authorize any Task execution or Task-scoped commit step below; those conditional steps refer to the original implementation authorization and remain applicable to that work. The pre-existing D-3 permission to prepare an Implementation Plan was not execution authorization; the explicit authorizations above are the basis for execution.
 
 ## Global Constraints
 
@@ -44,10 +44,12 @@
 | File | Change | Responsibility |
 | --- | --- | --- |
 | `src/core/s1c/contract.ts` | Create | Import shared types; define strict S1-c input/result/diagnostic and pure helper types |
+| `src/core/s1c/shared-utils.ts` | Create | Shared record-key validation and UTF-8 byte ordering helpers |
 | `src/core/s1c/path-rules.ts` | Create | Validate ChangeSet and safe paths/allowlist; pure candidate path comparison |
 | `src/core/s1c/policy.ts` | Create | Recognize active Markdown Policy section; atomically parse/validate bounded JSON blocks |
 | `src/core/s1c/evaluator.ts` | Create | Envelope/shared baseline gate; Plan digest; independent Scope/Evidence branches; sorted immutable result |
 | `tests/core/s1c/path-rules.test.ts` | Create | Task 1 unit tests |
+| `tests/core/s1c/shared-utils.test.ts` | Create | Shared utility unit tests |
 | `tests/core/s1c/policy.test.ts` | Create | Task 2 unit tests |
 | `tests/core/s1c/evaluator.test.ts` | Create | Task 3 independent-branch and trust tests |
 | `tests/helpers/s1c-fixtures.ts` | Create | Build a real S1-a ready baseline with Plan artifact bytes matching the embedded Policy |
@@ -59,28 +61,34 @@ Do not edit `src/core/s1a/`, `src/core/s1b/`, existing S1-a/b tests, package dep
 
 **Files:**
 - Create: `src/core/s1c/contract.ts`
+- Create: `src/core/s1c/shared-utils.ts`
 - Create: `src/core/s1c/path-rules.ts`
 - Test: `tests/core/s1c/path-rules.test.ts`
+- Test: `tests/core/s1c/shared-utils.test.ts`
 
 **Interfaces:**
 - Import `LoaderResult`, `SelectedArtifactRef` from `../s1a/contract.js`; `EvidenceRefV1`, `BindingReasonCode` from `../s1b/contract.js`.
 - Export `S1cInput`, `S1cResult`, `S1cDiagnostic`, `DiagnosticCode`, `CandidateScopeComparison`, `DeviationVerdict`, `ChangeSet`, `ChangedPath`, `TaskScopePolicy`, and the frozen `S1C_LIMITATIONS` constant from `contract.ts`. Use the discriminated diagnostic union **exactly** as in Design §5; the binding mismatch arm requires `bindingReasonCodes: readonly BindingReasonCode[]`. Set `S1cResult.limitations` to `typeof S1C_LIMITATIONS` (mandatory fixed tuple), not `readonly string[]`.
+- Export from `shared-utils.ts`:
+  - `isPlainRecord(value: unknown): value is Record<string, unknown>`
+  - `hasExactKeys(value: unknown, expected: readonly string[]): value is Record<string, unknown>`
+  - `compareUtf8(left: string, right: string): number`
 - Export from `path-rules.ts`:
   - `validateAllowedPaths(value: unknown): readonly string[] | null`
   - `inspectChangeSet(value: unknown): {state:'PRESENT'; touchedPaths:readonly string[]} | {state:'UNAVAILABLE'} | {state:'INVALID'}`
   - `compareCandidatePaths(allowlist: readonly string[], touchedPaths: readonly string[]): {comparison:'WITHIN_CANDIDATE_SCOPE'|'OUTSIDE_CANDIDATE_SCOPE'; outsidePaths: readonly string[]}`
 - `compareCandidatePaths` is a pure comparator: it does **not** issue `NO_DEVIATION_DETECTED` as an authorized runtime verdict.
 
-- [ ] **Step 1: Write failing tests in `tests/core/s1c/path-rules.test.ts`.** Name and assert:
+- [ ] **Step 1: Write failing tests in `tests/core/s1c/path-rules.test.ts` and `tests/core/s1c/shared-utils.test.ts`.** In `shared-utils.test.ts`, cover plain/null-prototype records versus arrays/class instances, exact own keys including non-enumerable and symbol keys, and UTF-8 byte ordering including equality. In `path-rules.test.ts`, name and assert:
   - `exactAndDirectoryPrefixAreCaseSensitive`: `['src/core/s1c/**', 'docs/plan.md']` accepts `src/core/s1c/rules.ts` and `docs/plan.md` but rejects `src/core/s1b/rules.ts`, `src/core/s1c`, and `SRC/core/s1c/rules.ts`.
   - `renameChecksBothEndpoints`: `RENAME` from `src/core/s1b/x.ts` to `src/core/s1c/x.ts` reports exactly the outside *old* path.
   - `emptyAllowlistDiffersFromUnavailablePolicy`: `[]` plus `src/core/s1c/x.ts` is `OUTSIDE_CANDIDATE_SCOPE`; empty `PRESENT` changes yield `WITHIN_CANDIDATE_SCOPE` **for that snapshot**.
   - `changeSetRejectsWholeCollection`: valid and invalid changes together (`../secret`, absolute path, unexpected field, or sparse array) produce `{state:'INVALID'}`, not a valid subset.
   - `limitsAndPathSafety`: 129 changes, 129 allowlist entries, >1,024-byte path, `.`/`..`, double slash, backslash, leading slash, URL/drive syntax, and unsupported wildcard reject.
   - `permutationAndDuplicatePaths`: same set in different order gives the same sorted unique `outsidePaths`, sorted by UTF-8 byte order.
-- [ ] **Step 2: Run only the Task 1 test when implementation is authorized.** `bun run vitest run tests/core/s1c/path-rules.test.ts` → expected FAIL because the module or exports are not yet implemented.
-- [ ] **Step 3: Implement contract types and `path-rules.ts`.** Require exact `availability`-dependent ChangeSet keys (`UNAVAILABLE` has no `changes`; `PRESENT` has dense `changes` array). ADD/MODIFY/DELETE require just `kind,path`; RENAME just `kind,oldPath,newPath`. Reject null, unknown keys, invalid enums/paths and sparse arrays. `/**` matches descendants only; don't normalize any input. Use `Buffer.compare(Buffer.from(a,'utf8'),Buffer.from(b,'utf8'))` for stable sorting; dedupe outside-path diagnostics only after validating the full collection.
-- [ ] **Step 4: Rerun the Task 1 test.** `bun run vitest run tests/core/s1c/path-rules.test.ts` → expected PASS. (Planned command; not executed in this planning Task.)
+- [ ] **Step 2: Run only the Task 1 tests when implementation is authorized.** `bun run vitest run tests/core/s1c/path-rules.test.ts tests/core/s1c/shared-utils.test.ts` → expected FAIL because the modules or exports are not yet implemented.
+- [ ] **Step 3: Implement contract types, shared utilities, and `path-rules.ts`.** Add the `shared-utils.ts` functions listed above. Require exact `availability`-dependent ChangeSet keys (`UNAVAILABLE` has no `changes`; `PRESENT` has dense `changes` array). ADD/MODIFY/DELETE require just `kind,path`; RENAME just `kind,oldPath,newPath`. Reject null, unknown keys, invalid enums/paths and sparse arrays. `/**` matches descendants only; don't normalize any input. Use `Buffer.compare(Buffer.from(a,'utf8'),Buffer.from(b,'utf8'))` for stable sorting; dedupe outside-path diagnostics only after validating the full collection.
+- [ ] **Step 4: Rerun the Task 1 tests.** `bun run vitest run tests/core/s1c/path-rules.test.ts tests/core/s1c/shared-utils.test.ts` → expected PASS. (This parenthetical records the status during the original planning Task; it does not describe the current follow-up verification.)
 - [ ] **Step 5: Stop Task 1 at its verified contract.** When separately permitted to write Git commits, stage only its listed files and commit `feat(s1c): add bounded path comparison contract`. No push/review/next Task is implicit in this step.
 
 ### Task 2: Exact-Plan Policy Extraction
@@ -98,12 +106,13 @@ Do not edit `src/core/s1a/`, `src/core/s1b/`, existing S1-a/b tests, package dep
   - `singleExactActiveSectionAndBlock`: a column-zero `## Justice S1-c Task Scope Policies`, exact marker pair, and `{schemaVersion:'justice-s1c-task-scope-v1',planRef:{artifactId:'plan-1',revision:'R1'},taskRef:{artifactId:'task-1',revision:'R1'},scopeKey:'scope-1',allowedPaths:['src/core/s1c/**']}` → `READY`.
   - `policyExamplesAreNotActive`: the same heading/marker/JSON only in fenced `text` or `json`, `~~~` fence, blockquote, four-space indented code or ordinary HTML comment → `UNDEFINED`.
   - `mixedMarkdownOnlyActiveSectionCounts`: a fenced fake section before one active section plus quoted/indented fake markers inside it do not add Policy blocks; exact active block is selected.
-  - `unpairedNestedAlteredOrDuplicateMarkers`: malformed markers within active region, crossing its ending `# ` or `## ` heading, duplicated active heading or duplicate selected-Task blocks → `INVALID`.
+  - `unpairedNestedAlteredOrDuplicateMarkers`: malformed markers within active region, crossing its ending ATX H1/H2 heading, duplicated active heading or duplicate selected-Task blocks → `INVALID`.
+  - `indentedLevelOneOrTwoHeadingEndsActiveRegion`: ATX H1/H2 headings with zero to three leading spaces, including headings containing only `#` or `##`, end the active region.
   - `atomicPolicyInvalidityAcrossTasks`: malformed JSON or invalid path in **another Task**'s active block invalidates the entire Policy set.
   - `unknownSelectedTaskIsUndefined`; `selectedRevisionOrPlanMismatchIsReferenceMismatch`; `validExplicitEmptyAllowlistReady`.
   - `utf8AndBounds`: invalid UTF-8, UTF-8 BOM, bare CR, duplicate JSON keys, >128 blocks, >65,536-byte JSON or >128 entries → `INVALID`; code fences with unmatched internal markers are ignored.
 - [ ] **Step 2: Run only Task 2 tests after implementation authorization.** `bun run vitest run tests/core/s1c/policy.test.ts` → expected FAIL for missing extractor.
-- [ ] **Step 3: Implement one bounded, deterministic line scanner.** Verify strict UTF-8/no BOM/bare CR, then track fenced-code state (≤3 leading spaces, matching backtick/tilde run and closer rules), ordinary HTML comments, and ignored quoted/indented/list lines. Only the exact column-zero H2 heading opens the active region; a later column-zero `# ` / `## ` ends it. Only full-line markers inside the active region open/close blocks. Use `parseStrictJson` to reject duplicate keys; strict field whitelist; validate every recognized block before selecting exactly one by Task artifact ID. For mismatched selected Task revision, Plan ID/revision or Scope choose `REFERENCE_MISMATCH`; no block for selected Task is `UNDEFINED`. Never echo an unsafe source line.
+- [ ] **Step 3: Implement one bounded, deterministic line scanner.** Verify strict UTF-8/no BOM/bare CR, then track fenced-code state (≤3 leading spaces, matching backtick/tilde run and closer rules), ordinary HTML comments, and ignored quoted/indented/list lines. Only the exact column-zero H2 heading opens the active region; a later valid ATX H1/H2 heading with zero to three leading spaces—including a heading containing only `#` or `##`—ends it. Only full-line markers inside the active region open/close blocks. Use `parseStrictJson` to reject duplicate keys; strict field whitelist; validate every recognized block before selecting exactly one by Task artifact ID. For mismatched selected Task revision, Plan ID/revision or Scope choose `REFERENCE_MISMATCH`; no block for selected Task is `UNDEFINED`. Never echo an unsafe source line.
 - [ ] **Step 4: Run Task 1 and 2 tests.** `bun run vitest run tests/core/s1c/path-rules.test.ts tests/core/s1c/policy.test.ts` → expected PASS.
 - [ ] **Step 5: Stop Task 2 at its extractor contract.** If separately authorized to commit, stage only `policy.ts` and `policy.test.ts` and commit `feat(s1c): extract unambiguous task scope from plan`.
 
@@ -166,6 +175,6 @@ Do not edit `src/core/s1a/`, `src/core/s1b/`, existing S1-a/b tests, package dep
 
 **Definition of Done for an explicitly authorized implementation:** the small deterministic Core and tests described above work against the exact adopted Design; documented positive/negative/UNKNOWN fixture outputs are reproducible; S1-a/b contracts remain unchanged; `formalVerdict` never elevates unverified authority; no Host/workflow effects are introduced. **Finding count zero, repeated independent reviews, S2 integration, real Host evidence, and a complete Git-diff guarantee are not completion criteria.**
 
-**Stop and residual risks:** The R0.1.1 corrections must be accepted by Human Owner as the implementation baseline; no tests are executed by this plan. Runtime Owner approval verification, collection/completeness of ChangeSet, S1-b evidence authenticity/AC satisfaction, and external enforcement remain outside S1-c. An `UNKNOWN` result is nonblocking for ordinary Superpowers progression, but may not satisfy an independent acceptance/authority gate that requires proven authorization.
+**Stop and residual risks:** At original plan creation, the R0.1.1 corrections still required Human Owner acceptance as the implementation baseline and no tests had been executed; that records the planning-stage status, not the current follow-up verification. Runtime Owner approval verification, collection/completeness of ChangeSet, S1-b evidence authenticity/AC satisfaction, and external enforcement remain outside S1-c. An `UNKNOWN` result is nonblocking for ordinary Superpowers progression, but may not satisfy an independent acceptance/authority gate that requires proven authorization.
 
-**Handoff policy:** This plan is prepared for Owner review only. The Owner may approve its bounded implementation later, decline it, or defer implementation; no automatic next Task, independent review, write, PR, or Gate/HOLD change. If a plan correction is required, limit it to the concrete issue; do not begin a revision/re-review cycle by default.
+**Handoff policy:** At original plan handoff, this plan was prepared for Owner review only; the Owner could approve its bounded implementation later, decline it, or defer implementation. This historical handoff status does not supersede the explicit, narrowly scoped follow-up authorization above. No automatic next Task, independent review, PR, or Gate/HOLD change is authorized. If a plan correction is required, limit it to the concrete issue; do not begin a revision/re-review cycle by default.
