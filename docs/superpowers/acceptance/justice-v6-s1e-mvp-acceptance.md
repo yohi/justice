@@ -28,7 +28,9 @@ means the named test was reported as passing in the run above, nothing more.
 
 All fixtures come from the test-local factory `makeS1eFixture` inside the test
 file (identity: the file SHA-256 above). They use fixed artifact IDs
-(`design-1`, `plan-1`, `task-1`, `ac-1`, `ac-2`; Task-B exists only for N-03).
+(`design-1`, `plan-1`, `task-1`, `ac-1`, `ac-2`). Task-B (`task-2`) is added to
+the Manifest and served as an Artifact in every case; Evidence refers to Task-B
+only in N-03.
 The expected and observed fields below are the assertions in the test file; a
 test reported as passing means those assertions held.
 
@@ -92,7 +94,8 @@ Scope: Native-only means Superpowers + OpenCode V2 without Justice S1, as
 defined in Design section 6 and the Implementation Plan. oh-my-openagent (OmO)
 is not part of this baseline; earlier OmO observations are kept only in the
 separate supplementary subsection below and are not counted toward any
-dimension. No Native workflow was run and no instrumentation was added. Statements are based on local source or documentation snapshots only.
+dimension. No Native workflow was run and no instrumentation was added.
+Statements are based on local source or documentation snapshots only.
 Documentation silence is not treated as absence of a capability.
 
 Sources consulted (local snapshots, paths relative to `$HOME`):
