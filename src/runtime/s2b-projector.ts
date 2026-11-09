@@ -170,6 +170,214 @@ function toolParts(message: JsonRecord): readonly JsonRecord[] {
   return content.filter((part): part is JsonRecord => isRecord(part) && part["type"] === "tool");
 }
 
+type BindingConflicts = Readonly<{
+  messages: ReadonlySet<string>;
+  tools: ReadonlyMap<CorrelationBinding, ReadonlySet<string>>;
+}>;
+
+function findBindingConflicts(bindings: readonly CorrelationBinding[], tally: Tally): BindingConflicts {
+  const bindingsPerMessage = new Map<string, number>();
+  for (const binding of bindings) {
+    bindingsPerMessage.set(binding.messageId, (bindingsPerMessage.get(binding.messageId) ?? 0) + 1);
+  }
+  const messages = new Set([...bindingsPerMessage].filter(([, count]) => count > 1).map(([id]) => id));
+  tally.add("CONFLICT", messages.size);
+
+  const tools = new Map<CorrelationBinding, ReadonlySet<string>>();
+  for (const binding of bindings) {
+    if (messages.has(binding.messageId)) continue;
+    const seen = new Map<string, number>();
+    for (const tool of binding.tools) seen.set(tool.toolId, (seen.get(tool.toolId) ?? 0) + 1);
+    const colliding = new Set([...seen].filter(([, count]) => count > 1).map(([id]) => id));
+    tally.add("CONFLICT", colliding.size);
+    tools.set(binding, colliding);
+  }
+  return Object.freeze({ messages, tools });
+}
+
+type SelectionCounts = Pick<
+  Counts,
+  "conflictedBindings" | "foreignBindings" | "selectedBindings" | "explicitSelectedCandidates" | "rejectedCandidates" | "conflictedSelectedMessages"
+>;
+type CandidateSelection = Readonly<{
+  pending: readonly Candidate[];
+  selectedBindings: readonly CorrelationBinding[];
+  counts: SelectionCounts;
+}>;
+
+// Candidate diagnostics count unique (messageId, toolId) keys; Binding counters count entries.
+function selectCandidates(
+  bindings: readonly CorrelationBinding[],
+  selected: TaskIntent,
+  conflicts: BindingConflicts,
+  tally: Tally,
+): CandidateSelection {
+  const isSelectedTuple = (binding: CorrelationBinding): boolean =>
+    refEquals(binding.taskRef, selected.task) && binding.scopeKey === selected.scopeKey;
+  const pending: Candidate[] = [];
+  const selectedBindings: CorrelationBinding[] = [];
+  const conflictedSelectedKeys = new Set<string>();
+  const conflictedSelectedMessages = new Set<string>();
+  const counts: SelectionCounts = {
+    conflictedBindings: 0,
+    foreignBindings: 0,
+    selectedBindings: 0,
+    explicitSelectedCandidates: 0,
+    rejectedCandidates: 0,
+    conflictedSelectedMessages: 0,
+  };
+
+  for (const binding of bindings) {
+    if (conflicts.messages.has(binding.messageId)) {
+      counts.conflictedBindings++;
+      if (isSelectedTuple(binding)) {
+        conflictedSelectedMessages.add(binding.messageId);
+        for (const tool of binding.tools) conflictedSelectedKeys.add(toolKey(binding.messageId, tool.toolId));
+      }
+      continue;
+    }
+    const colliding = conflicts.tools.get(binding) ?? new Set<string>();
+    if (!isSelectedTuple(binding)) {
+      if (colliding.size === 0) {
+        counts.foreignBindings++;
+        tally.add("FOREIGN_TASK_EXCLUDED");
+      }
+      continue;
+    }
+    selectedBindings.push(binding);
+    counts.selectedBindings++;
+    const seenToolIds = new Set<string>();
+    for (const tool of binding.tools) {
+      if (seenToolIds.has(tool.toolId)) continue;
+      seenToolIds.add(tool.toolId);
+      counts.explicitSelectedCandidates++;
+      if (colliding.has(tool.toolId)) {
+        counts.rejectedCandidates++;
+        continue;
+      }
+      if (!selected.ac.some((ac) => refEquals(ac, tool.acRef))) {
+        tally.add("CORRELATION_MISMATCH");
+        counts.rejectedCandidates++;
+        continue;
+      }
+      pending.push(Object.freeze({ binding, toolId: tool.toolId, acRef: tool.acRef }));
+    }
+  }
+  counts.conflictedSelectedMessages = conflictedSelectedMessages.size;
+  counts.explicitSelectedCandidates += conflictedSelectedKeys.size;
+  counts.rejectedCandidates += conflictedSelectedKeys.size;
+  return Object.freeze({ pending: Object.freeze(pending), selectedBindings: Object.freeze(selectedBindings), counts });
+}
+
+type CandidateResolution = Readonly<{
+  valid: readonly ResolvedCandidate[];
+  rejectedCandidates: number;
+  unconfirmedCandidates: number;
+}>;
+
+function resolveCandidates(source: ValidatedSource, selection: CandidateSelection, tally: Tally): CandidateResolution {
+  const messagesById = new Map<string, JsonRecord>();
+  for (const message of source.messages) messagesById.set(message["id"] as string, message);
+  const complete = source.collectionStatus === "PAGINATION_COMPLETE";
+  const valid: ResolvedCandidate[] = [];
+  let rejectedCandidates = 0;
+  let unconfirmedCandidates = 0;
+  const byBinding = new Map<CorrelationBinding, Candidate[]>();
+  for (const candidate of selection.pending) {
+    byBinding.set(candidate.binding, [...(byBinding.get(candidate.binding) ?? []), candidate]);
+  }
+  for (const binding of selection.selectedBindings) {
+    const candidates = byBinding.get(binding);
+    if (candidates === undefined) continue;
+    const message = messagesById.get(binding.messageId);
+    if (message === undefined) {
+      if (complete) {
+        tally.add("MISSING_MESSAGE");
+        rejectedCandidates += candidates.length;
+      } else {
+        unconfirmedCandidates += candidates.length;
+      }
+      continue;
+    }
+    if (message["type"] !== "assistant") {
+      tally.add("NOT_ASSISTANT_MESSAGE");
+      rejectedCandidates += candidates.length;
+      continue;
+    }
+    const parts = toolParts(message);
+    for (const candidate of candidates) {
+      const matches = parts.filter((part) => part["id"] === candidate.toolId);
+      if (matches.length === 0) {
+        tally.add("MISSING_TOOL");
+        rejectedCandidates++;
+      } else if (matches.length > 1) {
+        tally.add("CONFLICT");
+        rejectedCandidates++;
+      } else {
+        valid.push(Object.freeze({ candidate, part: matches[0] as JsonRecord }));
+      }
+    }
+  }
+  return Object.freeze({ valid: Object.freeze(valid), rejectedCandidates, unconfirmedCandidates });
+}
+
+function countUnmappedTools(source: ValidatedSource, bindings: readonly CorrelationBinding[]): number {
+  const referenced = new Set<string>();
+  for (const binding of bindings) {
+    for (const tool of binding.tools) referenced.add(toolKey(binding.messageId, tool.toolId));
+  }
+  let unmappedTools = 0;
+  for (const message of source.messages) {
+    for (const part of toolParts(message)) {
+      if (!referenced.has(toolKey(message["id"] as string, String(part["id"])))) unmappedTools++;
+    }
+  }
+  return unmappedTools;
+}
+
+type EvidenceOutput = Readonly<{ status: S2bStatus; evidenceRefs: readonly EvidenceRefV1[] }>;
+
+function emitEvidence(
+  source: ValidatedSource,
+  valid: readonly ResolvedCandidate[],
+  counts: Counts,
+  tally: Tally,
+  complete: boolean,
+): EvidenceOutput {
+  const hashed = partitionHashedIdentities(valid, (resolved) =>
+    s2bEvidenceIdentityToken(
+      source.collectionId,
+      source.sessionId,
+      resolved.candidate.binding.messageId,
+      resolved.candidate.toolId,
+    ),
+  );
+  tally.add("CONFLICT", hashed.collisionGroups);
+  counts.rejectedCandidates += hashed.collided.length;
+  counts.validCandidates = hashed.unique.length;
+
+  const projected: EvidenceRefV1[] = hashed.unique
+    .map(({ item, token }) => toEvidenceRef(item, token, source))
+    .sort((a, b) => (a.evidenceId < b.evidenceId ? -1 : a.evidenceId > b.evidenceId ? 1 : 0));
+  const limitViolation = checkEvidenceOutputLimits(projected);
+  if (limitViolation !== null) {
+    tally.add(limitViolation);
+    return Object.freeze({ status: "REJECTED", evidenceRefs: Object.freeze([]) });
+  }
+  // Partial results retain valid Evidence; an empty partial result is rejected.
+  const partial =
+    !complete || counts.rejectedCandidates > 0 || counts.unconfirmedCandidates > 0 || counts.conflictedSelectedMessages > 0;
+  let status: S2bStatus;
+  if (!partial) {
+    status = "PROJECTED";
+  } else if (projected.length > 0) {
+    status = "LIMITED";
+  } else {
+    status = "REJECTED";
+  }
+  return Object.freeze({ status, evidenceRefs: Object.freeze(status === "REJECTED" ? [] : projected) });
+}
+
 // ---------------------------------------------------------------------------
 // Public
 // ---------------------------------------------------------------------------
@@ -220,161 +428,30 @@ export function projectS2bEvidence(
 
   const bindings = correlation.bindings;
   counts.bindings = bindings.length;
-  const isSelectedTuple = (b: CorrelationBinding): boolean =>
-    refEquals(b.taskRef, selected.task) && b.scopeKey === selected.scopeKey;
+  const conflicts = findBindingConflicts(bindings, tally);
 
-  // Phase 2: Message-level duplicates / Task ownership conflicts, detected before any selection.
-  const bindingsPerMessage = new Map<string, number>();
-  for (const b of bindings) bindingsPerMessage.set(b.messageId, (bindingsPerMessage.get(b.messageId) ?? 0) + 1);
-  const conflictedMessages = new Set([...bindingsPerMessage].filter(([, n]) => n > 1).map(([id]) => id));
-  tally.add("CONFLICT", conflictedMessages.size);
+  // Phase 3/4: classify bindings, then apply AC semantics to selected candidates only.
+  const selection = selectCandidates(bindings, selected, conflicts, tally);
+  counts.conflictedBindings = selection.counts.conflictedBindings;
+  counts.foreignBindings = selection.counts.foreignBindings;
+  counts.selectedBindings = selection.counts.selectedBindings;
+  counts.explicitSelectedCandidates = selection.counts.explicitSelectedCandidates;
+  counts.rejectedCandidates = selection.counts.rejectedCandidates;
+  counts.conflictedSelectedMessages = selection.counts.conflictedSelectedMessages;
 
-  // Phase 2 (cont.): Tool ID collisions inside one Message Binding → reject every colliding Tool entry.
-  const collidingTools = new Map<CorrelationBinding, ReadonlySet<string>>();
-  for (const b of bindings) {
-    if (conflictedMessages.has(b.messageId)) continue;
-    const seen = new Map<string, number>();
-    for (const t of b.tools) seen.set(t.toolId, (seen.get(t.toolId) ?? 0) + 1);
-    const colliding = new Set([...seen].filter(([, n]) => n > 1).map(([id]) => id));
-    tally.add("CONFLICT", colliding.size);
-    collidingTools.set(b, colliding);
-  }
+  // Phase 5: resolve selected candidates against the validated Source prefix.
+  const resolution = resolveCandidates(source, selection, tally);
+  counts.rejectedCandidates += resolution.rejectedCandidates;
+  counts.unconfirmedCandidates = resolution.unconfirmedCandidates;
 
-  // Phase 3/4: classification, then selected-only AC semantics.
-  //
-  // Count units (documented contract):
-  //   - explicitSelectedCandidates / rejectedCandidates / unconfirmedCandidates / validCandidates count unique
-  //     `(messageId, toolId)` candidate keys claimed by the selected Task (identical duplicates count once).
-  //   - conflictedSelectedMessages counts unique Message IDs whose ownership conflict involves the selected Task;
-  //     such a Message is a locally conflicted explicit candidate even if it lists zero Tools (→ never PROJECTED).
-  //   - bindings / conflictedBindings / foreignBindings / selectedBindings count Binding entries.
-  //   - CONFLICT diagnostic counts are display-only (message-level + tool-level + source-side + hash collisions)
-  //     and never drive status on their own.
-  const selectedAc = selected.ac;
-  const pending: Candidate[] = [];
-  const selectedBindings: CorrelationBinding[] = [];
-  const conflictedSelectedKeys = new Set<string>();
-  const conflictedSelectedMessages = new Set<string>();
-  for (const b of bindings) {
-    if (conflictedMessages.has(b.messageId)) {
-      counts.conflictedBindings++;
-      // A conflicted Binding is never classified as foreign; if it claims the selected Task, the Message and
-      // its explicit candidates are rejected (partial), never silently dropped.
-      if (isSelectedTuple(b)) {
-        conflictedSelectedMessages.add(b.messageId);
-        for (const t of b.tools) conflictedSelectedKeys.add(toolKey(b.messageId, t.toolId));
-      }
-      continue;
-    }
-    const colliding = collidingTools.get(b) ?? new Set<string>();
-    if (!isSelectedTuple(b)) {
-      if (colliding.size === 0) {
-        counts.foreignBindings++;
-        tally.add("FOREIGN_TASK_EXCLUDED");
-      }
-      continue;
-    }
-    selectedBindings.push(b);
-    counts.selectedBindings++;
-    const seenToolIds = new Set<string>();
-    for (const t of b.tools) {
-      if (seenToolIds.has(t.toolId)) continue; // one candidate per unique (messageId, toolId)
-      seenToolIds.add(t.toolId);
-      counts.explicitSelectedCandidates++;
-      if (colliding.has(t.toolId)) {
-        counts.rejectedCandidates++;
-        continue;
-      }
-      if (!selectedAc.some((ac) => refEquals(ac, t.acRef))) {
-        tally.add("CORRELATION_MISMATCH");
-        counts.rejectedCandidates++;
-        continue;
-      }
-      pending.push(Object.freeze({ binding: b, toolId: t.toolId, acRef: t.acRef }));
-    }
-  }
-  counts.conflictedSelectedMessages = conflictedSelectedMessages.size;
-  counts.explicitSelectedCandidates += conflictedSelectedKeys.size;
-  counts.rejectedCandidates += conflictedSelectedKeys.size;
-
-  // Phase 5: resolve remaining selected candidates against the validated Source prefix.
-  const messagesById = new Map<string, JsonRecord>();
-  for (const m of source.messages) messagesById.set(m["id"] as string, m);
-  const complete = source.collectionStatus === "PAGINATION_COMPLETE";
-  const valid: ResolvedCandidate[] = [];
-  const byBinding = new Map<CorrelationBinding, Candidate[]>();
-  for (const c of pending) byBinding.set(c.binding, [...(byBinding.get(c.binding) ?? []), c]);
-  for (const b of selectedBindings) {
-    const candidates = byBinding.get(b);
-    if (candidates === undefined) continue;
-    const message = messagesById.get(b.messageId);
-    if (message === undefined) {
-      if (complete) {
-        tally.add("MISSING_MESSAGE");
-        counts.rejectedCandidates += candidates.length;
-      } else {
-        // Unconfirmed: the Message may sit beyond the validated prefix (PAGINATION_INCOMPLETE already recorded).
-        counts.unconfirmedCandidates += candidates.length;
-      }
-      continue;
-    }
-    if (message["type"] !== "assistant") {
-      tally.add("NOT_ASSISTANT_MESSAGE");
-      counts.rejectedCandidates += candidates.length;
-      continue;
-    }
-    const parts = toolParts(message);
-    for (const c of candidates) {
-      const matches = parts.filter((p) => p["id"] === c.toolId);
-      if (matches.length === 0) {
-        tally.add("MISSING_TOOL");
-        counts.rejectedCandidates++;
-      } else if (matches.length > 1) {
-        tally.add("CONFLICT");
-        counts.rejectedCandidates++;
-      } else {
-        valid.push(Object.freeze({ candidate: c, part: matches[0] as JsonRecord }));
-      }
-    }
-  }
-
-  // Phase 6: Source Tool parts without any explicit Binding are UNMAPPED (never implicit evidence).
-  const referenced = new Set<string>();
-  for (const b of bindings) for (const t of b.tools) referenced.add(toolKey(b.messageId, t.toolId));
-  for (const m of source.messages) {
-    for (const part of toolParts(m)) {
-      if (!referenced.has(toolKey(m["id"] as string, String(part["id"])))) counts.unmappedTools++;
-    }
-  }
+  // Phase 6: Source Tool parts without an explicit Binding are UNMAPPED, never implicit evidence.
+  counts.unmappedTools = countUnmappedTools(source, bindings);
   tally.add("UNMAPPED", counts.unmappedTools);
 
-  // Phase 7a: hashed Evidence identity; collided candidates are rejected locally (never merged or renamed).
-  const hashed = partitionHashedIdentities(valid, (r) =>
-    s2bEvidenceIdentityToken(source.collectionId, source.sessionId, r.candidate.binding.messageId, r.candidate.toolId),
-  );
-  tally.add("CONFLICT", hashed.collisionGroups);
-  counts.rejectedCandidates += hashed.collided.length;
-  counts.validCandidates = hashed.unique.length;
-
-  // Phase 7b: EvidenceRefV1 emission, canonically sorted by Evidence ID (independent of Binding order).
-  const projected: EvidenceRefV1[] = hashed.unique
-    .map(({ item, token }) => toEvidenceRef(item, token, source))
-    .sort((a, b) => (a.evidenceId < b.evidenceId ? -1 : a.evidenceId > b.evidenceId ? 1 : 0));
-
-  // Phase 7c: status in fixed priority.
-  //   1. REJECTED on any Evidence-output limit (count or serialized bytes; never truncated).
-  //   2. Partial (incomplete pagination, or selected explicit candidates rejected / unconfirmed / conflicted):
-  //      LIMITED with ≥1 Evidence, REJECTED with none.
-  //   3. PROJECTED (zero explicit candidates allowed). Valid foreign exclusions never make a result partial.
-  const limitViolation = checkEvidenceOutputLimits(projected);
-  if (limitViolation !== null) {
-    tally.add(limitViolation);
-    return finish("REJECTED", [], counts.selectedBindings);
-  }
-  const partial =
-    !complete || counts.rejectedCandidates > 0 || counts.unconfirmedCandidates > 0 || counts.conflictedSelectedMessages > 0;
-  const status: S2bStatus = partial ? (projected.length > 0 ? "LIMITED" : "REJECTED") : "PROJECTED";
-  return finish(status, status === "REJECTED" ? [] : projected, counts.selectedBindings);
+  // Phase 7: emit canonical EvidenceRefs and apply output limits/status priority.
+  const complete = source.collectionStatus === "PAGINATION_COMPLETE";
+  const output = emitEvidence(source, resolution.valid, counts, tally, complete);
+  return finish(output.status, output.evidenceRefs, counts.selectedBindings);
 }
 
 // ---------------------------------------------------------------------------
