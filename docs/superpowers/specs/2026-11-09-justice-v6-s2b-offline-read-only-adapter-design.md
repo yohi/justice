@@ -1,6 +1,6 @@
 # Justice v6 — S2-b Offline OpenCode V2 READ_ONLY Adapter
 
-> **Design:** R0.1.1 — F-001〜F-003限定訂正版・Human Owner判断待ち（未採択）  
+> **Design:** R0.1.2 — F-001/F-003限定整合訂正版（F-002維持）・Human Owner判断待ち（未採択）  
 > **Date:** 2026-11-09 JST  
 > **Issue:** [yohi/justice #372](https://github.com/yohi/justice/issues/372) / Parent [#355](https://github.com/yohi/justice/issues/355) / Decision Hub [#349](https://github.com/yohi/justice/issues/349)  
 > **S2-a fixed source:** [`5b47d6792f3296c7c9eef7267aa20d98ee842e26`](https://github.com/yohi/justice/blob/5b47d6792f3296c7c9eef7267aa20d98ee842e26/docs/reports/2026-11-09-justice-v6-s2a-host-source-investigation.md)  
@@ -129,6 +129,7 @@ APIレスポンスを改変しない。Collection wrapperはAPIの外側に置�
 ```
 
 **F-001追加：診断の単位は`1 invocation = 1 LoaderInput = 1 TaskIntent`。** 呼出し側が`LoaderInput`（Manifest path、独立指定のManifest SHA-256、Intent path、Artifact root）を一つ指定する。このTaskIntentの`task`（Artifact ID/Revision）、`scopeKey`、必須`ac[]`を選択Identityとし、S2-bが新しいTaskを合成してはならない。1回の診断で複数TaskIntentを自動結合しない。複数Taskを診断するなら、各TaskIntentを明示した別の呼出しが必要（初期MVPでの一括実行は非対象）。Correlationに複数TaskのBindingが存在しても入力としては許容するが、**今回選択していないTaskのBindingは`FOREIGN_TASK_EXCLUDED`として投影対象外**とし、S1-dのEvidence集合には混入させない。同一MessageにTask競合があるときは元の候補全体を`CONFLICT`で除外し、都合のよいTaskを選ばない。
+**F-001検証境界:** 全Bindingの構造・安全ID・重複・一意性とMessage単位のTask競合を**選択前に**検証する。選択TaskのAC集合による意味的照合は、Task ID/Revision/Scopeで選別した**選択TaskのBindingだけ**に適用する。正常なForeign Bindingは`FOREIGN_TASK_EXCLUDED`として集計し、そのACが選択IntentのAC集合に含まれないことを`CORRELATION_MISMATCH`にしない。不正BindingをForeign選別で救済・黙殺せず、局所競合は候補拒否、全体一意性不能は`REJECTED`とする。
 
 - `sessionId`はCollection/Session GETと一致する必要がある。`(sessionId,messageId)`は1 Taskにのみ帰属し、同じMessage IDの複数Bindingを拒否する（値が同一でも重複を受け入れない）。`(sessionId,messageId,toolId)`は全体で一意。
 - `taskRef`, `scopeKey`, `acRef`は既存S1-a TaskIntent/Manifest/LoaderResultとの比較対象。Correlation側でTask・Scope・承認を新設しない。AC未指定のToolはEvidence対象外とする初期方針（明示Tool→AC要件を強制）。
@@ -154,7 +155,7 @@ APIレスポンスを改変しない。Collection wrapperはAPIの外側に置�
 - 同じcursorの再使用、循環、重複Message ID、破損JSON、欠落した保存ページ、途中で`next`が消えた後の余剰ページは不完全または競合として診断する。
 - 最終有効ページの`cursor.next`が存在せず、先頭からそこまで連続・検証済みなら`PAGINATION_COMPLETE`。それ以外は`PAGINATION_INCOMPLETE`（非対応フィルター等の拒否は別）。これは**保存ページ列の連続性**であってHostの全履歴・収集時の無変化の証明ではない。
 - 不完全時は**先頭から連続して検証できたprefix**の一意なMessage/Tool候補だけを限定投影可。孤立ページ・競合Message・曖昧な候補からは生成しない。要求Message未発見は`MISSING_MESSAGE`と断定せず、取得不足として扱う。
-- **F-003入力境界:** 先頭ページ自体が不正、グローバルID/Version/Filter不整合、解析上限超過、prefix内の重複Message IDで帰属不能、または有効prefixが存在しないときは`REJECTED`としてS1-dを実行しない。後続ページの欠落・cursor不整合のみで、先頭から検証済みprefixが存在し、選択Task向けに検証済みEvidence候補が1件以上残る場合だけ`LIMITED`として続行する。保存済みページ列の`PAGINATION_COMPLETE`とEvidenceのSession全体完全性は別物。
+- **F-003状態境界:** 先頭ページ自体が不正、グローバルID/Version/Filter不整合、上限超過、全体一意性不能、有効prefixなし等は`REJECTED`（S1-d未実行）。`LIMITED`は **A:** `PAGINATION_INCOMPLETE`だが先頭から連続する検証済みprefixに選択Taskの有効Evidenceが1件以上残る場合、または **B:** `PAGINATION_COMPLETE`だが選択Taskの一部明示候補を競合・欠測で拒否し有効Evidenceが1件以上残る場合に成立する。どちらも有効Evidence0件なら`REJECTED`。`PROJECTED`は`PAGINATION_COMPLETE`で選択Taskの**全明示候補**を未解決の欠落・競合なしに検証・投影した場合のみ（明示候補0件を含む）。正常なForeign Binding除外だけでは`LIMITED`にしない。ページング完了もHost履歴全体の完全性ではない。
 
 ### 6.3 Correlation Validation
 
@@ -163,10 +164,11 @@ APIレスポンスを改変しない。Collection wrapperはAPIの外側に置�
 - Messageは存在するが`assistant`以外 → `NOT_ASSISTANT_MESSAGE`、Toolがない → `MISSING_TOOL`。`UNMAPPED`は取得済みだが明示対応がないMessage/Tool（原則集計のみ、全未対応を逐一列挙しない）。
 - `taskRef`、`scopeKey`、`acRef`不一致 → `CORRELATION_MISMATCH`。複数Task混在/重複衝突 → `CONFLICT`。候補Evidenceを作成しない。
 - 失敗は対象Message/Toolに限定して扱うが、Collection Identity/Version・全体一意性を判定不能なケースはCollection全体を拒否する。
+**F-001固定検証順序:** (1) **全Binding**のキー/型/安全ID・重複・一意性を検証、(2) 同一Message内の複数Task帰属/Message単位競合をTask選択前に検出、(3) Task ID/Revision/Scopeによって選択TaskとForeign Taskを分類、(4) 正常なForeignを`FOREIGN_TASK_EXCLUDED`で集計・除外、(5) **選択TaskのBindingに限って**`acRef`を選択Intentの`ac[]`集合と意味的照合、(6) 合格したToolのみEvidence化する。Foreign Taskの正常なACが選択TaskのAC集合にないことは`CORRELATION_MISMATCH`ではない。Foreign側の構造違反・競合も選別で消去せず診断し、全体一意性を判定できなければ`REJECTED`、局所競合は該当候補を拒否する。
 
 ## 7. Evidence Projection / trust
 
-**F-001 / F-003投影境界:** 呼出しごとに選択された**一つの**TaskIntent/LoaderInputを基準とする。Corpusに存在する複数TaskのBindingを集約しない。全Message/Tool/ACの一意性・参照を検証した後、`(taskRef.artifactId, taskRef.revision, scopeKey) == (selectedIntent.task.artifactId, selectedIntent.task.revision, selectedIntent.scopeKey)`のBindingだけを選び、その`acRef`が選択Intentの`ac[]`に含まれることを照合する。別TaskのBindingは`FOREIGN_TASK_EXCLUDED`として集計・破棄し、誤った選択を救うためS1-bの`TASK_NOT_SELECTED`へ流し込まない。今回選択したTaskに属する、有効で一意なAssistant Toolだけを`EvidenceRefV1[]`に投影する。選択Intentや参照の取得・解釈が不可能なら`REJECTED`でS1-d呼出しなし（Manifest digest不一致などは、構造的に読み取れる場合はS1-d本来の診断へ委譲し、Adapterが承認を付与しない）。
+**F-001 / F-003投影境界:** 一呼出しにつき選択するTaskIntent/LoaderInputは一つのみ。先に全Bindingの構造/重複/Message単位Task競合を検証した後、`(taskRef.artifactId, taskRef.revision, scopeKey) == (selectedIntent.task.artifactId, selectedIntent.task.revision, selectedIntent.scopeKey)`で選択Taskに属するBindingだけ抽出する。正常な別Task Bindingは`FOREIGN_TASK_EXCLUDED`として集計・除外し、その`acRef`が選択Intentの`ac[]`に含まれないことを`CORRELATION_MISMATCH`としない。**選択TaskのBindingだけ**`acRef`と選択IntentのAC集合を意味的照合する。不正Foreign Bindingも構造/競合として診断し、選択で救済しない。有効で一意な選択Task Assistant Toolのみ`EvidenceRefV1[]`化し、S1-bの`TASK_NOT_SELECTED`を除外機構として使用しない。選択Intentや参照の取得・解釈が不可能なら`REJECTED`でS1-d呼出しなし（Manifest digest不一致などは、構造的に読み取れる場合はS1-d本来の診断へ委譲し、Adapterが承認を付与しない）。
 
 - `EvidenceRefV1`の`evidenceId`は`(collectionId,sessionId,messageId,toolId)`を曖昧さなくエンコードしたByte列のSHA-256を用いた、S1安全識別子長64以下の決定論的トークン。短縮する場合は衝突を明示検査し、衝突時に両候補を拒否。生ID・秘密文字列をレポートに出さない。
 - `taskRef`,`scopeKey`,`acRef`は検証済みCorrelationと既存S1 Artifactからのみ取得。`issuerId`は固定の*Host記録出所ラベル*（例:`opencode-v225-record`）、`originId`は安全に生成したSource参照トークンとし、実際のAgent/Owner本人確認を意味させない。
@@ -174,7 +176,7 @@ APIレスポンスを改変しない。Collection wrapperはAPIの外側に置�
 - `provenanceClass`: `UNVERIFIED_EXTERNAL`。`reportedExecutionState`: 実行申告の明示値がない場合`UNKNOWN`、保存されたTool stateが`completed`かつ`executed === true`と確認できる場合のみ**申告値**`EXECUTED`。`reportedOutcome`は初期は常に`UNKNOWN`。`completed`≠テストPASS、`error`≠AC FAILの自動判定。`contentDigest`は初期は省略（将来付けても真正性証明ではない）。
 - S1-bの`MATCH`、`MATCHED_REF_PRESENT`は参照結合/存在のみ。`authenticityStatus`/`executionVerificationStatus`は`NOT_VERIFIED`、S1-a `ownerAuthorityStatus: NOT_PROVEN`、S1-c `formalVerdict: UNKNOWN`を維持。`eligibleBaseline: false`を上書きしない。
 - **上限超過は全件拒否:** 選択Taskの投影候補が`S1B_MAX_EVIDENCE_REFS=128`件を超える、または生成したEvidence JSONが1,048,576 bytesを超える場合、先頭の一部を切り捨てず`REJECTED`としてS1-dを呼び出さない。ページ/Correlation自体の上限超過も§5.1に従う。入力欠損を空Evidence集合へ自動的に変換しない。
-- `LIMITED`に渡す配列は**検証済みprefix・選択Task・対象Toolに限定された候補**である。`S1-d`の`MISSING_EVIDENCE`や`MATCHED_REF_PRESENT`は、この限定集合に対するS1既存の判定であり、欠落領域を含むSession全履歴の完全性やAC未実施を示さない。Adapter側で`projectionScope`と`coverageCompleteness: NOT_ESTABLISHED`を必ず併記する。
+- `LIMITED`に渡すEvidence配列は **A:** `PAGINATION_INCOMPLETE`時の連続検証済みprefix内から投影した選択Task候補、または **B:** `PAGINATION_COMPLETE`時の全ページ中、一部候補の競合・欠測を除外した選択Task候補のうち、安全に検証した1件以上に限定する。`projectionScope`には検証済みページ範囲・候補除外数・未確認数を併記する。S1-dの`MISSING_EVIDENCE`/`MATCHED_REF_PRESENT`は投影済み限定集合の診断であり、Session全履歴の完全性や未取得領域のAC未実施を証明しない。`coverageCompleteness: NOT_ESTABLISHED`を維持する。
 
 ## 8. Optional Diff / ChangeSet
 
@@ -196,7 +198,7 @@ APIレスポンスを改変しない。Collection wrapperはAPIの外側に置�
 - `src/runtime/s1d-diagnostic.ts`の既存`runS1dDiagnostic(request, source)`に、**選択Taskに限定した**Evidence JSON Bytesと`{"availability":"UNAVAILABLE"}`のChangeSet JSON Bytesを返すメモリ上の仮想`S1aReadOnlySource.readInputFile()`を接続。Artifact読み取りは既存READ_ONLY sourceへ委譲。中間ファイルの書込みやS1 Core変更は行わない。内部仮想パスの競合を禁止し、既存のEvidence 1,048,576 bytes・ChangeSet 262,144 bytes上限に従う。
 - S1-dには既存型の`EvidenceRefV1[]`と`ChangeSet`のみ供給し、`formatText`/`formatJson`の既存出力を再利用。Adapter診断は`justice-s2b-diagnostics-v1`として別オブジェクト/別Text節に置く。S1-dの`reasonCode`、`S1dReportV1`、Exit Code意味を変更しない。
 - **Wrapper出力契約（F-003）:** S2-bのJsonは`{schemaVersion:"justice-s2b-report-v1", adapter:{status,collectionStatus,selectedTaskRef,projectionScope,coverageCompleteness,counts,diagnostics,diffProjection}, s1d?: S1dReportV1}`とする。`adapter.status`は`REJECTED|LIMITED|PROJECTED`、`coverageCompleteness`は常に`NOT_ESTABLISHED`、`diffProjection`は初期MVPで常に`UNAVAILABLE`。`projectionScope`は`{sessionId,collectionId,taskRef,scopeKey,firstPageIndex:0,lastValidatedPageIndex:number|null,validatedPageCount:number,selectedMessageCount:number,projectedEvidenceCount:number}`で、ユーザー由来IDは外部に出さず安全な匿名トークンで表す。`counts`は候補・除外・拒否・未確認をそれぞれ非負整数で表す。`diagnostics`は固定コードと件数のみ。`s1d`は**呼出しがあった場合に限り存在**し、既存Reportを一切書き換えない。`s1d:null`や成功風の空オブジェクトは使わない。
-- **状態別実行:** `REJECTED`＝グローバル不正・上限超過・選択対象不明・有効prefixなし・対象Evidence集合の全件安全投影不可等。**S1-dを呼ばず`s1d`キーを省略**、Adapter診断だけ返す。`LIMITED`＝グローバル入力が妥当で、選択Taskに属する完全検証済みEvidenceが**1件以上**存在するが、ページ列欠測・一部競合・欠測候補がある場合。限定集合のみS1-dを1回呼び、`projectionScope`に検証済みprefixと除外件数を明示。`PROJECTED`＝ページ列の連続性が確認済みで、選択Taskに対する全明示候補を検証・投影できた場合（有効な明示候補が0件の完全Collectionも含む）。S1-dを1回呼ぶ。Diff欠測はこれらのstatus選択とは独立し、常に`UNAVAILABLE`。不完全Collectionで有効候補0件なら`REJECTED`で空Evidenceを偽装しない。
+- **状態別実行（F-003、優先順固定）:** グローバル不正・上限超過・選択対象不明・全体一意性不能・有効prefixなし等は最優先で`REJECTED`。次にページング不完全または選択Task候補の一部欠落/競合がある場合、**有効な選択Task Evidenceが1件以上**なら`LIMITED`（S1-d1回、`s1d`あり）、0件なら`REJECTED`（S1-d0回、`s1d`なし）。その他、ページング完了かつ選択Taskの全明示候補を未解決欠落・競合なしに検証・投影できた場合のみ`PROJECTED`（明示候補0件を含み、S1-d1回・`s1d`あり）。`LIMITED`は **A:** 有効prefixがある不完全ページング、**B:** 完全ページ列内での一部候補拒否、の両方を含む。`projectionScope`にページ範囲と候補の除外/未確認数を記録する。正常なForeign Task除外だけでは`LIMITED`にしない。Diffはstatusに関係なく`UNAVAILABLE`。
 - `LIMITED`のS1-d結果に現れる`MISSING_EVIDENCE`や`AC_EVIDENCE_REF_MISSING`は**投影された限定集合に関する診断**であり、Session全履歴にEvidenceが無い証拠ではない。`PROJECTED`もHost履歴の完全取得やOwner承認を証明しない。S2-b wrapper TextはAdapter status/Projection範囲/制約を先に提示し、`LIMITED/PROJECTED`の場合にだけ既存S1-d Text全文を変更せず後段で表示する。Jsonも同じ条件で`s1d`を含める。
 - Adapterは収集欠落、拒否件数、投影件数、Version申告、取得範囲の制限を表示するが、**Agent出力本文、ToolのRaw content、Diff patch、Secrets、Host絶対path、任意の例外文は出力しない**。固定コードと件数、匿名安全IDだけを使用。既存S1-d CLIのExit Code体系は変更しない。S2-bは独自Exit CodeによるGate/承認判定を新設しない。
 
@@ -233,7 +235,7 @@ APIレスポンスを改変しない。Collection wrapperはAPIの外側に置�
 | T03 | 未対応Message、未対応Tool | Evidenceを生成せず`UNMAPPED` |
 | T04 | 重複Message Binding、重複Tool ID | 当該候補を拒否し`CONFLICT` |
 | T05 | Child Sessionが親Collectionに紛入 | Session不一致を拒否、自動統合禁止 |
-| T06 | `cursor.next`欠落ページ/要求cursor不一致/循環 | `PAGINATION_INCOMPLETE`。有効prefix＋選択Task Evidence≥1なら`LIMITED`・S1-d1回、それ以外`REJECTED`・S1-d0回 |
+| T06 | 後続ページ欠測/要求cursor不一致/循環により`PAGINATION_INCOMPLETE` | 有効な連続prefix＋選択Task Evidence≥1なら`LIMITED`・S1-d1回、それ以外は`REJECTED`・S1-d0回。`PAGINATION_COMPLETE`時の一部候補拒否はT18で検証 |
 | T07 | 完全ページ列に要求Messageなし | `MISSING_MESSAGE`（偽の代替なし） |
 | T08 | 不完全ページ列に要求Messageなし | `MISSING_MESSAGE`断定なし、未収集として保持 |
 | T09 | `type`指定、未知Version、Export形式 | Collection拒否、S1 Core未変更 |
@@ -245,7 +247,7 @@ APIレスポンスを改変しない。Collection wrapperはAPIの外側に置�
 | T15 | Evidence>128、Evidence JSON>1,048,576 bytes、Source/Correlation超過、Diff>128件/不正path | 必須入力・Evidence超過は`REJECTED`・S1-d未実行。任意Diff超過/不正はDiffのみ`UNAVAILABLE`。切捨てなし |
 | T16 | Artifact不一致、Manifest独立SHA誤り、Scope Policy欠測 | 既存S1の不一致/未知状態を維持 |
 
-**F-001 / F-003限定追加ケース:** T17＝Correlationに別TaskのBindingが混在 → 選択TaskのみS1-dへ、`FOREIGN_TASK_EXCLUDED`、S1-bの`TASK_NOT_SELECTED`に依存しない。T18＝選択Taskの1 Message/Toolに競合があり有効候補だけ残る → `LIMITED`、prefix/除外数を明示、`s1d`あり。T19＝全件拒否（先頭ページ不正、候補ゼロの不完全Collection、Evidence出力超過） → `REJECTED`、`s1d`キーなし、S1-d呼出し0回。T20＝完全Collectionかつ選択Taskの明示候補ゼロ → `PROJECTED`・`s1d`あり、ただし`MISSING_EVIDENCE`はSession全履歴の不存在証明としない。T21＝Diffなしでも完全なEvidence投影 → `PROJECTED`と`diffProjection:UNAVAILABLE`を同時に保持。T22＝`sessionAfter`有無・異時刻/状態変更・Snapshot IDだけ一致 → すべてDiffは`UNAVAILABLE`。これらはいずれも**設計上の期待ケースで未実施**。
+**F-001 / F-003限定追加ケース:** T17＝全Bindingの構造・一意性・Message単位のTask競合を先に検証。正常なForeign TaskのACが選択TaskのAC集合にない場合も、`FOREIGN_TASK_EXCLUDED`として集計し、`CORRELATION_MISMATCH`を出さず、選択TaskのEvidenceのみS1-dへ（`TASK_NOT_SELECTED`に依存しない）。Foreign Binding自体が不正なら選別で救済しない。T18＝**`PAGINATION_COMPLETE`だが選択Taskの一部明示候補に欠測/競合があり、有効Evidence≥1件が残る**場合 → `LIMITED`、全検証済みページ範囲・除外数を表示、S1-d1回・`s1d`あり。T19＝先頭ページ不正・上限超過・全体一意性不能・有効prefixなし、またはページ不完全/候補部分拒否で有効Evidence0件 → `REJECTED`、S1-d0回・`s1d`キーなし。T20＝完全Collectionかつ選択Taskの明示候補ゼロ → `PROJECTED`・`s1d`あり、ただし`MISSING_EVIDENCE`はSession全履歴の不存在証明としない。T21＝Diffなしでも完全なEvidence投影 → `PROJECTED`と`diffProjection:UNAVAILABLE`を同時に保持。T22＝`sessionAfter`有無・異時刻/状態変更・Snapshot IDだけ一致 → すべてDiffは`UNAVAILABLE`。これらはいずれも**設計上の期待ケースで未実施**。
 
 実装時の検証は**固定Fixture中心**。既存S1-a〜d回帰が維持されれば十分で、実Host Probeは初期MVP完了要件にしない。未実行試験はPASSと記載しない。
 
