@@ -130,8 +130,7 @@ function validateBindingStructure(binding: unknown): void {
   }
 }
 
-function validateGlobal(source: ValidatedSource, correlation: AcceptedCorrelation, selected: TaskIntent): void {
-  validateSelectedIntent(selected);
+function validateGlobal(source: ValidatedSource, correlation: AcceptedCorrelation): void {
   if (!isSessionId(correlation.sessionId) || !isSessionId(source.sessionId)) fail("SOURCE_SCHEMA_INVALID");
   // T05: the Correlation must name the Source Session itself; a child/parent Session cannot be joined.
   if (correlation.sessionId !== source.sessionId) fail("SOURCE_IDENTITY_MISMATCH");
@@ -178,6 +177,7 @@ export function projectS2bEvidence(
 ): Projection {
   const tally = new Tally(source.diagnostics);
   const counts = zeroCounts();
+  let selectedIntentValidated = false;
 
   const finish = (status: S2bStatus, evidenceRefs: readonly EvidenceRefV1[], selectedMessageCount: number): Projection =>
     Object.freeze({
@@ -187,8 +187,10 @@ export function projectS2bEvidence(
       projectionScope: Object.freeze({
         sessionId: anonymousToken("session", source.sessionId),
         collectionId: anonymousToken("collection", source.collectionId),
-        taskRef: Object.freeze({ artifactId: selected.task.artifactId, revision: selected.task.revision }),
-        scopeKey: selected.scopeKey,
+        taskRef: selectedIntentValidated
+          ? Object.freeze({ artifactId: selected.task.artifactId, revision: selected.task.revision })
+          : Object.freeze({ artifactId: "", revision: "" }),
+        scopeKey: selectedIntentValidated ? selected.scopeKey : "",
         firstPageIndex: source.validatedPageCount > 0 ? (0 as const) : null,
         lastValidatedPageIndex: source.lastValidatedPageIndex,
         validatedPageCount: source.validatedPageCount,
@@ -200,7 +202,9 @@ export function projectS2bEvidence(
 
   // Phase 1
   try {
-    validateGlobal(source, correlation, selected);
+    validateSelectedIntent(selected);
+    selectedIntentValidated = true;
+    validateGlobal(source, correlation);
   } catch (error) {
     tally.add(error instanceof GlobalRejection ? error.code : "SOURCE_SCHEMA_INVALID");
     return finish("REJECTED", [], 0);

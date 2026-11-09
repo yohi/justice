@@ -62,6 +62,8 @@ describe("S2-b projector: correlation and safe Task selection", () => {
     expect(p.status).toBe("REJECTED");
     expect(count(p, "SOURCE_SCHEMA_INVALID")).toBe(1);
     expect(p.evidenceRefs).toEqual([]);
+    expect(p.projectionScope.taskRef).toEqual({ artifactId: "", revision: "" });
+    expect(p.projectionScope.scopeKey).toBe("");
   });
 
   it("rejects a source with no validated pages", () => {
