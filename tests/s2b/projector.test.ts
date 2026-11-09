@@ -52,6 +52,32 @@ const SELECTED_AC = { artifactId: "ac-1", revision: "R1" } as const;
 const FOREIGN_AC = { artifactId: "ac-9", revision: "R1" } as const;
 
 describe("S2-b projector: correlation and safe Task selection", () => {
+  it("rejects an invalid selected intent before projecting evidence", () => {
+    const source = validatedSource([userMessage("msg_001"), assistantMessage("msg_002", [toolPart("tool_001")])]);
+    const invalidIntent = { ...selectedIntent(), scopeKey: "../unsafe" } as TaskIntent;
+    const p = projectS2bEvidence(source, acceptedCorrelation([
+      { messageId: "msg_002", tools: [{ toolId: "tool_001", acRef: SELECTED_AC }] },
+    ]), invalidIntent);
+
+    expect(p.status).toBe("REJECTED");
+    expect(count(p, "SOURCE_SCHEMA_INVALID")).toBe(1);
+    expect(p.evidenceRefs).toEqual([]);
+  });
+
+  it("rejects a source with no validated pages", () => {
+    const source: ValidatedSource = {
+      ...validatedSource([]),
+      validatedPageCount: 0,
+      lastValidatedPageIndex: null,
+    };
+    const p = projectS2bEvidence(source, acceptedCorrelation([]), selectedIntent());
+
+    expect(p.status).toBe("REJECTED");
+    expect(count(p, "PAGINATION_INCOMPLETE")).toBe(1);
+    expect(p.evidenceRefs).toEqual([]);
+    expect(p.projectionScope.firstPageIndex).toBeNull();
+  });
+
   it("foreignTaskAcIsExcludedWithoutMismatch", () => {
     const source = validatedSource([
       userMessage("msg_001"),
@@ -649,4 +675,3 @@ describe("S2-b projector: Evidence projection and status (Task 4)", () => {
     expect(r.unique.map((u) => u.token)).toEqual(["h-k3", "h-k4"]);
   });
 });
-
