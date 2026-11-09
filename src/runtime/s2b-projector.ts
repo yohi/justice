@@ -130,22 +130,26 @@ function validateBindingStructure(binding: unknown): void {
   }
 }
 
-function validateGlobal(source: ValidatedSource, correlation: AcceptedCorrelation): void {
-  if (!isSessionId(correlation.sessionId) || !isSessionId(source.sessionId)) fail("SOURCE_SCHEMA_INVALID");
-  // T05: the Correlation must name the Source Session itself; a child/parent Session cannot be joined.
-  if (correlation.sessionId !== source.sessionId) fail("SOURCE_IDENTITY_MISMATCH");
-  const bindings: unknown = correlation.bindings;
-  if (!Array.isArray(bindings)) return fail("SOURCE_SCHEMA_INVALID");
+function validateBindingInputLimits(bindings: readonly unknown[]): void {
   // Limits are evaluated over the whole input before any structural decision (no truncation).
   if (bindings.length > S2B_LIMITS.bindings) fail("INPUT_LIMIT_EXCEEDED");
   let totalTools = 0;
-  for (const binding of bindings as unknown[]) {
+  for (const binding of bindings) {
     const tools = isRecord(binding) ? binding["tools"] : undefined;
     if (!Array.isArray(tools)) continue;
     if (tools.length > S2B_LIMITS.toolsPerMessage) fail("INPUT_LIMIT_EXCEEDED");
     totalTools += tools.length;
   }
   if (totalTools > S2B_LIMITS.toolsTotal) fail("INPUT_LIMIT_EXCEEDED");
+}
+
+function validateGlobal(source: ValidatedSource, correlation: AcceptedCorrelation): void {
+  if (!isSessionId(correlation.sessionId) || !isSessionId(source.sessionId)) fail("SOURCE_SCHEMA_INVALID");
+  // T05: the Correlation must name the Source Session itself; a child/parent Session cannot be joined.
+  if (correlation.sessionId !== source.sessionId) fail("SOURCE_IDENTITY_MISMATCH");
+  const bindings: unknown = correlation.bindings;
+  if (!Array.isArray(bindings)) return fail("SOURCE_SCHEMA_INVALID");
+  validateBindingInputLimits(bindings);
   for (const binding of bindings as unknown[]) validateBindingStructure(binding);
   // Global Message identity must be resolvable; otherwise no candidate can be attributed safely.
   const ids = new Set<string>();
