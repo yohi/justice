@@ -234,7 +234,7 @@ APIレスポンスを改変しない。Collection wrapperはAPIの外側に置�
 | T02 | 1 Message内に異なる2 Tool + 異なるAC | Tool単位で2 Evidence ID、一意性保持 |
 | T03 | 未対応Message、未対応Tool | Evidenceを生成せず`UNMAPPED` |
 | T04 | 重複Message Binding、重複Tool ID | 当該候補を拒否し`CONFLICT` |
-| T05 | Child Sessionが親Collectionに紛入 | Session不一致を拒否、自動統合禁止 |
+| T05 | Collectionの`sessionId`、Session GETの`data.id`、各`request.sessionId`、Correlationの`sessionId`のいずれかが不一致 | 明示Session識別子の不一致を`SOURCE_IDENTITY_MISMATCH`として`REJECTED`。Message応答自体の所属Sessionは未検証であり、Child Session由来Messageの混入はこの比較だけでは検出・証明できない。`parentID`による自動統合は禁止 |
 | T06 | 後続ページ欠測/要求cursor不一致/循環により`PAGINATION_INCOMPLETE` | 有効な連続prefix＋選択Task Evidence≥1なら`LIMITED`・S1-d1回、それ以外は`REJECTED`・S1-d0回。`PAGINATION_COMPLETE`時の一部候補拒否はT18で検証 |
 | T07 | 完全ページ列に要求Messageなし | `MISSING_MESSAGE`（偽の代替なし） |
 | T08 | 不完全ページ列に要求Messageなし | `MISSING_MESSAGE`断定なし、未収集として保持 |
