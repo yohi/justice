@@ -10,11 +10,11 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-10-justice-v6-s2c-controlled-native-comparison-design.md` (Design R0.1, `baa2f2024a53ec81af1b53572e4fb230bf0b72af`, Issue [#373](https://github.com/yohi/justice/issues/373), PR [#380](https://github.com/yohi/justice/pull/380))。
 
-**Plan status:** `PLAN_DRAFT_FOR_OWNER_DECISION / EVALUATION_NOT_RUN / EXECUTION_BLOCKED`。既知のReview判定: `READY (Design only)` / `DOCUMENT_READY_WITH_BLOCKERS` / `Implementation Readiness: BLOCKED` / `Required Findings: 0`。Design訂正不要。**この計画文書は現在の作業コンテナにのみ作成し、GitHubへCommit/Pushしていない。**
+**Plan status:** `PLAN_DRAFT_FOR_OWNER_DECISION / GITHUB_RECORDED / EVALUATION_NOT_RUN / EXECUTION_BLOCKED`。既知のReview判定: `READY (Design only)` / `DOCUMENT_READY_WITH_BLOCKERS` / `Implementation Readiness: BLOCKED` / `Required Findings: 0`。Design訂正不要。**このPlanはPR #380のfeatureブランチにCommit/Push済み（初回記録Commit `7ea7a0eded0a333b2729a0f9c0952e59a3655f42`）。GitHubへの記録は実証開始承認ではなく、PlanのOwner正式採択もGitHub上の記録だけでは確認できない（`NOT_VERIFIED`）。**
 
 ## Global Constraints
 
-- **最初のSTOP:** 実証・データ収集・機密除去処理・モデル呼出し・テスト実行・ファイルのGitHub反映は、Human OwnerがHost、権限、Secrets、Network、費用、出力先、停止条件、対象Version/Commitを個別承認するまで禁止。計画の承認と実行承認を区別する。
+- **最初のSTOP:** 実証・データ収集・機密除去処理・モデル呼出し・テスト実行・**評価データや実証結果のGitHub反映**は、Human OwnerがHost、権限、Secrets、Network、費用、出力先、停止条件、対象Version/Commitを個別承認するまで禁止。**既に承認・実施済みのPlan文書のGitHub記録**と、Plan正式採択・実行承認を区別する。
 - **固定入力:** OpenCode `v2.2.5`の保存済み`session.get` + 無フィルタ`session.message.list`各ページのAPI応答（Session Export/DB直読/Live GETは禁止）、既存Manifest/TaskIntent/Design/Plan/AC、呼出し側が**独立に**固定したManifest SHA-256、明示Task/Message/Tool/AC Correlation。Superpowersの実稼働Version/Commitは確認できた値だけ記録する。
 - **S2-b:** `S2bRequest = {loaderInput: LoaderInput, sourcePath: string, correlationPath: string}`。`runS2bOfflineAdapter(request, source): Promise<S2bReportV1>`、`createS1aReadOnlySource(): S1aReadOnlySource`、`formatS2bJson(report): string`を再利用。**1 invocation = 1 LoaderInput = 1 TaskIntent**、複数Taskの自動結合なし。生IDをReportで捏造せず、Locationは入力／安全な対応表のみで確認。
 - **結果の境界:** `adapter.status = REJECTED | LIMITED | PROJECTED`、`coverageCompleteness = NOT_ESTABLISHED`、`diffProjection = UNAVAILABLE`。`REJECTED`では`s1d`なし、`LIMITED`/`PROJECTED`では`s1d`あり（既存契約通り）。S1-c `formalVerdict=UNKNOWN`、Owner承認`NOT_PROVEN`、真正性`NOT_VERIFIED`を成功へ昇格させない。`FOREIGN_TASK_EXCLUDED`は単なる正常除外でも生じるためTPにならない。
@@ -183,7 +183,7 @@ type ReviewAnswer = Readonly<{
 
 **このwriting-plans Taskの完了条件:** Design R0.1に対応する、具体的な5つの実証Taskとファイル責務、既存API・検証・エラー分類・非機能・STOP・採点ルールを明記したPlan文書を提示すること。**この文書の存在はPlanの正式採択や実証着手承認ではない。**
 
-**未承認:** PlanのGitHubへのCommit/Push、実Host/実Session読取り・機密除去、Dataset作成、実モデルレビュー、Build/Test/CI、ソース変更、PR、Issue更新、Gate/HOLD、S3開始。
+**GitHub記録:** Plan文書のCommit/Pushおよび既存PR #380への反映は実施済み。**未承認:** 本F-001限定訂正以外の追加書込み、実Host/実Session読取り・機密除去、Dataset作成、実モデルレビュー、Build/Test/CI、ソース変更、新規PR、Issue更新、Gate/HOLD、S3開始。
 
 **停止条件:** 別の実証範囲または新CLI／新診断機能を要することが分かった場合は、ここで止めてOwner判断とする。追加Findingが出てもレビュー→訂正→再レビューを自動連鎖させない。
 
