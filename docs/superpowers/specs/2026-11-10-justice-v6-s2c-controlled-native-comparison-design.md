@@ -84,7 +84,8 @@ Justice v6の最優先目的である「承認済みDesign / PlanとAI実装成�
 - **Native + Justice:** 同じ基礎入力・レビュー手順に、当該ケースの固定S2-b/S1-d **Text/JSONのうち事前に選定した単一表現**を追加する。利用するReportのschemaVersion・byte digest・対象Versionを固定する。JusticeがNative側にはない新たな生SourceやGround Truthを入手しない。
 - 比較の介入差は**Justice追加レポート**。両者の入力byte数が完全一致するとは主張しない。追加トークン・所要時間・費用は副次負荷として記録する。
 - 両アームで同一レビュアーモデルの正確なID/Version、努力量/推論設定、システム指示、レビュー依頼、許可Tool、利用制限、時間枠、予算を固定。温度・seed等の制御可否も記録し、固定不能な値を「同一」と推測しない。
-- **別コンテキスト／独立セッション**で実施し、先行回答や相手側Reportを共有しない。実行順序は事前固定の交互順または乱択でバランスし、結果を見て変更しない。実際の実行順序・Model ID・Context制約を記録する。比較不能な差異があれば対応するケースを`NOT_COMPARABLE`とする。
+- **別コンテキスト／独立セッション**で実施し、先行回答や相手側Reportを共有しない。実行順序は事前固定の交互順または均衡した乱択順に限定し、Native-only全ケース先行などの一括順序を許さず、結果を見て変更しない。実際の実行順序・Model ID・Context制約を記録する。比較不能な差異があれば対応するケースを`NOT_COMPARABLE`とする。
+- **各レビューのToolアクセスはケース単位で分離**する。両アームに対象ケースの同じ固定入力だけを読み取り許可し、Justice追加側に限りそのケースの許可済みReportを追加する。共通ワークスペース経由を含め、`baseline/`、他ケース、非公開Ground Truth、他アームの回答へのアクセスは禁止する。レビュー出力の保存は分離した管理側で行い、レビューAgentに未承認のHost操作・書込みを許さない。
 - Native側には「問題を探す」機会をJustice側と同等に与え、Justice側だけに正解を示唆する追加プロンプトを与えない。Human Ownerによる評価は両アームの回答固定後に行う。
 
 ### 5.2 Reviewer response schema (evaluation-only; not product API)
@@ -96,6 +97,7 @@ Justice v6の最優先目的である「承認済みDesign / PlanとAI実装成�
 | `caseKey` | 中立的な評価ケースID。正解種別を含めない |
 | `finding[]` | `type`（どの不整合か）、`target`（安全なTask/Revision/Message/Tool/AC識別）、`basis`（与えられた入力の該当箇所）、`confidence` |
 | `noFinding` | 不整合なしと判断した場合にのみ明示。未確認・未観測を正常扱いしない |
+| `noFindingBasis` | 評価専用の正常判断根拠。`noFinding=true`の場合、確認した対象と固定入力上の根拠を非空文字列で示す。判断不能や`noFinding=false`の場合は`null`。秘密情報は含めない |
 | `uncertainty` | `UNKNOWN`・`NOT_VERIFIED`・`UNAVAILABLE`・`NOT_ASSESSABLE`の根拠 |
 | `sourceUse` | Native Source、Superpowers、Justice追加Reportのどれを参照したか |
 
@@ -107,12 +109,12 @@ Ground Truthはケースごとに固定し、回答を後から書き換えず�
 
 - **TP (strict):** ネガティブケースで、**不整合の種類が一致し、対象Identityが一致し、固定入力で根拠が支持される**場合だけ1件。無関係な誤検知を同時に含む場合はFPも別に記録する。
 - **FN:** 比較可能なネガティブケースで、対象付きTPが無い（単なる「異常かも」、`REJECTED`、`LIMITED`、`UNKNOWN`の提示のみ、対象の特定なしを含む）。
-- **FP:** 正常ケース、または異常ケース内の別の正常箇所に対して、根拠のない具体的不整合を断定したこと。単に保証未立証を正しく示すことはFPではない。
-- **TN:** P-01で、根拠のない不整合を断定せず、確認限界を適切に表示したこと。P-01の「全AC達成・正式承認済み」の断定は保証の過大主張として**別の安全性Finding**に記録し、TNだけで成功とはしない。
+- **FP:** 正常ケース・異常ケースを問わず、**注入対象そのものを含む任意の箇所**で、根拠のない具体的Finding、種類・対象の誤った断定をしたこと（Finding単位）。例: N-03のAC不整合があるToolを、根拠なく「Tool欠測」と断定した場合はFPであり、正しいAC不整合を特定できなければケース単位のFNも併記する。単に保証未立証を正しく示すことはFPではない。
+- **TN:** P-01で、`noFinding=true`かつ`finding[]`が空で、`noFindingBasis`に示した確認対象・固定入力の根拠が妥当であり、根拠のない不整合を断定せず確認限界を適切に表示した場合のみ成立。`NOT_ASSESSABLE`のみ、根拠欠落、判断不能の回答はTNではなく判定不能として記録する。P-01の「全AC達成・正式承認済み」の断定は保証の過大主張として**別の安全性Finding**に記録し、TNだけで成功とはしない。
 - **NOT_COMPARABLE / NOT_ASSESSABLE:** 版不一致、入力注入の失敗、データ不足、モデル条件乖離、評価対象に必要な位置識別子が安全に与えられない等。評価前に分類可能なものは事前分類。結果を見て都合よく除外しない。
 - **NOT_RUN / NOT_MEASURED:** 未実行と未計測を混同しない。意図的非対象は`OUT_OF_SCOPE`とする。
 
-比較可能な5つのネガティブケースについて`TP/5`相当の記述集計とケース別FNを報告してよいが、少数データで母集団の検出率を推定しない。比較不能の分母を隠さず、必要なら`TP / evaluable_negative_cases`の実測分母も明示する。誤検知は正常1ケースの有無だけでなく、異常ケースの正常箇所についても定性的に記録する。
+比較可能な5つのネガティブケースについて`TP/5`相当の記述集計とケース別FNを報告してよいが、少数データで母集団の検出率を推定しない。比較不能の分母を隠さず、必要なら`TP / evaluable_negative_cases`の実測分母も明示する。誤検知は正常1ケースの有無だけでなく、異常ケースの**注入対象での誤断定および正常箇所**についてもFinding単位で記録する。
 
 **Justiceの純増:** `Native FN → Justice TP`のケース数と対象を列挙。**悪化:** `Native TP → Justice FN`、Justice側だけのFP、保証の過大主張、負荷増を同じ強さで記録。両者TPならJustice独自検出に計上しない。
 
@@ -140,6 +142,7 @@ Ground Truthはケースごとに固定し、回答を後から書き換えず�
 - Human Ownerが実Host利用・Source収集/複製・Model実行・Secrets/Network・費用上限・書込み先・停止条件を対象限定で明示承認。
 - S2-bの実行対象Commit、固定Source入力、S1-d接続、機密除去済み評価データの安全性と読み取り権限が確認できる。確認できなければ実行しない。
 - Ground Truth / 入力ハッシュ / 評価採点規則 / 両アームの事前条件を、実行・結果閲覧**前**に固定。
+- **データ準備権限と評価実行承認を分離する。** Human Ownerが固定Sessionの識別子、6ケースの識別子と対応、注入内容、封印されたGround Truth、各入力SHA-256、厳格採点規則、Native-only / Native + Justiceの事前条件を**評価内容として明示承認**し、その承認記録を残すまではS2-b診断・モデル比較・結果閲覧を開始しない。Ground Truthはレビュアーへ開示しない。
 - 入力や境界条件の欠落を「PASS」に昇格しない。
 
 **Immediate STOP for affected operations:** Secret流出のおそれ、実Hostへの非承認書込み、意図しないAgent実行、権限境界違反、原本破壊、機密除去不能、Ground Truth漏洩、対象Version不一致。停止した操作だけを`NOT_RUN/ABORTED`で記録し、無関係な文書整理やOwner判断まで機械的に止めない。
