@@ -130,3 +130,21 @@ No further tasks proceed without real baseline.
 - No synthetic fixture creation.
 - No new review or fix rounds.
 - No Git commit, push, PR, Issue, or Gate changes.
+
+## 2026-11-12 JST — Human Owner-provided development-session capture
+- Authority and scope: Human Owner explicitly requested this Git record of the observed capture, artifact hashes, test result, and the interruption/resumption note. This entry is **documentation only**; it does not authorize case injection, new model comparisons, additional independent review, source-code changes, or uploading raw API JSON.
+- Provenance: Human Owner executed the collection/verification on their own OpenCode v2.2.5 OC2 Phase 5 R5 Sandbox and Ubuntu host. The outputs below were shared in the conversation; the raw files and tools' internal contents were **not independently inspected** by this recorder.
+- Development Session ID: `ses_e34af0584ffeEkqLsNQo1iOVr4`. This is the newly created `s2c-session-inspector` development session, **not** the earlier `Greeting` session.
+- Captured `session.get` and unfiltered, ascending `session.message.list`: 37 messages on page 0; zero-message terminal page 1; `cursor.next=null` at the end; `PAGINATION_COMPLETE` for the **saved page sequence only**. This does not prove complete or authentic Host history.
+- Observed Tool entries: 32 (glob 3, patch 4, question 8, read 5, shell 7, skill 5). These are occurrences, not independently established successful Tool outcomes.
+- Raw-response evidence: `session.get.json`, `messages-page-000.json`, `messages-page-001.json`, `SHA256SUMS` retained **outside Git**, in a private host copy. `sha256sum -c SHA256SUMS` reported **3/3 PASS** both inside the Sandbox and after copying to the Ubuntu host. Individual raw-response digests were not provided to this recorder; no digest value is inferred or invented.
+- Development artifacts copied to a private host directory and their SHA-256 values matched the Sandbox originals:
+  - `DESIGN.md`: `4fb3c5e8f5ec69822883b1f0bb1e6b5c6f3c4881898b7bbc1cb14a27573ba355`
+  - `PLAN.md`: `31b8fd110a9d9ef06be234089a5825b151a0fc9d0342842ffe73e2867a161877`
+  - `inspector.py`: `a6fc007d2f205fc5c19f1ca33d6b578bbc5149a90c5f39ca05b399c7425bcb5a`
+  - `test_inspector.py`: `310e2008ce488bfbc49d95af5b5889ee4e03385cc403877e991cbc36b75ecd1d`
+- `DESIGN.md` has AC-01 through AC-06; `PLAN.md` has Task 1. Human Owner ran `python3 -B -m unittest discover -s . -p 'test_inspector.py' -v` on the copied artifacts and reported **7 tests PASS / 0 failures**. AC traceability and actual Tool outcomes have not been independently established.
+- **Execution condition (Human Owner report only):** One accidental `Esc` interruption occurred, followed by the literal instruction `continue` in the same Session. Interruption point, exact interruption semantics, and effects on timing/Token/Tool efficiency were not independently verified. **Do not treat this as uninterrupted execution or silently exclude the resumed turns.** This is not a defect finding and does not require a rerun of the completed development Task.
+- **Current status:** `SOURCE_CAPTURE_COMPLETE / HOST_COPY_SHA256_PASS / INPUT_ADMISSION_PENDING`. Earlier `OPENCODE_V225_SAVED_API_RESPONSE_UNAVAILABLE` describes the previous implementer's environment at the time of that report; Owner has now supplied credible capture evidence from a separate environment. The original Task 1 `COMPLETED_WITH_BLOCKER / NOT_ASSESSABLE` remains a historical result, **not** retroactively converted to Task 1 PASS.
+- **Remaining boundaries:** S2-b schema-valid Source wrapper, single TaskIntent, independent Manifest digest, explicit Task/Revision/Message/Tool/AC Correlation, redaction preserving identity, and Host/Artifact provenance still require validation; hence S2-c formal input admission and the six-case comparison are **not started**. No raw Message/Tool JSON, Secret, or host-specific path has been committed.
+- **Stop/Owner checkpoint:** This documentation-only update ends here. Task 2–5, model calls, case construction, additional reviews, and GitHub changes beyond this single record are not started automatically.
