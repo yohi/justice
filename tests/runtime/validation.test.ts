@@ -521,6 +521,39 @@ describe("validateRecordSchema", () => {
     ).toThrow("Invalid plan AcceptanceDecision");
   });
 
+  it("validates round-bearing decisions while reading historic roundless records", () => {
+    const [historicTaskGate, planGate, historicTaskAcceptance, planAcceptance] =
+      validDecisionVariants();
+    const legacyTaskGate = validDecision();
+    for (const reviewRound of [1, 2]) {
+      expect(() => validateRecordSchema({ ...historicTaskGate, reviewRound })).not.toThrow();
+      expect(() => validateRecordSchema({ ...historicTaskAcceptance, reviewRound })).not.toThrow();
+    }
+    for (const reviewRound of [0, -1, 1.5, Number.NaN, null, "1", undefined]) {
+      expect(() => validateRecordSchema({ ...historicTaskGate, reviewRound })).toThrow(
+        "Invalid task GateDecision identity",
+      );
+      expect(() => validateRecordSchema({ ...historicTaskAcceptance, reviewRound })).toThrow(
+        "Invalid task AcceptanceDecision",
+      );
+    }
+    // Historic records whose reviewRound field is absent stay readable.
+    expect(Object.hasOwn(historicTaskGate ?? {}, "reviewRound")).toBe(false);
+    expect(() => validateRecordSchema(historicTaskGate)).not.toThrow();
+    expect(() => validateRecordSchema(historicTaskAcceptance)).not.toThrow();
+    expect(() => validateRecordSchema(legacyTaskGate)).not.toThrow();
+    // A round without a TaskExecutionRef, or a task round on Plan decisions, is rejected.
+    expect(() => validateRecordSchema({ ...legacyTaskGate, reviewRound: 1 })).toThrow(
+      "Invalid legacy task GateDecision",
+    );
+    expect(() => validateRecordSchema({ ...planGate, reviewRound: 1 })).toThrow(
+      "Invalid plan GateDecision identity",
+    );
+    expect(() => validateRecordSchema({ ...planAcceptance, reviewRound: 1 })).toThrow(
+      "Invalid plan AcceptanceDecision",
+    );
+  });
+
   it("rejects an unknown AcceptanceDecision kind", () => {
     expect(() =>
       validateRecordSchema({

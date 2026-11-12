@@ -4,10 +4,10 @@ import { Effect } from "effect";
 import { SessionStateProvider } from "../core/session-state-provider";
 import { normalizeReviewResolutionArtifact } from "../core/review-resolution-artifact";
 import type { ReviewResolutionArtifact } from "../core/types";
-import type { GateContext } from "../core/v2/gate-context";
+import type { GateDryRunContext } from "../core/v2/gate-context";
 import type { PersistedLogRecord } from "../core/v2/observation-model";
 import { collectReviewScopes } from "../core/v2/review-scope";
-import { evaluate } from "../core/v2/rule-evaluation-engine";
+import { evaluateDryRun } from "../core/v2/rule-evaluation-engine";
 import { project, toSerializableProjectedState } from "../core/v2/state-projection";
 import type { ScopeReviewSummary } from "../core/v2/review-types";
 import type { ReadOnlyObservationLog } from "./observation-log-store";
@@ -72,7 +72,7 @@ export function defineJusticeGateTool(adapter: OpenCodeAdapter): ToolDefinition 
         if (currentRef === undefined) {
           return JSON.stringify({ verdict: "SKIP", reason: "no current task attempt" }, null, 2);
         }
-        const gateContext: GateContext = {
+        const gateContext: GateDryRunContext = {
           scope: "task",
           trigger: "task_complete",
           taskExecutionRef: currentRef,
@@ -83,7 +83,7 @@ export function defineJusticeGateTool(adapter: OpenCodeAdapter): ToolDefinition 
           reviewSummary: state.reviewSummary,
         };
         return JSON.stringify(
-          evaluate(gates, state.tasks.get(scopedTaskId)?.evidence ?? [], gateContext),
+          evaluateDryRun(gates, state.tasks.get(scopedTaskId)?.evidence ?? [], gateContext),
           null,
           2,
         );

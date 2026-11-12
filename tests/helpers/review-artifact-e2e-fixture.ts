@@ -303,6 +303,7 @@ export async function arrangeReviewArtifactCompletionFixture(
             gateType: "task" as const,
             taskId: context.taskExecutionRef.taskId,
             taskExecutionRef: context.taskExecutionRef,
+            reviewRound: context.reviewRound,
             verdict: "PASS" as const,
             reachableEnforcementLevel: "L1" as const,
             appliedEnforcementLevel: "L0" as const,

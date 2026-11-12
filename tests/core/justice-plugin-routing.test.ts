@@ -562,6 +562,7 @@ async function seedAcceptedDecision(
     kind: "task-acceptance",
     taskId,
     taskExecutionRef: { authorizationId, taskId, attemptId: taskAttemptId(taskId) },
+    reviewRound: 1,
     verdict: "accepted",
   });
 }

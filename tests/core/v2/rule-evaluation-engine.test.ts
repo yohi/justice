@@ -32,6 +32,7 @@ const BASE_CONTEXT = {
   agentId: "atlas",
   sessionId: "session-1",
   writerId: "writer-1",
+  reviewRound: 1,
   reviewScope: [],
 } satisfies GateContext;
 
@@ -230,11 +231,33 @@ describe("evaluate", () => {
         agentId: "atlas",
         sessionId: "session-1",
         writerId: "writer-1",
+        reviewRound: 1,
         reviewScope: [],
       },
     );
 
     expect(result).toMatchObject({ verdict: "WARN" });
+  });
+
+  it("propagates a proven task review round into the generated GateDecision", () => {
+    const provenContext: GateContext = { ...BASE_CONTEXT, reviewRound: 2 };
+    const result = evaluate(
+      [gate({ id: "tests", check: { type: "evidence_present", evidenceKind: "test" } })],
+      [toolEvidence({ evidenceId: "test-pass", kind: "test", outcome: "pass" })],
+      provenContext,
+    );
+
+    expect(result).toMatchObject({
+      recordType: "decision",
+      gateType: "task",
+      taskId: "task-1",
+      taskExecutionRef: BASE_CONTEXT.taskExecutionRef,
+      reviewRound: 2,
+      verdict: "PASS",
+    });
+    expect("reviewRound" in result && result.reviewRound).toBe(
+      provenContext.scope === "task" ? provenContext.reviewRound : undefined,
+    );
   });
 
   it("evaluates tool_observed after the caller resolves an active task", () => {

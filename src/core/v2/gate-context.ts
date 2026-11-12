@@ -7,6 +7,8 @@ export type GateContext =
       readonly scope: "task";
       readonly trigger: "task_complete" | "tool_observed";
       readonly taskExecutionRef: TaskExecutionRef;
+      /** F-003: proven Task Review round of the current correlation. Never guessed. */
+      readonly reviewRound: number;
       readonly agentId: ObservationAgentId;
       readonly sessionId: string;
       readonly writerId: string;
@@ -26,6 +28,12 @@ export type GateContext =
       readonly reviewScope: readonly string[];
       readonly reviewSummary?: { readonly byScope: ReadonlyMap<string, ScopeReviewSummary> };
     };
+
+/**
+ * Non-persistable dry-run context (internal `justice_gate` diagnostic): the
+ * review round is not proven there, so its output can never become a decision.
+ */
+export type GateDryRunContext = Omit<Extract<GateContext, { readonly scope: "task" }>, "reviewRound">;
 
 export type GatePendingAttemptContext =
   | {

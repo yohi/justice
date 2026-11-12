@@ -589,6 +589,15 @@ function isValidDelegatedExecutionBindingRecord(value: Record<string, unknown>):
   );
 }
 
+/**
+ * F-003: a Task decision `reviewRound` must be a positive safe integer when the
+ * field is present. Only a historic record whose field is entirely absent stays
+ * readable (and is excluded from current-round lookup).
+ */
+function isAbsentOrPositiveTaskReviewRound(r: Record<string, unknown>): boolean {
+  return !Object.hasOwn(r, "reviewRound") || isPositiveReviewRound(r.reviewRound);
+}
+
 function validateDecisionRecord(r: Record<string, unknown>): void {
   const hasGate = r.gateType !== undefined;
   const hasAcceptance = r.kind !== undefined;
@@ -635,7 +644,11 @@ function validateDecisionRecord(r: Record<string, unknown>): void {
       )
         throw new Error("Invalid task GateDecision scope");
       if (r.gateType === "task" && !Object.hasOwn(r, "taskExecutionRef")) {
-        if (typeof r.taskId !== "string" || r.taskId.length === 0)
+        if (
+          typeof r.taskId !== "string" ||
+          r.taskId.length === 0 ||
+          Object.hasOwn(r, "reviewRound")
+        )
           throw new Error("Invalid legacy task GateDecision");
         return;
       }
@@ -645,7 +658,8 @@ function validateDecisionRecord(r: Record<string, unknown>): void {
         typeof r.taskExecutionRef.taskId !== "string" ||
         typeof r.taskExecutionRef.attemptId !== "string" ||
         typeof r.taskId !== "string" ||
-        r.taskId !== r.taskExecutionRef.taskId
+        r.taskId !== r.taskExecutionRef.taskId ||
+        !isAbsentOrPositiveTaskReviewRound(r)
       )
         throw new Error("Invalid task GateDecision identity");
       return;
@@ -653,6 +667,7 @@ function validateDecisionRecord(r: Record<string, unknown>): void {
     if (
       Object.hasOwn(r, "taskId") ||
       Object.hasOwn(r, "taskExecutionRef") ||
+      Object.hasOwn(r, "reviewRound") ||
       typeof r.authorizationId !== "string" ||
       !isValidMandatoryRelativePath(r.planPath) ||
       typeof r.finalizationAttemptId !== "string" ||
@@ -673,6 +688,7 @@ function validateDecisionRecord(r: Record<string, unknown>): void {
       typeof r.taskExecutionRef.attemptId !== "string" ||
       typeof r.taskId !== "string" ||
       r.taskId !== r.taskExecutionRef.taskId ||
+      !isAbsentOrPositiveTaskReviewRound(r) ||
       !isOneOf(r.verdict, ["accepted", "rework-required", "blocked"])
     )
       throw new Error("Invalid task AcceptanceDecision");
@@ -682,6 +698,7 @@ function validateDecisionRecord(r: Record<string, unknown>): void {
     if (
       Object.hasOwn(r, "taskId") ||
       Object.hasOwn(r, "taskExecutionRef") ||
+      Object.hasOwn(r, "reviewRound") ||
       typeof r.authorizationId !== "string" ||
       !isValidMandatoryRelativePath(r.planPath) ||
       typeof r.finalizationAttemptId !== "string" ||

@@ -410,6 +410,7 @@ function authoritativeGateRecord(): PersistedLogRecord {
     gateType: "task",
     taskId: "task-1",
     taskExecutionRef: ref,
+    reviewRound: 1,
     verdict: "PASS",
     reachableEnforcementLevel: "L1",
     appliedEnforcementLevel: "L0",
@@ -427,6 +428,7 @@ function taskAcceptanceRecord(
     kind: "task-acceptance",
     taskId: "task-1",
     taskExecutionRef: ref,
+    reviewRound: 1,
     verdict,
   } as unknown as PersistedLogRecord;
 }
@@ -588,6 +590,7 @@ describe("createGatePendingAttemptEvaluator", () => {
         appliedEnforcementLevel: "L0",
         taskId: "task-1",
         taskExecutionRef: ref,
+        reviewRound: 1,
         ruleResults: [],
       }),
       async () => ({ kind: "committed" }),
@@ -662,6 +665,7 @@ describe("createGatePendingAttemptEvaluator", () => {
         appliedEnforcementLevel: "L0",
         taskId: "task-1",
         taskExecutionRef: ref,
+        reviewRound: 1,
         ruleResults: [],
       }),
       recordAdvisory: async () => undefined,
@@ -690,6 +694,7 @@ describe("createGatePendingAttemptEvaluator", () => {
         appliedEnforcementLevel: "L0",
         taskId: "task-1",
         taskExecutionRef: ref,
+        reviewRound: 1,
         ruleResults: [],
       }),
       2,
@@ -723,6 +728,7 @@ describe("createGatePendingAttemptEvaluator", () => {
         appliedEnforcementLevel: "L0",
         taskId: "task-1",
         taskExecutionRef: ref,
+        reviewRound: 1,
         ruleResults: [],
       }),
       2,
@@ -750,6 +756,7 @@ describe("createGatePendingAttemptEvaluator", () => {
         appliedEnforcementLevel: "L0",
         taskId: "task-1",
         taskExecutionRef: ref,
+        reviewRound: 1,
         ruleResults: [],
       }),
       3,
@@ -834,6 +841,7 @@ describe("createGatePendingAttemptEvaluator", () => {
           appliedEnforcementLevel: "L0",
           taskId: "task-1",
           taskExecutionRef: ref,
+          reviewRound: 1,
           ruleResults: [],
         };
       },
@@ -862,6 +870,7 @@ describe("createGatePendingAttemptEvaluator", () => {
         appliedEnforcementLevel: "L0",
         taskId: "task-1",
         taskExecutionRef: ref,
+        reviewRound: 1,
         ruleResults: [],
       }),
       async () => ({ kind: "failed" }),
@@ -888,6 +897,7 @@ describe("createGatePendingAttemptEvaluator", () => {
         appliedEnforcementLevel: "L0",
         taskId: "task-1",
         taskExecutionRef: ref,
+        reviewRound: 1,
         ruleResults: [],
       }),
       async (input) => {
@@ -1221,6 +1231,7 @@ describe("createGatePendingAttemptEvaluator", () => {
         appliedEnforcementLevel: "L0",
         taskId: "task-1",
         taskExecutionRef: ref,
+        reviewRound: 1,
         ruleResults: [],
       }),
       async () => ({ kind: "committed" }),
@@ -1410,6 +1421,7 @@ describe("authorization identity", () => {
       kind: "task-acceptance",
       taskId: "task-1",
       taskExecutionRef: ref,
+      reviewRound: 1,
       verdict: "accepted",
     } as unknown as PersistedLogRecord;
     const secondAcceptance = { ...firstAcceptance, sequence: 10 };
@@ -1454,6 +1466,7 @@ describe("current review correlation admission (F-001)", () => {
     appliedEnforcementLevel: "L0",
     taskId: "task-1",
     taskExecutionRef: ref,
+    reviewRound: 1,
     ruleResults: [],
   } as const;
 
@@ -1480,7 +1493,11 @@ describe("current review correlation admission (F-001)", () => {
     records: readonly PersistedLogRecord[],
     taskContext: GatePendingAttemptContext = context(),
   ): Promise<EvaluationOutcome> {
-    const counter = countingEvaluator(async () => passingTaskGate);
+    // Fixture echoes the proven round so retry rounds produce a matching Gate identity.
+    const counter = countingEvaluator(async ({ context: gateContext }) => ({
+      ...passingTaskGate,
+      reviewRound: gateContext.scope === "task" ? gateContext.reviewRound : 0,
+    }));
     const fixture = dependencies(counter.evaluateRules, async () => ({ kind: "committed" }));
     const result = await createGatePendingAttemptEvaluator({
       ...fixture.dependencies,
@@ -1941,6 +1958,7 @@ describe("execution and review evidence admission (F-002)", () => {
         appliedEnforcementLevel: "L0",
         taskId: "task-1",
         taskExecutionRef: ref,
+        reviewRound: 1,
         ruleResults: [{ ruleId: "required-tests", verdict: "FAIL", reason: "missing", evidenceRefs: [] }],
       }),
       async () => ({ kind: "committed" }),
@@ -1964,6 +1982,7 @@ describe("execution and review evidence admission (F-002)", () => {
         appliedEnforcementLevel: "L0",
         taskId: "task-1",
         taskExecutionRef: ref,
+        reviewRound: 1,
         ruleResults: [
           {
             ruleId: "required-tests",
@@ -2019,6 +2038,7 @@ describe("execution and review evidence admission (F-002)", () => {
           appliedEnforcementLevel: "L0",
           taskId: "task-1",
           taskExecutionRef: ref,
+          reviewRound: 1,
           ruleResults: [],
         };
       },
@@ -2103,6 +2123,7 @@ describe("execution and review evidence admission (F-002)", () => {
             appliedEnforcementLevel: "L0",
             taskId: "task-1",
             taskExecutionRef: ref,
+            reviewRound: 1,
             ruleResults: [],
           };
         },
@@ -2144,5 +2165,260 @@ describe("execution and review evidence admission (F-002)", () => {
       "task",
       "task-acceptance",
     ]);
+  });
+});
+
+describe("round-safe GateDecision / AcceptanceDecision (F-003)", () => {
+  const decisionEnvelope = (sequence: number): Record<string, unknown> => ({
+    schemaVersion: 1,
+    sequence,
+    timestamp: `2026-09-18T00:09:${String(sequence).padStart(2, "0")}.000Z`,
+    agentId: "atlas",
+    sessionId: "session-1",
+    writerId: "decision-writer",
+    recordType: "decision",
+  });
+
+  function taskGatePayload(
+    verdict: "PASS" | "WARN" | "FAIL",
+    reviewRound: number,
+    overrides: Record<string, unknown> = {},
+  ): Awaited<ReturnType<GateEvaluationDependencies["evaluateRules"]>> {
+    return {
+      recordType: "decision",
+      gateType: "task",
+      verdict,
+      reachableEnforcementLevel: "L1",
+      appliedEnforcementLevel: "L0",
+      taskId: "task-1",
+      taskExecutionRef: ref,
+      reviewRound,
+      ruleResults: [],
+      ...overrides,
+    } as Awaited<ReturnType<GateEvaluationDependencies["evaluateRules"]>>;
+  }
+
+  /** `reviewRound: undefined` omits the field (historic roundless record). */
+  function taskGate(
+    sequence: number,
+    verdict: "PASS" | "WARN" | "FAIL",
+    reviewRound: number | undefined,
+  ): PersistedLogRecord {
+    return {
+      ...decisionEnvelope(sequence),
+      gateType: "task",
+      taskId: "task-1",
+      taskExecutionRef: ref,
+      ...(reviewRound === undefined ? {} : { reviewRound }),
+      verdict,
+      reachableEnforcementLevel: "L1",
+      appliedEnforcementLevel: "L0",
+      ruleResults: [],
+    } as unknown as PersistedLogRecord;
+  }
+
+  function taskAcceptance(
+    sequence: number,
+    verdict: "accepted" | "rework-required" | "blocked",
+    reviewRound: number | undefined,
+  ): PersistedLogRecord {
+    return {
+      ...decisionEnvelope(sequence),
+      kind: "task-acceptance",
+      taskId: "task-1",
+      taskExecutionRef: ref,
+      ...(reviewRound === undefined ? {} : { reviewRound }),
+      verdict,
+    } as unknown as PersistedLogRecord;
+  }
+
+  /** Task at gate_pending whose current proven review is Round 2 (Round 1 incomplete). */
+  function round2Records(): readonly PersistedLogRecord[] {
+    return [
+      ...taskTransitionRecords(),
+      ...reviewRecords([
+        { type: "terminal", correlation: taskCorrelation(1), terminalReason: "review_incomplete" },
+        { type: "terminal", correlation: taskCorrelation(2) },
+        { type: "observed", correlation: taskCorrelation(2) },
+      ]),
+    ];
+  }
+
+  async function runWith(
+    records: readonly PersistedLogRecord[],
+    evaluateRules: GateEvaluationDependencies["evaluateRules"],
+  ): Promise<{
+    readonly result: GatePendingAttemptResult;
+    readonly decisions: readonly PendingDecisionRecord[];
+    readonly transitions: readonly string[];
+  }> {
+    const transitions: string[] = [];
+    const fixture = dependencies(evaluateRules, async (input) => {
+      transitions.push(input.to);
+      return { kind: "committed" };
+    });
+    const result = await createGatePendingAttemptEvaluator({
+      ...fixture.dependencies,
+      readDurableRecords: async () => records,
+    }).evaluateGatePendingAttempt(context());
+    return { result, decisions: fixture.decisions, transitions };
+  }
+
+  const mustNotEvaluate: GateEvaluationDependencies["evaluateRules"] = async () => {
+    throw new Error("evaluateRules must not run");
+  };
+
+  it("propagates a proven task review round into persisted Gate and Acceptance", async () => {
+    const reviewOnlyGate = {
+      id: "review-clean",
+      gateType: "task" as const,
+      trigger: { scope: "task" as const, on: "task_complete" as const },
+      check: { type: "review_open_items" as const, minimumSeverity: "major" as const },
+      onViolation: "fail" as const,
+      onMissingEvidence: "fail" as const,
+      enabled: true,
+    };
+    const contexts: unknown[] = [];
+    const { result, decisions } = await runWith(round2Records(), async (input) => {
+      contexts.push(input.context);
+      return evaluate([reviewOnlyGate], input.admittedExecutionEvidence, input.context);
+    });
+
+    expect(contexts).toEqual([expect.objectContaining({ scope: "task", reviewRound: 2 })]);
+    expect(result).toMatchObject({ kind: "decided", decision: { reviewRound: 2, verdict: "PASS" } });
+    expect(decisions).toEqual([
+      expect.objectContaining({ gateType: "task", taskExecutionRef: ref, reviewRound: 2 }),
+      expect.objectContaining({ kind: "task-acceptance", reviewRound: 2, verdict: "accepted" }),
+    ]);
+  });
+
+  it("blocks a Gate callback whose round or identity differs from the proven correlation", async () => {
+    for (const payload of [
+      taskGatePayload("PASS", 1),
+      taskGatePayload("PASS", 3),
+      taskGatePayload("PASS", 2, { reviewRound: undefined }),
+      taskGatePayload("PASS", 2, { taskExecutionRef: { ...ref, attemptId: "attempt-0" } }),
+      taskGatePayload("PASS", 2, { taskId: "task-2" }),
+    ]) {
+      const { result, decisions, transitions } = await runWith(round2Records(), async () => payload);
+      expect(result).toEqual({ kind: "blocked", advisory: "gate_decision_identity_mismatch" });
+      expect(decisions).toHaveLength(0);
+      expect(transitions).toHaveLength(0);
+    }
+  });
+
+  it("records a blocked Acceptance only with the proven review round", async () => {
+    const { result, decisions } = await runWith(round2Records(), async () => ({
+      kind: "insufficient_evidence",
+      reason: "missing",
+    }));
+    expect(result).toEqual({ kind: "blocked", advisory: "gate_evaluation_blocked" });
+    expect(decisions).toEqual([
+      expect.objectContaining({ kind: "task-acceptance", verdict: "blocked", reviewRound: 2 }),
+    ]);
+  });
+
+  it("rejects replay of a historic roundless task decision", async () => {
+    const historicGate = taskGate(1, "PASS", undefined);
+    const historicAcceptance = taskAcceptance(2, "accepted", undefined);
+    expect(findCurrentGateDecision([historicGate], taskCorrelation(1)).kind).toBe("conflict");
+    expect(findCurrentAcceptanceDecision([historicAcceptance], taskCorrelation(1)).kind).toBe(
+      "conflict",
+    );
+    for (const replay of [[historicGate, historicAcceptance], [historicGate], [historicAcceptance]]) {
+      const { result, decisions } = await runWith([...lifecycleRecords(), ...replay], mustNotEvaluate);
+      expect(result).toEqual({ kind: "blocked", advisory: "decision_integrity_violation" });
+      expect(decisions).toHaveLength(0);
+    }
+    // A decision with an explicit older round is never adopted for the current round.
+    const oldRound = [taskGate(1, "PASS", 1), taskAcceptance(2, "accepted", 1)];
+    expect(findCurrentGateDecision(oldRound, taskCorrelation(2))).toEqual({ kind: "missing" });
+    expect(findCurrentAcceptanceDecision(oldRound, taskCorrelation(2))).toEqual({ kind: "missing" });
+    const current = await runWith([...round2Records(), ...oldRound], async () =>
+      taskGatePayload("FAIL", 2),
+    );
+    expect(current.result).toMatchObject({ kind: "decided", decision: { reviewRound: 2, verdict: "FAIL" } });
+    expect(current.decisions).toEqual([
+      expect.objectContaining({ gateType: "task", reviewRound: 2 }),
+      expect.objectContaining({ kind: "task-acceptance", reviewRound: 2, verdict: "rework-required" }),
+    ]);
+  });
+
+  it("rejects conflicting Gate and Acceptance verdicts", async () => {
+    for (const [verdict, acceptanceVerdict] of [
+      ["PASS", "rework-required"],
+      ["PASS", "blocked"],
+      ["FAIL", "accepted"],
+      ["WARN", "accepted"],
+      ["FAIL", "blocked"],
+    ] as const) {
+      const { result, decisions, transitions } = await runWith(
+        [...lifecycleRecords(), taskGate(1, verdict, 1), taskAcceptance(2, acceptanceVerdict, 1)],
+        mustNotEvaluate,
+      );
+      expect(result).toEqual({ kind: "blocked", advisory: "decision_integrity_violation" });
+      expect(decisions).toHaveLength(0);
+      expect(transitions).toHaveLength(0);
+    }
+    const consistent = await runWith(
+      [...lifecycleRecords(), taskGate(1, "WARN", 1), taskAcceptance(2, "rework-required", 1)],
+      mustNotEvaluate,
+    );
+    expect(consistent.result).toMatchObject({ kind: "decided", decision: { verdict: "WARN" } });
+  });
+
+  it("rejects duplicate current decisions", async () => {
+    for (const records of [
+      [taskGate(1, "PASS", 1), taskGate(2, "PASS", 1), taskAcceptance(3, "accepted", 1)],
+      [taskGate(1, "PASS", 1), taskAcceptance(2, "accepted", 1), taskAcceptance(3, "accepted", 1)],
+      [taskGate(1, "PASS", 1), taskGate(2, "PASS", undefined)],
+    ]) {
+      const { result, decisions } = await runWith([...lifecycleRecords(), ...records], mustNotEvaluate);
+      expect(result).toEqual({ kind: "blocked", advisory: "decision_integrity_violation" });
+      expect(decisions).toHaveLength(0);
+    }
+  });
+
+  it("does not append a second Acceptance after a blocked Acceptance for the current round", async () => {
+    let records: readonly PersistedLogRecord[] = lifecycleRecords();
+    let outcome: "insufficient" | "pass" = "insufficient";
+    const fixture = dependencies(
+      async () =>
+        outcome === "insufficient"
+          ? { kind: "insufficient_evidence", reason: "missing" }
+          : taskGatePayload("PASS", 1),
+      async () => ({ kind: "committed" }),
+    );
+    const decisions: PendingDecisionRecord[] = [];
+    const evaluator = createGatePendingAttemptEvaluator({
+      ...fixture.dependencies,
+      readDurableRecords: async () => records,
+      appendDecision: async (record) => {
+        decisions.push(record);
+        records = [
+          ...records,
+          { ...record, sequence: 100 + decisions.length } as unknown as PersistedLogRecord,
+        ];
+        return { kind: "committed" };
+      },
+    });
+
+    await expect(evaluator.evaluateGatePendingAttempt(context())).resolves.toEqual({
+      kind: "blocked",
+      advisory: "gate_evaluation_blocked",
+    });
+    outcome = "pass";
+    await expect(evaluator.evaluateGatePendingAttempt(context())).resolves.toEqual({
+      kind: "blocked",
+      advisory: "acceptance_blocked",
+    });
+
+    expect(decisions).toEqual([
+      expect.objectContaining({ kind: "task-acceptance", verdict: "blocked", reviewRound: 1 }),
+    ]);
+    expect(findCurrentAcceptanceDecision(records, taskCorrelation(1))).toMatchObject({
+      kind: "found",
+      decision: { verdict: "blocked" },
+    });
   });
 });
