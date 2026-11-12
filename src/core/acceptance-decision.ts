@@ -593,18 +593,52 @@ export function admitExecutionEvidence(
   return { status, admitted, excluded };
 }
 
+function evidenceRefKey(ref: FullEvidenceRef): string {
+  return JSON.stringify([ref.agentId, ref.sessionId, ref.writerId, ref.sequence, ref.evidenceId]);
+}
+
 /**
- * True when a non-PASS Gate outcome rests only on absent evidence: no non-PASS
- * rule references any evidence. Under F-002 such absence is not proven failure
- * (required evidence may be UNATTRIBUTED). If any non-PASS rule carries refs, an
- * observed violation exists and the formal FAIL/WARN verdict is kept.
+ * Keys of admitted execution evidence whose outcome is indeterminate
+ * (`unknown`/absent). A rule citing only such refs has not observed a violation.
  */
-function restsOnUnprovenEvidence(result: GateDecisionPayload): boolean {
+function indeterminateEvidenceKeys(admitted: readonly ProjectedEvidence[]): ReadonlySet<string> {
+  const keys = new Set<string>();
+  for (const item of admitted) {
+    const outcome =
+      item.evidence.sourceClass === "tool_output" ? item.evidence.interpretation?.outcome : undefined;
+    if (outcome === undefined || outcome === "unknown") keys.add(evidenceRefKey(item.ref));
+  }
+  return keys;
+}
+
+/**
+ * True when a non-PASS Gate outcome rests only on unproven evidence AND a
+ * fail-closed rule withholds a needed proof.
+ *
+ * - A non-PASS rule is "unproven" when it cites no evidence, or only admitted
+ *   execution evidence with indeterminate outcomes. Any other ref is an observed
+ *   violation, which keeps the formal FAIL/WARN verdict.
+ * - The rule engine maps missing evidence through `onMissingEvidence`
+ *   (`fail` -> FAIL, `warn`/`pass` -> WARN). An unproven WARN is therefore an
+ *   advisory outcome and proceeds as a formal WARN Gate + rework-required
+ *   Acceptance (pre-F-002 behavior). Only an unproven FAIL (fail-closed missing
+ *   evidence) blocks. Unproven evidence is never converted into PASS.
+ */
+function restsOnUnprovenEvidence(
+  result: GateDecisionPayload,
+  admitted: readonly ProjectedEvidence[],
+): boolean {
+  const indeterminate = indeterminateEvidenceKeys(admitted);
   const nonPass = result.ruleResults.filter((rule) => rule.verdict !== "PASS");
+  const unproven = (rule: GateDecisionPayload["ruleResults"][number]): boolean =>
+    rule.evidenceRefs.every(
+      (ref) => ref.kind === "full" && indeterminate.has(evidenceRefKey(ref)),
+    );
   return (
     result.verdict !== "PASS" &&
     nonPass.length > 0 &&
-    nonPass.every((rule) => rule.evidenceRefs.length === 0)
+    nonPass.every(unproven) &&
+    nonPass.some((rule) => rule.verdict === "FAIL")
   );
 }
 
@@ -916,9 +950,10 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
       }
       if (!gateMatchesAdmittedCorrelation(result, context, correlation))
         return { kind: "blocked", advisory: "gate_decision_identity_mismatch" };
-      if (context.scope === "task" && restsOnUnprovenEvidence(result)) {
-        // Missing / UNATTRIBUTED / CONFLICT execution evidence is not an observed
-        // FAIL: never record a formal Gate verdict from it, only a blocked Acceptance.
+      if (context.scope === "task" && restsOnUnprovenEvidence(result, execution.admitted)) {
+        // Missing / UNATTRIBUTED / CONFLICT / indeterminate execution evidence on a
+        // fail-closed rule is not an observed FAIL: never record a formal Gate
+        // verdict from it, only a blocked Acceptance.
         if (!(await isCurrentActiveAuthorization(correlation, dependencies.findAuthorizationById)))
           return { kind: "blocked", advisory: "review_authorization_not_active" };
         const blocked = await appendBlockedAcceptanceIfMissing(dependencies, context, correlation);

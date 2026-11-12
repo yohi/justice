@@ -15,6 +15,8 @@ import type { GatePendingAttemptContext } from "../../src/core/v2/gate-context";
 import type { PersistedLogRecord } from "../../src/core/v2/observation-model";
 import { project } from "../../src/core/v2/state-projection";
 import { evaluate } from "../../src/core/v2/rule-evaluation-engine";
+import { DEFAULT_GATES } from "../../src/core/v2/default-gates";
+import type { GateRule } from "../../src/core/v2/gate-definition";
 import type { PendingDecisionRecord } from "../../src/core/v2/decision-model";
 import type {
   CurrentReviewAdmission,
@@ -2165,6 +2167,103 @@ describe("execution and review evidence admission (F-002)", () => {
       "task",
       "task-acceptance",
     ]);
+  });
+
+  function evidenceGate(
+    id: string,
+    evidenceKind: "test" | "build",
+    onMissingEvidence: "pass" | "warn" | "fail",
+  ): GateRule {
+    return {
+      id,
+      gateType: "task",
+      trigger: { scope: "task", on: "task_complete" },
+      check: { type: "evidence_outcome", evidenceKind, requireOutcome: "pass" },
+      onViolation: "fail",
+      onMissingEvidence,
+      enabled: true,
+    };
+  }
+
+  async function runRealGates(
+    gates: readonly GateRule[],
+    records: readonly PersistedLogRecord[],
+  ): Promise<{
+    readonly result: GatePendingAttemptResult;
+    readonly decisions: readonly PendingDecisionRecord[];
+    readonly transitions: readonly string[];
+  }> {
+    const transitions: string[] = [];
+    const fixture = dependencies(
+      async ({ context: gateContext, admittedExecutionEvidence }) =>
+        evaluate(gates, admittedExecutionEvidence, gateContext),
+      async (input) => {
+        transitions.push(input.to);
+        return { kind: "committed" };
+      },
+    );
+    const result = await createGatePendingAttemptEvaluator({
+      ...fixture.dependencies,
+      readDurableRecords: async () => records,
+    }).evaluateGatePendingAttempt(context());
+    return { result, decisions: fixture.decisions, transitions };
+  }
+
+  it("keeps DEFAULT_GATES advisory: unattributed child evidence yields a formal WARN and rework", async () => {
+    // Child-session test/build evidence cannot be attributed by the parent binding.
+    const records = [
+      ...lifecycleRecords(),
+      toolRecord(1, { callId: "child-test", sessionId: "child-session-1", evidenceId: "child-test" }),
+      toolRecord(2, { callId: "child-build", sessionId: "child-session-1", evidenceId: "child-build" }),
+    ];
+    const { result, decisions, transitions } = await runRealGates(DEFAULT_GATES, records);
+
+    expect(result).toMatchObject({ kind: "decided", decision: { verdict: "WARN", reviewRound: 1 } });
+    expect(decisions).toEqual([
+      expect.objectContaining({ gateType: "task", verdict: "WARN", reviewRound: 1 }),
+      expect.objectContaining({ kind: "task-acceptance", verdict: "rework-required", reviewRound: 1 }),
+    ]);
+    expect(decisions.some((record) => "kind" in record && record.verdict === "blocked")).toBe(false);
+    expect(transitions).toEqual(["rework_required"]);
+  });
+
+  it("still blocks when a fail-closed onMissingEvidence rule has no admitted evidence", async () => {
+    const records = [
+      ...lifecycleRecords(),
+      toolRecord(1, { callId: "child-test", sessionId: "child-session-1", evidenceId: "child-test" }),
+    ];
+    const { result, decisions, transitions } = await runRealGates(
+      [evidenceGate("required-tests", "test", "fail"), evidenceGate("build-green", "build", "warn")],
+      records,
+    );
+
+    expect(result).toEqual({ kind: "blocked", advisory: "execution_evidence_not_proven" });
+    expect(decisions).toEqual([
+      expect.objectContaining({ kind: "task-acceptance", verdict: "blocked", reviewRound: 1 }),
+    ]);
+    expect(transitions).toEqual([]);
+  });
+
+  it("does not treat admitted evidence with only unknown outcomes as an observed violation", async () => {
+    const unknownTool = {
+      ...toolRecord(1, { callId: "call-impl", evidenceId: "e-unknown" }),
+      evidence: {
+        ...testEvidence("e-unknown"),
+        interpretation: { outcome: "unknown", basis: "parsed_output", provenance: "derived", derivedFrom: [] },
+      },
+    } as unknown as PersistedLogRecord;
+    const records = [...lifecycleRecords(), bindingRecord(1, "call-impl"), unknownTool];
+    expect(admitExecutionEvidence(admissionScope, records).admitted).toHaveLength(1);
+
+    const failClosed = await runRealGates([evidenceGate("required-tests", "test", "fail")], records);
+    expect(failClosed.result).toEqual({ kind: "blocked", advisory: "execution_evidence_not_proven" });
+    expect(failClosed.decisions).toEqual([
+      expect.objectContaining({ kind: "task-acceptance", verdict: "blocked" }),
+    ]);
+
+    const advisory = await runRealGates([evidenceGate("required-tests", "test", "warn")], records);
+    expect(advisory.result).toMatchObject({ kind: "decided", decision: { verdict: "WARN" } });
+    expect(advisory.transitions).toEqual(["rework_required"]);
   });
 });
 
