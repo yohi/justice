@@ -71,6 +71,88 @@ function currentTaskLifecycleEvents(): readonly PersistedLogRecord[] {
   })) as readonly PersistedLogRecord[];
 }
 
+function completedReviewDispatch(
+  correlation: Record<string, unknown>,
+): readonly PersistedLogRecord[] {
+  const base = {
+    schemaVersion: 1,
+    agentId: "atlas",
+    sessionId: "s-1",
+    writerId: "w-review",
+    recordType: "observation",
+  };
+  const dispatch = {
+    ...base,
+    kind: "review_dispatch_transition",
+    transitionId: "review-transition-1",
+    parentSessionId: "s-1",
+    correlation,
+    expectedCategory: "sp-review",
+  };
+  const observedExecution = {
+    schemaVersion: 1,
+    provenance: "observed",
+    reviewExecutionEventId: "event-review-call-1",
+    parentSessionId: "s-1",
+    callId: "review-call-1",
+    childSessionId: "review-child-1",
+    correlation,
+  };
+  const reviewArtifact = {
+    schemaVersion: 1,
+    reviewKind: "task-review",
+    reviewSource: "sp-review",
+    correlation,
+    observedExecution,
+    complete: true,
+    findings: [],
+  };
+  const artifactConsumption = { artifactId: "artifact-1", digest: "sha256:artifact-1" };
+  return [
+    { ...dispatch, sequence: 1, timestamp: "2026-07-01T00:01:01.000Z", from: null, to: "pending" },
+    {
+      ...dispatch,
+      sequence: 2,
+      timestamp: "2026-07-01T00:01:02.000Z",
+      from: "pending",
+      to: "claimed",
+      callId: "review-call-1",
+      artifactReservation: {
+        status: "usable",
+        artifactId: "artifact-1",
+        artifactPath: ".justice/review/artifact-1.json",
+        leasePath: ".justice/review/artifact-1.lease",
+        artifactIdentity: { device: "1", inode: "1" },
+      },
+    },
+    {
+      ...base,
+      sequence: 3,
+      timestamp: "2026-07-01T00:01:03.000Z",
+      kind: "review_completion_staged",
+      parentSessionId: "s-1",
+      staging: {
+        callId: "review-call-1",
+        correlation,
+        artifactConsumption,
+        reviewArtifact,
+        observedExecution,
+      },
+    },
+    {
+      ...dispatch,
+      sequence: 4,
+      timestamp: "2026-07-01T00:01:04.000Z",
+      from: "claimed",
+      to: "terminal",
+      callId: "review-call-1",
+      terminalReason: "completed",
+      artifactConsumption,
+      reviewArtifact,
+    },
+  ] as unknown as readonly PersistedLogRecord[];
+}
+
 function makeLogStore(events: readonly PersistedLogRecord[] = currentTaskLifecycleEvents()): {
   store: ObservationLogStore;
   appended: AppendedRecord[];
@@ -189,31 +271,9 @@ describe("ObservationHandler gate evaluation", () => {
       items: [],
       isCompleteSnapshot: true,
     };
-    // F-001: the current review correlation must be proven by a completed
-    // terminal dispatch slot, not by a session/scope match alone.
-    const dispatchBase = {
-      schemaVersion: 1,
-      agentId: "atlas",
-      sessionId: "s-1",
-      writerId: "w-review",
-      recordType: "observation",
-      kind: "review_dispatch_transition",
-      transitionId: "review-transition-1",
-      parentSessionId: "s-1",
-      correlation: reviewCorrelation,
-      expectedCategory: "sp-review",
-    };
-    const completedDispatch = [
-      { ...dispatchBase, sequence: 1, timestamp: "2026-07-01T00:01:01.000Z", from: null, to: "pending" },
-      {
-        ...dispatchBase,
-        sequence: 2,
-        timestamp: "2026-07-01T00:01:02.000Z",
-        from: "pending",
-        to: "terminal",
-        terminalReason: "completed",
-      },
-    ] as unknown as readonly PersistedLogRecord[];
+    // F-001/F-002: the current review correlation must be proven by the durable
+    // claimed -> staged -> completed terminal history, not by a session/scope match alone.
+    const completedDispatch = completedReviewDispatch(reviewCorrelation);
     const { store, appended } = makeLogStore([
       ...currentTaskLifecycleEvents(),
       reviewObserved,
@@ -249,6 +309,86 @@ describe("ObservationHandler gate evaluation", () => {
       sessionId: "s-1",
       writerId: "w-test",
     });
+  });
+
+  it("never feeds projected task evidence or the global review summary to the Rule Engine", async () => {
+    const reviewCorrelation = {
+      reviewKind: "task-review",
+      taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" },
+      reviewRound: 1,
+    } as const;
+    const records = [
+      ...currentTaskLifecycleEvents(),
+      {
+        schemaVersion: 1,
+        timestamp: "2026-07-01T00:00:07.000Z",
+        agentId: "atlas",
+        sessionId: "s-1",
+        writerId: "w-test",
+        taskId: "task-1",
+        recordType: "observation",
+        sequence: 7,
+        kind: "review_observed",
+        reviewScope: "task:task-1",
+        correlation: reviewCorrelation,
+        items: [],
+        isCompleteSnapshot: true,
+      },
+      // Same task, but produced by a call with no durable implementation binding
+      // (e.g. an independent child-session tool): it must stay UNATTRIBUTED.
+      {
+        schemaVersion: 1,
+        timestamp: "2026-07-01T00:00:08.000Z",
+        agentId: "atlas",
+        sessionId: "s-1",
+        writerId: "w-test",
+        taskId: "task-1",
+        recordType: "observation",
+        sequence: 8,
+        kind: "tool_executed",
+        toolName: "bash",
+        callId: "child-tool-1",
+        evidence: {
+          evidenceId: "e-unbound",
+          kind: "test",
+          sourceClass: "tool_output",
+          provenance: "observed",
+          toolOutputClass: "command_exec",
+          command: "bun test",
+          rawOutput: "pass",
+        },
+      },
+      ...completedReviewDispatch(reviewCorrelation),
+    ] as unknown as readonly PersistedLogRecord[];
+    const { store, appended } = makeLogStore(records);
+    const gateLoader = makeGateLoader([
+      {
+        id: "required-tests",
+        gateType: "task",
+        trigger: { scope: "task", on: "tool_observed" },
+        check: { type: "evidence_present", evidenceKind: "test" },
+        onViolation: "fail",
+        onMissingEvidence: "fail",
+        enabled: true,
+      },
+    ]);
+    const handler = new ObservationHandler({
+      logStore: store,
+      sessionStateProvider,
+      writerId: "w-test",
+      gateLoader,
+      findAuthorizationById: vi.fn(async () => activeAuthorization),
+    });
+
+    const response = await callGate(handler, "tool_observed", "task-1", "call-1", "atlas", "s-1");
+
+    expect(response).toEqual({ action: "proceed" });
+    expect(appended.some((entry) => entry.record.recordType === "decision" && "gateType" in entry.record)).toBe(
+      false,
+    );
+    expect(appended.map((entry) => entry.record)).toEqual([
+      expect.objectContaining({ kind: "task-acceptance", verdict: "blocked" }),
+    ]);
   });
 
   it("returns a gate_advisory inject and appends the DecisionRecord when a gate warns", async () => {

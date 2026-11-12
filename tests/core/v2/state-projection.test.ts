@@ -2,7 +2,10 @@
 import { describe, expect, it } from "vitest";
 import {
   fromSerializableProjectedState,
+  implementationCallBindingKey,
+  projectCompletedReviewCallHistory,
   projectDelegatedExecutionBindings,
+  projectImplementationCallBindings,
   projectObservedReviewExecution,
   project,
   toSerializableProjectedState,
@@ -905,5 +908,238 @@ describe("ProjectedState JSON round-trip", () => {
     expect(restored.reviewSummary.open.map((i) => i.itemKey)).toEqual(["a"]);
     // ...but the legacy authorship:null is not retained in newly produced state.
     expect(restored.reviewSummary).not.toHaveProperty("authorship");
+  });
+});
+
+describe("durable implementation call binding readback (F-002)", () => {
+  const bindingRef: TaskExecutionRef = { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" };
+
+  function bindingRecord(
+    sequence: number,
+    overrides: Record<string, unknown> = {},
+  ): ObservationRecord {
+    return {
+      schemaVersion: 1,
+      sequence,
+      timestamp: `2026-11-13T00:00:${String(sequence).padStart(2, "0")}.000Z`,
+      agentId: "atlas",
+      sessionId: "parent-1",
+      writerId: "w1",
+      taskId: "task-1",
+      recordType: "observation",
+      kind: "implementation_call_binding",
+      parentSessionId: "parent-1",
+      callId: "call-impl-1",
+      authorizationId: "auth-1",
+      taskExecutionRef: bindingRef,
+      ...overrides,
+    } as unknown as ObservationRecord;
+  }
+
+  it("restores durable implementation binding after restart", () => {
+    // The in-memory SessionStateProvider map is gone after a restart; only the
+    // durable record proves (parentSessionId, callId) -> TaskExecutionRef.
+    const records = [bindingRecord(1), bindingRecord(2, { callId: "call-impl-2", taskExecutionRef: { ...bindingRef, attemptId: "attempt-2" } })];
+    const bindings = projectImplementationCallBindings(records);
+
+    expect(bindings.get(implementationCallBindingKey("parent-1", "call-impl-1"))).toEqual({
+      kind: "bound",
+      parentSessionId: "parent-1",
+      callId: "call-impl-1",
+      taskExecutionRef: bindingRef,
+    });
+    expect(bindings.get(implementationCallBindingKey("parent-1", "call-impl-2"))).toMatchObject({
+      kind: "bound",
+      taskExecutionRef: { attemptId: "attempt-2" },
+    });
+    // Review-dispatch task call bindings remain a separate projection.
+    expect(project(records, REBUILT_AT).taskCallBindings).toEqual([]);
+    // An identical replayed record is idempotent, not a conflict.
+    expect(
+      projectImplementationCallBindings([bindingRecord(1), bindingRecord(3)]).get(
+        implementationCallBindingKey("parent-1", "call-impl-1"),
+      ),
+    ).toMatchObject({ kind: "bound" });
+  });
+
+  it("rejects conflicting bindings for one parent call", () => {
+    const conflicting = projectImplementationCallBindings([
+      bindingRecord(1),
+      bindingRecord(2, { taskExecutionRef: { ...bindingRef, attemptId: "attempt-2" } }),
+    ]);
+    expect(conflicting.get(implementationCallBindingKey("parent-1", "call-impl-1"))).toMatchObject({
+      kind: "conflict",
+    });
+
+    // Malformed records (authorization mismatch, envelope session mismatch) are never bound.
+    const malformed = projectImplementationCallBindings([
+      bindingRecord(1, { authorizationId: "auth-other" }),
+      bindingRecord(2, { callId: "call-impl-2", sessionId: "other-session" }),
+    ]);
+    expect(malformed.get(implementationCallBindingKey("parent-1", "call-impl-1"))?.kind).not.toBe("bound");
+    expect(malformed.get(implementationCallBindingKey("parent-1", "call-impl-2"))?.kind).not.toBe("bound");
+  });
+});
+
+describe("durable completed review call history (F-002)", () => {
+  const correlation: ReviewCorrelation = {
+    reviewKind: "task-review",
+    taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" },
+    reviewRound: 1,
+  };
+  const reservation = {
+    status: "usable",
+    artifactId: "artifact-1",
+    artifactPath: ".justice/review/artifact-1.json",
+    leasePath: ".justice/review/artifact-1.lease",
+    artifactIdentity: { device: "1", inode: "2" },
+  } as const;
+
+  function observed(callId: string) {
+    return {
+      schemaVersion: 1,
+      provenance: "observed",
+      reviewExecutionEventId: `event-${callId}`,
+      parentSessionId: "parent-1",
+      callId,
+      childSessionId: "child-1",
+      correlation,
+    } as const;
+  }
+
+  function history(
+    options: {
+      readonly claimedCallId?: string;
+      readonly terminalCallId?: string;
+      readonly stagingCallId?: string;
+      readonly stagingArtifactId?: string;
+      readonly extraClaimedCallId?: string;
+      readonly omitClaimed?: boolean;
+      readonly omitStaging?: boolean;
+    } = {},
+  ): readonly ObservationRecord[] {
+    const claimedCallId = options.claimedCallId ?? "review-call-1";
+    const terminalCallId = options.terminalCallId ?? claimedCallId;
+    const stagingCallId = options.stagingCallId ?? claimedCallId;
+    let sequence = 0;
+    const envelope = () => ({
+      schemaVersion: 1,
+      sequence: ++sequence,
+      timestamp: `2026-11-13T00:01:${String(sequence).padStart(2, "0")}.000Z`,
+      agentId: "atlas",
+      sessionId: "parent-1",
+      writerId: "review-writer",
+      recordType: "observation",
+    });
+    const base = {
+      kind: "review_dispatch_transition",
+      parentSessionId: "parent-1",
+      correlation,
+      expectedCategory: "sp-review",
+    };
+    const records: unknown[] = [{ ...envelope(), ...base, transitionId: "t-1", from: null, to: "pending" }];
+    if (options.omitClaimed !== true) {
+      records.push({
+        ...envelope(),
+        ...base,
+        transitionId: "t-2",
+        from: "pending",
+        to: "claimed",
+        callId: claimedCallId,
+        artifactReservation: reservation,
+      });
+    }
+    if (options.extraClaimedCallId !== undefined) {
+      records.push({
+        ...envelope(),
+        ...base,
+        transitionId: "t-2b",
+        from: "pending",
+        to: "claimed",
+        callId: options.extraClaimedCallId,
+        artifactReservation: reservation,
+      });
+    }
+    const artifact = {
+      schemaVersion: 1,
+      reviewKind: "task-review",
+      reviewSource: "sp-review",
+      correlation,
+      observedExecution: observed(stagingCallId),
+      complete: true,
+      findings: [],
+    };
+    const consumption = { artifactId: options.stagingArtifactId ?? "artifact-1", digest: "sha256:d" };
+    if (options.omitStaging !== true) {
+      records.push({
+        ...envelope(),
+        kind: "review_completion_staged",
+        parentSessionId: "parent-1",
+        staging: {
+          callId: stagingCallId,
+          correlation,
+          artifactConsumption: consumption,
+          reviewArtifact: artifact,
+          observedExecution: observed(stagingCallId),
+        },
+      });
+    }
+    records.push({
+      ...envelope(),
+      ...base,
+      transitionId: "t-3",
+      from: "claimed",
+      to: "terminal",
+      callId: terminalCallId,
+      terminalReason: "completed",
+      artifactConsumption: consumption,
+      reviewArtifact: artifact,
+    });
+    return records as readonly ObservationRecord[];
+  }
+
+  it("matches durable claimed history after completed terminal", () => {
+    const records = history();
+    // The claimed-only projection is empty once the slot is terminal...
+    expect(project(records, REBUILT_AT).taskCallBindings).toEqual([]);
+    // ...but the durable claimed -> staged -> terminal history still proves the call.
+    expect(projectCompletedReviewCallHistory(records, "parent-1", correlation)).toEqual({
+      kind: "proven",
+      callId: "review-call-1",
+      artifactId: "artifact-1",
+    });
+  });
+
+  it("blocks on missing or conflicting claimed identity despite equal correlation", () => {
+    expect(projectCompletedReviewCallHistory(history({ omitClaimed: true }), "parent-1", correlation).kind).toBe(
+      "missing",
+    );
+    expect(projectCompletedReviewCallHistory(history({ omitStaging: true }), "parent-1", correlation).kind).toBe(
+      "missing",
+    );
+    expect(
+      projectCompletedReviewCallHistory(history({ stagingCallId: "review-call-other" }), "parent-1", correlation).kind,
+    ).not.toBe("proven");
+    expect(
+      projectCompletedReviewCallHistory(history({ terminalCallId: "review-call-other" }), "parent-1", correlation).kind,
+    ).not.toBe("proven");
+    expect(
+      projectCompletedReviewCallHistory(history({ stagingArtifactId: "artifact-other" }), "parent-1", correlation).kind,
+    ).toBe("conflict");
+    expect(
+      projectCompletedReviewCallHistory(history({ extraClaimedCallId: "review-call-2" }), "parent-1", correlation).kind,
+    ).toBe("conflict");
+    expect(projectCompletedReviewCallHistory(history(), "parent-other", correlation).kind).toBe("missing");
+  });
+
+  it("preserves proven review-only Gate success without execution evidence", () => {
+    // Review history proof needs no implementation binding or tool evidence.
+    const records = history();
+    expect(
+      records.some(
+        (record) => record.kind === "implementation_call_binding" || record.kind === "tool_executed",
+      ),
+    ).toBe(false);
+    expect(projectCompletedReviewCallHistory(records, "parent-1", correlation).kind).toBe("proven");
   });
 });

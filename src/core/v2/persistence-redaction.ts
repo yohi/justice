@@ -222,6 +222,11 @@ export function redactPendingLogRecord(record: PendingLogRecord): PendingLogReco
         : record;
     case "delegated_execution_binding":
       return record;
+    // F-002: identity-only record. parentSessionId/callId/authorizationId/
+    // taskExecutionRef are durable identity and must not be transformed; structural
+    // validity is enforced by runtime validation, never by redaction.
+    case "implementation_call_binding":
+      return record;
     case "review_completion_staged":
       return {
         ...record,

@@ -130,6 +130,24 @@ export function aggregateReviews(records: readonly ObservationRecord[]): ReviewS
   return { authority: "observed_review_output", ...global, byScope };
 }
 
+/**
+ * F-002: Gate-facing summary restricted to review observations that carry a
+ * correlation and are admitted by the caller (the current review correlation).
+ * Uncorrelated legacy snapshots, previous rounds, and other scopes never reach
+ * the formal Gate; the global `aggregateReviews` summary stays diagnostic only.
+ */
+export function aggregateAdmittedReviews(
+  records: readonly ObservationRecord[],
+  isAdmitted: (record: ReviewObservedRecord) => boolean,
+): ReviewSummary {
+  return aggregateReviews(
+    records.filter(
+      (record): record is ReviewObservedRecord =>
+        record.kind === "review_observed" && record.correlation !== undefined && isAdmitted(record),
+    ),
+  );
+}
+
 function assertNever(value: never): never {
   throw new TypeError(`Unexpected discriminant: ${String(value)}`);
 }
