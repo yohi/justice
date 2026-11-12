@@ -10,6 +10,7 @@ import type {
   HistoricalTaskGateDecision,
   LegacyTaskGateDecision,
   PendingDecisionRecord,
+  TaskAcceptanceDecision,
 } from "./v2/decision-model";
 import { orderEventsForProjection } from "./v2/integrity";
 import { hashString } from "./v2/hash";
@@ -332,6 +333,27 @@ export function deriveAcceptanceDecision(
 function acceptanceAgreesWithGate(gate: GateDecision, acceptance: AcceptanceDecision): boolean {
   const expected = deriveAcceptanceDecision(gate);
   return acceptance.kind === expected.kind && acceptance.verdict === expected.verdict;
+}
+
+/**
+ * Readers (plan progress): the current-round accepted Task Acceptance, only when a
+ * current Gate exists for the same correlation and agrees with it (Gate PASS).
+ * Historic roundless, other-attempt/round, missing-Gate or disagreeing records
+ * yield `null` (ignored, not an error).
+ */
+export function findAgreedAcceptedTaskDecision(
+  records: readonly PersistedLogRecord[],
+  correlation: Extract<ReviewCorrelation, { readonly reviewKind: "task-review" }>,
+): TaskAcceptanceDecision | null {
+  const gate = findCurrentGateDecision(records, correlation);
+  const acceptance = findCurrentAcceptanceDecision(records, correlation);
+  if (gate.kind !== "found" || acceptance.kind !== "found") return null;
+  const decision = acceptance.decision;
+  return decision.kind === "task-acceptance" &&
+    decision.verdict === "accepted" &&
+    acceptanceAgreesWithGate(gate.decision, decision)
+    ? decision
+    : null;
 }
 
 type ActiveApprovedPlanBinding = Extract<ApprovedPlanBinding, { readonly status: "active" }>;

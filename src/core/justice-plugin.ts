@@ -73,6 +73,7 @@ import {
   createReviewCompletionDomain,
 } from "./review-artifact";
 import {
+  findAgreedAcceptedTaskDecision,
   findCurrentAcceptanceDecision,
 } from "./acceptance-decision";
 import { PlanParser } from "./plan-parser";
@@ -1190,14 +1191,9 @@ export class JusticePlugin {
       await this.authorizationReviewBoundary.withParentSession(parentSessionId, async () => {
         if (!(await this.isAuthorizationPlanCurrent(correlation))) return;
         const records = await this.observationLogStore.readAll();
-        const acceptance = findCurrentAcceptanceDecision(records, correlation);
-        if (
-          acceptance.kind !== "found" ||
-          acceptance.decision.kind !== "task-acceptance" ||
-          acceptance.decision.verdict !== "accepted"
-        ) {
-          return;
-        }
+        // Round-safe: only a current accepted decision that agrees with its Gate.
+        const accepted = findAgreedAcceptedTaskDecision(records, correlation);
+        if (accepted === null) return;
         // INV-19: an accepted decision replayed from an old released or
         // invalidated authorization must not advance plan progress. The primary
         // defense is Task 3.2 (no accepted decision after terminality); this
@@ -1221,7 +1217,7 @@ export class JusticePlugin {
           .parse(content)
           .find((candidate) => candidate.id === correlation.taskExecutionRef.taskId);
         if (task === undefined) return;
-        const result = updatePlanProgress(content, task, acceptance.decision);
+        const result = updatePlanProgress(content, task, accepted);
         if (!result.updated) return;
         await this.fileWriter.writeFile(planPath, result.content);
       });
@@ -1333,16 +1329,37 @@ export class JusticePlugin {
   private async recoverAcceptedTaskProgress(parentSessionId: string): Promise<void> {
     try {
       const records = await this.observationLogStore.readAll();
-      const accepted = records.filter(
-        (record): record is Extract<
-          PersistedLogRecord,
-          { readonly recordType: "decision"; readonly kind: "task-acceptance" }
-        > =>
-          record.recordType === "decision" &&
-          "kind" in record &&
-          record.kind === "task-acceptance" &&
-          record.verdict === "accepted",
-      );
+      const lifecycle = project(records, new Date().toISOString()).lifecycle;
+      // Round-safe recovery: only round-bearing accepted decisions for the task's
+      // current TaskExecutionRef whose current Gate agrees. Historic roundless or
+      // other-attempt/round decisions are ignored.
+      const accepted = records.flatMap((record) => {
+        if (
+          record.recordType !== "decision" ||
+          !("kind" in record) ||
+          record.kind !== "task-acceptance" ||
+          record.verdict !== "accepted" ||
+          typeof record.reviewRound !== "number" ||
+          !Number.isSafeInteger(record.reviewRound) ||
+          record.reviewRound <= 0
+        )
+          return [];
+        const ref = record.taskExecutionRef;
+        const current = lifecycle.currentTaskExecutionRefs.get(taskLifecycleKey(parentSessionId, ref));
+        if (
+          current === undefined ||
+          current.authorizationId !== ref.authorizationId ||
+          current.taskId !== ref.taskId ||
+          current.attemptId !== ref.attemptId
+        )
+          return [];
+        const decision = findAgreedAcceptedTaskDecision(records, {
+          reviewKind: "task-review",
+          taskExecutionRef: ref,
+          reviewRound: record.reviewRound,
+        });
+        return decision === null ? [] : [decision];
+      });
       for (const decision of accepted) {
         await this.authorizationReviewBoundary.withParentSession(parentSessionId, async () => {
           const binding = await this.authorizationStore.findByAuthorizationId(

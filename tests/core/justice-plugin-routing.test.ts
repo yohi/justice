@@ -552,17 +552,46 @@ async function seedClaimedReviewDispatch(
   });
 }
 
+type SeedDecisionOptions = {
+  /** `null` omits the field (historic roundless decision). */
+  readonly reviewRound?: number | null;
+  /** `null` seeds no Gate. Defaults to an agreeing PASS Gate. */
+  readonly gateVerdict?: "PASS" | "WARN" | "FAIL" | null;
+  readonly attemptId?: string;
+};
+
 async function seedAcceptedDecision(
   plugin: JusticePlugin,
   authorizationId: string,
   taskId = "task-1",
+  options: SeedDecisionOptions = {},
 ): Promise<void> {
+  const taskExecutionRef = {
+    authorizationId,
+    taskId,
+    attemptId: options.attemptId ?? taskAttemptId(taskId),
+  };
+  const reviewRound = options.reviewRound === undefined ? 1 : options.reviewRound;
+  const round = reviewRound === null ? {} : { reviewRound };
+  const gateVerdict = options.gateVerdict === undefined ? "PASS" : options.gateVerdict;
+  if (gateVerdict !== null)
+    await appendObservation(plugin, {
+      recordType: "decision",
+      gateType: "task",
+      taskId,
+      taskExecutionRef,
+      ...round,
+      verdict: gateVerdict,
+      reachableEnforcementLevel: "L1",
+      appliedEnforcementLevel: "L0",
+      ruleResults: [],
+    });
   await appendObservation(plugin, {
     recordType: "decision",
     kind: "task-acceptance",
     taskId,
-    taskExecutionRef: { authorizationId, taskId, attemptId: taskAttemptId(taskId) },
-    reviewRound: 1,
+    taskExecutionRef,
+    ...round,
     verdict: "accepted",
   });
 }
@@ -1020,6 +1049,38 @@ describe("JusticePlugin accepted-decision progress updates", () => {
     expect(await fs.readFile("plan.md")).toContain("- [x] first");
   });
 
+  it("restores progress only from a current round-bearing accepted decision that agrees with its Gate", async () => {
+    const cases: readonly { readonly name: string; readonly options: SeedDecisionOptions; readonly ticked: boolean }[] = [
+      { name: "current round 1 + PASS Gate", options: {}, ticked: true },
+      { name: "historic roundless", options: { reviewRound: null }, ticked: false },
+      { name: "Gate FAIL disagrees", options: { gateVerdict: "FAIL" }, ticked: false },
+      { name: "no Gate", options: { gateVerdict: null }, ticked: false },
+      { name: "other attempt", options: { attemptId: "attempt-old" }, ticked: false },
+    ];
+    for (const testCase of cases) {
+      const fs = createMockFileSystem({ "plan.md": progressPlan });
+      const first = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+      const authorization = await internalsOf(first).authorizationStore.approve({
+        sessionId: "s-1",
+        planPath: "plan.md",
+        planFingerprint: computePlanFingerprint(progressPlan, ["task-1"]),
+        canonicalSnapshot: buildCanonicalSnapshot(progressPlan, ["task-1"]),
+        approvedAt: "2026-09-05T00:00:00.000Z",
+      });
+      if (authorization === null) throw new Error("test setup: authorization approval failed");
+      await seedAcceptedDecision(first, authorization.authorizationId, "task-1", testCase.options);
+      await seedAcceptedTaskLifecycle(first, authorization.authorizationId, "task-1");
+
+      const restarted = new JusticePlugin(fs, fs, { writerId: "w-restarted" });
+      await restarted.initialize();
+
+      expect({ name: testCase.name, plan: await fs.readFile("plan.md") }).toEqual({
+        name: testCase.name,
+        plan: expect.stringContaining(testCase.ticked ? "- [x] first" : "- [ ] first"),
+      });
+    }
+  });
+
   it("does not invalidate another session's authorization while recovering accepted progress", async () => {
     const fs = createMockFileSystem({ "plan.md": progressPlan });
     const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
@@ -1235,6 +1296,22 @@ describe("JusticePlugin accepted-decision progress updates", () => {
     });
     expect(fs.writtenFiles["plan.md"]).toContain("- [x] first");
     expect(fs.writtenFiles["plan.md"]).toContain("- [x] second");
+  });
+
+  it("does not update plan progress from an accepted decision that disagrees with its Gate", async () => {
+    for (const options of [{ gateVerdict: "FAIL" }, { gateVerdict: null }] as const) {
+      const fs: MockFileSystem = createMockFileSystem({ "plan.md": progressPlan });
+      const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+      plugin.getPlanBridge().setActivePlan("s-1", "plan.md");
+      const authorizationId = await approvePlanAuthorization(plugin);
+      await seedClaimedReviewDispatch(plugin, authorizationId);
+      await seedAcceptedDecision(plugin, authorizationId, "task-1", options);
+      mockTerminalReviewCompletion(plugin);
+
+      await plugin.handleEvent(reviewPostToolUseEvent());
+
+      expect(fs.writtenFiles["plan.md"]).toBe(progressPlan);
+    }
   });
 
   it("continues finalization when an accepted task progress write fails", async () => {
