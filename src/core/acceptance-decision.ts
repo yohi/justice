@@ -507,14 +507,17 @@ export function admitExecutionEvidence(
 }
 
 /**
- * True when a non-PASS Gate outcome rests on absent evidence (a non-PASS rule with
- * no referenced evidence) rather than on observed violating evidence. Under F-002
- * such absence is not proven failure: required evidence may be UNATTRIBUTED.
+ * True when a non-PASS Gate outcome rests only on absent evidence: no non-PASS
+ * rule references any evidence. Under F-002 such absence is not proven failure
+ * (required evidence may be UNATTRIBUTED). If any non-PASS rule carries refs, an
+ * observed violation exists and the formal FAIL/WARN verdict is kept.
  */
 function restsOnUnprovenEvidence(result: GateDecisionPayload): boolean {
+  const nonPass = result.ruleResults.filter((rule) => rule.verdict !== "PASS");
   return (
     result.verdict !== "PASS" &&
-    result.ruleResults.some((rule) => rule.verdict !== "PASS" && rule.evidenceRefs.length === 0)
+    nonPass.length > 0 &&
+    nonPass.every((rule) => rule.evidenceRefs.length === 0)
   );
 }
 

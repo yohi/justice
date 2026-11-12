@@ -1954,6 +1954,38 @@ describe("execution and review evidence admission (F-002)", () => {
     expect(fixture.decisions[0]).toMatchObject({ kind: "task-acceptance", verdict: "blocked" });
   });
 
+  it("keeps an observed failing rule as a formal Gate verdict when another rule lacks evidence", async () => {
+    const fixture = dependencies(
+      async () => ({
+        recordType: "decision",
+        gateType: "task",
+        verdict: "FAIL",
+        reachableEnforcementLevel: "L1",
+        appliedEnforcementLevel: "L0",
+        taskId: "task-1",
+        taskExecutionRef: ref,
+        ruleResults: [
+          {
+            ruleId: "required-tests",
+            verdict: "FAIL",
+            reason: "observed failing test",
+            evidenceRefs: [fullRef(1, "e-1")],
+          },
+          { ruleId: "build-green", verdict: "FAIL", reason: "missing", evidenceRefs: [] },
+        ],
+      }),
+      async () => ({ kind: "committed" }),
+    );
+    const result = await createGatePendingAttemptEvaluator(fixture.dependencies).evaluateGatePendingAttempt(
+      context(),
+    );
+    expect(result).toMatchObject({ kind: "decided", decision: { verdict: "FAIL" } });
+    expect(fixture.decisions).toEqual([
+      expect.objectContaining({ gateType: "task", verdict: "FAIL" }),
+      expect.objectContaining({ kind: "task-acceptance", verdict: "rework-required" }),
+    ]);
+  });
+
   it("never passes unfiltered ProjectedEvidence or global Review Summary to evaluateRules", async () => {
     const inputs: Parameters<GateEvaluationDependencies["evaluateRules"]>[0][] = [];
     const records = [
