@@ -1,4 +1,4 @@
-# Justice v6 S3-a — Authority / Review Boundary Implementation Plan R0.1.3 (F-002 Persistence Redaction Limited Remediation)
+# Justice v6 S3-a — Authority / Review Boundary Implementation Plan R0.1.4 (F-002 Gate Admission Wiring Limited Remediation)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` or `superpowers:subagent-driven-development` only after separate Human Owner implementation approval. Steps use checkbox (`- [ ]`) syntax for tracking. No automatic review dispatch.
 
@@ -12,7 +12,7 @@
 
 **Reference HEAD:** `adf97c2d3dfd9b254c39206558f3fe9f0133eebe`。実装開始時には実際のHEADと差分を確認する。
 
-**Plan status:** `PLAN_R0.1.3_F002_REDACTION_DOCUMENT_ONLY / OWNER_ADOPTION_PENDING / IMPLEMENTATION_HOLD`。F-002方式Aを維持し、Human Ownerは`persistence-redaction.ts`と対応テストを計画に加える文書限定訂正・1 Commit/Pushのみ承認。ソース変更、Build/Test、Gate変更、実装着手は未承認。
+**Plan status:** `PLAN_R0.1.4_F002_GATE_ADMISSION_DOCUMENT_ONLY / OWNER_ADOPTION_PENDING / IMPLEMENTATION_HOLD`。F-002方式AとRedaction契約を維持し、Human OwnerはGate入力・Durable Review帰属経路の文書限定訂正・1 Commit/Pushのみ承認。ソース変更、Build/Test、Gate変更、実装着手は未承認。
 
 ## Global Constraints
 
@@ -34,21 +34,21 @@
 
 | File | Responsibility | Scope |
 |---|---|---|
-| `src/core/acceptance-decision.ts` | 現在Correlation Admission、成功Terminal照合、Gate / Acceptance再利用時の整合性・Fail-Closed | Modify Tasks 1, 3 |
+| `src/core/acceptance-decision.ts` | Current Correlation確証、Durable Binding/FullEvidenceRef照合、Admission済みGate入力の構築、Decision整合性・Fail-Closed | Modify Tasks 1, **2**, 3 |
 | `src/core/review-dispatch-state.ts` | 既存`ReviewDispatchSlot`、再試行Round算出の規則を参照。`review_pending`前提の関数を`gate_pending`で無条件に流用しない | Read; modify only if Task 1 needs a narrow reusable helper |
 | `src/core/v2/review-aggregator.ts` | `review_observed.correlation`で限定した集約経路。従来の全体表示用集約は維持 | Modify Task 2 |
 | `src/core/types.ts` | 既存の`ImplementationTaskCallBinding`と`TaskExecutionRef`を再利用 | Read Task 2 |
 | `src/core/v2/observation-model.ts` | F-002専用の最小`implementation_call_binding` Observation Record | Modify Task 2 |
 | `src/core/v2/persistence-redaction.ts` | `redactPendingLogRecord`に新Recordの分岐を追加。Identityを変更せず、余計なペイロードを増やさず、既存LogのRedaction境界を維持 | Modify Task 2 |
-| `src/core/v2/state-projection.ts` | Durable Implementation Bindingの復元・競合検出（Review Bindingとは区別） | Modify Task 2 |
+| `src/core/v2/state-projection.ts` | Durable Implementation Binding復元、および成功Terminal後のclaimed履歴照合（現在claimed-only Projectionに依存しない） | Modify Task 2 |
 | `src/core/v2/gate-context.ts` | Task Gateへ確証済み`reviewRound`を入力、Final既存フィールドを維持 | Modify Task 3 |
 | `src/core/v2/rule-evaluation-engine.ts` | **Task GateDecision生成責務**：`GateContext.reviewRound`を`TaskGateDecisionPayload.reviewRound`へ転送 | Modify Task 3 |
 | `src/core/v2/decision-model.ts` | 新規Task Gate / Acceptance DecisionのRound付き型、旧型の読み取り互換 | Modify Task 3 |
 | `src/runtime/validation.ts` | 新規Roundと専用Implementation Bindingの構造を検証。旧形式の読み取り互換を維持 | Modify Tasks 2, 3 |
-| `src/hooks/observation-handler.ts` | Gate Ruleへ渡すEvidenceを、正式Admissionを通った入力に限定する | Modify Task 2 |
-| `tests/core/acceptance-decision.test.ts` | Round 1/2、旧Attempt、Terminal / Observation照合、Decision再利用・矛盾 | Test Tasks 1, 3 |
+| `src/hooks/observation-handler.ts` | `evaluateRules`のAdmission済みEvidence/Summaryだけを`rule-evaluation-engine.evaluate()`へ渡し、未選別ProjectionをRule入力に使わない | Modify Task 2 |
+| `tests/core/acceptance-decision.test.ts` | Round 1/2、F-002 Gate Admission入力とTerminal後履歴、Decision再利用・矛盾 | Test Tasks 1, **2**, 3 |
 | `tests/core/v2/review-aggregator.test.ts` | Round混在・空Snapshot・未帰属Observationを隔離 | Test Task 2 |
-| `tests/core/v2/state-projection.test.ts` | 永続Bindingの復元・重複競合の非受理 | Test Task 2 |
+| `tests/core/v2/state-projection.test.ts` | Durable Binding復元とclaimed→terminal履歴の照合・競合拒否 | Test Task 2 |
 | `tests/core/v2/persistence-redaction.test.ts` | 新Recordの専用分岐、Identity保存、冪等性、既存Redaction / 未知Kindの退行防止 | Test Task 2 |
 | `tests/hooks/observation-handler-lifecycle.test.ts` | PreToolUse時のLifecycle→Binding保存順序と失敗 | Test Task 2 |
 | `tests/hooks/observation-handler-tool.test.ts` | Call ID/Session/Attempt違いによるEvidence非受理 | Test Task 2 |
@@ -139,6 +139,27 @@ type ImplementationCallBindingObserved = {
 
 Gateへ渡す入力は`admittedExecutionEvidence`と`admittedReviewSummary`だけとし、未確証の実行証拠は含めない。
 
+**Gate Evaluation wiring (F-002 bounded correction; Redaction unchanged):**
+
+`src/core/acceptance-decision.ts`の`GateEvaluationDependencies.evaluateRules`を次の入力契約とする。型は既存`ProjectedEvidence`と`ReviewSummary`を再利用し、新しい共通Frameworkは作らない。
+
+```ts
+type EvaluateRulesInput = {
+  readonly context: GateContext;
+  readonly projected: ProjectedState; // lifecycle/reference only
+  readonly admittedExecutionEvidence: readonly ProjectedEvidence[];
+  readonly admittedReviewSummary: ReviewSummary; // current correlation only
+};
+// GateEvaluationDependencies.evaluateRules:
+//   (input: EvaluateRulesInput) => Promise<GateRuleEvaluation>
+```
+
+- **Evaluator責務:** `createGatePendingAttemptEvaluator`内、既存Authorization Review Boundaryの下で`admitCurrentReview()`により`parentSessionId`、TaskExecutionRef/Finalization、Round、成功Terminal、`review_observed.correlation`を確証する。同じDurable Readbackから方式Aの`implementation_call_binding`と`FullEvidenceRef`が参照する`tool_executed`を厳密照合し、`admittedExecutionEvidence`を構築する。Review側は現在Correlationと完全一致した`review_observed`だけを既存`aggregateReviews()`へ渡し、`admittedReviewSummary`を構築する。GateContextの`reviewScope`/`reviewSummary`もそのAdmission済みSummaryから生成する。未確証入力をGate Ruleへ渡さない。
+- **Rule呼出し責務:** `src/hooks/observation-handler.ts`の`evaluateRules: async ({context, projected, admittedExecutionEvidence, admittedReviewSummary})`は、`evaluate(await loader.load(), admittedExecutionEvidence, {...context, reviewSummary: admittedReviewSummary})`へ接続する。ContextのreviewScopeも現在Correlation限定にする。`projected.tasks.get(taskId)?.evidence`や`projected.reviewSummary`をRule入力として読み出さない。`projected`はLifecycleなどの参照に限定する。
+- **Review Binding履歴:** `state.taskCallBindings`は`taskCallBindingsFor()`がclaimed状態のSlotだけから復元するので、完了Terminal後の正式帰属証明には使えない。Durable `review_dispatch_transition`の`from:"pending",to:"claimed"`履歴（`callId`, `artifactReservation`）と、成功`from:"claimed",to:"terminal"`（`terminalReason:"completed"`）を探し、`parentSessionId`、`callId`、`sameReviewCorrelation`、Artifact ReservationのIdentityを完全一致させる。`review_completion_staged`・Review Artifact・`review_observed.correlation`も同じCall/Correlationに帰属することを確認。**同一Correlationでもclaimed/terminal/staging/artifactのIdentityが競合、欠測、または不一致ならFail-Closed。** 時系列やScopeだけで補完しない。Review Dispatchの挙動は変更しない。
+- **正常/欠測:** Review-only等のExecution Evidence不要Gateは、現在CorrelationのReview Summaryが確認できれば既存どおり評価する。必要Execution Evidenceが`UNATTRIBUTED`（特に子Session Call未結合）なら当該証拠を除外し、**空配列を無条件にPASSへ昇格させず**正式Acceptanceを`blocked`にする。親Task Callと同一Call IDの人工Fixture成功を、実際の子Session Build/Testの帰属成功と混同しない。無関係Taskを停止しない。
+
+
 ### F-003: Round-Safe Decision Generation / Storage / Validation
 
 1. **Generator:** `src/core/v2/gate-context.ts`のTask variantへ`readonly reviewRound: number`を追加。`src/core/v2/rule-evaluation-engine.ts`の`evaluate(gates,evidence,ctx)`がTask GateDecisionへ`reviewRound: ctx.reviewRound`をセットする。Finalは既存`finalReviewRound`を維持。
@@ -187,19 +208,19 @@ Gateへ渡す入力は`admittedExecutionEvidence`と`admittedReviewSummary`だ�
 
 ### Task 2: Durable Implementation Binding / Review and Execution Evidence Isolation (F-002, Owner Option A)
 
-**Files:** Modify `src/core/v2/observation-model.ts`、`src/core/v2/persistence-redaction.ts`、`src/runtime/validation.ts`、`src/hooks/observation-handler.ts`、`src/core/v2/state-projection.ts`、`src/core/v2/review-aggregator.ts`、`src/core/acceptance-decision.ts`。Read `src/core/types.ts`。Test `tests/core/v2/persistence-redaction.test.ts`、`tests/runtime/validation.test.ts`、`tests/hooks/observation-handler-lifecycle.test.ts`、`tests/hooks/observation-handler-tool.test.ts`、`tests/core/v2/state-projection.test.ts`、`tests/core/v2/review-aggregator.test.ts`、`tests/hooks/observation-handler-gate.test.ts`。
+**Files:** Modify `src/core/v2/observation-model.ts`、`src/core/v2/persistence-redaction.ts`、`src/runtime/validation.ts`、`src/hooks/observation-handler.ts`、`src/core/v2/state-projection.ts`、`src/core/v2/review-aggregator.ts`、`src/core/acceptance-decision.ts`。Read `src/core/types.ts`。Test `tests/core/v2/persistence-redaction.test.ts`、`tests/runtime/validation.test.ts`、`tests/hooks/observation-handler-lifecycle.test.ts`、`tests/hooks/observation-handler-tool.test.ts`、`tests/core/v2/state-projection.test.ts`、`tests/core/v2/review-aggregator.test.ts`、`tests/hooks/observation-handler-gate.test.ts`、`tests/core/acceptance-decision.test.ts`。
 
-**Interfaces:** F-002で固定した専用`ImplementationCallBindingObserved`を既存Logへappend。Durable Readbackだけから`(parentSessionId,callId)`と`TaskExecutionRef`を結合し、Current Review Correlationに一致したGateへ`admittedExecutionEvidence`／`admittedReviewSummary`を供給する。未確認は`UNATTRIBUTED`、競合は`CONFLICT`としてGateに入力しない（独立Frameworkは作らない）。**保存前に`redactPendingLogRecord()`の専用分岐を通す。**
+**Interfaces:** F-002の`ImplementationCallBindingObserved`を既存Logへappend。Durable ReadbackからImplementation BindingとTerminal後のReview claimed履歴を照合し、`acceptance-decision.ts`でCurrent Correlation／FullEvidenceRefを確証。`GateEvaluationDependencies.evaluateRules`へ`{context, projected, admittedExecutionEvidence: readonly ProjectedEvidence[], admittedReviewSummary: ReviewSummary}`を渡す。`observation-handler.ts`はAdmission済み入力だけをRule Engineに転送する。未確証は`UNATTRIBUTED`、競合は`CONFLICT`として必要GateをFail-Closed。Redaction契約は維持。
 
 - [ ] **Step 1 — RED test:** `it("validates a durable implementation call binding", ...)`。正常Recordを受理し、空Call ID／Authorization不一致／破損TaskExecutionRefを拒否し、旧Logの読み取りを維持する。
 - [ ] **Step 2 — RED redaction test:** `tests/core/v2/persistence-redaction.test.ts`へ`it("passes implementation_call_binding through redaction without changing durable identity", ...)`、`it("preserves implementation_call_binding redaction idempotence and rejects unknown record kinds", ...)`を追加。元の`parentSessionId`、`callId`、`authorizationId`、`taskExecutionRef`、Envelopeのバイト同値を確認し、2回適用した結果が同一であること、既存Redaction分岐が変わらないことを確認。RecordにTool生出力・Secrets等の非契約フィールドは付与しない。
 - [ ] **Step 3 — RED test:** `it("persists implementation call binding after initial lifecycle", ...)`／`it("does not admit evidence when binding append fails", ...)`。正常時にLifecycle→Binding順でappendし、失敗時にメモリ値を正式根拠にしない。
 - [ ] **Step 4 — RED test:** `it("restores durable implementation binding after restart", ...)`／`it("rejects conflicting bindings for one parent call", ...)`。正常復元と重複Identity競合を確認。
-- [ ] **Step 5 — RED test:** `it("admits same-attempt evidence with exact FullEvidenceRef and call identity", ...)`、`it("rejects missing binding, taskId-only, wrong session, wrong call, old attempt and unlinked child tools", ...)`。欠測時は必要Gateから正式Acceptanceを確定しない。
-- [ ] **Step 6 — RED test:** `it("isolates previous-round findings and complete snapshots from current review", ...)`。現在Correlation内のReview Summaryだけを採用。
-- [ ] **Step 7 — RED run:** `bun run vitest run tests/core/v2/persistence-redaction.test.ts tests/runtime/validation.test.ts tests/hooks/observation-handler-lifecycle.test.ts tests/hooks/observation-handler-tool.test.ts tests/core/v2/state-projection.test.ts tests/core/v2/review-aggregator.test.ts tests/hooks/observation-handler-gate.test.ts`。期待: 新しいRedaction分岐が存在しないため新設Redactionテストが失敗し、Binding保存・復元・Admissionも未実装なので関連新規テストが失敗する。既存Failureを追加テストの期待Failureと混同しない。
-- [ ] **Step 8 — GREEN:** F-002のRecord型、保存・Validation・復元・EvidenceRef/Call/Attempt照合とReview隔離を実装。**`src/core/v2/persistence-redaction.ts`の`redactPendingLogRecord`に`case "implementation_call_binding"`を追加し、Identity-only Recordを変更せず返す（非契約自由記述を追加しない）。`assertNever`による未知Kind拒否は維持する。** Child Sessionの帰属を推測せず、欠測Evidenceを除外。通常Tool実行は維持し、正式AcceptanceだけFail-Closed。
-- [ ] **Step 9 — GREEN run:** Step 7と同じコマンドを再実行。Redaction正常系・冪等性・既存分岐の非退行、保存→Readback、正常・欠測・競合・再起動・Review隔離がPASSすること。親Bindingのみで子ToolのBuild/TestがPASSすると主張しない。
+- [ ] **Step 5 — RED test:** `it("admits same-attempt evidence with exact FullEvidenceRef and call identity", ...)`、`it("rejects missing binding, taskId-only, wrong session, wrong call, old attempt and unlinked child tools", ...)`。`tests/core/acceptance-decision.test.ts`に`it("never passes unfiltered ProjectedEvidence or global Review Summary to evaluateRules", ...)`を追加し、未選別入力がSpyへ到達しないことを確認。`tests/hooks/observation-handler-gate.test.ts`ではRule Engineが`projected.tasks.get(taskId)?.evidence`を直接受け取らないことを検証。欠測時は必要Gateから正式Acceptanceを確定しない。
+- [ ] **Step 6 — RED test:** `it("isolates previous-round findings and complete snapshots from current review", ...)`。`tests/core/v2/state-projection.test.ts`と`tests/core/acceptance-decision.test.ts`へ、`it("matches durable claimed history after completed terminal", ...)`、`it("blocks on missing or conflicting claimed identity despite equal correlation", ...)`、`it("preserves proven review-only Gate success without execution evidence", ...)`を追加。現在claimed-only Projectionが空でも、Durable claimed→terminal履歴とStaging・Observationの一致を証明できれば正常Reviewは継続する。
+- [ ] **Step 7 — RED run:** `bun run vitest run tests/core/v2/persistence-redaction.test.ts tests/runtime/validation.test.ts tests/hooks/observation-handler-lifecycle.test.ts tests/hooks/observation-handler-tool.test.ts tests/core/v2/state-projection.test.ts tests/core/v2/review-aggregator.test.ts tests/hooks/observation-handler-gate.test.ts tests/core/acceptance-decision.test.ts`。期待: 追加テストがBaselineでFAILし、特に未選別EvidenceのRule流入、Terminal後のclaimed-only Binding不足、欠測/競合の誤受理を検出する。既存Failureと混同しない。
+- [ ] **Step 8 — GREEN:** F-002のRecord型、保存・Validation・復元・EvidenceRef/Call/Attempt照合を実装し、既存Redaction分岐・`assertNever`を維持。Terminal後はDurable claimed→terminal/Staging/Review Observationを一意照合（現在claimed-only Projection非依存）。`acceptance-decision.ts`でAdmission済みEvidence/Summaryを構築して`evaluateRules`へ渡し、GateContextのreviewScope/reviewSummaryも現在Correlation限定にする。`observation-handler.ts`では`projected.tasks.get(taskId)?.evidence`とグローバル`projected.reviewSummary`をRule入力に使わない。Child Session未証明Evidenceは除外し、必要Gateの正式AcceptanceのみFail-Closed。Review-only正常系、無関係Task、通常Tool実行を維持。
+- [ ] **Step 9 — GREEN run:** Step 7と同じコマンドを再実行。Redaction/Readback、未選別EvidenceのRule非流入、Terminal後のclaimed履歴・Staging・Observation照合、欠測/競合の非受理、現在CorrelationのReview-only正常系がPASSすること。人工的な同一Call fixture成功を実際の子Session Build/Testの帰属成功と誤認しない。
 - [ ] **Step 10 — Commit boundary (future implementation approval only):** 実際に変更したTask 2対象のSource/Testだけを`git add`し、**`src/core/v2/persistence-redaction.ts`と`tests/core/v2/persistence-redaction.test.ts`を必ず含める**。 `git commit -m "fix(justice): persist minimal execution call attribution"`。**本ドキュメント承認には実装Commitの権限を含めない。**
 
 **Stop:** 既存永続Recordから子Session実行のIdentityが証明できなければ、そのEvidenceを非受理として正常Gateへの制限を記録し、このTaskの範囲を自動拡張しない。
@@ -262,11 +283,12 @@ Gateへ渡す入力は`admittedExecutionEvidence`と`admittedReviewSummary`だ�
 
 ## Completion Criteria
 
-Implementation Plan R0.1.3の文書限定訂正条件：
+Implementation Plan R0.1.4の文書限定訂正条件：
 
 - [x] F-001〜F-003の実装判断（Current Correlation / Evidence Binding / Decision Round）をPlan内に固定
 - [x] Owner採択の方式AをF-002専用の最小永続Binding Recordとして固定し、帰属未確証では方式B相当のFail-Closedを適用
 - [x] F-002のRedaction境界（新Record分岐、Identity保持、冪等性、未知Kind拒否）をFile Map／Task 2 RED・GREEN・Commitに反映
+- [x] F-002の`evaluateRules`入力契約とAdmission構築責務、Durable claimed履歴・Terminal後照合、Review-only正常系、欠測/競合の非受理をTask 2へ固定
 - [x] F-004のRED / GREEN / Verify / Commit境界と独立Integration対象を固定
 - [ ] Design全文との逐条整合は `NOT_VERIFIED`（Designの本文が現行Git参照から確認できないため、ドキュメント差分なしと断定しない）
 - [x] 変更ファイル・既存インターフェースを特定
@@ -314,4 +336,4 @@ Task 1〜4の実行結果が得られた時点で実装を終了する。結果�
 
 新規FindingやReview結果を理由に別Task・独立レビュー・再訂正を自動開始しない。
 
-**本R0.1.3はF-002 Redaction対応の文書限定訂正・1 Commit/Pushのみ承認済み。Implementation HOLDを維持し、ソース編集・Build/Test・追加レビュー・Gate変更・他ファイルへのGitHub書込みは未承認。Design全文の逐条確認は `NOT_VERIFIED`。Plan採択判断はHuman Ownerが別途行う。**
+**本R0.1.4はF-002 Gate入力とDurable Review帰属接続の文書限定訂正・1 Commit/Pushのみ承認済み。Implementation HOLDを維持し、ソース編集・Build/Test・追加レビュー・Gate変更・他ファイルへのGitHub書込みは未承認。Design全文の逐条確認は `NOT_VERIFIED`。Plan採択とImplementation GOはHuman Ownerが別途判断する。**
