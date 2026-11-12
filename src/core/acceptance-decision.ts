@@ -17,7 +17,7 @@ import type {
   PlanFinalizationTransitionInput,
   TaskLifecycleTransitionInput,
 } from "./task-lifecycle";
-import { project, type ProjectedState } from "./v2/state-projection";
+import { project, taskLifecycleKey, type ProjectedState } from "./v2/state-projection";
 
 type SkipGateEvaluation = { readonly verdict: "SKIP"; readonly reason: string };
 type GateRuleEvaluation =
@@ -228,38 +228,162 @@ export function deriveAcceptanceDecision(
   };
 }
 
-async function currentCorrelation(
+type ActiveApprovedPlanBinding = Extract<ApprovedPlanBinding, { readonly status: "active" }>;
+
+export type CurrentReviewAdmission =
+  | { readonly kind: "admitted"; readonly correlation: ReviewCorrelation }
+  | { readonly kind: "not_proven"; readonly reason: string }
+  | { readonly kind: "conflict"; readonly reason: string };
+
+type ReviewDispatchTerminalRecord = Extract<
+  PersistedLogRecord,
+  { readonly recordType: "observation"; readonly kind: "review_dispatch_transition" }
+>;
+
+/**
+ * Execution identity of the current gate context, excluding the review round:
+ * Task = TaskExecutionRef, Final = authorization/plan/fingerprint/finalization attempt.
+ * The round is deliberately excluded so that competing successful rounds for the
+ * same execution surface as a conflict instead of being resolved by max/latest.
+ */
+function matchesExecutionIdentity(
+  correlation: ReviewCorrelation,
+  context: GatePendingAttemptContext,
+  binding: ActiveApprovedPlanBinding,
+): boolean {
+  if (context.scope === "task")
+    return (
+      correlation.reviewKind === "task-review" &&
+      sameTask(correlation.taskExecutionRef, context.taskExecutionRef)
+    );
+  return (
+    correlation.reviewKind === "final-review" &&
+    correlation.authorizationId === context.authorizationId &&
+    correlation.planPath === context.planPath &&
+    samePlanFingerprint(correlation.planFingerprint, binding.planFingerprint) &&
+    correlation.finalizationAttemptId === context.finalizationAttemptId
+  );
+}
+
+function bindingCoversContext(
   context: GatePendingAttemptContext,
   state: ProjectedState,
-  findAuthorizationById: GateEvaluationDependencies["findAuthorizationById"],
-): Promise<ReviewCorrelation | undefined> {
+  binding: ActiveApprovedPlanBinding,
+): boolean {
+  if (binding.sessionId !== context.parentSessionId) return false;
   if (context.scope === "task") {
-    const ref = Array.from(state.lifecycle.currentTaskExecutionRefs.values()).find((value) =>
-      sameTask(value, context.taskExecutionRef),
+    const ref = context.taskExecutionRef;
+    const key = taskLifecycleKey(context.parentSessionId, ref);
+    const current = state.lifecycle.currentTaskExecutionRefs.get(key);
+    return (
+      binding.authorizationId === ref.authorizationId &&
+      binding.canonicalSnapshot.tasks.some((task) => task.taskId === ref.taskId) &&
+      current !== undefined &&
+      sameTask(current, ref) &&
+      state.lifecycle.taskStates.get(key) === "gate_pending"
     );
-    return ref === undefined
-      ? undefined
-      : { reviewKind: "task-review", taskExecutionRef: ref, reviewRound: 1 };
   }
-  const entry = Array.from(state.lifecycle.finalization.values()).find(
-    (value) =>
-      value.authorizationId === context.authorizationId &&
-      value.planPath === context.planPath &&
-      value.finalizationAttemptId === context.finalizationAttemptId &&
-      value.finalReviewRound === context.finalReviewRound,
+  return (
+    binding.authorizationId === context.authorizationId &&
+    binding.planPath === context.planPath &&
+    Array.from(state.lifecycle.finalization.values()).some(
+      (value) =>
+        value.parentSessionId === context.parentSessionId &&
+        value.authorizationId === context.authorizationId &&
+        value.planPath === context.planPath &&
+        value.finalizationAttemptId === context.finalizationAttemptId &&
+        value.finalReviewRound === context.finalReviewRound &&
+        value.state === "final_gate_pending",
+    )
   );
-  if (entry === undefined) return undefined;
-  const binding = await findAuthorizationById(entry.authorizationId);
-  return binding === null
-    ? undefined
-    : {
-        reviewKind: "final-review",
-        authorizationId: entry.authorizationId,
-        planPath: entry.planPath,
-        planFingerprint: binding.planFingerprint,
-        finalizationAttemptId: entry.finalizationAttemptId,
-        finalReviewRound: entry.finalReviewRound,
-      };
+}
+
+/**
+ * F-001: proves the current review correlation at `gate_pending` from the durable
+ * lifecycle, the successful terminal dispatch slot, and a correlation-bearing clean
+ * complete review snapshot. Never guesses a round; competing candidates are a conflict.
+ */
+export function admitCurrentReview(
+  context: GatePendingAttemptContext,
+  state: ProjectedState,
+  records: readonly PersistedLogRecord[],
+  binding: ActiveApprovedPlanBinding,
+): CurrentReviewAdmission {
+  if (!bindingCoversContext(context, state, binding))
+    return { kind: "not_proven", reason: "lifecycle_or_authorization_mismatch" };
+
+  const slots = state.reviewDispatchSlots.filter(
+    (slot) =>
+      slot.key.parentSessionId === context.parentSessionId &&
+      slot.state === "terminal" &&
+      slot.terminalReason === "completed" &&
+      matchesExecutionIdentity(slot.key.correlation, context, binding),
+  );
+  const terminalTransitions = records.filter(
+    (record): record is ReviewDispatchTerminalRecord =>
+      record.recordType === "observation" &&
+      record.kind === "review_dispatch_transition" &&
+      record.to === "terminal" &&
+      record.terminalReason === "completed" &&
+      record.parentSessionId === context.parentSessionId &&
+      matchesExecutionIdentity(record.correlation, context, binding),
+  );
+  if (slots.length > 1 || terminalTransitions.length > 1)
+    return { kind: "conflict", reason: "multiple_completed_terminal_candidates" };
+  const slot = slots[0];
+  const transition = terminalTransitions[0];
+  if (
+    slot === undefined ||
+    transition === undefined ||
+    !sameReviewCorrelation(slot.key.correlation, transition.correlation)
+  )
+    return { kind: "not_proven", reason: "completed_terminal_missing" };
+
+  const correlation = slot.key.correlation;
+  if (
+    context.scope === "plan" &&
+    correlation.reviewKind === "final-review" &&
+    correlation.finalReviewRound !== context.finalReviewRound
+  )
+    return { kind: "not_proven", reason: "final_review_round_mismatch" };
+
+  const scoped = records.filter(
+    (record) =>
+      record.recordType === "observation" &&
+      record.kind === "review_observed" &&
+      record.correlation !== undefined &&
+      sameReviewCorrelation(record.correlation, correlation) &&
+      record.sessionId === context.parentSessionId &&
+      (context.scope === "task"
+        ? record.taskId === context.taskExecutionRef.taskId &&
+          record.reviewScope === `task:${context.taskExecutionRef.taskId}`
+        : record.reviewScope === "final"),
+  );
+  const clean = scoped.filter(
+    (record) =>
+      record.recordType === "observation" &&
+      record.kind === "review_observed" &&
+      record.isCompleteSnapshot === true &&
+      record.items.length === 0,
+  );
+  if (clean.length === 0) return { kind: "not_proven", reason: "clean_review_observation_missing" };
+  if (clean.length !== scoped.length)
+    return { kind: "conflict", reason: "contradictory_review_observations" };
+  return { kind: "admitted", correlation };
+}
+
+async function findActiveBinding(
+  context: GatePendingAttemptContext,
+  findAuthorizationById: GateEvaluationDependencies["findAuthorizationById"],
+): Promise<ActiveApprovedPlanBinding | null> {
+  try {
+    const binding = await findAuthorizationById(
+      context.scope === "task" ? context.taskExecutionRef.authorizationId : context.authorizationId,
+    );
+    return binding !== null && binding.status === "active" ? binding : null;
+  } catch {
+    return null;
+  }
 }
 
 function isGatePending(context: GatePendingAttemptContext, state: ProjectedState): boolean {
@@ -276,23 +400,6 @@ function isGatePending(context: GatePendingAttemptContext, state: ProjectedState
       value.finalizationAttemptId === context.finalizationAttemptId &&
       value.finalReviewRound === context.finalReviewRound &&
       value.state === "final_gate_pending",
-  );
-}
-
-function hasTerminalReview(
-  records: readonly PersistedLogRecord[],
-  context: GatePendingAttemptContext,
-): boolean {
-  return records.some(
-    (record) =>
-      record.recordType === "observation" &&
-      record.kind === "review_observed" &&
-      record.isCompleteSnapshot === true &&
-      record.items.length === 0 &&
-      record.sessionId === context.sessionId &&
-      (context.scope === "plan"
-        ? record.reviewScope === "final"
-        : record.taskId === context.taskExecutionRef.taskId),
   );
 }
 
@@ -413,17 +520,7 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
     try {
       const records = await dependencies.readDurableRecords();
       const state = project(records, new Date().toISOString());
-      const correlation = await currentCorrelation(
-        context,
-        state,
-        dependencies.findAuthorizationById,
-      );
-      if (
-        correlation === undefined ||
-        !isGatePending(context, state) ||
-        !hasTerminalReview(records, context)
-      )
-        return { kind: "not_applicable" };
+      if (!isGatePending(context, state)) return { kind: "not_applicable" };
       if (
         context.scope === "task" &&
         records.some(
@@ -432,6 +529,14 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
         )
       )
         return { kind: "not_applicable" };
+      const binding = await findActiveBinding(context, dependencies.findAuthorizationById);
+      if (binding === null) return { kind: "blocked", advisory: "review_authorization_not_active" };
+      const admission = admitCurrentReview(context, state, records, binding);
+      if (admission.kind === "conflict")
+        return { kind: "blocked", advisory: "review_correlation_conflict" };
+      if (admission.kind === "not_proven")
+        return { kind: "blocked", advisory: "review_correlation_not_proven" };
+      const correlation = admission.correlation;
       if (!(await isCurrentActiveAuthorization(correlation, dependencies.findAuthorizationById)))
         return { kind: "blocked", advisory: "review_authorization_not_active" };
       const gate = findCurrentGateDecision(records, correlation);

@@ -169,6 +169,11 @@ describe("ObservationHandler gate evaluation", () => {
     // "fail" to prove this isn't the missing-evidence fallback path, which
     // caps at WARN even for "pass" (see rule-evaluation-engine.test.ts:
     // "caps passing onMissingEvidence at WARN when reviewScope is empty").
+    const reviewCorrelation = {
+      reviewKind: "task-review",
+      taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" },
+      reviewRound: 1,
+    } as const;
     const reviewObserved: PersistedLogRecord = {
       schemaVersion: 1,
       timestamp: new Date().toISOString(),
@@ -179,13 +184,40 @@ describe("ObservationHandler gate evaluation", () => {
       recordType: "observation",
       sequence: 7,
       kind: "review_observed",
-      reviewScope: "task-1",
+      reviewScope: "task:task-1",
+      correlation: reviewCorrelation,
       items: [],
       isCompleteSnapshot: true,
     };
+    // F-001: the current review correlation must be proven by a completed
+    // terminal dispatch slot, not by a session/scope match alone.
+    const dispatchBase = {
+      schemaVersion: 1,
+      agentId: "atlas",
+      sessionId: "s-1",
+      writerId: "w-review",
+      recordType: "observation",
+      kind: "review_dispatch_transition",
+      transitionId: "review-transition-1",
+      parentSessionId: "s-1",
+      correlation: reviewCorrelation,
+      expectedCategory: "sp-review",
+    };
+    const completedDispatch = [
+      { ...dispatchBase, sequence: 1, timestamp: "2026-07-01T00:01:01.000Z", from: null, to: "pending" },
+      {
+        ...dispatchBase,
+        sequence: 2,
+        timestamp: "2026-07-01T00:01:02.000Z",
+        from: "pending",
+        to: "terminal",
+        terminalReason: "completed",
+      },
+    ] as unknown as readonly PersistedLogRecord[];
     const { store, appended } = makeLogStore([
       ...currentTaskLifecycleEvents(),
       reviewObserved,
+      ...completedDispatch,
     ]);
     const gateLoader = makeGateLoader([reviewGate("all-clear", "fail", "tool_observed")]);
     const handler = new ObservationHandler({
