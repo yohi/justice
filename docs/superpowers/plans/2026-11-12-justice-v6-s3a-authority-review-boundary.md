@@ -269,12 +269,12 @@ type EvaluateRulesInput = {
 - [ ] **Step 1 — RED test:** `it("accepts a matching round-1 review artifact through terminal, observation, gate and acceptance", ...)`を作成。期待: `review_completion_staged`→`review_dispatch_transition(to=terminal,terminalReason=completed)`→`review_observed(correlation一致)`→Task Gate Round 1→Task Acceptance Round 1→Lifecycle accepted（各1件）。
 - [ ] **Step 2 — RED test:** `it("accepts completed retry round 2 but never old round 1 evidence", ...)`。期待: Round 2のみ採用、Round 1は失敗Terminalとして残るが混入なし。
 - [ ] **Step 3 — RED test:** `it("does not accept mismatched parent session, roundless decision, conflicting verdict or revoked authority", ...)`。期待: 不正な正式Acceptance / Lifecycle accepted 0件。
-- [ ] **Step 4 — RED run:** `bun run vitest run tests/integration/s3a-review-artifact-to-acceptance.test.ts`。期待: 新規テストが既存経路の未補強箇所で`FAIL`。
+- [ ] **Step 4 — Integration baseline run:** `bun run vitest run tests/integration/s3a-review-artifact-to-acceptance.test.ts`。Task 1〜3のGREEN・Commit後に実行するため、Task 1〜3で解消済みの条件に対応する新規テストが初回から`PASS`することを許容する。Task 4固有の未補強箇所があれば、その失敗を記録してStep 5で対応する。
 - [ ] **Step 5 — GREEN:** Task 1〜3で指定済みの変更に限って結線し、上記統合テストを満たす。新しいReview Dispatcher、Semantic Recovery、Host Enforcementを追加しない。
 - [ ] **Step 6 — GREEN run:** `bun run vitest run tests/integration/s3a-review-artifact-to-acceptance.test.ts tests/core/review-artifact.test.ts tests/integration/approved-review-resolution.test.ts`。期待: 正常Round 1/2、否定ケースと既存レビュー解決の回帰が`PASS`。
 - [ ] **Step 7 — Regression:** `bun run vitest run tests/core/acceptance-decision.test.ts tests/core/v2/review-aggregator.test.ts tests/core/v2/rule-evaluation-engine.test.ts tests/hooks/observation-handler-gate.test.ts tests/runtime/validation.test.ts tests/core/review-dispatch-state.test.ts tests/core/review-dispatch-state-behavior.test.ts tests/core/v2/gate-provenance-gating.test.ts`。期待: 新規・既存が`PASS`。
 - [ ] **Step 8 — Static/build:** `bun run typecheck`、`bun run build`、`bun run lint`を実行。既知Warningと新しいErrorを区別し、実測値のみ報告する。
-- [ ] **Step 9 — Commit boundary (implementation approval required):** `git add tests/integration/s3a-review-artifact-to-acceptance.test.ts`（Task 4で実際に変更した追加Fixtureのみ含める）→ `git commit -m "test(justice): cover S3-a review admission end to end"`。変更がなければ空Commitを作らない。
+- [ ] **Step 9 — Commit boundary (implementation approval required):** Task 4で実際に変更したソース、対応するテスト、Fixtureだけを`git add`し、変更のないファイルや無関係な変更は含めない。統合修正のソース変更があれば、その変更に対応するテスト・Fixtureも含める。`git commit -m "test(justice): cover S3-a review admission end to end"`。変更がなければ空Commitを作らない。
 
 **Deliverable:** Review ArtifactからGate/Acceptanceまでの正常・異常ケースを実際の接続で証明。`justice_review.resolve`のテストを誤用しない。
 
