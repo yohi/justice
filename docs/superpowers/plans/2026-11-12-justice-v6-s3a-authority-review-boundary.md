@@ -1,4 +1,4 @@
-# Justice v6 S3-a — Authority / Review Boundary Implementation Plan R0.1.2 (F-002 Owner Option A Limited Remediation)
+# Justice v6 S3-a — Authority / Review Boundary Implementation Plan R0.1.3 (F-002 Persistence Redaction Limited Remediation)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` or `superpowers:subagent-driven-development` only after separate Human Owner implementation approval. Steps use checkbox (`- [ ]`) syntax for tracking. No automatic review dispatch.
 
@@ -12,7 +12,7 @@
 
 **Reference HEAD:** `adf97c2d3dfd9b254c39206558f3fe9f0133eebe`。実装開始時には実際のHEADと差分を確認する。
 
-**Plan status:** `PLAN_R0.1.2_OPTION_A_DOCUMENT_ONLY / OWNER_ADOPTION_PENDING / IMPLEMENTATION_HOLD`。Human OwnerはF-002に**方式A（最小限の永続帰属情報）**を採択し、本Plan限定訂正・1 Commit/Pushのみを承認。ソース変更、Build/Test、Gate変更、実装着手は未承認。
+**Plan status:** `PLAN_R0.1.3_F002_REDACTION_DOCUMENT_ONLY / OWNER_ADOPTION_PENDING / IMPLEMENTATION_HOLD`。F-002方式Aを維持し、Human Ownerは`persistence-redaction.ts`と対応テストを計画に加える文書限定訂正・1 Commit/Pushのみ承認。ソース変更、Build/Test、Gate変更、実装着手は未承認。
 
 ## Global Constraints
 
@@ -39,6 +39,7 @@
 | `src/core/v2/review-aggregator.ts` | `review_observed.correlation`で限定した集約経路。従来の全体表示用集約は維持 | Modify Task 2 |
 | `src/core/types.ts` | 既存の`ImplementationTaskCallBinding`と`TaskExecutionRef`を再利用 | Read Task 2 |
 | `src/core/v2/observation-model.ts` | F-002専用の最小`implementation_call_binding` Observation Record | Modify Task 2 |
+| `src/core/v2/persistence-redaction.ts` | `redactPendingLogRecord`に新Recordの分岐を追加。Identityを変更せず、余計なペイロードを増やさず、既存LogのRedaction境界を維持 | Modify Task 2 |
 | `src/core/v2/state-projection.ts` | Durable Implementation Bindingの復元・競合検出（Review Bindingとは区別） | Modify Task 2 |
 | `src/core/v2/gate-context.ts` | Task Gateへ確証済み`reviewRound`を入力、Final既存フィールドを維持 | Modify Task 3 |
 | `src/core/v2/rule-evaluation-engine.ts` | **Task GateDecision生成責務**：`GateContext.reviewRound`を`TaskGateDecisionPayload.reviewRound`へ転送 | Modify Task 3 |
@@ -48,6 +49,7 @@
 | `tests/core/acceptance-decision.test.ts` | Round 1/2、旧Attempt、Terminal / Observation照合、Decision再利用・矛盾 | Test Tasks 1, 3 |
 | `tests/core/v2/review-aggregator.test.ts` | Round混在・空Snapshot・未帰属Observationを隔離 | Test Task 2 |
 | `tests/core/v2/state-projection.test.ts` | 永続Bindingの復元・重複競合の非受理 | Test Task 2 |
+| `tests/core/v2/persistence-redaction.test.ts` | 新Recordの専用分岐、Identity保存、冪等性、既存Redaction / 未知Kindの退行防止 | Test Task 2 |
 | `tests/hooks/observation-handler-lifecycle.test.ts` | PreToolUse時のLifecycle→Binding保存順序と失敗 | Test Task 2 |
 | `tests/hooks/observation-handler-tool.test.ts` | Call ID/Session/Attempt違いによるEvidence非受理 | Test Task 2 |
 | `tests/core/v2/rule-evaluation-engine.test.ts` | GateContext → Task GateDecisionのRound伝播 | Test Task 3 |
@@ -123,6 +125,8 @@ type ImplementationCallBindingObserved = {
 
 **Security / nonfunctional:** BindingにはIdentityの最小メタデータだけを保存し、Tool生出力・Secrets・認証情報を含めない。旧ログにBindingを補記したことにせず、そのEvidenceは正式受理には使わない。既存Observation Log・Validation・Authorization Boundaryを再利用する。
 
+**Persistence Redaction boundary (F-002 residual):** 既存Logのappend前に適用される`src/core/v2/persistence-redaction.ts`の`redactPendingLogRecord()`は`kind`の網羅的`switch`と`assertNever`を持つため、新設`implementation_call_binding`の専用`case`を追加する。Recordの`parentSessionId`、`callId`、`authorizationId`、`taskExecutionRef.authorizationId/taskId/attemptId`、既存Envelope/Sequenceを**変換・マスク・正規化しない**。自由記述、Tool生出力、Secretsを新Recordへ追加せず、必要なIdentityメタデータだけを同じRecordとして返す（Identity-onlyであれば`return record`相当の明示分岐）。複数回のRedactionでも同じRecord/Identityを返すこと。新Record以外の既存分岐および未知`kind`の`assertNever`による拒否を維持する。Record全体の構造妥当性は`src/runtime/validation.ts`の専用Validationで確認し、Redactionで不正Recordを正当化しない。**Redaction通過だけでDurable Attribution成立とみなさず、保存成功・Readback・Attempt照合を引き続き要求する。**
+
 | Test Case | Binding | Evidence | Expected |
 |---|---|---|---|
 | 正常・同一親Call / Attempt | 永続保存とReadback一致 | 同一CallのAuthoritative FullEvidenceRef | Admit（必要Gate条件が成立した場合のみ） |
@@ -183,19 +187,20 @@ Gateへ渡す入力は`admittedExecutionEvidence`と`admittedReviewSummary`だ�
 
 ### Task 2: Durable Implementation Binding / Review and Execution Evidence Isolation (F-002, Owner Option A)
 
-**Files:** Modify `src/core/v2/observation-model.ts`、`src/runtime/validation.ts`、`src/hooks/observation-handler.ts`、`src/core/v2/state-projection.ts`、`src/core/v2/review-aggregator.ts`、`src/core/acceptance-decision.ts`。Read `src/core/types.ts`。Test `tests/runtime/validation.test.ts`、`tests/hooks/observation-handler-lifecycle.test.ts`、`tests/hooks/observation-handler-tool.test.ts`、`tests/core/v2/state-projection.test.ts`、`tests/core/v2/review-aggregator.test.ts`、`tests/hooks/observation-handler-gate.test.ts`。
+**Files:** Modify `src/core/v2/observation-model.ts`、`src/core/v2/persistence-redaction.ts`、`src/runtime/validation.ts`、`src/hooks/observation-handler.ts`、`src/core/v2/state-projection.ts`、`src/core/v2/review-aggregator.ts`、`src/core/acceptance-decision.ts`。Read `src/core/types.ts`。Test `tests/core/v2/persistence-redaction.test.ts`、`tests/runtime/validation.test.ts`、`tests/hooks/observation-handler-lifecycle.test.ts`、`tests/hooks/observation-handler-tool.test.ts`、`tests/core/v2/state-projection.test.ts`、`tests/core/v2/review-aggregator.test.ts`、`tests/hooks/observation-handler-gate.test.ts`。
 
-**Interfaces:** F-002で固定した専用`ImplementationCallBindingObserved`を既存Logへappend。Durable Readbackだけから`(parentSessionId,callId)`と`TaskExecutionRef`を結合し、Current Review Correlationに一致したGateへ`admittedExecutionEvidence`／`admittedReviewSummary`を供給する。未確認は`UNATTRIBUTED`、競合は`CONFLICT`としてGateに入力しない（独立Frameworkは作らない）。
+**Interfaces:** F-002で固定した専用`ImplementationCallBindingObserved`を既存Logへappend。Durable Readbackだけから`(parentSessionId,callId)`と`TaskExecutionRef`を結合し、Current Review Correlationに一致したGateへ`admittedExecutionEvidence`／`admittedReviewSummary`を供給する。未確認は`UNATTRIBUTED`、競合は`CONFLICT`としてGateに入力しない（独立Frameworkは作らない）。**保存前に`redactPendingLogRecord()`の専用分岐を通す。**
 
 - [ ] **Step 1 — RED test:** `it("validates a durable implementation call binding", ...)`。正常Recordを受理し、空Call ID／Authorization不一致／破損TaskExecutionRefを拒否し、旧Logの読み取りを維持する。
-- [ ] **Step 2 — RED test:** `it("persists implementation call binding after initial lifecycle", ...)`／`it("does not admit evidence when binding append fails", ...)`。正常時にLifecycle→Binding順でappendし、失敗時にメモリ値を正式根拠にしない。
-- [ ] **Step 3 — RED test:** `it("restores durable implementation binding after restart", ...)`／`it("rejects conflicting bindings for one parent call", ...)`。正常復元と重複Identity競合を確認。
-- [ ] **Step 4 — RED test:** `it("admits same-attempt evidence with exact FullEvidenceRef and call identity", ...)`、`it("rejects missing binding, taskId-only, wrong session, wrong call, old attempt and unlinked child tools", ...)`。欠測時は必要Gateから正式Acceptanceを確定しない。
-- [ ] **Step 5 — RED test:** `it("isolates previous-round findings and complete snapshots from current review", ...)`。現在Correlation内のReview Summaryだけを採用。
-- [ ] **Step 6 — RED run:** `bun run vitest run tests/runtime/validation.test.ts tests/hooks/observation-handler-lifecycle.test.ts tests/hooks/observation-handler-tool.test.ts tests/core/v2/state-projection.test.ts tests/core/v2/review-aggregator.test.ts tests/hooks/observation-handler-gate.test.ts`。期待: 追加テストがBaselineではFAIL（専用永続Record、復元、Admission境界がないため）。無関係な既存Failureと混同しない。
-- [ ] **Step 7 — GREEN:** F-002のRecord保存・Validation・復元・EvidenceRef/Call/Attempt照合とReview隔離だけを実装。Child Sessionの帰属を推測せず、欠測Evidenceを除外。通常Tool実行は維持し、正式AcceptanceだけFail-Closed。
-- [ ] **Step 8 — GREEN run:** Step 6と同じコマンドを再実行。正常・欠測・競合・再起動・Review隔離がPASSすること。親Bindingのみで子ToolのBuild/TestがPASSすると主張しない。
-- [ ] **Step 9 — Commit boundary (future implementation approval only):** 実際に変更したTask 2対象のSource/Testだけを`git add`し、`git commit -m "fix(justice): persist minimal execution call attribution"`。**本ドキュメント承認には実装Commitの権限を含めない。**
+- [ ] **Step 2 — RED redaction test:** `tests/core/v2/persistence-redaction.test.ts`へ`it("passes implementation_call_binding through redaction without changing durable identity", ...)`、`it("preserves implementation_call_binding redaction idempotence and rejects unknown record kinds", ...)`を追加。元の`parentSessionId`、`callId`、`authorizationId`、`taskExecutionRef`、Envelopeのバイト同値を確認し、2回適用した結果が同一であること、既存Redaction分岐が変わらないことを確認。RecordにTool生出力・Secrets等の非契約フィールドは付与しない。
+- [ ] **Step 3 — RED test:** `it("persists implementation call binding after initial lifecycle", ...)`／`it("does not admit evidence when binding append fails", ...)`。正常時にLifecycle→Binding順でappendし、失敗時にメモリ値を正式根拠にしない。
+- [ ] **Step 4 — RED test:** `it("restores durable implementation binding after restart", ...)`／`it("rejects conflicting bindings for one parent call", ...)`。正常復元と重複Identity競合を確認。
+- [ ] **Step 5 — RED test:** `it("admits same-attempt evidence with exact FullEvidenceRef and call identity", ...)`、`it("rejects missing binding, taskId-only, wrong session, wrong call, old attempt and unlinked child tools", ...)`。欠測時は必要Gateから正式Acceptanceを確定しない。
+- [ ] **Step 6 — RED test:** `it("isolates previous-round findings and complete snapshots from current review", ...)`。現在Correlation内のReview Summaryだけを採用。
+- [ ] **Step 7 — RED run:** `bun run vitest run tests/core/v2/persistence-redaction.test.ts tests/runtime/validation.test.ts tests/hooks/observation-handler-lifecycle.test.ts tests/hooks/observation-handler-tool.test.ts tests/core/v2/state-projection.test.ts tests/core/v2/review-aggregator.test.ts tests/hooks/observation-handler-gate.test.ts`。期待: 新しいRedaction分岐が存在しないため新設Redactionテストが失敗し、Binding保存・復元・Admissionも未実装なので関連新規テストが失敗する。既存Failureを追加テストの期待Failureと混同しない。
+- [ ] **Step 8 — GREEN:** F-002のRecord型、保存・Validation・復元・EvidenceRef/Call/Attempt照合とReview隔離を実装。**`src/core/v2/persistence-redaction.ts`の`redactPendingLogRecord`に`case "implementation_call_binding"`を追加し、Identity-only Recordを変更せず返す（非契約自由記述を追加しない）。`assertNever`による未知Kind拒否は維持する。** Child Sessionの帰属を推測せず、欠測Evidenceを除外。通常Tool実行は維持し、正式AcceptanceだけFail-Closed。
+- [ ] **Step 9 — GREEN run:** Step 7と同じコマンドを再実行。Redaction正常系・冪等性・既存分岐の非退行、保存→Readback、正常・欠測・競合・再起動・Review隔離がPASSすること。親Bindingのみで子ToolのBuild/TestがPASSすると主張しない。
+- [ ] **Step 10 — Commit boundary (future implementation approval only):** 実際に変更したTask 2対象のSource/Testだけを`git add`し、**`src/core/v2/persistence-redaction.ts`と`tests/core/v2/persistence-redaction.test.ts`を必ず含める**。 `git commit -m "fix(justice): persist minimal execution call attribution"`。**本ドキュメント承認には実装Commitの権限を含めない。**
 
 **Stop:** 既存永続Recordから子Session実行のIdentityが証明できなければ、そのEvidenceを非受理として正常Gateへの制限を記録し、このTaskの範囲を自動拡張しない。
 
@@ -257,10 +262,11 @@ Gateへ渡す入力は`admittedExecutionEvidence`と`admittedReviewSummary`だ�
 
 ## Completion Criteria
 
-Implementation Plan R0.1.2の文書限定訂正条件：
+Implementation Plan R0.1.3の文書限定訂正条件：
 
 - [x] F-001〜F-003の実装判断（Current Correlation / Evidence Binding / Decision Round）をPlan内に固定
 - [x] Owner採択の方式AをF-002専用の最小永続Binding Recordとして固定し、帰属未確証では方式B相当のFail-Closedを適用
+- [x] F-002のRedaction境界（新Record分岐、Identity保持、冪等性、未知Kind拒否）をFile Map／Task 2 RED・GREEN・Commitに反映
 - [x] F-004のRED / GREEN / Verify / Commit境界と独立Integration対象を固定
 - [ ] Design全文との逐条整合は `NOT_VERIFIED`（Designの本文が現行Git参照から確認できないため、ドキュメント差分なしと断定しない）
 - [x] 変更ファイル・既存インターフェースを特定
@@ -308,4 +314,4 @@ Task 1〜4の実行結果が得られた時点で実装を終了する。結果�
 
 新規FindingやReview結果を理由に別Task・独立レビュー・再訂正を自動開始しない。
 
-**本R0.1.2はF-002方式Aの文書限定訂正・1 Commit/Pushのみ承認済み。Implementation HOLDを維持し、ソース編集・Build/Test・追加レビュー・Gate変更・他ファイルへのGitHub書込みは未承認。Design全文の逐条確認は `NOT_VERIFIED`。**
+**本R0.1.3はF-002 Redaction対応の文書限定訂正・1 Commit/Pushのみ承認済み。Implementation HOLDを維持し、ソース編集・Build/Test・追加レビュー・Gate変更・他ファイルへのGitHub書込みは未承認。Design全文の逐条確認は `NOT_VERIFIED`。Plan採択判断はHuman Ownerが別途行う。**
