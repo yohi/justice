@@ -357,12 +357,22 @@ describe("S3-a review artifact to acceptance (F-004)", () => {
         writerId: fixture.writerId,
       });
 
-      // Observed behavior: staging/terminal/review_observed are still appended and the
-      // task reaches gate_pending; the mismatch is caught at Gate admission
-      // (`projectCompletedReviewCallHistory` -> staging_identity_mismatch), so no
-      // formal decision is recorded. Only the protected acceptance is asserted here.
-      expect(outcome.kind).toBe("blocked");
+      // Rejected early, before any durable write: same `stale` outcome as the other
+      // session mismatches, with a pinned identity-mismatch advisory.
+      expect(outcome).toEqual({ kind: "stale" });
+      expect(fixture.recordAdvisory).toHaveBeenCalledWith(
+        "review_observed_execution_identity_mismatch",
+      );
+      expect(fixture.readReservedArtifact).not.toHaveBeenCalled();
       const records = await fixture.durableRecords();
+      expect(ofKind(records, "review_artifact_read_started")).toHaveLength(0);
+      expect(ofKind(records, "review_artifact_failure_staged")).toHaveLength(0);
+      expect(ofKind(records, "review_completion_staged")).toHaveLength(0);
+      expect(
+        ofKind(records, "review_dispatch_transition").filter((record) => record.to === "terminal"),
+      ).toHaveLength(0);
+      expect(ofKind(records, "review_observed")).toHaveLength(0);
+      expect(lifecycleTo(records, "gate_pending")).toHaveLength(0);
       expect(taskGateDecisions(records)).toHaveLength(0);
       await expectNoFormalAcceptance(fixture);
     });
@@ -395,6 +405,10 @@ describe("S3-a review artifact to acceptance (F-004)", () => {
       await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
 
       await expect(fixture.consume()).resolves.toEqual({ kind: "blocked" });
+      await expect(fixture.gateEvaluation.mock.results[0]?.value).resolves.toEqual({
+        kind: "blocked",
+        advisory: "decision_integrity_violation",
+      });
 
       const records = await fixture.durableRecords();
       // Only the seeded roundless record exists; no round-1 decision is written beside it.

@@ -94,6 +94,12 @@ export type ReviewArtifactCompletionFixture = {
   /** Real review dispatch state machine sharing the fixture's log, store, and boundary. */
   readonly reviewDispatch: ReturnType<typeof createReviewDispatchState>;
   readonly injectReviewRequiredDirective: ReturnType<typeof vi.fn>;
+  /** Spy over the real within-boundary Gate evaluator (results carry the advisory). */
+  readonly gateEvaluation: ReturnType<
+    typeof vi.fn<
+      ReturnType<typeof createGatePendingAttemptEvaluator>["evaluateGatePendingAttemptWithinAuthorizationReviewBoundary"]
+    >
+  >;
   /** Consumes a review completion through the real completion domain with explicit input. */
   readonly consumeWith: (input: ReviewCompletionInput) => Promise<ReviewCompletionOutcome>;
 };
@@ -350,6 +356,8 @@ export async function arrangeReviewArtifactCompletionFixture(
       await recordAdvisory(advisory);
     },
   });
+  // Spy over the real Gate evaluator so tests can pin its blocked advisory.
+  const gateEvaluation = vi.fn(gateEvaluator.evaluateGatePendingAttemptWithinAuthorizationReviewBoundary);
   const readAndAssembleMatchingArtifact: ReviewCompletionDependenciesForTest["readAndAssembleMatchingArtifact"] =
     async (postToolUse, binding, delegatedBinding, trustedCorrelation, observedExecution) => {
       const content = await readReservedArtifact(binding.artifactReservation);
@@ -397,8 +405,7 @@ export async function arrangeReviewArtifactCompletionFixture(
     appendReviewDispatchTransition,
     readAndAssembleMatchingArtifact,
     cleanupArtifact,
-    evaluateGatePendingAttemptWithinAuthorizationReviewBoundary:
-      gateEvaluator.evaluateGatePendingAttemptWithinAuthorizationReviewBoundary,
+    evaluateGatePendingAttemptWithinAuthorizationReviewBoundary: gateEvaluation,
     appendTaskLifecycleTransition,
     appendPlanFinalizationTransition,
     recordAdvisory,
@@ -608,6 +615,7 @@ export async function arrangeReviewArtifactCompletionFixture(
     },
     reviewDispatch,
     injectReviewRequiredDirective,
+    gateEvaluation,
     consumeWith: (input) => completion.consumeReviewCompletion(input),
   };
 }
