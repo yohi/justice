@@ -282,9 +282,11 @@ describe("aggregateAdmittedReviews() current-correlation isolation (F-002)", () 
     expect(global.resolved.map((item) => item.itemKey)).toEqual(
       expect.arrayContaining(["major:round-1", "critical:legacy"]),
     );
-    // Records without a correlation are never admitted, even if the predicate would accept them.
-    expect(aggregateAdmittedReviews(records, () => true).open.map((item) => item.itemKey)).not.toContain(
-      "critical:legacy",
-    );
+  });
+
+  it("excludes an uncorrelated observation even when the admission predicate accepts it", () => {
+    const uncorrelated = correlated(1, undefined, [reviewItem("critical:legacy", "critical")]);
+
+    expect(aggregateAdmittedReviews([uncorrelated], () => true).open).toEqual([]);
   });
 });

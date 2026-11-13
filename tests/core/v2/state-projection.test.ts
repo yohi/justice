@@ -18,7 +18,11 @@ import type {
   TaskProgressState,
 } from "../../../src/core/v2/observation-model";
 import type { ReviewCorrelation, TaskExecutionRef } from "../../../src/core/types";
-import type { DelegatedExecutionBinding, DelegatedExecutionRelationObserved } from "../../../src/core/types";
+import type {
+  DelegatedExecutionBinding,
+  DelegatedExecutionRelationObserved,
+  ObservedReviewExecutionV1,
+} from "../../../src/core/types";
 
 function toolEvent(
   seq: number,
@@ -1024,6 +1028,7 @@ describe("durable completed review call history (F-002)", () => {
       readonly artifactCorrelationMismatch?: boolean;
       readonly terminalArtifactId?: string;
       readonly terminalReviewCallId?: string;
+      readonly artifactObservedExecutionOverrides?: Partial<ObservedReviewExecutionV1>;
     } = {},
   ): readonly ObservationRecord[] {
     const claimedCallId = options.claimedCallId ?? "review-call-1";
@@ -1081,7 +1086,10 @@ describe("durable completed review call history (F-002)", () => {
               taskExecutionRef: { ...correlation.taskExecutionRef, attemptId: "attempt-other" },
             }
           : correlation,
-      observedExecution: observed(stagingCallId),
+      observedExecution: {
+        ...observed(stagingCallId),
+        ...options.artifactObservedExecutionOverrides,
+      },
       complete: options.artifactComplete ?? true,
       findings: options.artifactFindings ?? [],
     };
@@ -1188,6 +1196,20 @@ describe("durable completed review call history (F-002)", () => {
       projectCompletedReviewCallHistory(history({ extraClaimedCallId: "review-call-2" }), "parent-1", correlation).kind,
     ).toBe("conflict");
     expect(projectCompletedReviewCallHistory(history(), "parent-other", correlation).kind).toBe("missing");
+  });
+
+  it.each([
+    ["correlation", { correlation: { ...correlation, reviewRound: 2 } }],
+    ["child session", { childSessionId: "child-other" }],
+    ["review execution event", { reviewExecutionEventId: "event-other" }],
+  ] as const)("rejects an artifact observed-execution %s mismatch", (_name, artifactObservedExecutionOverrides) => {
+    expect(
+      projectCompletedReviewCallHistory(
+        history({ artifactObservedExecutionOverrides }),
+        "parent-1",
+        correlation,
+      ),
+    ).toEqual({ kind: "conflict", reason: "staging_identity_mismatch" });
   });
 
   it("preserves proven review-only Gate success without execution evidence", () => {
