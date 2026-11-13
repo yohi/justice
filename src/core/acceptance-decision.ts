@@ -896,6 +896,8 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
           ? { kind: "decided", decision: gate.decision }
           : { kind: "blocked", advisory: "decision_integrity_violation" };
       }
+      if (acceptance.kind === "found" && acceptance.decision.verdict !== "blocked")
+        return { kind: "blocked", advisory: "decision_integrity_violation" };
       if (gate.kind === "found") {
         if (!(await isCurrentActiveAuthorization(correlation, dependencies.findAuthorizationById)))
           return { kind: "blocked", advisory: "review_authorization_not_active" };

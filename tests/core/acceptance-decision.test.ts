@@ -1336,7 +1336,7 @@ describe("createGatePendingAttemptEvaluator", () => {
     });
   });
 
-  it("does not duplicate an existing acceptance when its GateDecision is missing", async () => {
+  it("blocks an accepted Acceptance when its GateDecision is missing", async () => {
     const existingAcceptance = taskAcceptanceRecord();
     const fixture = dependencies(
       async () => ({
@@ -1363,11 +1363,12 @@ describe("createGatePendingAttemptEvaluator", () => {
       },
     });
 
-    await expect(evaluator.evaluateGatePendingAttempt(context())).resolves.toMatchObject({
-      kind: "decided",
-      decision: { verdict: "PASS" },
+    await expect(evaluator.evaluateGatePendingAttempt(context())).resolves.toEqual({
+      kind: "blocked",
+      advisory: "decision_integrity_violation",
     });
 
+    expect(fixture.decisions).toHaveLength(0);
     expect(fixture.decisions.filter((record) => "kind" in record && record.kind === "task-acceptance")).toHaveLength(0);
     expect(findCurrentAcceptanceDecision(records, taskCorrelation())).toMatchObject({
       kind: "found",
