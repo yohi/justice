@@ -9,6 +9,9 @@ import {
 } from "../../src/core/review-artifact";
 import type { ReviewCompletionOutcome } from "../../src/core/review-artifact";
 import { createGatePendingAttemptEvaluator } from "../../src/core/acceptance-decision";
+import type { EvaluateRulesInput } from "../../src/core/acceptance-decision";
+import { createReviewDispatchState } from "../../src/core/review-dispatch-state";
+import type { ReviewCompletionInput } from "../../src/core/review-artifact";
 import { ObservationLogStore } from "../../src/runtime/observation-log-store";
 import { createMockFileSystem, createMockReservedReviewArtifactIo } from "./mock-file-system";
 import type { MockFileSystem } from "./mock-file-system";
@@ -26,7 +29,11 @@ import type {
   PersistedLogRecord,
   PendingEnvelope,
 } from "../../src/core/v2/observation-model";
-import type { AcceptanceDecision, GateDecision } from "../../src/core/v2/decision-model";
+import type {
+  AcceptanceDecision,
+  GateDecision,
+  PendingDecisionRecord,
+} from "../../src/core/v2/decision-model";
 import type { TaskProgressState } from "../../src/core/task-lifecycle";
 
 export type UsableReviewArtifactReservation = Extract<
@@ -76,6 +83,25 @@ export type ReviewArtifactCompletionFixture = {
   readonly appendPendingRecord: <T extends PendingEnvelope & { readonly recordType: "observation" }>(
     input: T,
   ) => Promise<T & { readonly sequence: number }>;
+  /** Appends a durable decision record (used to seed historic/conflicting decisions). */
+  readonly appendPendingDecision: (input: PendingDecisionRecord) => Promise<number>;
+  readonly agentId: ObservationAgentId;
+  readonly writerId: string;
+  /** Deterministic PASS rule evaluator spy wired into the real Gate evaluator. */
+  readonly evaluateRules: ReturnType<typeof vi.fn<(input: EvaluateRulesInput) => Promise<unknown>>>;
+  /** Invalidates the seeded Authorization in the real AuthorizationStore (no boundary acquisition). */
+  readonly revokeAuthorization: () => Promise<void>;
+  /** Real review dispatch state machine sharing the fixture's log, store, and boundary. */
+  readonly reviewDispatch: ReturnType<typeof createReviewDispatchState>;
+  readonly injectReviewRequiredDirective: ReturnType<typeof vi.fn>;
+  /** Spy over the real within-boundary Gate evaluator (results carry the advisory). */
+  readonly gateEvaluation: ReturnType<
+    typeof vi.fn<
+      ReturnType<typeof createGatePendingAttemptEvaluator>["evaluateGatePendingAttemptWithinAuthorizationReviewBoundary"]
+    >
+  >;
+  /** Consumes a review completion through the real completion domain with explicit input. */
+  readonly consumeWith: (input: ReviewCompletionInput) => Promise<ReviewCompletionOutcome>;
 };
 
 export type ReviewCompletionDependenciesForTest = Parameters<
@@ -268,9 +294,10 @@ export async function arrangeReviewArtifactCompletionFixture(
     });
   }
 
+  // Resolve through the real AuthorizationStore so a durable revocation is observed.
   const findAuthorizationById: ReviewCompletionDependenciesForTest["findAuthorizationById"] = (
     id,
-  ) => (id === authorization.authorizationId ? Promise.resolve(authorization) : Promise.resolve(null));
+  ) => seedAuthorizationStore.findByAuthorizationId(id);
   const appendReviewDispatchTransition: ReviewCompletionDependenciesForTest["appendReviewDispatchTransition"] =
     async (input) => ({
       kind: "committed" as const,
@@ -286,6 +313,31 @@ export async function arrangeReviewArtifactCompletionFixture(
       await appendPendingRecord({ ...envelope(), kind: "plan_finalization_transition", ...input });
       return { kind: "committed" as const };
     };
+  const evaluateRules = vi.fn(async ({ context }: EvaluateRulesInput): Promise<unknown> =>
+    context.scope === "task"
+      ? {
+          recordType: "decision" as const,
+          gateType: "task" as const,
+          taskId: context.taskExecutionRef.taskId,
+          taskExecutionRef: context.taskExecutionRef,
+          reviewRound: context.reviewRound,
+          verdict: "PASS" as const,
+          reachableEnforcementLevel: "L1" as const,
+          appliedEnforcementLevel: "L0" as const,
+          ruleResults: [],
+        }
+      : {
+          recordType: "decision" as const,
+          gateType: "plan" as const,
+          authorizationId: context.authorizationId,
+          planPath: context.planPath,
+          finalizationAttemptId: context.finalizationAttemptId,
+          finalReviewRound: context.finalReviewRound,
+          verdict: "PASS" as const,
+          reachableEnforcementLevel: "L1" as const,
+          appliedEnforcementLevel: "L0" as const,
+          ruleResults: [],
+        });
   const gateEvaluator = createGatePendingAttemptEvaluator({
     readDurableRecords: () => logStore.readAll(),
     appendDecision: async (input) => {
@@ -296,34 +348,16 @@ export async function arrangeReviewArtifactCompletionFixture(
     withAuthorizationReviewBoundary: boundary.withParentSession,
     appendTaskLifecycleTransition,
     appendPlanFinalizationTransition,
-    evaluateRules: async ({ context }) =>
-      context.scope === "task"
-        ? {
-            recordType: "decision" as const,
-            gateType: "task" as const,
-            taskId: context.taskExecutionRef.taskId,
-            taskExecutionRef: context.taskExecutionRef,
-            verdict: "PASS" as const,
-            reachableEnforcementLevel: "L1" as const,
-            appliedEnforcementLevel: "L0" as const,
-            ruleResults: [],
-          }
-        : {
-            recordType: "decision" as const,
-            gateType: "plan" as const,
-            authorizationId: context.authorizationId,
-            planPath: context.planPath,
-            finalizationAttemptId: context.finalizationAttemptId,
-            finalReviewRound: context.finalReviewRound,
-            verdict: "PASS" as const,
-            reachableEnforcementLevel: "L1" as const,
-            appliedEnforcementLevel: "L0" as const,
-            ruleResults: [],
-          },
+    evaluateRules: (input) =>
+      evaluateRules(input) as ReturnType<
+        Parameters<typeof createGatePendingAttemptEvaluator>[0]["evaluateRules"]
+      >,
     recordAdvisory: async (advisory) => {
       await recordAdvisory(advisory);
     },
   });
+  // Spy over the real Gate evaluator so tests can pin its blocked advisory.
+  const gateEvaluation = vi.fn(gateEvaluator.evaluateGatePendingAttemptWithinAuthorizationReviewBoundary);
   const readAndAssembleMatchingArtifact: ReviewCompletionDependenciesForTest["readAndAssembleMatchingArtifact"] =
     async (postToolUse, binding, delegatedBinding, trustedCorrelation, observedExecution) => {
       const content = await readReservedArtifact(binding.artifactReservation);
@@ -371,8 +405,7 @@ export async function arrangeReviewArtifactCompletionFixture(
     appendReviewDispatchTransition,
     readAndAssembleMatchingArtifact,
     cleanupArtifact,
-    evaluateGatePendingAttemptWithinAuthorizationReviewBoundary:
-      gateEvaluator.evaluateGatePendingAttemptWithinAuthorizationReviewBoundary,
+    evaluateGatePendingAttemptWithinAuthorizationReviewBoundary: gateEvaluation,
     appendTaskLifecycleTransition,
     appendPlanFinalizationTransition,
     recordAdvisory,
@@ -385,6 +418,40 @@ export async function arrangeReviewArtifactCompletionFixture(
         async () => undefined,
       ),
     },
+  });
+  let reservationCounter = 1;
+  const injectReviewRequiredDirective = vi.fn(async (): Promise<void> => undefined);
+  const reviewDispatch = createReviewDispatchState({
+    readDurableRecords: () => logStore.readAll(),
+    readDurableAuthorizations: () => seedAuthorizationStore.hydrate(),
+    findAuthorizationById,
+    appendReviewDispatchTransition,
+    reserveReviewArtifact: async () => {
+      reservationCounter += 1;
+      const id = `review-artifact-${reservationCounter}`;
+      const nextArtifactPath = `.justice/reviews/${id}.json`;
+      const nextLeasePath = `.justice/reviews/.leases/${id}.json.lease`;
+      const identity: ReviewArtifactInodeIdentity = { device: "mock-device", inode: id };
+      files.writtenFiles[nextArtifactPath] = "";
+      files.writtenFiles[nextLeasePath] = "";
+      baseArtifactIo.reviewArtifactIdentities.set(nextArtifactPath, identity);
+      baseArtifactIo.reviewArtifactIdentities.set(nextLeasePath, identity);
+      return {
+        status: "usable" as const,
+        artifactId: id,
+        artifactPath: nextArtifactPath,
+        leasePath: nextLeasePath,
+        artifactIdentity: identity,
+      };
+    },
+    cleanupReviewArtifactReservation: async (usable) => {
+      await baseArtifactIo.cleanup(usable);
+    },
+    injectReviewRequiredDirective,
+    withAuthorizationReviewBoundary: boundary.withParentSession,
+    hydrateAuthorizationsBeforeReviewRecovery: () => seedAuthorizationStore.hydrate(),
+    recordAdvisory,
+    generateId: () => `dispatch-${reservationCounter}-${Math.random().toString(36).slice(2)}`,
   });
   const validReviewWorkerJson = JSON.stringify({
     schemaVersion: 1,
@@ -531,5 +598,24 @@ export async function arrangeReviewArtifactCompletionFixture(
       ),
     durableRecords: () => logStore.readAll(),
     appendPendingRecord,
+    appendPendingDecision: (input) => logStore.append(shard, input),
+    agentId,
+    writerId,
+    evaluateRules,
+    revokeAuthorization: async (): Promise<void> => {
+      const result = await seedAuthorizationStore.invalidateForFingerprintWithinAuthorizationReviewBoundary(
+        parentSessionId,
+        authorization.authorizationId,
+        { ...authorization.planFingerprint, value: `${authorization.planFingerprint.value}-revoked` },
+        "2026-09-05T00:00:01.000Z",
+      );
+      if (result.kind !== "saved") {
+        throw new Error(`completion fixture could not revoke Authorization: ${result.kind}`);
+      }
+    },
+    reviewDispatch,
+    injectReviewRequiredDirective,
+    gateEvaluation,
+    consumeWith: (input) => completion.consumeReviewCompletion(input),
   };
 }

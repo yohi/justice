@@ -21,7 +21,7 @@ export type ProgressUpdateResult = {
 export function updatePlanProgress(
   content: string,
   task: PlanTask,
-  decision: TaskAcceptanceDecision,
+  decision: Pick<TaskAcceptanceDecision, "verdict" | "taskExecutionRef">,
 ): ProgressUpdateResult {
   if (decision.verdict !== "accepted" || decision.taskExecutionRef.taskId !== task.id)
     return { content, updated: false };

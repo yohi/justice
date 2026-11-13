@@ -23,11 +23,25 @@ type GateDecisionFields = {
   readonly ruleResults: readonly RuleResult[];
 };
 
+/** F-003: new Task Gate decisions carry the proven Task Review round. */
 export type TaskGateDecisionPayload = GateDecisionFields & {
   readonly recordType: "decision";
   readonly gateType: "task";
   readonly taskId: string;
   readonly taskExecutionRef: TaskExecutionRef;
+  readonly reviewRound: number;
+};
+
+/**
+ * Read-only compatibility shape for pre-F-003 Task Gate decisions that carry a
+ * TaskExecutionRef but no review round. Never a current-round GateDecision.
+ */
+export type HistoricalTaskGateDecisionPayload = GateDecisionFields & {
+  readonly recordType: "decision";
+  readonly gateType: "task";
+  readonly taskId: string;
+  readonly taskExecutionRef: TaskExecutionRef;
+  readonly reviewRound?: undefined;
 };
 
 export type LegacyTaskGateDecisionPayload = GateDecisionFields & {
@@ -47,12 +61,26 @@ export type PlanGateDecisionPayload = GateDecisionFields & {
   readonly finalReviewRound: number;
 };
 
+type TaskAcceptanceVerdict = "accepted" | "rework-required" | "blocked";
+
+/** F-003: new Task Acceptance decisions carry the proven Task Review round. */
 export type TaskAcceptanceDecisionPayload = {
   readonly recordType: "decision";
   readonly kind: "task-acceptance";
   readonly taskId: string;
   readonly taskExecutionRef: TaskExecutionRef;
-  readonly verdict: "accepted" | "rework-required" | "blocked";
+  readonly reviewRound: number;
+  readonly verdict: TaskAcceptanceVerdict;
+};
+
+/** Read-only compatibility shape for pre-F-003 roundless Task Acceptance decisions. */
+export type HistoricalTaskAcceptanceDecisionPayload = {
+  readonly recordType: "decision";
+  readonly kind: "task-acceptance";
+  readonly taskId: string;
+  readonly taskExecutionRef: TaskExecutionRef;
+  readonly reviewRound?: undefined;
+  readonly verdict: TaskAcceptanceVerdict;
 };
 
 export type PlanAcceptanceDecisionPayload = {
@@ -68,6 +96,8 @@ export type PlanAcceptanceDecisionPayload = {
 
 export type DecisionPayload =
   | LegacyTaskGateDecisionPayload
+  | HistoricalTaskGateDecisionPayload
+  | HistoricalTaskAcceptanceDecisionPayload
   | TaskGateDecisionPayload
   | PlanGateDecisionPayload
   | TaskAcceptanceDecisionPayload
@@ -80,8 +110,12 @@ export type PendingDecisionRecord = PendingEnvelope & DecisionPayload;
 export type DecisionRecord = PersistedEnvelope & DecisionPayload;
 export type TaskGateDecision = PersistedEnvelope & TaskGateDecisionPayload;
 export type LegacyTaskGateDecision = PersistedEnvelope & LegacyTaskGateDecisionPayload;
+export type HistoricalTaskGateDecision = PersistedEnvelope & HistoricalTaskGateDecisionPayload;
+export type HistoricalTaskAcceptanceDecision = PersistedEnvelope &
+  HistoricalTaskAcceptanceDecisionPayload;
 export type PlanGateDecision = PersistedEnvelope & PlanGateDecisionPayload;
 export type TaskAcceptanceDecision = PersistedEnvelope & TaskAcceptanceDecisionPayload;
 export type PlanAcceptanceDecision = PersistedEnvelope & PlanAcceptanceDecisionPayload;
+/** Current-round decisions only; historical/legacy shapes are excluded from lookup. */
 export type GateDecision = TaskGateDecision | PlanGateDecision;
 export type AcceptanceDecision = TaskAcceptanceDecision | PlanAcceptanceDecision;

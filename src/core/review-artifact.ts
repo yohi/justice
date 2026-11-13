@@ -138,6 +138,23 @@ export function parseReviewWorkerResult(value: unknown): ReviewWorkerResultV1 | 
   };
 }
 
+/**
+ * The observed review execution must carry exactly the claimed call's identity:
+ * parent session, call, correlation, and the delegated child session.
+ */
+function observedExecutionMatchesBinding(
+  observedExecution: ObservedReviewExecutionV1,
+  binding: ReviewTaskCallBinding,
+  delegatedBinding: DelegatedExecutionBinding,
+): boolean {
+  return (
+    observedExecution.parentSessionId === binding.parentSessionId &&
+    observedExecution.callId === binding.callId &&
+    observedExecution.childSessionId === delegatedBinding.childSessionId &&
+    sameReviewCorrelation(observedExecution.correlation, binding.correlation)
+  );
+}
+
 export function assembleReviewCompletionStaging(
   postToolUse: MatchingReviewParentPostToolUse,
   binding: ReviewTaskCallBinding,
@@ -150,7 +167,7 @@ export function assembleReviewCompletionStaging(
   if (postToolUse.sessionId !== binding.parentSessionId || postToolUse.callId !== binding.callId) {
     return { kind: "failure", reason: "artifact_schema_invalid" };
   }
-  if (delegatedBinding.childSessionId !== observedExecution.childSessionId) {
+  if (!observedExecutionMatchesBinding(observedExecution, binding, delegatedBinding)) {
     return { kind: "failure", reason: "artifact_schema_invalid" };
   }
   let parsed: unknown;
@@ -585,6 +602,12 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
       }
       const observed = input.observedExecution ?? projectObservedReviewExecution(records, delegated);
       if (observed === undefined) return { kind: "stale" as const };
+      // Reject a mismatched observed execution before any durable write, so it
+      // never reaches staging/terminal/gate_pending (fail-closed, no stuck lifecycle).
+      if (!observedExecutionMatchesBinding(observed, binding, delegated)) {
+        await dependencies.recordAdvisory("review_observed_execution_identity_mismatch");
+        return { kind: "stale" as const };
+      }
       const attempt = await dependencies.appendReviewArtifactReadAttempt({ ...envelope(input), kind: "review_artifact_read_started", parentSessionId: input.parentSessionId, callId: input.callId, correlation: slot.key.correlation, artifactId: binding.artifactReservation.artifactId, artifactPath: binding.artifactReservation.artifactPath });
       if (attempt.kind !== "committed") return { kind: "blocked" as const };
       // A reader throw must not escape to the outer fail-open catch (N1/§4.8.1):

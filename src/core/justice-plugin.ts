@@ -1341,6 +1341,8 @@ export class JusticePlugin {
           record.recordType === "decision" &&
           "kind" in record &&
           record.kind === "task-acceptance" &&
+          "reviewRound" in record &&
+          typeof record.reviewRound === "number" &&
           record.verdict === "accepted",
       );
       for (const decision of accepted) {

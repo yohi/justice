@@ -1,6 +1,6 @@
 import type { FullEvidenceRef } from "../types";
 import type { GateDecisionPayload, RuleResult, Verdict } from "./decision-model";
-import type { GateContext } from "./gate-context";
+import type { GateContext, GateDryRunContext } from "./gate-context";
 import type { GateRule } from "./gate-definition";
 import type { Evidence } from "./observation-model";
 import type { ProjectedEvidence, ReviewSummaryItem } from "./state-projection";
@@ -10,11 +10,19 @@ type SkipGateEvaluation = {
   readonly reason: string;
 };
 
-export function evaluate(
+/** Gate inputs that rule evaluation reads; identity fields are attached by callers. */
+type RuleEvaluationContext = Pick<GateContext, "scope" | "trigger" | "reviewScope" | "reviewSummary">;
+
+type RuleSetEvaluation = {
+  readonly verdict: Verdict;
+  readonly ruleResults: readonly RuleResult[];
+};
+
+function evaluateRuleSet(
   gates: readonly GateRule[],
   evidence: readonly ProjectedEvidence[],
-  ctx: GateContext,
-): GateDecisionPayload | SkipGateEvaluation {
+  ctx: RuleEvaluationContext,
+): RuleSetEvaluation | SkipGateEvaluation {
   const activeGates = gates.filter(
     (gate) =>
       gate.enabled &&
@@ -28,16 +36,27 @@ export function evaluate(
       reason: `no matching active gates found for trigger: ${ctx.trigger}`,
     };
   }
-
   const ruleResults = activeGates.map((gate) => evaluateRule(gate, evidence, ctx));
+  return { verdict: worstOf(ruleResults.map((result) => result.verdict)), ruleResults };
+}
+
+export function evaluate(
+  gates: readonly GateRule[],
+  evidence: readonly ProjectedEvidence[],
+  ctx: GateContext,
+): GateDecisionPayload | SkipGateEvaluation {
+  const evaluation = evaluateRuleSet(gates, evidence, ctx);
+  if (evaluation.verdict === "SKIP") return evaluation;
   return {
     recordType: "decision",
-    verdict: worstOf(ruleResults.map((result) => result.verdict)),
+    verdict: evaluation.verdict,
     ...(ctx.scope === "task"
       ? {
           gateType: "task" as const,
           taskId: ctx.taskExecutionRef.taskId,
           taskExecutionRef: ctx.taskExecutionRef,
+          // F-003: carry the proven Task Review round; never inferred here.
+          reviewRound: ctx.reviewRound,
         }
       : {
           gateType: "plan" as const,
@@ -48,14 +67,43 @@ export function evaluate(
         }),
     reachableEnforcementLevel: "L1",
     appliedEnforcementLevel: "L0",
-    ruleResults,
+    ruleResults: evaluation.ruleResults,
+  };
+}
+
+/**
+ * Dry-run Task Gate result for the internal `justice_gate` diagnostic. It has no
+ * proven review round, so it is structurally not a `GateDecisionPayload` and can
+ * never be persisted as a formal decision.
+ */
+export type TaskGateDryRunResult = Omit<
+  Extract<GateDecisionPayload, { readonly gateType: "task" }>,
+  "reviewRound"
+>;
+
+export function evaluateDryRun(
+  gates: readonly GateRule[],
+  evidence: readonly ProjectedEvidence[],
+  ctx: GateDryRunContext,
+): TaskGateDryRunResult | SkipGateEvaluation {
+  const evaluation = evaluateRuleSet(gates, evidence, ctx);
+  if (evaluation.verdict === "SKIP") return evaluation;
+  return {
+    recordType: "decision",
+    verdict: evaluation.verdict,
+    gateType: "task",
+    taskId: ctx.taskExecutionRef.taskId,
+    taskExecutionRef: ctx.taskExecutionRef,
+    reachableEnforcementLevel: "L1",
+    appliedEnforcementLevel: "L0",
+    ruleResults: evaluation.ruleResults,
   };
 }
 
 function evaluateRule(
   gate: GateRule,
   evidence: readonly ProjectedEvidence[],
-  ctx: GateContext,
+  ctx: RuleEvaluationContext,
 ): RuleResult {
   const check = gate.check;
 
