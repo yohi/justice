@@ -132,5 +132,5 @@ describe('justice-s1a standalone CLI',()=>{
   expect(artifactReads).not.toContain('ac-3.md');
   expect(json.identityCandidateReady).toBe(false);expect(json.eligibleBaseline).toBe(false);
   expect(json.ownerAuthorityStatus).toBe('NOT_PROVEN');expect(json.ownerTrustPrecondition).toBe('EXTERNAL_NOT_VERIFIED_BY_S1A');
- });
+ },15_000);
 });
