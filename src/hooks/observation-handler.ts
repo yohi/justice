@@ -938,6 +938,11 @@ export class ObservationHandler {
     if (
       callId === undefined ||
       callId.trim().length === 0 ||
+      event.sessionId.trim().length === 0 ||
+      authorizationId.trim().length === 0 ||
+      taskExecutionRef.authorizationId.trim().length === 0 ||
+      taskExecutionRef.taskId.trim().length === 0 ||
+      taskExecutionRef.attemptId.trim().length === 0 ||
       authorizationId !== taskExecutionRef.authorizationId
     )
       return false;

@@ -673,7 +673,10 @@ export function projectCompletedReviewCallHistory(
     observed.callId !== callId ||
     !sameCorrelationIdentity(observed.correlation, correlation) ||
     artifact.observedExecution.callId !== callId ||
-    artifact.observedExecution.parentSessionId !== parentSessionId
+    artifact.observedExecution.parentSessionId !== parentSessionId ||
+    artifact.observedExecution.childSessionId !== observed.childSessionId ||
+    artifact.observedExecution.reviewExecutionEventId !== observed.reviewExecutionEventId ||
+    !sameCorrelationIdentity(artifact.observedExecution.correlation, observed.correlation)
   )
     return { kind: "conflict", reason: "staging_identity_mismatch" };
   if (artifact.complete !== true || artifact.findings.length !== 0)

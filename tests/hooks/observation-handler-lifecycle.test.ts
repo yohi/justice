@@ -114,6 +114,39 @@ describe("ObservationHandler lifecycle notifications", () => {
     expect(Object.keys(binding)).not.toContain("rawOutput");
   });
 
+  it("does not persist implementation binding when task execution attemptId is empty", async () => {
+    const { reader, writer } = createMemFs();
+    const logStore = new ObservationLogStore(writer, reader, "w-1");
+    const append = vi.spyOn(logStore, "append");
+    const handler = new ObservationHandler({
+      logStore,
+      sessionStateProvider: new SessionStateProvider(),
+      writerId: "w-1",
+    });
+
+    const response = await handler.handlePreToolUse({
+      type: "PreToolUse",
+      sessionId: "parent-1",
+      callId: "call-1",
+      payload: {
+        toolName: "task",
+        toolInput: { authorizationId: "auth-1", taskId: "task-1", attemptId: "" },
+      },
+    });
+
+    expect(response).toEqual({ action: "proceed" });
+    expect(
+      append.mock.calls.filter(
+        ([, record]) => record.recordType === "observation" && record.kind === "implementation_call_binding",
+      ),
+    ).toEqual([]);
+    expect(
+      (await logStore.readAll()).filter(
+        (record) => record.recordType === "observation" && record.kind === "implementation_call_binding",
+      ),
+    ).toEqual([]);
+  });
+
   it("does not admit evidence when binding append fails", async () => {
     const { reader, writer } = createMemFs();
     const realStore = new ObservationLogStore(writer, reader, "w-1");

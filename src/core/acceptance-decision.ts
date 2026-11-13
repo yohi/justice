@@ -277,9 +277,13 @@ export function findCurrentAcceptanceDecision(
   const matches = orderEventsForProjection(records)
     .filter(isAcceptance)
     .filter((record) => correlationMatchesAcceptance(record, correlation));
-  if (matches.length > 1)
+  // A blocked AcceptanceDecision records a provisional inability to decide. If
+  // reevaluation later commits a final verdict, keep that final verdict current.
+  const finalMatches = matches.filter((record) => record.verdict !== "blocked");
+  const currentMatches = finalMatches.length > 0 ? finalMatches : matches;
+  if (currentMatches.length > 1)
     return { kind: "conflict", advisory: "multiple current AcceptanceDecision records" };
-  const decision = matches[0];
+  const decision = currentMatches[0];
   return decision === undefined ? { kind: "missing" } : { kind: "found", decision };
 }
 
@@ -630,15 +634,16 @@ function restsOnUnprovenEvidence(
 ): boolean {
   const indeterminate = indeterminateEvidenceKeys(admitted);
   const nonPass = result.ruleResults.filter((rule) => rule.verdict !== "PASS");
+  const failures = nonPass.filter((rule) => rule.verdict === "FAIL");
   const unproven = (rule: GateDecisionPayload["ruleResults"][number]): boolean =>
     rule.evidenceRefs.every(
       (ref) => ref.kind === "full" && indeterminate.has(evidenceRefKey(ref)),
     );
   return (
-    result.verdict !== "PASS" &&
+    result.verdict === "FAIL" &&
     nonPass.length > 0 &&
-    nonPass.every(unproven) &&
-    nonPass.some((rule) => rule.verdict === "FAIL")
+    failures.length > 0 &&
+    failures.every(unproven)
   );
 }
 
@@ -886,17 +891,11 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
       const acceptance = findCurrentAcceptanceDecision(records, correlation);
       if (gate.kind === "conflict" || acceptance.kind === "conflict")
         return { kind: "blocked", advisory: "decision_integrity_violation" };
-      if (gate.kind === "found" && acceptance.kind === "found")
+      if (gate.kind === "found" && acceptance.kind === "found") {
         return acceptanceAgreesWithGate(gate.decision, acceptance.decision)
           ? { kind: "decided", decision: gate.decision }
           : { kind: "blocked", advisory: "decision_integrity_violation" };
-      if (acceptance.kind === "found")
-        // F-003 duplicate-write prevention: an Acceptance without a Gate is either a
-        // durable blocked (FAIL-CLOSED) outcome for this round, which a re-evaluation
-        // must not shadow with a second Acceptance, or an integrity violation.
-        return acceptance.decision.verdict === "blocked"
-          ? { kind: "blocked", advisory: "acceptance_blocked" }
-          : { kind: "blocked", advisory: "decision_integrity_violation" };
+      }
       if (gate.kind === "found") {
         if (!(await isCurrentActiveAuthorization(correlation, dependencies.findAuthorizationById)))
           return { kind: "blocked", advisory: "review_authorization_not_active" };
@@ -961,6 +960,14 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
           return { kind: "blocked", advisory: "acceptance_append_failed" };
         return { kind: "blocked", advisory: "execution_evidence_not_proven" };
       }
+      const expectedAcceptance = deriveAcceptanceDecision(result);
+      if (
+        acceptance.kind === "found" &&
+        acceptance.decision.verdict !== "blocked" &&
+        acceptance.decision.verdict !== expectedAcceptance.verdict
+      ) {
+        return { kind: "blocked", advisory: "decision_integrity_violation" };
+      }
       if (!(await isCurrentActiveAuthorization(correlation, dependencies.findAuthorizationById)))
         return { kind: "blocked", advisory: "review_authorization_not_active" };
       const gateAppended = await dependencies.appendDecision(pending(context, result));
@@ -968,11 +975,13 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
         return { kind: "blocked", advisory: "gate_decision_append_failed" };
       if (!(await isCurrentActiveAuthorization(correlation, dependencies.findAuthorizationById)))
         return { kind: "blocked", advisory: "review_authorization_not_active" };
-      const acceptanceAppended = await dependencies.appendDecision(
-        pending(context, deriveAcceptanceDecision(result)),
-      );
-      if (acceptanceAppended.kind !== "committed")
-        return { kind: "blocked", advisory: "acceptance_append_failed" };
+      if (acceptance.kind !== "found" || acceptance.decision.verdict === "blocked") {
+        const acceptanceAppended = await dependencies.appendDecision(
+          pending(context, expectedAcceptance),
+        );
+        if (acceptanceAppended.kind !== "committed")
+          return { kind: "blocked", advisory: "acceptance_append_failed" };
+      }
       const lifecycle = await applyGateOutcomeLifecycle(dependencies, context, result);
       if (lifecycle.kind !== "committed")
         return { kind: "blocked", advisory: "lifecycle_append_failed" };
