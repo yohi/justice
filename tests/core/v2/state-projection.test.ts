@@ -1016,6 +1016,14 @@ describe("durable completed review call history (F-002)", () => {
       readonly extraClaimedCallId?: string;
       readonly omitClaimed?: boolean;
       readonly omitStaging?: boolean;
+      readonly unusableReservation?: boolean;
+      readonly terminalFrom?: string;
+      readonly omitTerminalCallId?: boolean;
+      readonly artifactComplete?: boolean;
+      readonly artifactFindings?: readonly unknown[];
+      readonly artifactCorrelationMismatch?: boolean;
+      readonly terminalArtifactId?: string;
+      readonly terminalReviewCallId?: string;
     } = {},
   ): readonly ObservationRecord[] {
     const claimedCallId = options.claimedCallId ?? "review-call-1";
@@ -1046,7 +1054,9 @@ describe("durable completed review call history (F-002)", () => {
         from: "pending",
         to: "claimed",
         callId: claimedCallId,
-        artifactReservation: reservation,
+        artifactReservation: options.unusableReservation
+          ? { ...reservation, status: "unusable" }
+          : reservation,
       });
     }
     if (options.extraClaimedCallId !== undefined) {
@@ -1064,10 +1074,16 @@ describe("durable completed review call history (F-002)", () => {
       schemaVersion: 1,
       reviewKind: "task-review",
       reviewSource: "sp-review",
-      correlation,
+      correlation:
+        options.artifactCorrelationMismatch && correlation.reviewKind === "task-review"
+          ? {
+              ...correlation,
+              taskExecutionRef: { ...correlation.taskExecutionRef, attemptId: "attempt-other" },
+            }
+          : correlation,
       observedExecution: observed(stagingCallId),
-      complete: true,
-      findings: [],
+      complete: options.artifactComplete ?? true,
+      findings: options.artifactFindings ?? [],
     };
     const consumption = { artifactId: options.stagingArtifactId ?? "artifact-1", digest: "sha256:d" };
     if (options.omitStaging !== true) {
@@ -1088,12 +1104,18 @@ describe("durable completed review call history (F-002)", () => {
       ...envelope(),
       ...base,
       transitionId: "t-3",
-      from: "claimed",
+      from: options.terminalFrom ?? "claimed",
       to: "terminal",
-      callId: terminalCallId,
+      ...(options.omitTerminalCallId ? {} : { callId: terminalCallId }),
       terminalReason: "completed",
-      artifactConsumption: consumption,
-      reviewArtifact: artifact,
+      artifactConsumption:
+        options.terminalArtifactId === undefined
+          ? consumption
+          : { ...consumption, artifactId: options.terminalArtifactId },
+      reviewArtifact:
+        options.terminalReviewCallId === undefined
+          ? artifact
+          : { ...artifact, observedExecution: observed(options.terminalReviewCallId) },
     });
     return records as readonly ObservationRecord[];
   }
@@ -1126,6 +1148,42 @@ describe("durable completed review call history (F-002)", () => {
     expect(
       projectCompletedReviewCallHistory(history({ stagingArtifactId: "artifact-other" }), "parent-1", correlation).kind,
     ).toBe("conflict");
+    expect(
+      projectCompletedReviewCallHistory(history({ unusableReservation: true }), "parent-1", correlation),
+    ).toEqual({ kind: "missing", reason: "artifact_reservation_unusable" });
+    expect(
+      projectCompletedReviewCallHistory(history({ terminalFrom: "pending" }), "parent-1", correlation),
+    ).toEqual({ kind: "missing", reason: "terminal_call_missing" });
+    expect(
+      projectCompletedReviewCallHistory(history({ omitTerminalCallId: true }), "parent-1", correlation),
+    ).toEqual({ kind: "missing", reason: "terminal_call_missing" });
+    expect(
+      projectCompletedReviewCallHistory(history({ artifactComplete: false }), "parent-1", correlation),
+    ).toEqual({ kind: "conflict", reason: "staging_artifact_not_clean" });
+    expect(
+      projectCompletedReviewCallHistory(
+        history({ artifactFindings: [{ severity: "major" }] }),
+        "parent-1",
+        correlation,
+      ),
+    ).toEqual({ kind: "conflict", reason: "staging_artifact_not_clean" });
+    expect(
+      projectCompletedReviewCallHistory(
+        history({ artifactCorrelationMismatch: true }),
+        "parent-1",
+        correlation,
+      ),
+    ).toEqual({ kind: "conflict", reason: "staging_identity_mismatch" });
+    expect(
+      projectCompletedReviewCallHistory(history({ terminalArtifactId: "artifact-other" }), "parent-1", correlation),
+    ).toEqual({ kind: "conflict", reason: "terminal_artifact_mismatch" });
+    expect(
+      projectCompletedReviewCallHistory(
+        history({ terminalReviewCallId: "review-call-other" }),
+        "parent-1",
+        correlation,
+      ),
+    ).toEqual({ kind: "conflict", reason: "terminal_artifact_mismatch" });
     expect(
       projectCompletedReviewCallHistory(history({ extraClaimedCallId: "review-call-2" }), "parent-1", correlation).kind,
     ).toBe("conflict");
