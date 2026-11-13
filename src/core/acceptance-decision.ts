@@ -10,8 +10,10 @@ import type {
   HistoricalTaskGateDecision,
   LegacyTaskGateDecision,
   PendingDecisionRecord,
+  TaskAcceptanceDecision,
 } from "./v2/decision-model";
 import { orderEventsForProjection } from "./v2/integrity";
+import { samePlanFingerprint, sameReviewCorrelation, sameTask } from "./review-correlation";
 import { hashString } from "./v2/hash";
 import type { ObservationRecord, PersistedLogRecord } from "./v2/observation-model";
 import type {
@@ -65,6 +67,8 @@ export type GateEvaluationDependencies = {
   readonly recordAdvisory: (advisory: string) => Promise<void>;
 };
 
+export { sameReviewCorrelation } from "./review-correlation";
+
 export type GateDecisionLookup =
   | { readonly kind: "missing" }
   | { readonly kind: "found"; readonly decision: GateDecision }
@@ -114,21 +118,6 @@ export async function isCurrentActiveAuthorization(
   } catch {
     return false;
   }
-}
-
-function samePlanFingerprint(
-  left: { readonly algorithm: string; readonly value: string },
-  right: { readonly algorithm: string; readonly value: string },
-): boolean {
-  return left.algorithm === right.algorithm && left.value === right.value;
-}
-
-function sameTask(left: TaskExecutionRef, right: TaskExecutionRef): boolean {
-  return (
-    left.authorizationId === right.authorizationId &&
-    left.taskId === right.taskId &&
-    left.attemptId === right.attemptId
-  );
 }
 
 function samePlanPath(
@@ -287,24 +276,6 @@ export function findCurrentAcceptanceDecision(
   return decision === undefined ? { kind: "missing" } : { kind: "found", decision };
 }
 
-export function sameReviewCorrelation(left: ReviewCorrelation, right: ReviewCorrelation): boolean {
-  if (left.reviewKind !== right.reviewKind) return false;
-  if (left.reviewKind === "task-review" && right.reviewKind === "task-review")
-    return (
-      left.reviewRound === right.reviewRound &&
-      sameTask(left.taskExecutionRef, right.taskExecutionRef)
-    );
-  if (left.reviewKind === "final-review" && right.reviewKind === "final-review")
-    return (
-      left.authorizationId === right.authorizationId &&
-      left.planPath === right.planPath &&
-      left.finalizationAttemptId === right.finalizationAttemptId &&
-      left.finalReviewRound === right.finalReviewRound &&
-      samePlanFingerprint(left.planFingerprint, right.planFingerprint)
-    );
-  return false;
-}
-
 export function deriveAcceptanceDecision(
   gate: GateDecisionPayload | GateDecision,
 ): AcceptanceDecisionPayload {
@@ -336,6 +307,27 @@ export function deriveAcceptanceDecision(
 function acceptanceAgreesWithGate(gate: GateDecision, acceptance: AcceptanceDecision): boolean {
   const expected = deriveAcceptanceDecision(gate);
   return acceptance.kind === expected.kind && acceptance.verdict === expected.verdict;
+}
+
+/**
+ * Readers (plan progress): the current-round accepted Task Acceptance, only when a
+ * current Gate exists for the same correlation and agrees with it (Gate PASS).
+ * Historic roundless, other-attempt/round, missing-Gate or disagreeing records
+ * yield `null` (ignored, not an error).
+ */
+export function findAgreedAcceptedTaskDecision(
+  records: readonly PersistedLogRecord[],
+  correlation: Extract<ReviewCorrelation, { readonly reviewKind: "task-review" }>,
+): TaskAcceptanceDecision | null {
+  const gate = findCurrentGateDecision(records, correlation);
+  const acceptance = findCurrentAcceptanceDecision(records, correlation);
+  if (gate.kind !== "found" || acceptance.kind !== "found") return null;
+  const decision = acceptance.decision;
+  return decision.kind === "task-acceptance" &&
+    decision.verdict === "accepted" &&
+    acceptanceAgreesWithGate(gate.decision, decision)
+    ? decision
+    : null;
 }
 
 type ActiveApprovedPlanBinding = Extract<ApprovedPlanBinding, { readonly status: "active" }>;
@@ -528,14 +520,33 @@ function fullEvidenceRefFor(
   };
 }
 
-function resolvesUniquely(records: readonly PersistedLogRecord[], ref: FullEvidenceRef): boolean {
-  const matches = records.filter(
-    (record) =>
-      record.agentId === ref.agentId &&
-      record.sessionId === ref.sessionId &&
-      record.writerId === ref.writerId &&
-      record.sequence === ref.sequence,
-  );
+type ShardSequenceIndex = ReadonlyMap<string, readonly PersistedLogRecord[]>;
+
+function shardSequenceKey(
+  ref: Pick<FullEvidenceRef, "agentId" | "sessionId" | "writerId" | "sequence">,
+): string {
+  return JSON.stringify([ref.agentId, ref.sessionId, ref.writerId, ref.sequence]);
+}
+
+/** One pass over the log: every record (any kind) grouped by shard + sequence. */
+function indexByShardSequence(records: readonly PersistedLogRecord[]): ShardSequenceIndex {
+  const index = new Map<string, PersistedLogRecord[]>();
+  for (const record of records) {
+    const key = shardSequenceKey(record);
+    const bucket = index.get(key);
+    if (bucket === undefined) index.set(key, [record]);
+    else bucket.push(record);
+  }
+  return index;
+}
+
+/**
+ * The ref resolves only if exactly one durable record (of any kind) has its shard +
+ * sequence, that record is `tool_executed`, and exactly one of its evidence items
+ * has the ref's evidenceId.
+ */
+function resolvesUniquely(index: ShardSequenceIndex, ref: FullEvidenceRef): boolean {
+  const matches = index.get(shardSequenceKey(ref)) ?? [];
   const target = matches[0];
   return (
     matches.length === 1 &&
@@ -577,6 +588,7 @@ export function admitExecutionEvidence(
     }
     if (sameTask(binding.taskExecutionRef, target)) currentCalls.add(binding.callId);
   }
+  const index = indexByShardSequence(records);
   const admitted: ProjectedEvidence[] = [];
   const excluded: FullEvidenceRef[] = [];
   for (const record of orderEventsForProjection(records)) {
@@ -588,7 +600,7 @@ export function admitExecutionEvidence(
       !conflictCalls.has(record.callId);
     for (const evidence of toEvidenceArray(record.evidence)) {
       const ref = fullEvidenceRefFor(record, evidence.evidenceId);
-      if (attributed && resolvesUniquely(records, ref)) admitted.push({ evidence, ref });
+      if (attributed && resolvesUniquely(index, ref)) admitted.push({ evidence, ref });
       else if (record.taskId === target.taskId) excluded.push(ref);
     }
   }
