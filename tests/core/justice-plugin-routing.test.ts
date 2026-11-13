@@ -1020,6 +1020,36 @@ describe("JusticePlugin accepted-decision progress updates", () => {
     expect(await fs.readFile("plan.md")).toContain("- [x] first");
   });
 
+  it("does not restore progress from an accepted roundless task decision", async () => {
+    const fs = createMockFileSystem({ "plan.md": progressPlan });
+    const first = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    const authorization = await internalsOf(first).authorizationStore.approve({
+      sessionId: "s-1",
+      planPath: "plan.md",
+      planFingerprint: computePlanFingerprint(progressPlan, ["task-1"]),
+      canonicalSnapshot: buildCanonicalSnapshot(progressPlan, ["task-1"]),
+      approvedAt: "2026-09-05T00:00:00.000Z",
+    });
+    if (authorization === null) throw new Error("test setup: authorization approval failed");
+    await appendObservation(first, {
+      recordType: "decision",
+      kind: "task-acceptance",
+      taskId: "task-1",
+      taskExecutionRef: {
+        authorizationId: authorization.authorizationId,
+        taskId: "task-1",
+        attemptId: taskAttemptId("task-1"),
+      },
+      verdict: "accepted",
+    });
+    await seedAcceptedTaskLifecycle(first, authorization.authorizationId, "task-1");
+
+    const restarted = new JusticePlugin(fs, fs, { writerId: "w-restarted" });
+    await restarted.initialize();
+
+    expect(await fs.readFile("plan.md")).toContain("- [ ] first");
+  });
+
   it("does not invalidate another session's authorization while recovering accepted progress", async () => {
     const fs = createMockFileSystem({ "plan.md": progressPlan });
     const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });

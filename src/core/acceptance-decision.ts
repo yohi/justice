@@ -892,9 +892,10 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
       if (gate.kind === "conflict" || acceptance.kind === "conflict")
         return { kind: "blocked", advisory: "decision_integrity_violation" };
       if (gate.kind === "found" && acceptance.kind === "found") {
-        return acceptanceAgreesWithGate(gate.decision, acceptance.decision)
-          ? { kind: "decided", decision: gate.decision }
-          : { kind: "blocked", advisory: "decision_integrity_violation" };
+        if (acceptance.decision.verdict !== "blocked")
+          return acceptanceAgreesWithGate(gate.decision, acceptance.decision)
+            ? { kind: "decided", decision: gate.decision }
+            : { kind: "blocked", advisory: "decision_integrity_violation" };
       }
       if (acceptance.kind === "found" && acceptance.decision.verdict !== "blocked")
         return { kind: "blocked", advisory: "decision_integrity_violation" };

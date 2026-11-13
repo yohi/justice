@@ -2607,10 +2607,8 @@ describe("round-safe GateDecision / AcceptanceDecision (F-003)", () => {
   it("rejects conflicting Gate and Acceptance verdicts", async () => {
     for (const [verdict, acceptanceVerdict] of [
       ["PASS", "rework-required"],
-      ["PASS", "blocked"],
       ["FAIL", "accepted"],
       ["WARN", "accepted"],
-      ["FAIL", "blocked"],
     ] as const) {
       const { result, decisions, transitions } = await runWith(
         [...lifecycleRecords(), taskGate(1, verdict, 1), taskAcceptance(2, acceptanceVerdict, 1)],
@@ -2620,6 +2618,36 @@ describe("round-safe GateDecision / AcceptanceDecision (F-003)", () => {
       expect(decisions).toHaveLength(0);
       expect(transitions).toHaveLength(0);
     }
+    const recovered = await runWith(
+      [...lifecycleRecords(), taskGate(1, "PASS", 1), taskAcceptance(2, "blocked", 1)],
+      mustNotEvaluate,
+    );
+    expect(recovered.result).toMatchObject({
+      kind: "decided",
+      decision: { verdict: "PASS" },
+    });
+    expect(recovered.decisions).toEqual([
+      expect.objectContaining({
+        kind: "task-acceptance",
+        reviewRound: 1,
+        verdict: "accepted",
+      }),
+    ]);
+    const recoveredFailure = await runWith(
+      [...lifecycleRecords(), taskGate(1, "FAIL", 1), taskAcceptance(2, "blocked", 1)],
+      mustNotEvaluate,
+    );
+    expect(recoveredFailure.result).toMatchObject({
+      kind: "decided",
+      decision: { verdict: "FAIL" },
+    });
+    expect(recoveredFailure.decisions).toEqual([
+      expect.objectContaining({
+        kind: "task-acceptance",
+        reviewRound: 1,
+        verdict: "rework-required",
+      }),
+    ]);
     const consistent = await runWith(
       [...lifecycleRecords(), taskGate(1, "WARN", 1), taskAcceptance(2, "rework-required", 1)],
       mustNotEvaluate,
