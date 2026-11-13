@@ -376,6 +376,49 @@ describe("validateRecordSchema", () => {
     ).toThrow("Invalid delegated_execution_binding record");
   });
 
+  it("validates a durable implementation call binding", async () => {
+    const binding = {
+      ...validBase("observation"),
+      taskId: "task-1",
+      kind: "implementation_call_binding",
+      parentSessionId: "ses-1",
+      callId: "call-impl-1",
+      authorizationId: "auth-1",
+      taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" },
+    };
+    expect(() => validateRecordSchema(binding)).not.toThrow();
+
+    for (const override of [
+      { callId: "" },
+      { callId: "   " },
+      { callId: undefined },
+      { parentSessionId: "" },
+      { authorizationId: "auth-other" },
+      { authorizationId: "" },
+      { taskExecutionRef: undefined },
+      { taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1" } },
+      { taskExecutionRef: { authorizationId: "auth-1", taskId: "", attemptId: "attempt-1" } },
+      { taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1", attemptId: 7 } },
+    ]) {
+      expect(() => validateRecordSchema({ ...binding, ...override })).toThrow(
+        "Invalid implementation_call_binding record",
+      );
+    }
+
+    // Durable readback keeps the identity verbatim, and legacy logs without the
+    // record kind keep replaying unchanged.
+    const persisted = await appendAndReplay(binding);
+    expect(persisted).toMatchObject({
+      kind: "implementation_call_binding",
+      parentSessionId: "ses-1",
+      callId: "call-impl-1",
+      authorizationId: "auth-1",
+      taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" },
+    });
+    expect(() => validateRecordSchema(validTaskLifecycleTransition())).not.toThrow();
+    expect(() => validateRecordSchema(validToolExecuted())).not.toThrow();
+  });
+
   it.each([
     { name: "missing execution ref", override: { taskExecutionRef: undefined } },
     { name: "invalid from state", override: { from: "started" } },

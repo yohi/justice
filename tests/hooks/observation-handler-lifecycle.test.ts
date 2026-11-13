@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { admitExecutionEvidence } from "../../src/core/acceptance-decision";
+import type { ApprovedPlanBinding } from "../../src/core/plan-authorization";
 import { SessionStateProvider } from "../../src/core/session-state-provider";
 import { ObservationHandler } from "../../src/hooks/observation-handler";
 import { ObservationLogStore } from "../../src/runtime/observation-log-store";
@@ -10,6 +12,24 @@ const canonicalTask = {
   canonicalBody: "## Task 1",
   digest: "digest",
 } as const;
+
+function activeAuthorization(): ApprovedPlanBinding {
+  return {
+    authorizationId: "auth-1",
+    sessionId: "parent-1",
+    planPath: "plan.md",
+    planFingerprint: { algorithm: "sha256", value: "fingerprint" },
+    canonicalSnapshot: {
+      schema: "justice-plan-v1",
+      documentDigest: "doc",
+      globalBodyDigest: "body",
+      tasks: [canonicalTask],
+    },
+    fingerprintSchema: "justice-plan-v1",
+    approvedAt: "2026-09-17T00:00:00.000Z",
+    status: "active",
+  } as unknown as ApprovedPlanBinding;
+}
 
 describe("ObservationHandler lifecycle notifications", () => {
   it("creates a fresh authorized attempt from the active authorization", async () => {
@@ -45,6 +65,156 @@ describe("ObservationHandler lifecycle notifications", () => {
       authorizationId: "auth-1",
       taskId: "task-1",
     });
+  });
+
+  it("persists implementation call binding after initial lifecycle", async () => {
+    const { reader, writer } = createMemFs();
+    const logStore = new ObservationLogStore(writer, reader, "w-1");
+    const handler = new ObservationHandler({
+      logStore,
+      sessionStateProvider: new SessionStateProvider(),
+      writerId: "w-1",
+      getActiveAuthorization: async () => activeAuthorization(),
+    });
+
+    const response = await handler.handlePreToolUse({
+      type: "PreToolUse",
+      sessionId: "parent-1",
+      callId: "call-1",
+      payload: { toolName: "task", toolInput: { taskId: "task-1" } },
+    });
+
+    expect(response).toEqual({ action: "proceed" });
+    const records = await logStore.readAll();
+    const kinds = records.map((record) => ("kind" in record ? record.kind : undefined));
+    expect(kinds).toEqual([
+      "task_lifecycle_transition",
+      "task_lifecycle_transition",
+      "implementation_call_binding",
+    ]);
+    const lifecycle = records[1];
+    const binding = records[2];
+    if (
+      lifecycle?.recordType !== "observation" ||
+      lifecycle.kind !== "task_lifecycle_transition" ||
+      binding?.recordType !== "observation" ||
+      binding.kind !== "implementation_call_binding"
+    ) {
+      throw new Error("expected lifecycle then binding");
+    }
+    expect(binding).toMatchObject({
+      sessionId: "parent-1",
+      parentSessionId: "parent-1",
+      callId: "call-1",
+      authorizationId: "auth-1",
+      taskExecutionRef: lifecycle.taskExecutionRef,
+    });
+    expect(binding.sequence).toBeGreaterThan(lifecycle.sequence);
+    expect(Object.keys(binding)).not.toContain("toolInput");
+    expect(Object.keys(binding)).not.toContain("rawOutput");
+  });
+
+  it("does not persist implementation binding when task execution attemptId is empty", async () => {
+    const { reader, writer } = createMemFs();
+    const logStore = new ObservationLogStore(writer, reader, "w-1");
+    const append = vi.spyOn(logStore, "append");
+    const handler = new ObservationHandler({
+      logStore,
+      sessionStateProvider: new SessionStateProvider(),
+      writerId: "w-1",
+    });
+
+    const response = await handler.handlePreToolUse({
+      type: "PreToolUse",
+      sessionId: "parent-1",
+      callId: "call-1",
+      payload: {
+        toolName: "task",
+        toolInput: { authorizationId: "auth-1", taskId: "task-1", attemptId: "" },
+      },
+    });
+
+    expect(response).toEqual({ action: "proceed" });
+    expect(
+      append.mock.calls.filter(
+        ([, record]) => record.recordType === "observation" && record.kind === "implementation_call_binding",
+      ),
+    ).toEqual([]);
+    expect(
+      (await logStore.readAll()).filter(
+        (record) => record.recordType === "observation" && record.kind === "implementation_call_binding",
+      ),
+    ).toEqual([]);
+  });
+
+  it("does not admit evidence when binding append fails", async () => {
+    const { reader, writer } = createMemFs();
+    const realStore = new ObservationLogStore(writer, reader, "w-1");
+    const append = vi.fn(async (...args: Parameters<ObservationLogStore["append"]>) => {
+      const [, record] = args;
+      if (record.recordType === "observation" && record.kind === "implementation_call_binding") {
+        throw new Error("binding append failed");
+      }
+      return realStore.append(...args);
+    });
+    const logStore = {
+      append,
+      readAll: () => realStore.readAll(),
+    } as unknown as ObservationLogStore;
+    const sessionStateProvider = new SessionStateProvider();
+    const handler = new ObservationHandler({
+      logStore,
+      sessionStateProvider,
+      writerId: "w-1",
+      getActiveAuthorization: async () => activeAuthorization(),
+    });
+
+    const response = await handler.handlePreToolUse({
+      type: "PreToolUse",
+      sessionId: "parent-1",
+      callId: "call-1",
+      payload: { toolName: "task", toolInput: { taskId: "task-1" } },
+    });
+
+    // Partial success: the existing tool flow is not changed by the binding failure.
+    expect(response).toEqual({ action: "proceed" });
+    const records = await realStore.readAll();
+    expect(
+      records.filter((record) => record.recordType === "observation" && record.kind === "implementation_call_binding"),
+    ).toHaveLength(0);
+    const ref = sessionStateProvider.getTaskCallBinding("call-1")?.taskExecutionRef;
+    if (ref === undefined) throw new Error("expected the in-memory workflow binding");
+    // Even with an in-memory binding and same-call tool evidence, the durable
+    // readback has no binding, so the evidence stays UNATTRIBUTED.
+    await realStore.append(
+      { agentId: "unknown", sessionId: "parent-1", writerId: "w-1" },
+      {
+        schemaVersion: 1,
+        timestamp: "2026-09-17T00:00:10.000Z",
+        agentId: "unknown",
+        sessionId: "parent-1",
+        writerId: "w-1",
+        taskId: "task-1",
+        recordType: "observation",
+        kind: "tool_executed",
+        toolName: "bash",
+        callId: "call-1",
+        evidence: {
+          evidenceId: "e-1",
+          kind: "test",
+          sourceClass: "tool_output",
+          provenance: "observed",
+          toolOutputClass: "command_exec",
+          command: "bun test",
+          rawOutput: "pass",
+        },
+      },
+    );
+    const admission = admitExecutionEvidence(
+      { parentSessionId: "parent-1", taskExecutionRef: ref },
+      await realStore.readAll(),
+    );
+    expect(admission).toMatchObject({ status: "unattributed", admitted: [] });
   });
 
   it("rejects a task absent from an empty canonical snapshot before lifecycle persistence", async () => {

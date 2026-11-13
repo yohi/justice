@@ -242,16 +242,16 @@ export class ObservationHandler {
           return 0;
         });
       },
-      evaluateRules: async ({ context, projected }) => {
+      // F-002: forward only admitted inputs to the Rule Engine. `projected` is for
+      // lifecycle/reference use only — never its per-task evidence or the
+      // diagnostic global review summary.
+      evaluateRules: async ({ context, admittedExecutionEvidence, admittedReviewSummary }) => {
         const loader = this.options.gateLoader;
         if (loader === undefined) return { verdict: "SKIP", reason: "gate loader unavailable" };
-        return evaluate(
-          await loader.load(),
-          context.scope === "task"
-            ? (projected.tasks.get(context.taskExecutionRef.taskId)?.evidence ?? [])
-            : [],
-          context,
-        );
+        return evaluate(await loader.load(), admittedExecutionEvidence, {
+          ...context,
+          reviewSummary: admittedReviewSummary,
+        });
       },
       recordAdvisory: (advisory) => this.appendLifecycleAdvisory(advisory),
     });
@@ -658,6 +658,11 @@ export class ObservationHandler {
           lifecycleState,
         );
         if (!committed) return PROCEED;
+        await this.appendImplementationCallBinding(
+          event,
+          authorization.authorizationId,
+          attempt.taskExecutionRef,
+        );
         this.options.sessionStateProvider.setTaskCallBinding(event.callId, {
           purpose: "implementation",
           parentSessionId: event.sessionId,
@@ -669,6 +674,11 @@ export class ObservationHandler {
       const taskExecutionRef = readTaskExecutionRef(event.payload.toolInput);
       if (taskExecutionRef !== undefined) {
         if (await this.appendInitialImplementationLifecycle(event, taskExecutionRef)) {
+          await this.appendImplementationCallBinding(
+            event,
+            taskExecutionRef.authorizationId,
+            taskExecutionRef,
+          );
           this.options.sessionStateProvider.setTaskCallBinding(event.callId, {
             purpose: "implementation",
             parentSessionId: event.sessionId,
@@ -910,6 +920,65 @@ export class ObservationHandler {
       appendRecord,
       dependencies,
     });
+  }
+
+  /**
+   * F-002 (Owner Option A): durably records the parent implementation call ->
+   * TaskExecutionRef binding after the initial lifecycle append succeeded. A failed
+   * append is a partial success: the tool flow still PROCEEDs, but no durable
+   * binding exists, so formal Gate admission fails closed (the in-memory binding is
+   * never formal evidence). Identity metadata only.
+   */
+  private async appendImplementationCallBinding(
+    event: PreToolUseEvent,
+    authorizationId: string,
+    taskExecutionRef: TaskExecutionRef,
+  ): Promise<boolean> {
+    const callId = event.callId;
+    if (
+      callId === undefined ||
+      callId.trim().length === 0 ||
+      event.sessionId.trim().length === 0 ||
+      authorizationId.trim().length === 0 ||
+      taskExecutionRef.authorizationId.trim().length === 0 ||
+      taskExecutionRef.taskId.trim().length === 0 ||
+      taskExecutionRef.attemptId.trim().length === 0 ||
+      authorizationId !== taskExecutionRef.authorizationId
+    )
+      return false;
+    const agentId = this.options.sessionStateProvider.getAgentId(event.sessionId);
+    const shardId: ShardId = {
+      agentId,
+      sessionId: event.sessionId,
+      writerId: this.options.writerId,
+    };
+    try {
+      await this.options.logStore.append(shardId, {
+        schemaVersion: 1,
+        timestamp: new Date().toISOString(),
+        agentId,
+        sessionId: event.sessionId,
+        writerId: this.options.writerId,
+        taskId: taskExecutionRef.taskId,
+        recordType: "observation",
+        kind: "implementation_call_binding",
+        parentSessionId: event.sessionId,
+        callId,
+        authorizationId,
+        taskExecutionRef: {
+          authorizationId: taskExecutionRef.authorizationId,
+          taskId: taskExecutionRef.taskId,
+          attemptId: taskExecutionRef.attemptId,
+        },
+      });
+      return true;
+    } catch (error) {
+      this.options.logger?.warn(
+        "observation-handler: implementation call binding append failed; execution evidence stays unattributed",
+        error,
+      );
+      return false;
+    }
   }
 
   private async appendInitialImplementationLifecycle(

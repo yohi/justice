@@ -340,6 +340,20 @@ export type ReviewArtifactCleanupRecord = {
     | { readonly phase: "finished"; readonly status: ReviewArtifactCleanupStatus }
   );
 
+/**
+ * F-002 (Owner Option A): minimal durable attribution of a parent implementation
+ * `task` call to its TaskExecutionRef. Identity metadata only — never tool output,
+ * secrets, or credentials. Appended only after the initial task lifecycle append
+ * succeeded. It does NOT attribute independent child-session tool calls.
+ */
+export type ImplementationCallBindingObserved = {
+  readonly kind: "implementation_call_binding";
+  readonly parentSessionId: string;
+  readonly callId: string;
+  readonly authorizationId: string;
+  readonly taskExecutionRef: TaskExecutionRef;
+};
+
 export type PendingReviewCompletionStagingRecord =
   PendingEnvelope &
   { readonly recordType: "observation" } &
@@ -388,6 +402,7 @@ export type PendingObservationRecord =
   | (PendingEnvelope & { readonly recordType: "observation" } & TaskLifecycleTransitionRecord)
   | (PendingEnvelope & { readonly recordType: "observation" } & PlanFinalizationTransitionRecord)
   | (PendingEnvelope & { readonly recordType: "observation" } & DelegatedExecutionBindingRecord)
+  | (PendingEnvelope & { readonly recordType: "observation" } & ImplementationCallBindingObserved)
   | PendingReviewDispatchTransitionRecord
   | PendingReviewCompletionStagingRecord
   | PendingReviewArtifactFailureStagingRecord

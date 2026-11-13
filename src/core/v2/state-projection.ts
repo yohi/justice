@@ -298,6 +298,9 @@ function applyObservationEvent(
     applyPlanFinalizationObservation(event, lifecycle);
     return;
   }
+  // F-002 attribution records carry no evidence; they are read back separately
+  // by `projectImplementationCallBindings`.
+  if (event.kind === "implementation_call_binding") return;
   const taskId = event.taskId;
   if (!taskId) return;
   const taskState = ensureTask(tasks, taskId);
@@ -454,6 +457,243 @@ export function projectObservedReviewExecution(
     childSessionId: record.binding.childSessionId,
     correlation: record.binding.correlation,
   };
+}
+
+type ImplementationCallBindingRecord = Extract<
+  PersistedLogRecord,
+  { readonly recordType: "observation"; readonly kind: "implementation_call_binding" }
+>;
+
+export type ImplementationCallBindingProjection =
+  | {
+      readonly kind: "bound";
+      readonly parentSessionId: string;
+      readonly callId: string;
+      readonly taskExecutionRef: TaskExecutionRef;
+    }
+  | {
+      readonly kind: "conflict";
+      readonly parentSessionId: string;
+      readonly callId: string;
+      readonly taskExecutionRefs: readonly TaskExecutionRef[];
+    };
+
+export function implementationCallBindingKey(parentSessionId: string, callId: string): string {
+  return JSON.stringify([parentSessionId, callId]);
+}
+
+function isNonEmpty(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isWellFormedImplementationCallBinding(record: ImplementationCallBindingRecord): boolean {
+  const ref = record.taskExecutionRef as Partial<TaskExecutionRef> | undefined;
+  return (
+    isNonEmpty(record.parentSessionId) &&
+    isNonEmpty(record.callId) &&
+    isNonEmpty(record.authorizationId) &&
+    ref !== undefined &&
+    isNonEmpty(ref.authorizationId) &&
+    isNonEmpty(ref.taskId) &&
+    isNonEmpty(ref.attemptId) &&
+    ref.authorizationId === record.authorizationId &&
+    record.sessionId === record.parentSessionId
+  );
+}
+
+/**
+ * F-002 (Owner Option A): restores `(parentSessionId, callId) -> TaskExecutionRef`
+ * from durable `implementation_call_binding` records only. This is distinct from
+ * the review-dispatch `taskCallBindings`. Duplicate identical records are
+ * idempotent; a call bound to different attempts, or a malformed record, is a
+ * `conflict` and never yields an admissible binding.
+ */
+export function projectImplementationCallBindings(
+  records: readonly PersistedLogRecord[],
+): ReadonlyMap<string, ImplementationCallBindingProjection> {
+  const result = new Map<string, ImplementationCallBindingProjection>();
+  for (const record of orderEventsForProjection(records)) {
+    if (record.recordType !== "observation" || record.kind !== "implementation_call_binding") continue;
+    const binding = record as ImplementationCallBindingRecord;
+    if (typeof binding.parentSessionId !== "string" || typeof binding.callId !== "string") continue;
+    const key = implementationCallBindingKey(binding.parentSessionId, binding.callId);
+    const current = result.get(key);
+    const refs: readonly TaskExecutionRef[] =
+      current === undefined
+        ? []
+        : current.kind === "bound"
+          ? [current.taskExecutionRef]
+          : current.taskExecutionRefs;
+    if (!isWellFormedImplementationCallBinding(binding)) {
+      result.set(key, {
+        kind: "conflict",
+        parentSessionId: binding.parentSessionId,
+        callId: binding.callId,
+        taskExecutionRefs: refs,
+      });
+      continue;
+    }
+    const ref: TaskExecutionRef = {
+      authorizationId: binding.taskExecutionRef.authorizationId,
+      taskId: binding.taskExecutionRef.taskId,
+      attemptId: binding.taskExecutionRef.attemptId,
+    };
+    if (current === undefined) {
+      result.set(key, {
+        kind: "bound",
+        parentSessionId: binding.parentSessionId,
+        callId: binding.callId,
+        taskExecutionRef: ref,
+      });
+    } else if (
+      current.kind === "bound" &&
+      taskExecutionRefIdentity(current.taskExecutionRef) === taskExecutionRefIdentity(ref)
+    ) {
+      continue;
+    } else {
+      result.set(key, {
+        kind: "conflict",
+        parentSessionId: binding.parentSessionId,
+        callId: binding.callId,
+        taskExecutionRefs: [...refs, ref],
+      });
+    }
+  }
+  return result;
+}
+
+type ReviewCorrelationValue = import("../types").ReviewCorrelation;
+
+function reviewCorrelationIdentity(correlation: ReviewCorrelationValue): string {
+  return correlation.reviewKind === "task-review"
+    ? JSON.stringify([
+        "task-review",
+        correlation.taskExecutionRef.authorizationId,
+        correlation.taskExecutionRef.taskId,
+        correlation.taskExecutionRef.attemptId,
+        correlation.reviewRound,
+      ])
+    : JSON.stringify([
+        "final-review",
+        correlation.authorizationId,
+        correlation.planPath,
+        correlation.planFingerprint.algorithm,
+        correlation.planFingerprint.value,
+        correlation.finalizationAttemptId,
+        correlation.finalReviewRound,
+      ]);
+}
+
+function sameCorrelationIdentity(
+  left: ReviewCorrelationValue | undefined,
+  right: ReviewCorrelationValue,
+): boolean {
+  return left !== undefined && reviewCorrelationIdentity(left) === reviewCorrelationIdentity(right);
+}
+
+export type CompletedReviewCallHistory =
+  | { readonly kind: "proven"; readonly callId: string; readonly artifactId: string }
+  | { readonly kind: "missing"; readonly reason: string }
+  | { readonly kind: "conflict"; readonly reason: string };
+
+type ReviewDispatchRecord = Extract<
+  PersistedLogRecord,
+  { readonly recordType: "observation"; readonly kind: "review_dispatch_transition" }
+>;
+type ReviewCompletionStagedRecord = Extract<
+  PersistedLogRecord,
+  { readonly recordType: "observation"; readonly kind: "review_completion_staged" }
+>;
+
+/**
+ * F-002 Review Binding history: once a review slot is terminal the claimed-only
+ * `taskCallBindings` projection is empty, so the formal attribution is proven from
+ * the durable `pending -> claimed` record (callId, artifact reservation), the
+ * successful `claimed -> terminal` record, and the `review_completion_staged`
+ * record, all required to name the same parent session, call, correlation and
+ * artifact identity. Missing pieces are `missing`; disagreeing pieces are a
+ * `conflict`. Nothing is inferred from ordering or scope.
+ */
+export function projectCompletedReviewCallHistory(
+  records: readonly PersistedLogRecord[],
+  parentSessionId: string,
+  correlation: ReviewCorrelationValue,
+): CompletedReviewCallHistory {
+  const dispatch = records.filter(
+    (record): record is ReviewDispatchRecord =>
+      record.recordType === "observation" &&
+      record.kind === "review_dispatch_transition" &&
+      record.parentSessionId === parentSessionId &&
+      sameCorrelationIdentity(record.correlation, correlation),
+  );
+  const claimed = dispatch.filter((record) => record.from === "pending" && record.to === "claimed");
+  if (claimed.length === 0) return { kind: "missing", reason: "claimed_history_missing" };
+  if (claimed.length > 1) return { kind: "conflict", reason: "multiple_claimed_history" };
+  const claim = claimed[0];
+  if (claim === undefined || !("callId" in claim) || !("artifactReservation" in claim))
+    return { kind: "missing", reason: "claimed_history_missing" };
+  const callId = claim.callId;
+  if (!isNonEmpty(callId)) return { kind: "missing", reason: "claimed_call_missing" };
+  const reservation = claim.artifactReservation;
+  if (reservation.status !== "usable")
+    return { kind: "missing", reason: "artifact_reservation_unusable" };
+
+  const terminals = dispatch.filter(
+    (record) => record.to === "terminal" && "terminalReason" in record && record.terminalReason === "completed",
+  );
+  if (terminals.length === 0) return { kind: "missing", reason: "completed_terminal_missing" };
+  if (terminals.length > 1) return { kind: "conflict", reason: "multiple_completed_terminals" };
+  const terminal = terminals[0];
+  if (terminal === undefined || terminal.to !== "terminal")
+    return { kind: "missing", reason: "completed_terminal_missing" };
+  if (terminal.from !== "claimed" || terminal.callId === undefined)
+    return { kind: "missing", reason: "terminal_call_missing" };
+  if (terminal.callId !== callId) return { kind: "conflict", reason: "terminal_call_mismatch" };
+
+  const stagings = records.filter(
+    (record): record is ReviewCompletionStagedRecord =>
+      record.recordType === "observation" &&
+      record.kind === "review_completion_staged" &&
+      record.parentSessionId === parentSessionId &&
+      sameCorrelationIdentity(record.staging.correlation, correlation),
+  );
+  if (stagings.length === 0) return { kind: "missing", reason: "completion_staging_missing" };
+  if (stagings.length > 1) return { kind: "conflict", reason: "multiple_completion_stagings" };
+  const staged = stagings[0];
+  if (staged === undefined) return { kind: "missing", reason: "completion_staging_missing" };
+  const staging = staged.staging;
+  if (staging.callId !== callId) return { kind: "conflict", reason: "staging_call_mismatch" };
+  if (staging.artifactConsumption.artifactId !== reservation.artifactId)
+    return { kind: "conflict", reason: "staging_artifact_mismatch" };
+  const artifact = staging.reviewArtifact;
+  const observed = staging.observedExecution;
+  if (
+    !sameCorrelationIdentity(artifact.correlation, correlation) ||
+    observed.parentSessionId !== parentSessionId ||
+    observed.callId !== callId ||
+    !sameCorrelationIdentity(observed.correlation, correlation) ||
+    artifact.observedExecution.callId !== callId ||
+    artifact.observedExecution.parentSessionId !== parentSessionId ||
+    artifact.observedExecution.childSessionId !== observed.childSessionId ||
+    artifact.observedExecution.reviewExecutionEventId !== observed.reviewExecutionEventId ||
+    !sameCorrelationIdentity(artifact.observedExecution.correlation, observed.correlation)
+  )
+    return { kind: "conflict", reason: "staging_identity_mismatch" };
+  if (artifact.complete !== true || artifact.findings.length !== 0)
+    return { kind: "conflict", reason: "staging_artifact_not_clean" };
+  if (
+    terminal.artifactConsumption !== undefined &&
+    (terminal.artifactConsumption.artifactId !== staging.artifactConsumption.artifactId ||
+      terminal.artifactConsumption.digest !== staging.artifactConsumption.digest)
+  )
+    return { kind: "conflict", reason: "terminal_artifact_mismatch" };
+  if (
+    terminal.reviewArtifact !== undefined &&
+    (!sameCorrelationIdentity(terminal.reviewArtifact.correlation, correlation) ||
+      terminal.reviewArtifact.observedExecution.callId !== callId)
+  )
+    return { kind: "conflict", reason: "terminal_artifact_mismatch" };
+  return { kind: "proven", callId, artifactId: reservation.artifactId };
 }
 
 /**

@@ -47,19 +47,44 @@ function completedReviewDispatch(
   correlation: Record<string, unknown>,
   timestampPrefix: string,
 ): readonly PersistedLogRecord[] {
-  // F-001: a completed terminal dispatch slot for the current review correlation.
-  const base = {
+  // F-001/F-002: the durable claimed -> staged -> completed terminal history for
+  // the current review correlation.
+  const reviewKind = correlation.reviewKind === "task-review" ? "task-review" : "final-review";
+  const expectedCategory = reviewKind === "task-review" ? "sp-review" : "sp-final-review";
+  const envelope = {
     schemaVersion: 1,
     agentId: "atlas",
     sessionId: "session-1",
     writerId: "w-review",
     recordType: "observation",
+  };
+  const base = {
+    ...envelope,
     kind: "review_dispatch_transition",
     transitionId: "review-transition-1",
     parentSessionId: "session-1",
     correlation,
-    expectedCategory: correlation.reviewKind === "task-review" ? "sp-review" : "sp-final-review",
+    expectedCategory,
   };
+  const observedExecution = {
+    schemaVersion: 1,
+    provenance: "observed",
+    reviewExecutionEventId: "event-review-call-1",
+    parentSessionId: "session-1",
+    callId: "review-call-1",
+    childSessionId: "review-child-1",
+    correlation,
+  };
+  const reviewArtifact = {
+    schemaVersion: 1,
+    reviewKind,
+    reviewSource: expectedCategory,
+    correlation,
+    observedExecution,
+    complete: true,
+    findings: [],
+  };
+  const artifactConsumption = { artifactId: "artifact-1", digest: "sha256:artifact-1" };
   return [
     { ...base, sequence: 1, timestamp: `${timestampPrefix}1.000Z`, from: null, to: "pending" },
     {
@@ -67,8 +92,34 @@ function completedReviewDispatch(
       sequence: 2,
       timestamp: `${timestampPrefix}2.000Z`,
       from: "pending",
+      to: "claimed",
+      callId: "review-call-1",
+      artifactReservation: {
+        status: "usable",
+        artifactId: "artifact-1",
+        artifactPath: ".justice/review/artifact-1.json",
+        leasePath: ".justice/review/artifact-1.lease",
+        artifactIdentity: { device: "1", inode: "1" },
+      },
+    },
+    {
+      ...envelope,
+      sequence: 3,
+      timestamp: `${timestampPrefix}3.000Z`,
+      kind: "review_completion_staged",
+      parentSessionId: "session-1",
+      staging: { callId: "review-call-1", correlation, artifactConsumption, reviewArtifact, observedExecution },
+    },
+    {
+      ...base,
+      sequence: 4,
+      timestamp: `${timestampPrefix}4.000Z`,
+      from: "claimed",
       to: "terminal",
+      callId: "review-call-1",
       terminalReason: "completed",
+      artifactConsumption,
+      reviewArtifact,
     },
   ] as unknown as readonly PersistedLogRecord[];
 }
@@ -113,6 +164,23 @@ function taskGateRecords(): readonly PersistedLogRecord[] {
       from,
       to,
     })),
+    {
+      // F-002 durable binding of the parent implementation call. Unit-level
+      // same-call fixture only: it does not prove child-session attribution.
+      schemaVersion: 1,
+      sequence: 1,
+      timestamp: "2026-09-18T00:00:06.500Z",
+      agentId: "atlas",
+      sessionId: "session-1",
+      writerId: "w-binding",
+      recordType: "observation",
+      taskId: "task-1",
+      kind: "implementation_call_binding",
+      parentSessionId: "session-1",
+      callId: "test-call",
+      authorizationId: "auth-1",
+      taskExecutionRef: gateTaskExecutionRef,
+    },
     {
       schemaVersion: 1,
       sequence: 7,

@@ -427,9 +427,28 @@ function validateObservationRecord(r: Record<string, unknown>): void {
     if (!isValidDelegatedExecutionBindingRecord(r)) {
       throw new Error("Invalid delegated_execution_binding record");
     }
+  } else if (kind === "implementation_call_binding") {
+    if (!isValidImplementationCallBindingRecord(r)) {
+      throw new Error("Invalid implementation_call_binding record");
+    }
   } else {
     throw new Error(`Invalid record: unknown observation kind: ${String(kind)}`);
   }
+}
+
+function isValidImplementationCallBindingRecord(r: Record<string, unknown>): boolean {
+  const ref = r.taskExecutionRef;
+  return (
+    isNonEmptyString(r.parentSessionId) &&
+    isNonEmptyString(r.callId) &&
+    r.callId.trim().length > 0 &&
+    isNonEmptyString(r.authorizationId) &&
+    isObject(ref) &&
+    isNonEmptyString(ref.authorizationId) &&
+    isNonEmptyString(ref.taskId) &&
+    isNonEmptyString(ref.attemptId) &&
+    ref.authorizationId === r.authorizationId
+  );
 }
 
 function isValidTaskExecutionRef(value: unknown): boolean {

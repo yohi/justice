@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aggregateReviews } from "../../../src/core/v2/review-aggregator";
+import { aggregateAdmittedReviews, aggregateReviews } from "../../../src/core/v2/review-aggregator";
 import type {
   ObservationRecord,
   ResolutionMarker,
@@ -229,5 +229,64 @@ describe("aggregateReviews() D32 resolution", () => {
     ];
 
     expect(() => aggregateReviews(records)).toThrow(TypeError);
+  });
+});
+
+describe("aggregateAdmittedReviews() current-correlation isolation (F-002)", () => {
+  type Correlation = { readonly reviewRound: number };
+  function correlated(
+    sequence: number,
+    reviewRound: number | undefined,
+    items: readonly ReviewItem[],
+    scope = "task:task-1",
+  ): ObservationRecord {
+    const base = reviewObserved({ sequence, scope, items, isCompleteSnapshot: true });
+    return reviewRound === undefined
+      ? base
+      : ({
+          ...base,
+          correlation: {
+            reviewKind: "task-review",
+            taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" },
+            reviewRound,
+          },
+        } as ObservationRecord);
+  }
+
+  it("isolates previous-round findings and complete snapshots from current review", () => {
+    const records = [
+      correlated(1, 1, [reviewItem("major:round-1", "major")]),
+      correlated(2, undefined, [reviewItem("critical:legacy", "critical")]),
+      correlated(3, 2, []),
+      correlated(4, undefined, [reviewItem("major:other-task", "major")], "task:task-2"),
+    ];
+    const isCurrent = (record: { readonly correlation?: unknown }): boolean =>
+      (record.correlation as Correlation | undefined)?.reviewRound === 2;
+
+    const admitted = aggregateAdmittedReviews(records, isCurrent);
+
+    expect([...admitted.byScope.keys()]).toEqual(["task:task-1"]);
+    expect(admitted.byScope.get("task:task-1")).toEqual({
+      critical: [],
+      major: [],
+      minor: [],
+      resolved: [],
+      open: [],
+    });
+    expect(admitted.open).toEqual([]);
+    expect(admitted.authority).toBe("observed_review_output");
+    // The global diagnostic summary still mixes rounds/scopes, which is why it
+    // must never reach the formal Gate.
+    const global = aggregateReviews(records);
+    expect(global.open.map((item) => item.itemKey)).toContain("major:other-task");
+    expect(global.resolved.map((item) => item.itemKey)).toEqual(
+      expect.arrayContaining(["major:round-1", "critical:legacy"]),
+    );
+  });
+
+  it("excludes an uncorrelated observation even when the admission predicate accepts it", () => {
+    const uncorrelated = correlated(1, undefined, [reviewItem("critical:legacy", "critical")]);
+
+    expect(aggregateAdmittedReviews([uncorrelated], () => true).open).toEqual([]);
   });
 });

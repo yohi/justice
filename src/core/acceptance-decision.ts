@@ -1,5 +1,5 @@
 import type { ApprovedPlanBinding, AuthorizationReviewBoundary } from "./plan-authorization";
-import type { ReviewCorrelation, TaskExecutionRef } from "./types";
+import type { FullEvidenceRef, ReviewCorrelation, TaskExecutionRef } from "./types";
 import type { GateContext, GatePendingAttemptContext } from "./v2/gate-context";
 import type {
   AcceptanceDecision,
@@ -12,18 +12,40 @@ import type {
 } from "./v2/decision-model";
 import { orderEventsForProjection } from "./v2/integrity";
 import { hashString } from "./v2/hash";
-import type { PersistedLogRecord } from "./v2/observation-model";
+import type { ObservationRecord, PersistedLogRecord } from "./v2/observation-model";
 import type {
   PlanFinalizationTransitionInput,
   TaskLifecycleTransitionInput,
 } from "./task-lifecycle";
-import { project, taskLifecycleKey, type ProjectedState } from "./v2/state-projection";
+import {
+  project,
+  projectCompletedReviewCallHistory,
+  projectImplementationCallBindings,
+  taskLifecycleKey,
+  type ProjectedEvidence,
+  type ProjectedState,
+} from "./v2/state-projection";
+import { aggregateAdmittedReviews } from "./v2/review-aggregator";
+import type { ReviewSummary } from "./v2/review-types";
+import { toEvidenceArray } from "./v2/evidence-list";
 
 type SkipGateEvaluation = { readonly verdict: "SKIP"; readonly reason: string };
 type GateRuleEvaluation =
   | GateDecisionPayload
   | SkipGateEvaluation
   | { readonly kind: "insufficient_evidence"; readonly reason: string };
+
+/**
+ * F-002 Gate Evaluation wiring: Rules receive only admitted inputs. `projected` is
+ * for lifecycle/reference lookups only and must not be read for evidence or the
+ * diagnostic global review summary.
+ */
+export type EvaluateRulesInput = {
+  readonly context: GateContext;
+  readonly projected: ProjectedState;
+  readonly admittedExecutionEvidence: readonly ProjectedEvidence[];
+  readonly admittedReviewSummary: ReviewSummary;
+};
 
 export type GateEvaluationDependencies = {
   readonly readDurableRecords: () => Promise<readonly PersistedLogRecord[]>;
@@ -38,10 +60,7 @@ export type GateEvaluationDependencies = {
   readonly appendPlanFinalizationTransition: (
     input: PlanFinalizationTransitionInput,
   ) => Promise<{ readonly kind: "committed" | "failed" }>;
-  readonly evaluateRules: (input: {
-    readonly context: GateContext;
-    readonly projected: ProjectedState;
-  }) => Promise<GateRuleEvaluation>;
+  readonly evaluateRules: (input: EvaluateRulesInput) => Promise<GateRuleEvaluation>;
   readonly recordAdvisory: (advisory: string) => Promise<void>;
 };
 
@@ -182,9 +201,13 @@ export function findCurrentAcceptanceDecision(
   const matches = orderEventsForProjection(records)
     .filter(isAcceptance)
     .filter((record) => correlationMatchesAcceptance(record, correlation));
-  if (matches.length > 1)
+  // A blocked AcceptanceDecision records a provisional inability to decide. If
+  // reevaluation later commits a final verdict, keep that final verdict current.
+  const finalMatches = matches.filter((record) => record.verdict !== "blocked");
+  const currentMatches = finalMatches.length > 0 ? finalMatches : matches;
+  if (currentMatches.length > 1)
     return { kind: "conflict", advisory: "multiple current AcceptanceDecision records" };
-  const decision = matches[0];
+  const decision = currentMatches[0];
   return decision === undefined ? { kind: "missing" } : { kind: "found", decision };
 }
 
@@ -347,17 +370,16 @@ export function admitCurrentReview(
   )
     return { kind: "not_proven", reason: "final_review_round_mismatch" };
 
+  // F-002: the terminal slot no longer carries the claimed call, so prove the
+  // review call from the durable claimed -> staged -> terminal history.
+  const history = projectCompletedReviewCallHistory(records, context.parentSessionId, correlation);
+  if (history.kind === "conflict") return { kind: "conflict", reason: history.reason };
+  if (history.kind === "missing") return { kind: "not_proven", reason: history.reason };
+
   const scoped = records.filter(
     (record) =>
       record.recordType === "observation" &&
-      record.kind === "review_observed" &&
-      record.correlation !== undefined &&
-      sameReviewCorrelation(record.correlation, correlation) &&
-      record.sessionId === context.parentSessionId &&
-      (context.scope === "task"
-        ? record.taskId === context.taskExecutionRef.taskId &&
-          record.reviewScope === `task:${context.taskExecutionRef.taskId}`
-        : record.reviewScope === "final"),
+      isCurrentReviewObservation(record, context, correlation),
   );
   const clean = scoped.filter(
     (record) =>
@@ -370,6 +392,142 @@ export function admitCurrentReview(
   if (clean.length !== scoped.length)
     return { kind: "conflict", reason: "contradictory_review_observations" };
   return { kind: "admitted", correlation };
+}
+
+/**
+ * F-002 current-correlation review observation predicate shared by admission and
+ * by the Gate-facing review summary.
+ */
+function isCurrentReviewObservation(
+  record: ObservationRecord,
+  context: GatePendingAttemptContext,
+  correlation: ReviewCorrelation,
+): boolean {
+  return (
+    record.kind === "review_observed" &&
+    record.correlation !== undefined &&
+    sameReviewCorrelation(record.correlation, correlation) &&
+    record.sessionId === context.parentSessionId &&
+    (context.scope === "task"
+      ? record.taskId === context.taskExecutionRef.taskId &&
+        record.reviewScope === `task:${context.taskExecutionRef.taskId}`
+      : record.reviewScope === "final")
+  );
+}
+
+export type ExecutionEvidenceAdmission = {
+  /**
+   * `bound`: a durable binding proves at least one parent call of this attempt.
+   * `unattributed`: no durable binding for this attempt (missing/failed/legacy).
+   * `conflict`: a parent call touching this task is bound to different attempts.
+   */
+  readonly status: "bound" | "unattributed" | "conflict";
+  readonly admitted: readonly ProjectedEvidence[];
+  /** Same-task tool evidence excluded as UNATTRIBUTED/CONFLICT. */
+  readonly excluded: readonly FullEvidenceRef[];
+};
+
+function fullEvidenceRefFor(
+  record: PersistedLogRecord,
+  evidenceId: string,
+): FullEvidenceRef {
+  return {
+    agentId: record.agentId,
+    sessionId: record.sessionId,
+    writerId: record.writerId,
+    sequence: record.sequence,
+    kind: "full",
+    evidenceId,
+  };
+}
+
+function resolvesUniquely(records: readonly PersistedLogRecord[], ref: FullEvidenceRef): boolean {
+  const matches = records.filter(
+    (record) =>
+      record.agentId === ref.agentId &&
+      record.sessionId === ref.sessionId &&
+      record.writerId === ref.writerId &&
+      record.sequence === ref.sequence,
+  );
+  const target = matches[0];
+  return (
+    matches.length === 1 &&
+    target !== undefined &&
+    target.recordType === "observation" &&
+    target.kind === "tool_executed" &&
+    toEvidenceArray(target.evidence).filter((evidence) => evidence.evidenceId === ref.evidenceId)
+      .length === 1
+  );
+}
+
+/**
+ * F-002 Execution Evidence Admission (Owner Option A). Admits a `tool_executed`
+ * evidence item only when its exact FullEvidenceRef resolves to one durable
+ * record whose `sessionId`/`callId`/`taskId` match a durable
+ * `implementation_call_binding` of the current attempt. Task ID alone, ordering,
+ * output text and in-memory bindings never admit evidence. Independent
+ * child-session tool calls cannot be attributed by the parent binding and stay
+ * UNATTRIBUTED.
+ */
+export function admitExecutionEvidence(
+  scope: { readonly parentSessionId: string; readonly taskExecutionRef: TaskExecutionRef },
+  records: readonly PersistedLogRecord[],
+): ExecutionEvidenceAdmission {
+  const target = scope.taskExecutionRef;
+  const currentCalls = new Set<string>();
+  const conflictCalls = new Set<string>();
+  for (const binding of projectImplementationCallBindings(records).values()) {
+    if (binding.parentSessionId !== scope.parentSessionId) continue;
+    if (binding.kind === "conflict") {
+      if (
+        binding.taskExecutionRefs.length === 0 ||
+        binding.taskExecutionRefs.some(
+          (ref) => ref.authorizationId === target.authorizationId && ref.taskId === target.taskId,
+        )
+      )
+        conflictCalls.add(binding.callId);
+      continue;
+    }
+    if (sameTask(binding.taskExecutionRef, target)) currentCalls.add(binding.callId);
+  }
+  const admitted: ProjectedEvidence[] = [];
+  const excluded: FullEvidenceRef[] = [];
+  for (const record of orderEventsForProjection(records)) {
+    if (record.recordType !== "observation" || record.kind !== "tool_executed") continue;
+    const attributed =
+      record.sessionId === scope.parentSessionId &&
+      record.taskId === target.taskId &&
+      currentCalls.has(record.callId) &&
+      !conflictCalls.has(record.callId);
+    for (const evidence of toEvidenceArray(record.evidence)) {
+      const ref = fullEvidenceRefFor(record, evidence.evidenceId);
+      if (attributed && resolvesUniquely(records, ref)) admitted.push({ evidence, ref });
+      else if (record.taskId === target.taskId) excluded.push(ref);
+    }
+  }
+  const status =
+    conflictCalls.size > 0 ? "conflict" : currentCalls.size > 0 ? "bound" : "unattributed";
+  return { status, admitted, excluded };
+}
+
+/**
+ * True when a non-PASS Gate outcome rests only on absent evidence: no non-PASS
+ * rule references any evidence. Under F-002 such absence is not proven failure
+ * (required evidence may be UNATTRIBUTED). If any non-PASS rule carries refs, an
+ * observed violation exists and the formal FAIL/WARN verdict is kept.
+ */
+function restsOnUnprovenEvidence(result: GateDecisionPayload): boolean {
+  if (result.verdict === "FAIL") {
+    return !result.ruleResults.some(
+      (rule) => rule.verdict === "FAIL" && rule.evidenceRefs.length > 0,
+    );
+  }
+  const nonPass = result.ruleResults.filter((rule) => rule.verdict !== "PASS");
+  return (
+    result.verdict !== "PASS" &&
+    nonPass.length > 0 &&
+    nonPass.every((rule) => rule.evidenceRefs.length === 0)
+  );
 }
 
 async function findActiveBinding(
@@ -543,8 +701,26 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
       const acceptance = findCurrentAcceptanceDecision(records, correlation);
       if (gate.kind === "conflict" || acceptance.kind === "conflict")
         return { kind: "blocked", advisory: "decision_integrity_violation" };
-      if (gate.kind === "found" && acceptance.kind === "found")
+      if (gate.kind === "found" && acceptance.kind === "found") {
+        const expectedAcceptance = deriveAcceptanceDecision(gate.decision);
+        if (
+          acceptance.decision.verdict !== "blocked" &&
+          acceptance.decision.verdict !== expectedAcceptance.verdict
+        ) {
+          return { kind: "blocked", advisory: "decision_integrity_violation" };
+        }
+        if (acceptance.decision.verdict !== "blocked")
+          return { kind: "decided", decision: gate.decision };
+        if (!(await isCurrentActiveAuthorization(correlation, dependencies.findAuthorizationById)))
+          return { kind: "blocked", advisory: "review_authorization_not_active" };
+        const appended = await dependencies.appendDecision(pending(context, expectedAcceptance));
+        if (appended.kind !== "committed")
+          return { kind: "blocked", advisory: "acceptance_append_failed" };
+        const lifecycle = await applyGateOutcomeLifecycle(dependencies, context, gate.decision);
+        if (lifecycle.kind !== "committed")
+          return { kind: "blocked", advisory: "lifecycle_append_failed" };
         return { kind: "decided", decision: gate.decision };
+      }
       if (gate.kind === "found") {
         if (!(await isCurrentActiveAuthorization(correlation, dependencies.findAuthorizationById)))
           return { kind: "blocked", advisory: "review_authorization_not_active" };
@@ -558,6 +734,17 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
           return { kind: "blocked", advisory: "lifecycle_append_failed" };
         return { kind: "decided", decision: gate.decision };
       }
+      // F-002: Rules see only admitted inputs — the current-correlation review
+      // summary and execution evidence proven by the durable implementation binding.
+      const admittedReviewSummary = aggregateAdmittedReviews(
+        records.filter((record): record is ObservationRecord => record.recordType === "observation"),
+        (record) => isCurrentReviewObservation(record, context, correlation),
+      );
+      const execution: ExecutionEvidenceAdmission =
+        context.scope === "task"
+          ? admitExecutionEvidence(context, records)
+          : { status: "unattributed", admitted: [], excluded: [] };
+      const admittedReviewScope = Array.from(admittedReviewSummary.byScope.keys());
       const gateContext: GateContext =
         context.scope === "task"
           ? {
@@ -567,9 +754,8 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
               agentId: context.agentId,
               sessionId: context.sessionId,
               writerId: context.writerId,
-              reviewScope:
-                state.tasks.get(context.taskExecutionRef.taskId)?.observedReviewScopes ?? [],
-              reviewSummary: state.reviewSummary,
+              reviewScope: admittedReviewScope,
+              reviewSummary: admittedReviewSummary,
             }
           : {
               scope: "plan",
@@ -581,12 +767,17 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
               agentId: context.agentId,
               sessionId: context.sessionId,
               writerId: context.writerId,
-              reviewScope: Array.from(state.reviewSummary.byScope.keys()),
-              reviewSummary: state.reviewSummary,
+              reviewScope: admittedReviewScope,
+              reviewSummary: admittedReviewSummary,
             };
       let result: GateRuleEvaluation;
       try {
-        result = await dependencies.evaluateRules({ context: gateContext, projected: state });
+        result = await dependencies.evaluateRules({
+          context: gateContext,
+          projected: state,
+          admittedExecutionEvidence: execution.admitted,
+          admittedReviewSummary,
+        });
       } catch {
         if (!(await isCurrentActiveAuthorization(correlation, dependencies.findAuthorizationById)))
           return { kind: "blocked", advisory: "review_authorization_not_active" };
@@ -605,6 +796,24 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
           return { kind: "blocked", advisory: "acceptance_append_failed" };
         return { kind: "blocked", advisory: "gate_evaluation_blocked" };
       }
+      if (context.scope === "task" && restsOnUnprovenEvidence(result)) {
+        // Missing / UNATTRIBUTED / CONFLICT execution evidence is not an observed
+        // FAIL: never record a formal Gate verdict from it, only a blocked Acceptance.
+        if (!(await isCurrentActiveAuthorization(correlation, dependencies.findAuthorizationById)))
+          return { kind: "blocked", advisory: "review_authorization_not_active" };
+        const blocked = await appendBlockedAcceptanceIfMissing(dependencies, context, correlation);
+        if (blocked.kind !== "committed")
+          return { kind: "blocked", advisory: "acceptance_append_failed" };
+        return { kind: "blocked", advisory: "execution_evidence_not_proven" };
+      }
+      const expectedAcceptance = deriveAcceptanceDecision(result);
+      if (
+        acceptance.kind === "found" &&
+        acceptance.decision.verdict !== "blocked" &&
+        acceptance.decision.verdict !== expectedAcceptance.verdict
+      ) {
+        return { kind: "blocked", advisory: "decision_integrity_violation" };
+      }
       if (!(await isCurrentActiveAuthorization(correlation, dependencies.findAuthorizationById)))
         return { kind: "blocked", advisory: "review_authorization_not_active" };
       const gateAppended = await dependencies.appendDecision(pending(context, result));
@@ -612,11 +821,13 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
         return { kind: "blocked", advisory: "gate_decision_append_failed" };
       if (!(await isCurrentActiveAuthorization(correlation, dependencies.findAuthorizationById)))
         return { kind: "blocked", advisory: "review_authorization_not_active" };
-      const acceptanceAppended = await dependencies.appendDecision(
-        pending(context, deriveAcceptanceDecision(result)),
-      );
-      if (acceptanceAppended.kind !== "committed")
-        return { kind: "blocked", advisory: "acceptance_append_failed" };
+      if (acceptance.kind !== "found" || acceptance.decision.verdict === "blocked") {
+        const acceptanceAppended = await dependencies.appendDecision(
+          pending(context, expectedAcceptance),
+        );
+        if (acceptanceAppended.kind !== "committed")
+          return { kind: "blocked", advisory: "acceptance_append_failed" };
+      }
       const lifecycle = await applyGateOutcomeLifecycle(dependencies, context, result);
       if (lifecycle.kind !== "committed")
         return { kind: "blocked", advisory: "lifecycle_append_failed" };

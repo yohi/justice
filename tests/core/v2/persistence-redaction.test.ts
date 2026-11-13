@@ -581,6 +581,79 @@ describe("redactPendingLogRecord", () => {
     });
   });
 
+  describe("implementation_call_binding records", () => {
+    const bindingRecord = (): PendingLogRecord => ({
+      ...baseEnvelope,
+      sessionId: "parent-1",
+      taskId: "task-1",
+      recordType: "observation",
+      kind: "implementation_call_binding",
+      parentSessionId: "parent-1",
+      callId: "call-/home/user/secret-1",
+      authorizationId: "auth-1",
+      taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" },
+    });
+
+    it("passes implementation_call_binding through redaction without changing durable identity", () => {
+      const record = bindingRecord();
+      const before = JSON.stringify(record);
+
+      const result = redactPendingLogRecord(record);
+
+      expect(result).toBe(record);
+      expect(JSON.stringify(result)).toBe(before);
+      expect(result).toMatchObject({
+        schemaVersion: 1,
+        agentId: "sisyphus",
+        sessionId: "parent-1",
+        writerId: "w-1",
+        recordType: "observation",
+        parentSessionId: "parent-1",
+        callId: "call-/home/user/secret-1",
+        authorizationId: "auth-1",
+        taskExecutionRef: { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" },
+      });
+      expect(Object.keys(result).sort()).toEqual(
+        [
+          "agentId",
+          "authorizationId",
+          "callId",
+          "kind",
+          "parentSessionId",
+          "recordType",
+          "schemaVersion",
+          "sessionId",
+          "taskExecutionRef",
+          "taskId",
+          "timestamp",
+          "writerId",
+        ].sort(),
+      );
+    });
+
+    it("preserves implementation_call_binding redaction idempotence and rejects unknown record kinds", () => {
+      const record = bindingRecord();
+      const once = redactPendingLogRecord(record);
+      const twice = redactPendingLogRecord(once);
+      expect(JSON.stringify(twice)).toBe(JSON.stringify(record));
+      expect(twice).toBe(once);
+
+      // Existing branches keep redacting as before.
+      const skill: PendingLogRecord = {
+        ...baseEnvelope,
+        recordType: "observation",
+        kind: "skill_invoked",
+        skillName: "GITHUB_TOKEN=ghp_1234567890",
+        source: "skill_tool",
+      };
+      expect(redactPendingLogRecord(skill)).toMatchObject({ skillName: "[REDACTED_ENV]" });
+
+      const unknown = bindingRecord();
+      Reflect.set(unknown, "kind", "implementation_call_binding_v2");
+      expect(() => Reflect.apply(redactPendingLogRecord, undefined, [unknown])).toThrow(TypeError);
+    });
+  });
+
   it("rejects an unknown record kind at the runtime boundary", () => {
     const record: PendingLogRecord = {
       ...baseEnvelope,
