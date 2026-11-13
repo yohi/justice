@@ -1489,6 +1489,84 @@ describe("current review correlation admission (F-001)", () => {
     expect(plan.decisions).toHaveLength(2);
   });
 
+  it("blocks when the active authorization lookup throws", async () => {
+    const counter = countingEvaluator(async () => passingTaskGate);
+    const fixture = dependencies(
+      counter.evaluateRules,
+      async () => ({ kind: "committed" }),
+      async () => {
+        throw new Error("authorization store unavailable");
+      },
+    );
+    const result = await createGatePendingAttemptEvaluator({
+      ...fixture.dependencies,
+      readDurableRecords: async () => lifecycleRecords(),
+    }).evaluateGatePendingAttempt(context());
+
+    expect(result).toEqual({ kind: "blocked", advisory: "review_authorization_not_active" });
+    expect(counter.calls()).toBe(0);
+    expect(fixture.decisions).toHaveLength(0);
+  });
+
+  it("blocks if authorization is released after review admission", async () => {
+    let lookups = 0;
+    const counter = countingEvaluator(async () => passingTaskGate);
+    const fixture = dependencies(
+      counter.evaluateRules,
+      async () => ({ kind: "committed" }),
+      async () => {
+        lookups += 1;
+        return lookups === 1
+          ? authorization
+          : { ...authorization, status: "released", releasedAt: "2026-09-18T00:01:00.000Z" };
+      },
+    );
+    const result = await createGatePendingAttemptEvaluator({
+      ...fixture.dependencies,
+      readDurableRecords: async () => lifecycleRecords(),
+    }).evaluateGatePendingAttempt(context());
+
+    expect(result).toEqual({ kind: "blocked", advisory: "review_authorization_not_active" });
+    expect(counter.calls()).toBe(0);
+    expect(fixture.decisions).toHaveLength(0);
+  });
+
+  it("rejects contradictory snapshots for the admitted review correlation", async () => {
+    const records = [
+      ...taskTransitionRecords(),
+      ...reviewRecords([
+        { type: "terminal", correlation: taskCorrelation(1) },
+        { type: "observed", correlation: taskCorrelation(1) },
+        {
+          type: "observed",
+          correlation: taskCorrelation(1),
+          items: [{ itemKey: "finding-1", evidenceId: "evidence-1", severity: "major", summary: "finding", location: "file.ts", status: "open" }],
+        },
+      ]),
+    ];
+
+    expect(admit(records, context())).toEqual({
+      kind: "conflict",
+      reason: "contradictory_review_observations",
+    });
+    await expect(runTask(records)).resolves.toMatchObject({
+      result: { kind: "blocked", advisory: "review_correlation_conflict" },
+      decisions: [],
+      calls: 0,
+    });
+  });
+
+  it("returns not_applicable when the gate rules skip evaluation", async () => {
+    const fixture = dependencies(async () => ({ verdict: "SKIP", reason: "not required" }), async () => ({ kind: "committed" }));
+    const result = await createGatePendingAttemptEvaluator({
+      ...fixture.dependencies,
+      readDurableRecords: async () => lifecycleRecords(),
+    }).evaluateGatePendingAttempt(context());
+
+    expect(result).toEqual({ kind: "not_applicable" });
+    expect(fixture.decisions).toHaveLength(0);
+  });
+
   it("admits retry round 2 after failed round 1, without reusing round 1", async () => {
     const retry = [
       ...taskTransitionRecords(),
