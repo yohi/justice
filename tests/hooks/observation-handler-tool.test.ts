@@ -43,6 +43,51 @@ const activeGateAuthorization = {
   status: "active",
 } as unknown as ApprovedPlanBinding;
 
+function completedReviewDispatch(
+  correlation: Record<string, unknown>,
+  timestampPrefix: string,
+): readonly PersistedLogRecord[] {
+  // F-001: a completed terminal dispatch slot for the current review correlation.
+  const base = {
+    schemaVersion: 1,
+    agentId: "atlas",
+    sessionId: "session-1",
+    writerId: "w-review",
+    recordType: "observation",
+    kind: "review_dispatch_transition",
+    transitionId: "review-transition-1",
+    parentSessionId: "session-1",
+    correlation,
+    expectedCategory: correlation.reviewKind === "task-review" ? "sp-review" : "sp-final-review",
+  };
+  return [
+    { ...base, sequence: 1, timestamp: `${timestampPrefix}1.000Z`, from: null, to: "pending" },
+    {
+      ...base,
+      sequence: 2,
+      timestamp: `${timestampPrefix}2.000Z`,
+      from: "pending",
+      to: "terminal",
+      terminalReason: "completed",
+    },
+  ] as unknown as readonly PersistedLogRecord[];
+}
+
+const taskReviewCorrelation = {
+  reviewKind: "task-review",
+  taskExecutionRef: gateTaskExecutionRef,
+  reviewRound: 1,
+} as const;
+
+const finalReviewCorrelation = {
+  reviewKind: "final-review",
+  authorizationId: "auth-1",
+  planPath: "plan.md",
+  planFingerprint: { algorithm: "sha256", value: "fingerprint-1" },
+  finalizationAttemptId: "final-1",
+  finalReviewRound: 1,
+} as const;
+
 function taskGateRecords(): readonly PersistedLogRecord[] {
   const transitions = [
     ["pending", "authorized"],
@@ -100,10 +145,12 @@ function taskGateRecords(): readonly PersistedLogRecord[] {
       recordType: "observation",
       taskId: "task-1",
       kind: "review_observed",
-      reviewScope: "task-1",
+      reviewScope: "task:task-1",
+      correlation: taskReviewCorrelation,
       items: [],
       isCompleteSnapshot: true,
     },
+    ...completedReviewDispatch(taskReviewCorrelation, "2026-09-18T00:02:0"),
   ] as unknown as readonly PersistedLogRecord[];
 }
 
@@ -141,9 +188,11 @@ function planGateRecords(): readonly PersistedLogRecord[] {
       recordType: "observation",
       kind: "review_observed",
       reviewScope: "final",
+      correlation: finalReviewCorrelation,
       items: [],
       isCompleteSnapshot: true,
     },
+    ...completedReviewDispatch(finalReviewCorrelation, "2026-09-18T00:03:0"),
   ] as unknown as readonly PersistedLogRecord[];
 }
 

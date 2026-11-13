@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  admitCurrentReview,
   createGatePendingAttemptEvaluator,
   deriveAcceptanceDecision,
   findCurrentAcceptanceDecision,
@@ -11,8 +12,13 @@ import type { ApprovedPlanBinding } from "../../src/core/plan-authorization";
 import type { ReviewCorrelation, TaskExecutionRef } from "../../src/core/types";
 import type { GatePendingAttemptContext } from "../../src/core/v2/gate-context";
 import type { PersistedLogRecord } from "../../src/core/v2/observation-model";
+import { project } from "../../src/core/v2/state-projection";
 import type { PendingDecisionRecord } from "../../src/core/v2/decision-model";
-import type { GateEvaluationDependencies } from "../../src/core/acceptance-decision";
+import type {
+  CurrentReviewAdmission,
+  GateEvaluationDependencies,
+  GatePendingAttemptResult,
+} from "../../src/core/acceptance-decision";
 
 const ref: TaskExecutionRef = {
   authorizationId: "auth-1",
@@ -29,7 +35,116 @@ const authorization = {
   status: "active",
 } as unknown as ApprovedPlanBinding;
 
-function lifecycleRecords(): readonly PersistedLogRecord[] {
+function taskCorrelation(
+  reviewRound = 1,
+  taskExecutionRef: TaskExecutionRef = ref,
+): ReviewCorrelation {
+  return { reviewKind: "task-review", taskExecutionRef, reviewRound };
+}
+
+function finalCorrelation(
+  overrides: Partial<Extract<ReviewCorrelation, { readonly reviewKind: "final-review" }>> = {},
+): ReviewCorrelation {
+  return {
+    reviewKind: "final-review",
+    authorizationId: "auth-1",
+    planPath: "plan.md",
+    planFingerprint: { algorithm: "sha256", value: "fingerprint-1" },
+    finalizationAttemptId: "final-1",
+    finalReviewRound: 1,
+    ...overrides,
+  };
+}
+
+type ReviewRecordSpec =
+  | {
+      readonly type: "terminal";
+      readonly correlation: ReviewCorrelation;
+      readonly terminalReason?: string;
+      readonly parentSessionId?: string;
+      readonly callId?: string;
+    }
+  | {
+      readonly type: "observed";
+      readonly correlation?: ReviewCorrelation;
+      readonly sessionId?: string;
+      readonly reviewScope?: string;
+      readonly taskId?: string;
+      readonly items?: readonly unknown[];
+      readonly isCompleteSnapshot?: boolean;
+    };
+
+/**
+ * Review dispatch/observation records in a dedicated writer shard, mirroring the
+ * Review Artifact path: pending -> claimed -> terminal dispatch transitions and a
+ * correlation-bearing review_observed snapshot written under the parent session.
+ */
+function reviewRecords(specs: readonly ReviewRecordSpec[]): readonly PersistedLogRecord[] {
+  let sequence = 0;
+  const envelope = (sessionId = "session-1"): Record<string, unknown> => ({
+    schemaVersion: 1,
+    sequence: ++sequence,
+    timestamp: `2026-09-18T00:01:${String(sequence).padStart(2, "0")}.000Z`,
+    agentId: "atlas",
+    sessionId,
+    writerId: "review-writer",
+    recordType: "observation",
+  });
+  const records: unknown[] = [];
+  for (const spec of specs) {
+    if (spec.type === "terminal") {
+      const parentSessionId = spec.parentSessionId ?? "session-1";
+      const callId = spec.callId ?? `call-${sequence + 1}`;
+      const expectedCategory =
+        spec.correlation.reviewKind === "task-review" ? "sp-review" : "sp-final-review";
+      const base = {
+        kind: "review_dispatch_transition",
+        parentSessionId,
+        correlation: spec.correlation,
+        expectedCategory,
+      };
+      records.push(
+        { ...envelope(), ...base, transitionId: `t-${sequence}`, from: null, to: "pending" },
+        {
+          ...envelope(),
+          ...base,
+          transitionId: `t-${sequence}`,
+          from: "pending",
+          to: "claimed",
+          callId,
+          artifactReservation: { status: "unusable", reason: "test" },
+        },
+        {
+          ...envelope(),
+          ...base,
+          transitionId: `t-${sequence}`,
+          from: "claimed",
+          to: "terminal",
+          callId,
+          terminalReason: spec.terminalReason ?? "completed",
+        },
+      );
+    } else {
+      const taskId =
+        spec.taskId ??
+        (spec.correlation?.reviewKind === "task-review"
+          ? spec.correlation.taskExecutionRef.taskId
+          : undefined);
+      records.push({
+        ...envelope(spec.sessionId),
+        ...(taskId === undefined ? {} : { taskId }),
+        kind: "review_observed",
+        reviewScope: spec.reviewScope ?? (taskId === undefined ? "final" : `task:${taskId}`),
+        isCompleteSnapshot: spec.isCompleteSnapshot ?? true,
+        ...(spec.correlation === undefined ? {} : { correlation: spec.correlation }),
+        items: spec.items ?? [],
+      });
+    }
+  }
+  return records as readonly PersistedLogRecord[];
+}
+
+function taskTransitionRecords(): readonly PersistedLogRecord[] {
   const states = [
     ["pending", "authorized"],
     ["authorized", "in_progress"],
@@ -54,6 +169,13 @@ function lifecycleRecords(): readonly PersistedLogRecord[] {
       from,
       to,
     })),
+  ] as unknown as readonly PersistedLogRecord[];
+}
+
+/** Task at gate_pending with a clean completed Round 1 terminal and matching observation. */
+function lifecycleRecords(): readonly PersistedLogRecord[] {
+  return [
+    ...taskTransitionRecords(),
     {
       schemaVersion: 1,
       sequence: 7,
@@ -64,14 +186,16 @@ function lifecycleRecords(): readonly PersistedLogRecord[] {
       recordType: "observation",
       taskId: "task-1",
       kind: "review_observed",
-      reviewScope: "task-1",
+      reviewScope: "task:task-1",
+      correlation: taskCorrelation(1),
       items: [],
       isCompleteSnapshot: true,
-    },
-  ] as unknown as readonly PersistedLogRecord[];
+    } as unknown as PersistedLogRecord,
+    ...reviewRecords([{ type: "terminal", correlation: taskCorrelation(1) }]),
+  ];
 }
 
-function planLifecycleRecords(): readonly PersistedLogRecord[] {
+function planTransitionRecords(): readonly PersistedLogRecord[] {
   const states = [
     ["tasks_pending", "all_tasks_accepted"],
     ["all_tasks_accepted", "final_review_pending"],
@@ -95,6 +219,13 @@ function planLifecycleRecords(): readonly PersistedLogRecord[] {
       from,
       to,
     })),
+  ] as unknown as readonly PersistedLogRecord[];
+}
+
+/** Plan at final_gate_pending with a clean completed Final Round 1 terminal and observation. */
+function planLifecycleRecords(): readonly PersistedLogRecord[] {
+  return [
+    ...planTransitionRecords(),
     {
       schemaVersion: 1,
       sequence: 4,
@@ -105,10 +236,12 @@ function planLifecycleRecords(): readonly PersistedLogRecord[] {
       recordType: "observation",
       kind: "review_observed",
       reviewScope: "final",
+      correlation: finalCorrelation(),
       items: [],
       isCompleteSnapshot: true,
-    },
-  ] as unknown as readonly PersistedLogRecord[];
+    } as unknown as PersistedLogRecord,
+    ...reviewRecords([{ type: "terminal", correlation: finalCorrelation() }]),
+  ];
 }
 
 function planGateRecord(verdict: "PASS" | "FAIL" = "PASS"): PersistedLogRecord {
@@ -1047,7 +1180,9 @@ describe("createGatePendingAttemptEvaluator", () => {
       async () => ({ kind: "committed" }),
       async () => {
         lookupCount += 1;
-        return lookupCount < 3
+        // Lookups: 1 active binding (F-001 admission), 2 pre-evaluation, 3 pre-Gate append,
+        // 4 pre-Acceptance append -> released after the Gate is durable.
+        return lookupCount < 4
           ? authorization
           : ({ ...authorization, status: "released" } as ApprovedPlanBinding);
       },
@@ -1260,5 +1395,359 @@ describe("authorization identity", () => {
     } as unknown as ReviewCorrelation;
 
     expect(sameReviewCorrelation(left, right)).toBe(false);
+  });
+});
+
+describe("current review correlation admission (F-001)", () => {
+  const activeBinding = authorization as Extract<ApprovedPlanBinding, { readonly status: "active" }>;
+  const passingTaskGate = {
+    recordType: "decision",
+    gateType: "task",
+    verdict: "PASS",
+    reachableEnforcementLevel: "L1",
+    appliedEnforcementLevel: "L0",
+    taskId: "task-1",
+    taskExecutionRef: ref,
+    ruleResults: [],
+  } as const;
+
+  type EvaluationOutcome = {
+    readonly result: GatePendingAttemptResult;
+    readonly decisions: readonly PendingDecisionRecord[];
+    readonly calls: number;
+  };
+
+  function countingEvaluator(
+    evaluate: GateEvaluationDependencies["evaluateRules"],
+  ): { readonly evaluateRules: GateEvaluationDependencies["evaluateRules"]; readonly calls: () => number } {
+    let calls = 0;
+    return {
+      evaluateRules: async (input): ReturnType<GateEvaluationDependencies["evaluateRules"]> => {
+        calls += 1;
+        return evaluate(input);
+      },
+      calls: (): number => calls,
+    };
+  }
+
+  async function runTask(
+    records: readonly PersistedLogRecord[],
+    taskContext: GatePendingAttemptContext = context(),
+  ): Promise<EvaluationOutcome> {
+    const counter = countingEvaluator(async () => passingTaskGate);
+    const fixture = dependencies(counter.evaluateRules, async () => ({ kind: "committed" }));
+    const result = await createGatePendingAttemptEvaluator({
+      ...fixture.dependencies,
+      readDurableRecords: async () => records,
+    }).evaluateGatePendingAttempt(taskContext);
+    return { result, decisions: fixture.decisions, calls: counter.calls() };
+  }
+
+  async function runPlan(records: readonly PersistedLogRecord[]): Promise<EvaluationOutcome> {
+    const counter = countingEvaluator(planGateEvaluation());
+    const fixture = planDependencies(records, counter.evaluateRules);
+    const result = await createGatePendingAttemptEvaluator(
+      fixture.dependencies,
+    ).evaluateGatePendingAttempt(planContext());
+    return { result, decisions: fixture.decisions, calls: counter.calls() };
+  }
+
+  function admit(
+    records: readonly PersistedLogRecord[],
+    admissionContext: GatePendingAttemptContext,
+  ): CurrentReviewAdmission {
+    return admitCurrentReview(
+      admissionContext,
+      project(records, "2026-09-18T01:00:00.000Z"),
+      records,
+      activeBinding,
+    );
+  }
+
+  it("admits a clean completed terminal round 1 with matching observed correlation", async () => {
+    const records = lifecycleRecords();
+
+    expect(admit(records, context())).toEqual({
+      kind: "admitted",
+      correlation: taskCorrelation(1),
+    });
+    const { result, decisions, calls } = await runTask(records);
+    expect(result).toMatchObject({ kind: "decided", decision: { gateType: "task", verdict: "PASS" } });
+    expect(calls).toBe(1);
+    expect(decisions.filter((record) => "gateType" in record)).toHaveLength(1);
+    expect(
+      decisions.filter((record) => "kind" in record && record.kind === "task-acceptance"),
+    ).toHaveLength(1);
+
+    const planRecords = planLifecycleRecords();
+    expect(admit(planRecords, planContext())).toEqual({
+      kind: "admitted",
+      correlation: finalCorrelation(),
+    });
+    const plan = await runPlan(planRecords);
+    expect(plan.result.kind).toBe("decided");
+    expect(plan.decisions).toHaveLength(2);
+  });
+
+  it("blocks when the active authorization lookup throws", async () => {
+    const counter = countingEvaluator(async () => passingTaskGate);
+    const fixture = dependencies(
+      counter.evaluateRules,
+      async () => ({ kind: "committed" }),
+      async () => {
+        throw new Error("authorization store unavailable");
+      },
+    );
+    const result = await createGatePendingAttemptEvaluator({
+      ...fixture.dependencies,
+      readDurableRecords: async () => lifecycleRecords(),
+    }).evaluateGatePendingAttempt(context());
+
+    expect(result).toEqual({ kind: "blocked", advisory: "review_authorization_not_active" });
+    expect(counter.calls()).toBe(0);
+    expect(fixture.decisions).toHaveLength(0);
+  });
+
+  it("blocks if authorization is released after review admission", async () => {
+    let lookups = 0;
+    const counter = countingEvaluator(async () => passingTaskGate);
+    const fixture = dependencies(
+      counter.evaluateRules,
+      async () => ({ kind: "committed" }),
+      async () => {
+        lookups += 1;
+        return lookups === 1
+          ? authorization
+          : { ...authorization, status: "released", releasedAt: "2026-09-18T00:01:00.000Z" };
+      },
+    );
+    const result = await createGatePendingAttemptEvaluator({
+      ...fixture.dependencies,
+      readDurableRecords: async () => lifecycleRecords(),
+    }).evaluateGatePendingAttempt(context());
+
+    expect(result).toEqual({ kind: "blocked", advisory: "review_authorization_not_active" });
+    expect(counter.calls()).toBe(0);
+    expect(fixture.decisions).toHaveLength(0);
+  });
+
+  it("rejects contradictory snapshots for the admitted review correlation", async () => {
+    const records = [
+      ...taskTransitionRecords(),
+      ...reviewRecords([
+        { type: "terminal", correlation: taskCorrelation(1) },
+        { type: "observed", correlation: taskCorrelation(1) },
+        {
+          type: "observed",
+          correlation: taskCorrelation(1),
+          items: [{ itemKey: "finding-1", evidenceId: "evidence-1", severity: "major", summary: "finding", location: "file.ts", status: "open" }],
+        },
+      ]),
+    ];
+
+    expect(admit(records, context())).toEqual({
+      kind: "conflict",
+      reason: "contradictory_review_observations",
+    });
+    await expect(runTask(records)).resolves.toMatchObject({
+      result: { kind: "blocked", advisory: "review_correlation_conflict" },
+      decisions: [],
+      calls: 0,
+    });
+  });
+
+  it("returns not_applicable when the gate rules skip evaluation", async () => {
+    const fixture = dependencies(async () => ({ verdict: "SKIP", reason: "not required" }), async () => ({ kind: "committed" }));
+    const result = await createGatePendingAttemptEvaluator({
+      ...fixture.dependencies,
+      readDurableRecords: async () => lifecycleRecords(),
+    }).evaluateGatePendingAttempt(context());
+
+    expect(result).toEqual({ kind: "not_applicable" });
+    expect(fixture.decisions).toHaveLength(0);
+  });
+
+  it("admits retry round 2 after failed round 1, without reusing round 1", async () => {
+    const retry = [
+      ...taskTransitionRecords(),
+      ...reviewRecords([
+        { type: "terminal", correlation: taskCorrelation(1), terminalReason: "review_incomplete" },
+        {
+          type: "observed",
+          correlation: taskCorrelation(1),
+          isCompleteSnapshot: false,
+          items: [{ itemKey: "r1", evidenceId: "r1", severity: "major", summary: "s", location: "l", status: "open" }],
+        },
+        { type: "terminal", correlation: taskCorrelation(2) },
+        { type: "observed", correlation: taskCorrelation(2) },
+      ]),
+    ];
+
+    expect(admit(retry, context())).toEqual({ kind: "admitted", correlation: taskCorrelation(2) });
+    const admitted = await runTask(retry);
+    expect(admitted.result).toMatchObject({ kind: "decided" });
+    expect(admitted.calls).toBe(1);
+
+    // A clean Round 1 snapshot must not stand in for the current Round 2 terminal.
+    const staleSnapshot = [
+      ...taskTransitionRecords(),
+      ...reviewRecords([
+        { type: "terminal", correlation: taskCorrelation(1), terminalReason: "review_incomplete" },
+        { type: "observed", correlation: taskCorrelation(1) },
+        { type: "terminal", correlation: taskCorrelation(2) },
+      ]),
+    ];
+    expect(admit(staleSnapshot, context()).kind).toBe("not_proven");
+    const stale = await runTask(staleSnapshot);
+    expect(stale.result).toEqual({ kind: "blocked", advisory: "review_correlation_not_proven" });
+    expect(stale.calls).toBe(0);
+    expect(stale.decisions).toHaveLength(0);
+  });
+
+  it("rejects wrong parentSessionId, attempt, finalization, round, or missing terminal/observed correlation", async () => {
+    const otherAttempt: TaskExecutionRef = { ...ref, attemptId: "attempt-0" };
+    const taskCases: ReadonlyArray<{
+      readonly name: string;
+      readonly specs: readonly ReviewRecordSpec[];
+      readonly context?: GatePendingAttemptContext;
+    }> = [
+      {
+        name: "context parentSessionId differs from the active authorization session",
+        specs: [
+          { type: "terminal", correlation: taskCorrelation(1) },
+          { type: "observed", correlation: taskCorrelation(1) },
+        ],
+        context: { ...context(), parentSessionId: "session-other" },
+      },
+      {
+        name: "terminal slot belongs to another parent session",
+        specs: [
+          { type: "terminal", correlation: taskCorrelation(1), parentSessionId: "session-other" },
+          { type: "observed", correlation: taskCorrelation(1) },
+        ],
+      },
+      {
+        name: "observation written under another session",
+        specs: [
+          { type: "terminal", correlation: taskCorrelation(1) },
+          { type: "observed", correlation: taskCorrelation(1), sessionId: "session-other" },
+        ],
+      },
+      {
+        name: "terminal and observation from an old attempt",
+        specs: [
+          { type: "terminal", correlation: taskCorrelation(1, otherAttempt) },
+          { type: "observed", correlation: taskCorrelation(1, otherAttempt) },
+        ],
+      },
+      {
+        name: "observation round differs from the terminal round",
+        specs: [
+          { type: "terminal", correlation: taskCorrelation(1) },
+          { type: "observed", correlation: taskCorrelation(2) },
+        ],
+      },
+      { name: "missing terminal", specs: [{ type: "observed", correlation: taskCorrelation(1) }] },
+      {
+        name: "terminal completed with findings",
+        specs: [
+          { type: "terminal", correlation: taskCorrelation(1), terminalReason: "completed_with_findings" },
+          { type: "observed", correlation: taskCorrelation(1) },
+        ],
+      },
+      {
+        name: "observation missing correlation",
+        specs: [{ type: "terminal", correlation: taskCorrelation(1) }, { type: "observed", taskId: "task-1" }],
+      },
+      {
+        name: "observation with only a legacy session/scope match",
+        specs: [
+          { type: "terminal", correlation: taskCorrelation(1) },
+          { type: "observed", correlation: taskCorrelation(1), reviewScope: "task-1" },
+        ],
+      },
+      {
+        name: "incomplete observation snapshot",
+        specs: [
+          { type: "terminal", correlation: taskCorrelation(1) },
+          { type: "observed", correlation: taskCorrelation(1), isCompleteSnapshot: false },
+        ],
+      },
+    ];
+    for (const testCase of taskCases) {
+      const records = [...taskTransitionRecords(), ...reviewRecords(testCase.specs)];
+      const outcome = await runTask(records, testCase.context ?? context());
+      expect({ name: testCase.name, ...outcome }).toEqual({
+        name: testCase.name,
+        result: { kind: "blocked", advisory: "review_correlation_not_proven" },
+        decisions: [],
+        calls: 0,
+      });
+    }
+
+    const planCases: ReadonlyArray<{ readonly name: string; readonly specs: readonly ReviewRecordSpec[] }> = [
+      {
+        name: "terminal from another finalization attempt",
+        specs: [
+          { type: "terminal", correlation: finalCorrelation({ finalizationAttemptId: "final-0" }) },
+          { type: "observed", correlation: finalCorrelation({ finalizationAttemptId: "final-0" }) },
+        ],
+      },
+      {
+        name: "terminal final round differs from the gate context round",
+        specs: [
+          { type: "terminal", correlation: finalCorrelation({ finalReviewRound: 2 }) },
+          { type: "observed", correlation: finalCorrelation({ finalReviewRound: 2 }) },
+        ],
+      },
+      { name: "missing final terminal", specs: [{ type: "observed", correlation: finalCorrelation() }] },
+      {
+        name: "final observation missing correlation",
+        specs: [{ type: "terminal", correlation: finalCorrelation() }, { type: "observed" }],
+      },
+    ];
+    for (const testCase of planCases) {
+      const outcome = await runPlan([...planTransitionRecords(), ...reviewRecords(testCase.specs)]);
+      expect({ name: testCase.name, ...outcome }).toEqual({
+        name: testCase.name,
+        result: { kind: "blocked", advisory: "review_correlation_not_proven" },
+        decisions: [],
+        calls: 0,
+      });
+    }
+  });
+
+  it("rejects conflicting completed terminal rounds for the same attempt", async () => {
+    const conflicting = [
+      ...taskTransitionRecords(),
+      ...reviewRecords([
+        { type: "terminal", correlation: taskCorrelation(1) },
+        { type: "observed", correlation: taskCorrelation(1) },
+        { type: "terminal", correlation: taskCorrelation(2) },
+        { type: "observed", correlation: taskCorrelation(2) },
+      ]),
+    ];
+    expect(admit(conflicting, context()).kind).toBe("conflict");
+    const outcome = await runTask(conflicting);
+    expect(outcome).toEqual({
+      result: { kind: "blocked", advisory: "review_correlation_conflict" },
+      decisions: [],
+      calls: 0,
+    });
+
+    // A duplicate durable terminal transition for the same round is not silently deduplicated.
+    const duplicate = [...lifecycleRecords()];
+    const terminal = duplicate.at(-1) as PersistedLogRecord;
+    const duplicated = [...duplicate, { ...terminal, sequence: terminal.sequence + 1 }];
+    expect(admit(duplicated, context()).kind).toBe("conflict");
+  });
+
+  it("does not stop an unrelated task identity that is not round-gated", async () => {
+    const unrelated = await runTask(lifecycleRecords(), {
+      ...context(),
+      taskExecutionRef: { ...ref, taskId: "task-2" },
+    });
+    expect(unrelated.result).toEqual({ kind: "not_applicable" });
+    expect(unrelated.calls).toBe(0);
   });
 });
