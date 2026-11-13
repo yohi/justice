@@ -750,6 +750,36 @@ describe("JusticePlugin accepted-decision progress updates", () => {
     expect(response.injectedContext).toContain("**Final review round**: 1");
   });
 
+  it("does not advance finalization from an accepted decision without an agreeing round-bearing Gate", async () => {
+    const cases: readonly { readonly options: SeedDecisionOptions; readonly advances: boolean }[] = [
+      { options: {}, advances: true },
+      { options: { gateVerdict: "FAIL" }, advances: false },
+      { options: { gateVerdict: null }, advances: false },
+      { options: { reviewRound: null }, advances: false },
+    ];
+    for (const { options, advances } of cases) {
+      const fs: MockFileSystem = createMockFileSystem({ "plan.md": progressPlan });
+      const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+      plugin.getPlanBridge().setActivePlan("s-1", "plan.md");
+      const authorizationId = await approvePlanAuthorization(plugin);
+      await seedClaimedReviewDispatch(plugin, authorizationId);
+      await seedAcceptedDecision(plugin, authorizationId, "task-1", options);
+      await seedAcceptedTaskLifecycle(plugin, authorizationId, "task-1");
+      mockTerminalReviewCompletion(plugin);
+
+      await plugin.handleEvent(reviewPostToolUseEvent());
+
+      const records = await internalsOf(plugin).observationLogStore.readAll();
+      expect({
+        options,
+        advanced: records.some(
+          (record) =>
+            record.recordType === "observation" && record.kind === "plan_finalization_transition",
+        ),
+      }).toEqual({ options, advanced: advances });
+    }
+  });
+
   it("does not start Final Review when the approved plan changes after task acceptance", async () => {
     const fs: MockFileSystem = createMockFileSystem({ "plan.md": progressPlan });
     const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });

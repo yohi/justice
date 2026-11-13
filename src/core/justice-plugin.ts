@@ -74,7 +74,6 @@ import {
 } from "./review-artifact";
 import {
   findAgreedAcceptedTaskDecision,
-  findCurrentAcceptanceDecision,
 } from "./acceptance-decision";
 import { PlanParser } from "./plan-parser";
 import { updatePlanProgress } from "./progress-updater";
@@ -1236,14 +1235,8 @@ export class JusticePlugin {
       const committed = await this.authorizationReviewBoundary.withParentSession(parentSessionId, async () => {
         if (!(await this.isAuthorizationPlanCurrent(correlation))) return false;
         const records = await this.observationLogStore.readAll();
-        const acceptance = findCurrentAcceptanceDecision(records, correlation);
-        if (
-          acceptance.kind !== "found" ||
-          acceptance.decision.kind !== "task-acceptance" ||
-          acceptance.decision.verdict !== "accepted"
-        ) {
-          return false;
-        }
+        // Round-safe: only a current accepted decision that agrees with its Gate.
+        if (findAgreedAcceptedTaskDecision(records, correlation) === null) return false;
 
         const binding = await this.authorizationStore.findByAuthorizationId(
           correlation.taskExecutionRef.authorizationId,
