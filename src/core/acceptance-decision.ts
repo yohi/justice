@@ -516,14 +516,33 @@ function fullEvidenceRefFor(
   };
 }
 
-function resolvesUniquely(records: readonly PersistedLogRecord[], ref: FullEvidenceRef): boolean {
-  const matches = records.filter(
-    (record) =>
-      record.agentId === ref.agentId &&
-      record.sessionId === ref.sessionId &&
-      record.writerId === ref.writerId &&
-      record.sequence === ref.sequence,
-  );
+type ShardSequenceIndex = ReadonlyMap<string, readonly PersistedLogRecord[]>;
+
+function shardSequenceKey(
+  ref: Pick<FullEvidenceRef, "agentId" | "sessionId" | "writerId" | "sequence">,
+): string {
+  return JSON.stringify([ref.agentId, ref.sessionId, ref.writerId, ref.sequence]);
+}
+
+/** One pass over the log: every record (any kind) grouped by shard + sequence. */
+function indexByShardSequence(records: readonly PersistedLogRecord[]): ShardSequenceIndex {
+  const index = new Map<string, PersistedLogRecord[]>();
+  for (const record of records) {
+    const key = shardSequenceKey(record);
+    const bucket = index.get(key);
+    if (bucket === undefined) index.set(key, [record]);
+    else bucket.push(record);
+  }
+  return index;
+}
+
+/**
+ * The ref resolves only if exactly one durable record (of any kind) has its shard +
+ * sequence, that record is `tool_executed`, and exactly one of its evidence items
+ * has the ref's evidenceId.
+ */
+function resolvesUniquely(index: ShardSequenceIndex, ref: FullEvidenceRef): boolean {
+  const matches = index.get(shardSequenceKey(ref)) ?? [];
   const target = matches[0];
   return (
     matches.length === 1 &&
@@ -565,6 +584,7 @@ export function admitExecutionEvidence(
     }
     if (sameTask(binding.taskExecutionRef, target)) currentCalls.add(binding.callId);
   }
+  const index = indexByShardSequence(records);
   const admitted: ProjectedEvidence[] = [];
   const excluded: FullEvidenceRef[] = [];
   for (const record of orderEventsForProjection(records)) {
@@ -576,7 +596,7 @@ export function admitExecutionEvidence(
       !conflictCalls.has(record.callId);
     for (const evidence of toEvidenceArray(record.evidence)) {
       const ref = fullEvidenceRefFor(record, evidence.evidenceId);
-      if (attributed && resolvesUniquely(records, ref)) admitted.push({ evidence, ref });
+      if (attributed && resolvesUniquely(index, ref)) admitted.push({ evidence, ref });
       else if (record.taskId === target.taskId) excluded.push(ref);
     }
   }

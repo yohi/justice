@@ -1906,6 +1906,40 @@ describe("execution and review evidence admission (F-002)", () => {
     expect(ambiguous.admitted).toEqual([]);
   });
 
+  it("keeps FullEvidenceRef ambiguity excluded across duplicate records, kinds and evidence ids", () => {
+    const base = [...lifecycleRecords(), bindingRecord(1, "call-impl")];
+    const tool = toolRecord(1, { callId: "call-impl", evidenceId: "e-1" });
+
+    // Duplicate tool_executed record with the same shard + sequence.
+    const duplicateRecord = admitExecutionEvidence(admissionScope, [...base, tool, { ...tool }]);
+    expect(duplicateRecord.admitted).toEqual([]);
+    expect(duplicateRecord.excluded).toEqual([fullRef(1, "e-1"), fullRef(1, "e-1")]);
+
+    // A non-tool record colliding on the same shard + sequence also makes the ref ambiguous.
+    const collidingKind = admitExecutionEvidence(admissionScope, [
+      ...base,
+      tool,
+      { ...bindingRecord(1, "call-unrelated"), writerId: "tool-writer" } as PersistedLogRecord,
+    ]);
+    expect(collidingKind.admitted).toEqual([]);
+
+    // The same evidenceId twice inside one record does not resolve to exactly one evidence item.
+    const duplicateEvidence = admitExecutionEvidence(admissionScope, [
+      ...base,
+      { ...tool, evidence: [testEvidence("e-1"), testEvidence("e-1")] } as unknown as PersistedLogRecord,
+    ]);
+    expect(duplicateEvidence.admitted).toEqual([]);
+    expect(duplicateEvidence.excluded).toEqual([fullRef(1, "e-1"), fullRef(1, "e-1")]);
+
+    // Distinct shards/sequences stay independently admissible.
+    const distinct = admitExecutionEvidence(admissionScope, [
+      ...base,
+      tool,
+      toolRecord(2, { callId: "call-impl", evidenceId: "e-2" }),
+    ]);
+    expect(distinct.admitted.map((item) => item.ref)).toEqual([fullRef(1, "e-1"), fullRef(2, "e-2")]);
+  });
+
   it("rejects missing binding, taskId-only, wrong session, wrong call, old attempt and unlinked child tools", async () => {
     const oldAttempt: TaskExecutionRef = { ...ref, attemptId: "attempt-0" };
     const missingBinding = admitExecutionEvidence(admissionScope, [
