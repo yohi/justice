@@ -976,8 +976,8 @@ describe("durable implementation call binding readback (F-002)", () => {
       bindingRecord(1, { authorizationId: "auth-other" }),
       bindingRecord(2, { callId: "call-impl-2", sessionId: "other-session" }),
     ]);
-    expect(malformed.get(implementationCallBindingKey("parent-1", "call-impl-1"))?.kind).not.toBe("bound");
-    expect(malformed.get(implementationCallBindingKey("parent-1", "call-impl-2"))?.kind).not.toBe("bound");
+    expect(malformed.get(implementationCallBindingKey("parent-1", "call-impl-1"))?.kind).toBe("conflict");
+    expect(malformed.get(implementationCallBindingKey("parent-1", "call-impl-2"))?.kind).toBe("conflict");
   });
 });
 
@@ -1119,10 +1119,10 @@ describe("durable completed review call history (F-002)", () => {
     );
     expect(
       projectCompletedReviewCallHistory(history({ stagingCallId: "review-call-other" }), "parent-1", correlation).kind,
-    ).not.toBe("proven");
+    ).toBe("conflict");
     expect(
       projectCompletedReviewCallHistory(history({ terminalCallId: "review-call-other" }), "parent-1", correlation).kind,
-    ).not.toBe("proven");
+    ).toBe("conflict");
     expect(
       projectCompletedReviewCallHistory(history({ stagingArtifactId: "artifact-other" }), "parent-1", correlation).kind,
     ).toBe("conflict");

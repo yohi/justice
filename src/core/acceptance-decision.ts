@@ -13,6 +13,7 @@ import type {
   TaskAcceptanceDecision,
 } from "./v2/decision-model";
 import { orderEventsForProjection } from "./v2/integrity";
+import { samePlanFingerprint, sameReviewCorrelation, sameTask } from "./review-correlation";
 import { hashString } from "./v2/hash";
 import type { ObservationRecord, PersistedLogRecord } from "./v2/observation-model";
 import type {
@@ -66,6 +67,8 @@ export type GateEvaluationDependencies = {
   readonly recordAdvisory: (advisory: string) => Promise<void>;
 };
 
+export { sameReviewCorrelation } from "./review-correlation";
+
 export type GateDecisionLookup =
   | { readonly kind: "missing" }
   | { readonly kind: "found"; readonly decision: GateDecision }
@@ -115,21 +118,6 @@ export async function isCurrentActiveAuthorization(
   } catch {
     return false;
   }
-}
-
-function samePlanFingerprint(
-  left: { readonly algorithm: string; readonly value: string },
-  right: { readonly algorithm: string; readonly value: string },
-): boolean {
-  return left.algorithm === right.algorithm && left.value === right.value;
-}
-
-function sameTask(left: TaskExecutionRef, right: TaskExecutionRef): boolean {
-  return (
-    left.authorizationId === right.authorizationId &&
-    left.taskId === right.taskId &&
-    left.attemptId === right.attemptId
-  );
 }
 
 function samePlanPath(
@@ -282,24 +270,6 @@ export function findCurrentAcceptanceDecision(
     return { kind: "conflict", advisory: "multiple current AcceptanceDecision records" };
   const decision = matches[0];
   return decision === undefined ? { kind: "missing" } : { kind: "found", decision };
-}
-
-export function sameReviewCorrelation(left: ReviewCorrelation, right: ReviewCorrelation): boolean {
-  if (left.reviewKind !== right.reviewKind) return false;
-  if (left.reviewKind === "task-review" && right.reviewKind === "task-review")
-    return (
-      left.reviewRound === right.reviewRound &&
-      sameTask(left.taskExecutionRef, right.taskExecutionRef)
-    );
-  if (left.reviewKind === "final-review" && right.reviewKind === "final-review")
-    return (
-      left.authorizationId === right.authorizationId &&
-      left.planPath === right.planPath &&
-      left.finalizationAttemptId === right.finalizationAttemptId &&
-      left.finalReviewRound === right.finalReviewRound &&
-      samePlanFingerprint(left.planFingerprint, right.planFingerprint)
-    );
-  return false;
 }
 
 export function deriveAcceptanceDecision(

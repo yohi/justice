@@ -378,6 +378,62 @@ describe("S3-a review artifact to acceptance (F-004)", () => {
     });
 
     it.each([
+      {
+        name: "call id",
+        mutate: (observed: ObservedReviewExecutionV1): ObservedReviewExecutionV1 => ({
+          ...observed,
+          callId: "review-artifact-call-other",
+        }),
+      },
+      {
+        name: "correlation",
+        mutate: (observed: ObservedReviewExecutionV1): ObservedReviewExecutionV1 => {
+          const correlation: ReviewCorrelation =
+            observed.correlation.reviewKind === "task-review"
+              ? { ...observed.correlation, reviewRound: observed.correlation.reviewRound + 1 }
+              : { ...observed.correlation, finalReviewRound: observed.correlation.finalReviewRound + 1 };
+          return { ...observed, correlation };
+        },
+      },
+      {
+        name: "child session",
+        mutate: (observed: ObservedReviewExecutionV1): ObservedReviewExecutionV1 => ({
+          ...observed,
+          childSessionId: "review-artifact-child-other",
+        }),
+      },
+    ])("rejects an observed execution that reports a different $name", async ({ mutate }) => {
+      const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+      await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
+
+      const outcome = await fixture.consumeWith({
+        parentSessionId: fixture.parentSessionId,
+        callId: fixture.callId,
+        postToolUse: { type: "PostToolUse", sessionId: fixture.parentSessionId, callId: fixture.callId },
+        observedExecution: mutate(fixture.observedExecution),
+        agentId: fixture.agentId,
+        writerId: fixture.writerId,
+      });
+
+      expect(outcome).toEqual({ kind: "stale" });
+      expect(fixture.recordAdvisory).toHaveBeenCalledWith(
+        "review_observed_execution_identity_mismatch",
+      );
+      expect(fixture.readReservedArtifact).not.toHaveBeenCalled();
+      const records = await fixture.durableRecords();
+      expect(ofKind(records, "review_artifact_read_started")).toHaveLength(0);
+      expect(ofKind(records, "review_artifact_failure_staged")).toHaveLength(0);
+      expect(ofKind(records, "review_completion_staged")).toHaveLength(0);
+      expect(
+        ofKind(records, "review_dispatch_transition").filter((record) => record.to === "terminal"),
+      ).toHaveLength(0);
+      expect(ofKind(records, "review_observed")).toHaveLength(0);
+      expect(lifecycleTo(records, "gate_pending")).toHaveLength(0);
+      expect(taskGateDecisions(records)).toHaveLength(0);
+      await expectNoFormalAcceptance(fixture);
+    });
+
+    it.each([
       ["historic roundless Task Gate decision", "gate"],
       ["historic roundless Task Acceptance decision", "acceptance"],
     ] as const)("does not accept beside a %s", async (_label, shape) => {

@@ -3,11 +3,13 @@ import type {
   DelegatedExecutionBinding,
   ObservedReviewExecutionV1,
   FullEvidenceRef,
+  ReviewCorrelation,
   ReviewTaskCallBinding,
   TaskCallBinding,
   TaskExecutionRef,
 } from "../types";
 import type { ReviewDispatchSlot } from "../review-dispatch-state";
+import { sameReviewCorrelation } from "../review-correlation";
 import {
   computeMaxSequenceByShard,
   computeSourceHash,
@@ -562,33 +564,8 @@ export function projectImplementationCallBindings(
   return result;
 }
 
-type ReviewCorrelationValue = import("../types").ReviewCorrelation;
-
-function reviewCorrelationIdentity(correlation: ReviewCorrelationValue): string {
-  return correlation.reviewKind === "task-review"
-    ? JSON.stringify([
-        "task-review",
-        correlation.taskExecutionRef.authorizationId,
-        correlation.taskExecutionRef.taskId,
-        correlation.taskExecutionRef.attemptId,
-        correlation.reviewRound,
-      ])
-    : JSON.stringify([
-        "final-review",
-        correlation.authorizationId,
-        correlation.planPath,
-        correlation.planFingerprint.algorithm,
-        correlation.planFingerprint.value,
-        correlation.finalizationAttemptId,
-        correlation.finalReviewRound,
-      ]);
-}
-
-function sameCorrelationIdentity(
-  left: ReviewCorrelationValue | undefined,
-  right: ReviewCorrelationValue,
-): boolean {
-  return left !== undefined && reviewCorrelationIdentity(left) === reviewCorrelationIdentity(right);
+function sameCorrelation(left: ReviewCorrelation | undefined, right: ReviewCorrelation): boolean {
+  return left !== undefined && sameReviewCorrelation(left, right);
 }
 
 export type CompletedReviewCallHistory =
@@ -617,14 +594,14 @@ type ReviewCompletionStagedRecord = Extract<
 export function projectCompletedReviewCallHistory(
   records: readonly PersistedLogRecord[],
   parentSessionId: string,
-  correlation: ReviewCorrelationValue,
+  correlation: ReviewCorrelation,
 ): CompletedReviewCallHistory {
   const dispatch = records.filter(
     (record): record is ReviewDispatchRecord =>
       record.recordType === "observation" &&
       record.kind === "review_dispatch_transition" &&
       record.parentSessionId === parentSessionId &&
-      sameCorrelationIdentity(record.correlation, correlation),
+      sameCorrelation(record.correlation, correlation),
   );
   const claimed = dispatch.filter((record) => record.from === "pending" && record.to === "claimed");
   if (claimed.length === 0) return { kind: "missing", reason: "claimed_history_missing" };
@@ -655,7 +632,7 @@ export function projectCompletedReviewCallHistory(
       record.recordType === "observation" &&
       record.kind === "review_completion_staged" &&
       record.parentSessionId === parentSessionId &&
-      sameCorrelationIdentity(record.staging.correlation, correlation),
+      sameCorrelation(record.staging.correlation, correlation),
   );
   if (stagings.length === 0) return { kind: "missing", reason: "completion_staging_missing" };
   if (stagings.length > 1) return { kind: "conflict", reason: "multiple_completion_stagings" };
@@ -668,10 +645,10 @@ export function projectCompletedReviewCallHistory(
   const artifact = staging.reviewArtifact;
   const observed = staging.observedExecution;
   if (
-    !sameCorrelationIdentity(artifact.correlation, correlation) ||
+    !sameCorrelation(artifact.correlation, correlation) ||
     observed.parentSessionId !== parentSessionId ||
     observed.callId !== callId ||
-    !sameCorrelationIdentity(observed.correlation, correlation) ||
+    !sameCorrelation(observed.correlation, correlation) ||
     artifact.observedExecution.callId !== callId ||
     artifact.observedExecution.parentSessionId !== parentSessionId
   )
@@ -686,7 +663,7 @@ export function projectCompletedReviewCallHistory(
     return { kind: "conflict", reason: "terminal_artifact_mismatch" };
   if (
     terminal.reviewArtifact !== undefined &&
-    (!sameCorrelationIdentity(terminal.reviewArtifact.correlation, correlation) ||
+    (!sameCorrelation(terminal.reviewArtifact.correlation, correlation) ||
       terminal.reviewArtifact.observedExecution.callId !== callId)
   )
     return { kind: "conflict", reason: "terminal_artifact_mismatch" };
