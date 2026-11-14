@@ -1,4 +1,4 @@
-# Justice v6 S3-b — Decision / Lifecycle Consistency Recovery Implementation Plan R0.1
+# Justice v6 S3-b — Decision / Lifecycle Consistency Recovery Implementation Plan R0.1.1
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` (recommended under the owner's anti-review-loop policy) or `superpowers:subagent-driven-development` **only after separate Human Owner approval for implementation**. Steps use checkbox (`- [ ]`) syntax for tracking. Do not automatically launch tasks, reviewers, or commits merely because the plan exists.
 
@@ -114,25 +114,35 @@
 
 **Task exit:** Review Completionの正式結果がEvaluator・Durable状態と矛盾しない。
 
-### Task 4: Staged Restartの正当なIdentity再証明
+### Task 4: Staged Restartの正当なIdentity再証明（成功Review / Rework分岐）
 
 **Files:**
 - Modify: `src/core/review-artifact.ts`（`recoverStagedReviewCompletion` matching Terminal分岐、既存Identity補助関数）
 - Test: `tests/integration/s3a-review-artifact-to-acceptance.test.ts`
-- Test: `tests/core/v2/state-projection.test.ts`（既存履歴関数の契約確認のみ。Source Projectorを変更しない）
+- Test: `tests/core/v2/state-projection.test.ts`（既存成功履歴関数の契約確認のみ。Source Projectorを変更しない）
 - No modify: `src/core/justice-plugin.ts`の`initialize()`順序。
 
 **Interfaces:**
-- Consumes: `projectCompletedReviewCallHistory(records, parentSessionId, correlation)` が返す既存 `proven/missing/conflict` とその `callId/artifactId`、`projectDelegatedExecutionBindings`、`projectObservedReviewExecution`、`stagingMatchesSlot`、Task 3の正式Outcome契約。
-- Produces: 既存の `recoverStagedReviewCompletion()` の安全な二分岐。Matching TerminalありはDurable Claim/Stage/Terminal履歴で証明し、**Claimed-only `projectTaskCallBindings` を使用しない**。Matching Terminalなしは現在Claimed Slot/Bindingを検証しTerminalを一度だけappendする。
+- Consumes: `projectCompletedReviewCallHistory(records, parentSessionId, correlation)` の既存 `proven/missing/conflict`（**`completed`専用**）、`projectDelegatedExecutionBindings`、`projectObservedReviewExecution`、`stagingMatchesSlot`、Task 3の正式完了およびReview-Rework Outcome契約。
+- Produces: 既存 `recoverStagedReviewCompletion()` のMatching Terminalあり／なしの二分岐。**双方ともTerminal Reason別に検証を分ける**。新規公開型・Recovery入口は作らない。
 
-- [ ] **Step 1: failing tests** — (a)matching Terminalあり、Claimed-only Bindingなし、Durable Claim/Stage/TerminalとDelegated/Observed全一致→Lifecycle復旧、(b)matching Terminalなし・Claimed有効→Terminalを1件append後にEvaluator再入、(c)Staging欠落→非受理・新規GatePending起動0、(d)Artifact ID/Digest不一致、Delegated Child/Call/Correlation競合、重複Terminal→Fail-Closed、(e)Authorization失効→Append/Progress/Release 0、(f)Restart2回目→Duplicate 0。単一プロセスMock永続Logを再生成して復元する。
-- [ ] **Step 2: confirm RED** — `bun run vitest run tests/integration/s3a-review-artifact-to-acceptance.test.ts -t "staged restart"` → 新設テストFAIL。
-- [ ] **Step 3: minimal implementation** — Matching Terminalがある場合は一意のDurable Claim/Stage/Terminal、`projectCompletedReviewCallHistory(...).kind === "proven"`、Delegated Bindingのobserved provenance/identity、Active Authority/Planを検証する。Terminalがない場合のみ `claimedSlot` と `stagingMatchesSlot` を使用し、Terminal append後の最新Durable再読込で同じHistory証明を行う。`appendReviewObserved`は既存冪等実装を使用する。いずれも`ensureTerminalReviewOutcomeApplied`へ渡し、Admissionを迂回しない。**非Staged Fallbackを追加しない、`initialize()`を再配置しない。**
-- [ ] **Step 4: confirm GREEN** — `bun run vitest run tests/integration/s3a-review-artifact-to-acceptance.test.ts tests/core/v2/state-projection.test.ts` PASS。既存Restart/Artifact Failureケースも回帰。
-- [ ] **Step 5: commit under authorized Implementation GO** — `git add src/core/review-artifact.ts tests/integration/s3a-review-artifact-to-acceptance.test.ts tests/core/v2/state-projection.test.ts && git commit -m "fix(justice): recover staged terminal from durable identity"`。
+**Terminal Reason別契約（両分岐共通）:**
 
-**Task exit:** Stagedありの2経路が一意で、Stagingなし・競合・失効は安全に停止する。
+| Terminal Reason | 必須証明と結果 |
+|---|---|
+| `completed` | 同一Parent/Call/Correlationの一意なDurable Claim・Stage・成功Terminalと、`projectCompletedReviewCallHistory(...).kind === "proven"`、clean Review、Delegated/Observed、Active Authorityを要求。Task 3のGate/Acceptance/Lifecycle正式照合後にのみ受理。 |
+| `completed_with_findings` | **clean成功履歴関数の`proven`を要求しない**。既存Rework専用契約で一意なDurable Claim・Stage・Terminal、Delegated/Observed、Review Artifactの`complete === true`とFindingsあり、`review_observed`の同一Correlation帰属、Active Authorityを検証する。その後Taskは`review_pending → rework_required`、Planは`final_review_pending → final_rework_required`の**正当なDurable Transition Recordと最新Projection/IdentityをReadback**できた場合だけReview-Rework処理を`terminalized`にできる。Task `accepted`・Plan `complete`への昇格は禁止。 |
+| `review_incomplete`、その他の非完了Reason | 既存の非受理・Failure Recovery契約を維持。成功ReviewまたはReworkとして補完せず、Gate/Acceptanceを生成しない。 |
+
+**共通Identity/Authority前提:** StagingはParent Session・Call ID・Review Correlation単位で一意とし、Durable `pending → claimed` の`expectedCategory`とusable Artifact Reservation、StagingのArtifact Consumption（ID）、Review Artifact/Observed ExecutionのParent/Call/Correlation/Child/Event ID、唯一の正当なDelegated Binding（observed provenance）を照合する。Matching Terminalありでは一意な`claimed → terminal`とReason、Artifact ID/Digestも検証し、現在のClaimed-only `projectTaskCallBindings`に依存しない。Matching Terminalなしでは現在のClaimed Slot/Bindingを事前検証し、Terminalを一度だけappendした後に最新Durable履歴を再照合する。Authority失効・旧Round/Attempt・Plan変更・履歴欠落や衝突はFail-Closed。成功ReviewのAdmissionを緩和しない。
+
+- [ ] **Step 1: failing tests** — (a) `completed`・Matching Terminalあり、Claimed-only Bindingなしでも一意なClaim/Stage/Terminal/Delegated/Observedが一致すれば既存DecisionからLifecycle復旧、(b) `completed`・Matching Terminalなしで正当なClaimedからTerminalを一度だけappend後、`projectCompletedReviewCallHistory(...).kind === "proven"` を要求、(c) **`completed_with_findings`・Matching TerminalありのTaskとPlan**でClaimed-only BindingなしでもRework専用履歴証明後に`rework_required` / `final_rework_required`がDurableに成立、(d) **`completed_with_findings`・Matching TerminalなしのTaskとPlan**で一度だけRework Terminalをappendし同じDurable Reworkを確認、(e) Rework両分岐でGate/Acceptance新規補完0・Task Progress更新0・Authorization release 0、(f) `review_incomplete`等の非受理、Staging欠落、Artifact ID/Digest/Delegated/Correlation/Terminal Reason競合、Authorization失効では不正なRecovery書込み0、(g) Restart再実行はTerminalとLifecycle重複0。各ケースで現在の正当なTransition RecordとProjectionを別々にASSERTする。
+- [ ] **Step 2: confirm RED** — `bun run vitest run tests/integration/s3a-review-artifact-to-acceptance.test.ts -t "staged restart"` → 新設の欠落機能を狙うテストがFAIL。既存成功系のPASSを保持する。
+- [ ] **Step 3: minimal implementation** — Matching Terminalあり: Terminal Reasonを先に一意に確定し、`completed`ではDurable Claim/Stage/Terminalの成功履歴関数`proven`、`completed_with_findings`では前記共通Identity/Delegated履歴とRework専用契約を使用。Terminalなし: `claimedSlot`/`stagingMatchesSlot`で正当なClaimedを確認後、Staging Artifactから決まるTerminal Reasonを保ったままappendし、Durable Readback後に同じReason別検証を行う。`appendReviewObserved()`は既存の冪等実装を使用する。`ensureTerminalReviewOutcomeApplied()`の`completed_with_findings`経路にはTask 3の正当なRework Transition/Readback条件を適用し、Gate EvaluatorによるDecision補完へ流さない。非Staged Fallbackや新規Schemaは追加せず、既存`initialize()`の順序を維持する。
+- [ ] **Step 4: confirm GREEN** — `bun run vitest run tests/integration/s3a-review-artifact-to-acceptance.test.ts tests/core/v2/state-projection.test.ts tests/core/review-artifact.test.ts` PASS。Task/Plan両Rework、既存clean Restart、Artifact Failureを回帰確認。
+- [ ] **Step 5: commit under authorized Implementation GO** — `git add src/core/review-artifact.ts tests/integration/s3a-review-artifact-to-acceptance.test.ts tests/core/v2/state-projection.test.ts && git commit -m "fix(justice): preserve staged restart rework by terminal reason"`。
+
+**Task exit:** `completed`の正式Admissionと`completed_with_findings`の既存Review-ReworkをReason別に保護し、どちらのMatching Terminal分岐でも正当なDurable確認後のみ処理を確定する。非Staged・競合・失効は非受理。
 
 ### Task 5: Plan ProgressのLifecycle前提と冪等性
 
@@ -153,7 +163,7 @@
 
 **Task exit:** 既存Plan Progressの通常更新・Restart復元の双方でDecision-only副作用が発生しない。
 
-### Task 6: S3-bの統合受入と停止判断
+### Task 6: S3-bの統合受入と停止判断（成功Review / Rework回帰）
 
 **Files:**
 - Test-only adjustment if necessary: `tests/integration/s3a-review-artifact-to-acceptance.test.ts`（Task 1–5の横断Fixtureを再利用）
@@ -161,16 +171,16 @@
 
 **Interfaces:**
 - Consumes: Tasks 1–5の完了実装と既存公開Entry/Result型。新規Production Interfaceは作らない。
-- Produces: AC-01〜AC-19の実装証拠、単一プロセス範囲のImplementation GO後の完了判断用レポート。
+- Produces: AC-01〜AC-19の実装証拠に加え、`completed_with_findings` のRestart後Review-ReworkをTask/Plan双方で退行させない証拠。単一プロセス範囲の完了判断用レポート。
 
-- [ ] **Step 1: failing integration tests** — `Gate/Acceptance durable → Lifecycle append failed → restart → Staged Recovery → Durable accepted/complete → Task Progress` の連結ケースをTaskとPlanで追加。`WARN/FAIL`のRework、Readback失敗、同一Correlation二度実行、Staging欠落、競合、失効、`completed_with_findings`の副作用抑止もASSERTする。
-- [ ] **Step 2: confirm RED** — 新設テストを実装前（または横断Fixture調整前）に実行して期待する欠落がFAILとなることを確認。`bun run vitest run tests/integration/s3a-review-artifact-to-acceptance.test.ts -t "S3-b"`。
-- [ ] **Step 3: minimal integration wiring** — 既存FixtureのDurable再構築、必要な連結のみ調整。Task 1–5に未カバーの境界が判明した場合は**それを所有するTaskの範囲内**で限定修正し、新しい独立レビューループ・汎用Frameworkを作らない。
-- [ ] **Step 4: targeted GREEN** — `bun run vitest run tests/core/acceptance-decision.test.ts tests/core/review-artifact.test.ts tests/core/v2/state-projection.test.ts tests/core/justice-plugin-routing.test.ts tests/core/progress-updater.test.ts tests/integration/s3a-review-artifact-to-acceptance.test.ts` →全件PASS。
+- [ ] **Step 1: integration / regression tests** — `completed`ではTask/Planの「Gate/Acceptance durable → Lifecycle append failed → restart → Staged Recovery → Durable accepted/complete」を連結。**`completed_with_findings`では次の4ケースを独立に検証:** (a) Task / Matching Terminalあり、(b) Task / Matching Terminalなし、(c) Plan / Matching Terminalあり、(d) Plan / Matching Terminalなし。それぞれ正当なClaim/Stage/Delegated/Artifact/Terminal履歴と有効AuthorizationをFixtureで構築し、**Task `review_pending → rework_required`、Plan `final_review_pending → final_rework_required` のDurable Transition Recordおよび再Projection一致**をASSERT。全ReworkケースでGate/Acceptanceの不正な新規生成0、Plan Progress更新0、Authorization release 0、再起動再実行時の重複遷移0をASSERT。`review_incomplete`、Staging欠落、Reason/Identity競合、失効は従来どおりFail-Closed。Readback失敗・同一Correlation再実行・正常系の既存副作用も回帰確認。
+- [ ] **Step 2: verification semantics** — Task 1〜5の着手前に統合ケースを追加できる場合は `bun run vitest run tests/integration/s3a-review-artifact-to-acceptance.test.ts -t "S3-b"` で欠落動作のREDを記録する。Task 1〜5実装後の追加なら**回帰・受入検証としてPASSを判定**し、人工的なREDを作らない。未実行/FAIL/PASSを区別して記録する。
+- [ ] **Step 3: minimal integration wiring** — 既存FixtureのDurable再構築とTask/Planの4ケースに必要な連結のみ調整。新規のRecovery入口を追加しない。Task 1〜5に未カバーの不整合が判明した場合は**所有Taskの範囲内の限定修正**に留め、新規レビュー循環・汎用Frameworkを作らない。
+- [ ] **Step 4: targeted GREEN** — `bun run vitest run tests/core/acceptance-decision.test.ts tests/core/review-artifact.test.ts tests/core/v2/state-projection.test.ts tests/core/justice-plugin-routing.test.ts tests/core/progress-updater.test.ts tests/integration/s3a-review-artifact-to-acceptance.test.ts` → 全件PASS（Task/PlanのRework各2分岐を含む）。
 - [ ] **Step 5: full verification** — `bun run typecheck`、`bun run lint`、`bun run test`、`bun run build` を順に実行。失敗・未実行・未確認を区別して記録する。実運用RuntimeでのRecoveryは明示承認がなければ行わず `NOT_VERIFIED`。
-- [ ] **Step 6: commit and owner checkpoint (only under Implementation GO)** — 変更があれば関連TestのみCommit。実装範囲、テスト結果、未解決リスク、未承認事項を報告して停止。PR/Push/Mergeは別途明示承認が必要。
+- [ ] **Step 6: commit and owner checkpoint (only under Implementation GO)** — 変更があれば関連TestのみCommit。実装範囲、正常ReviewとReworkそれぞれの検証結果、未解決リスク、未承認事項を報告して停止。PR/Push/Mergeは別途明示承認が必要。
 
-**Task exit:** Requirements AC-01〜AC-19に対して単一プロセスの具体的検証証拠を提示し、未証明部分を隠さずOwnerへ完了判断を返す。
+**Task exit:** Requirements AC-01〜AC-19に加えて、`completed_with_findings`のTask/Plan両Recovery分岐のDurable Rework、Gate/Acceptance・Plan Progress・Authorization releaseへの誤昇格がないことを示し、未証明部分を隠さずOwnerへ完了判断を返す。
 
 ## Requirements-to-Task Coverage
 
