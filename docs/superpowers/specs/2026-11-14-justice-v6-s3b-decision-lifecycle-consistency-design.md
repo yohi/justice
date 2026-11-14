@@ -1,14 +1,14 @@
-# Justice v6 S3-b — Decision / Lifecycle Consistency Recovery Design R0.1.1
+# Justice v6 S3-b — Decision / Lifecycle Consistency Recovery Design R0.1.2
 
 **Repository:** `yohi/justice`  
 **Issue:** [#356](https://github.com/yohi/justice/issues/356)  
 **Requirements:** R0.1.1 / Review PASS  
-**Reviewed Design HEAD:** `f5b35057c6342a2c01d68c219d696dc3a3ec3b83`  
+**Reviewed Design HEAD:** `0e28adf912a4a58b17f0c00f315acfef623a46f1`  
 **Architecture Option:** A — Existing Evaluator Limited Recovery  
-**Revision Scope:** D-001 / D-002のみ（Design R0.1限定訂正）  
+**Revision Scope:** D-002限定訂正（D-001既解消契約は維持）  
 **Status:** `DESIGN_DRAFT / OWNER_ADOPTION_PENDING / IMPLEMENTATION_HOLD`
 
-> 本文はHuman Ownerが承認したD-001・D-002の文書限定訂正版であり、Design Adoption / Implementation GOを意味しない。Requirements R0.1.1、Source Code、Tests、CI、Gate/HOLDは変更しない。Commit・Push・PR・Merge・再レビュー・実装を自動実施しない。
+> 本文はHuman Ownerが承認したD-002の文書限定訂正版（D-001の正式完了契約を維持）であり、Design Adoption / Implementation GOを意味しない。Requirements R0.1.1、Source Code、Tests、CI、Gate/HOLDは変更しない。Commit・Push・PR・Merge・再レビュー・実装を自動実施しない。
 
 ## 1. Architecture Contract
 
@@ -186,61 +186,63 @@ Readback不可、対象Identity欠測、Projection/Transition矛盾は `NOT_VERI
 
 ## 5. Restart Recovery Design
 
-### 5.1 Existing Entry Points and Staged Coverage
+### 5.1 D-002 — Staged Recoveryの対象・証拠・分岐契約（確定案）
 
-`JusticePlugin.initialize()` には既に `restoreActivePlans()`、`recoverPendingFinalizations()`、`recoverStagedReviewCompletionsAfterRestart()`、`recoverAcceptedTaskProgress()`、`recoverReviewDispatchesAfterRestart()` が存在する。
+**唯一のS3-b Restart Recovery入口は、既存 `JusticePlugin.initialize()` → `reviewCompletionDomain.recoverStagedReviewCompletionsAfterRestart()` → `recoverStagedReviewCompletion()` → `ensureTerminalReviewOutcomeApplied()` → 既存GatePending Evaluatorとする。** `review_completion_staged` を欠く履歴から、新たなGatePending Recoveryを起動しない。既存の `review_artifact_failure_staged`、`review_post_tooluse_pending`、`review_artifact_read_started` に対する元来の処理は維持するが、これらをS3-bの非Staged正式受理の代替経路とみなさない。
 
-**Staged経路でRecoveryできる範囲を固定する。** 有効な `review_completion_staged` がDurableに残り、現在Identity・成功Terminal・Active Authorization・Active Planの検査に合格する場合、既存 `recoverStagedReviewCompletion()` → `ensureTerminalReviewOutcomeApplied()` → 既存Evaluatorという経路を再利用する。
+**共通の事前条件（matching Terminalの有無にかかわらず必要）:**
 
-- matching Terminalが既にある場合: stagingと現在のDelegated/Review Call Binding・Artifact Reservationを検証し、`review_observed`を補完して同じTerminalのOutcomeを適用する。
-- matching Terminalがない場合: 既存のClaimed Slot/Bindingとstagingを照合し、Terminalの正当な追加・Review観測を経て同じOutcome適用へ進む。
-- Gate/Acceptanceが既にDurableだがLifecycleのみ未完了なら、方式AのEvaluatorが**既存Decisionを再生成せずLifecycleのみ**復旧する。
-- stagingのIdentity不一致、失効、Plan不一致、観測欠落、Terminal競合はFail-Closed。Staged経路失敗を汎用Fallbackで迂回しない。
+1. Durable Logから取得した `review_completion_staged` が当該 `parentSessionId`・`staging.callId`・`staging.correlation` について**一意**であり、重複・異なるReview Correlation・欠測を拒否する。現在Review Correlationは現行AuthorizationのTaskExecutionRef / Review Round、またはFinalization Attempt / Final Review Roundと一致する。
+2. 現行Active Authorization、Active Plan Path/Fingerprint、Canonical Task（Taskの場合）を検証する。別Parent Session、失効・Released、Plan変更、旧Attempt / RoundではRecovery書込みを行わない。
+3. Durableの `pending → claimed` 履歴から一意のClaimed Transitionを確認する。`parentSessionId`、`callId`、Review Correlation、`expectedCategory`（Task=`sp-review`／Plan=`sp-final-review`）と `artifactReservation.status === "usable"`、`artifactReservation.artifactId` を検証する。現在のProjected Claim Slotが残っていることを**Terminal成立後の条件にはしない**。
+4. Stagingの `artifactConsumption.artifactId` とClaimed Reservationを一致させる。Stagingの `reviewArtifact.correlation`、`observedExecution.parentSessionId/callId/correlation/childSessionId/reviewExecutionEventId`、`reviewArtifact.observedExecution` の対応フィールドをすべて照合する。
+5. Durable `delegated_execution_binding` から `parentSessionId`・`parentCallId`・Correlation・`childSessionId` がStagingの観測実行に一致する一意の関係を証明する。`projectDelegatedExecutionBindings()` の一致候補だけで確定せず、必要な場合は当該Persisted Binding Recordと `projectObservedReviewExecution()` の一意性・observed provenance・Event IDまで確認する。重複、衝突、欠落は非受理。Terminal後の `projectTaskCallBindings()` （Claimed-only）をこの証明に使用しない。
+6. 観測済みReview Artifactが正式完了用なら `complete === true` かつFindingsなしを確認し、既存のclean `review_observed` の帰属・矛盾検査を維持する。`completed_with_findings` は§2.5の別のRework契約のまま扱い、Gate/Acceptanceによる受理へ昇格させない。
 
-Staged Recoveryの前処理がすべてのDurable部分失敗を再入可能にする保証はないため、§5.2の限定Fallbackを**非Stagedの正当に証明できる対象だけ**に設ける。
+**A. Matching Terminalあり（Durable `claimed → terminal` が既存）**
 
-### 5.2 D-002 — Narrow Non-Staged Fallback (Decision Fixed)
+- Durable履歴から、同じParent Session・Call ID・Review CorrelationのTerminalが**一意**で、`from === "claimed"`、`to === "terminal"`、`terminalReason === "completed"` であることを証明する。別のTerminal候補、矛盾する理由・Call ID・Categoryは非受理。
+- **Claimed Slotの現在Projectionではなく**、既存 `projectCompletedReviewCallHistory(records, parentSessionId, correlation)` が `kind === "proven"` を返すことを必須とする。この関数はDurable Claim、Staging、成功Terminal、Artifact Reservation/Consumption、Review Artifact/Observed Executionの一意性と一致を検査する。返却された `callId`・`artifactId` が対象Staging/Terminalに一致することも確認する。
+- 上記共通条件のDelegated BindingとObserved Executionの一致を追加で確認する。既存 `stagingMatchesCurrentIdentity()` → `stagingMatchesSlotWithCurrentBinding()` がTerminal後にClaimed-only `projectTaskCallBindings()` を要求する契約は**matching Terminalありの経路では採用しない**。これをDurable履歴＋現在Authorization・実行帰属の検証に置き換える設計とする。
+- Identity/Authorization確認後、既存の `appendReviewObserved()` を冪等に実行する。次に既存Terminalを `ensureTerminalReviewOutcomeApplied()` に渡し、GatePending Evaluatorへ再入する。Gate/AcceptanceがDurableでLifecycleだけ未完了なら同一Decisionを再生成せずLifecycleのみをRecoveryする。
+- 復旧後に§3.2の**Admissionを含む正式完了判定**と最新Durable Readbackを再検証する。`findCurrentGateDecision()` と `findCurrentAcceptanceDecision()` の存在だけで `terminalized` にしない。`not_applicable` を成功へ変換しない。清掃・Authorization release・Plan Progressの各既存副作用も正式整合条件を迂回して実行しない。
 
-**採用案:** `justice-plugin.ts` の既存 `initialize()` 内に、Staged Recoveryの直後、Plan Progress復元の直前に、**一度だけ**非Staged候補を調べて既存Evaluatorへ渡す処理を置く。汎用Replay・Scheduler・別Recovery Managerは作らない。
+**B. Matching Terminalなし（まだClaimed）**
 
-対象候補は以下の条件を**すべて**満たすものだけとする。
+- 同一CorrelationのTerminalが**存在しない**ことをDurable読取で確認する。他のTerminal、競合するStaging、曖昧なClaimed履歴があれば止める。
+- この分岐に限り、現在のProjected Claimed Slot（`state === "claimed"`）と `stagingMatchesSlot()` 相当のReview Call Binding・Artifact Reservation一致を要求する。上記共通条件のDelegated Binding/Observed Execution一致、Authorization現在性も必須。
+- 既存 `terminalFor(staging, slot)` によって同一Call/CorrelationのTerminalを**一度だけ**appendし、その後Durable Recordを再読込む。`projectCompletedReviewCallHistory()` の `proven` と、Claim/Stage/Terminalの同一性を再検証する。appendが失敗・結果不明なら成功扱いせず、次回Durable再読込から再判定する。
+- その後、`appendReviewObserved()` を冪等に適用し、既存 `ensureTerminalReviewOutcomeApplied()` とEvaluatorへ進む。正式完了には§3.2を必須とする。ClaimedからTerminalへ遷移した後はClaimed-only Bindingを使って再証明しない。
 
-1. `restoreActivePlans() === "authoritative"` であり、現在Active Authorizationと親Session、Plan Path/Fingerprint、Canonical Taskが一致する。
-2. `readDurableRecords()`/既存Observation Logを再読込んだ現在Projectionで、Task `gate_pending` またはPlan `final_gate_pending` に留まり、現在のIdentity/Attempt/Review Roundに矛盾がない。
-3. 現在のReview Correlationと一致する `terminalReason === "completed"` のTerminalが**一意**にあり、Review Dispatch Slot・claimed→staged→terminalの呼出し履歴・clean完全 `review_observed` により正当に帰属できる。Terminalがない／不明／競合なら除外する。
-4. 当該Correlationを参照する `review_completion_staged` が**一件も存在しない**。存在すればその成否に関係なく既存Staged経路が唯一のRecovery入口であり、Fallbackからは触れない（Staged失敗の安全検査を迂回しない）。
-5. 同一CorrelationのGateDecisionが一意に存在する。AcceptanceはGateと一致する一意の確定値、Gateのみ、または既存契約で許される暫定 `blocked` とする。Gate未作成の単なるPending、確定Acceptanceのみ、Decision競合／旧Round／Historical Round欠落を対象外とする。
-6. 別Attempt/別Roundの現在状態、認可失効、Plan変更、Lifecycle遷移元不一致、読取不能を非受理とする。複数候補やHistoryの曖昧さを順序・最大Round推定で解決しない。
+**共通Fail-Closed:** Staging欠落・重複、Claim/Terminal履歴欠落・競合、Delegated Binding不一致、Artifact ID/Digest不一致、Review観測欠落、Authorization失効、Readback失敗は、個別Recoveryを `blocked` / `stale` / `NOT_VERIFIED` とし正式完了・Lifecycle/Plan Progress更新に昇格させない。曖昧な履歴を最新RoundやRecord順から推測しない。既存Admission `admitCurrentReview()` と `projectCompletedReviewCallHistory()` の検査は緩和・迂回しない。
 
-**Evaluator入力の構築:** 正当なTerminalのPersisted RecordとそのCorrelationの既存フィールドだけを使う。
+### 5.2 D-002 — 非Staged Fallbackの除外（確定案）
 
-- Task: `scope: "task"`, `trigger: "task_complete"`, `parentSessionId: terminal.parentSessionId`, `taskExecutionRef: terminal.correlation.taskExecutionRef`, `agentId/sessionId/writerId: terminal` の各Persisted値。
-- Plan: `scope: "plan"`, `trigger: "final_review_complete"`, `parentSessionId`, `authorizationId`, `planPath`, `finalizationAttemptId`, `finalReviewRound` はTerminal Correlationの値、`agentId/sessionId/writerId` はTerminalのPersisted値。
-- Task Review Roundは `GatePendingAttemptContext` には追加せず、Evaluator内で既存 `admitCurrentReview()` によってTerminal・Review履歴から証明する。推定値で補完しない。
+**非Staged GatePending Fallbackは採用しない。** `review_completion_staged` が存在しない場合、現在の `projectCompletedReviewCallHistory()` は `completion_staging_missing` を返し、当該履歴を使用する `admitCurrentReview()` は正式なReview Correlationを証明できない。成功TerminalやGate/Acceptanceが見つかっても、この不足を代替証拠で補えるとは扱わない。
 
-候補は同一Correlation単位で一度だけ扱い、**Plugin側では外側のParent Session Lockを握らず**、`evaluateGatePendingAttempt()`（通常版）を呼ぶ。この入口で既存Authorization Review BoundaryとIdentity別直列化を取得させる。`evaluateGatePendingAttemptWithinAuthorizationReviewBoundary()` を外側ロック付きで呼ぶ経路と混用せず、自己再入デッドロックを防ぐ。Evaluator内部で最新Readback・Authority・Correlationを再判定してからappendする。
+- `review_completion_staged` が存在しない同一CorrelationのLifecycle Pendingは、Restart時のS3-b自動Recovery対象から除外して**Fail-Closed**。`review_observed` やGate/AcceptanceのみからStagingを合成しない。
+- Stagingが存在するがIdentity・Authorization・Terminalに競合があってStaged Recoveryに失敗した場合も、非Staged探索で回避しない。
+- 非Staged用の候補走査、Terminalからの独立 `GatePendingAttemptContext` 生成、`evaluateGatePendingAttempt()` の新しい起動経路、追加Lock、Scheduler、全面Replayを設けない。
+- 非Staged欠測の自動解消は本Designの範囲外。状態を未完了／非受理として維持し、必要な運用判断はHuman Ownerに委ねる。未検証のRecovery成功を主張しない。
 
-候補が存在しない場合はNo-op。非Stagedでも十分なTerminal/Decisionの証拠がない状態は **非受理のまま保持してOwner判断事項**とし、Gate評価のやり直し、新規Review Round/Attempt/Dispatchや全履歴Replayを行わない。現行フローで非Staged候補が発生する頻度・実到達性は `NOT_VERIFIED` とし、このFallbackを全欠損状態の保証とは主張しない。
+**Evaluator入力はStaged Recoveryの既存経路のみから生成する。** Matching Terminalあり・なしの両分岐で、正当なStagingとTerminalのCorrelationに基づき、Taskは `scope: "task"`・`trigger: "task_complete"`・`parentSessionId`・`taskExecutionRef`、Planは `scope: "plan"`・`trigger: "final_review_complete"`・`parentSessionId`・`authorizationId`・`planPath`・`finalizationAttemptId`・`finalReviewRound` を設定する。`agentId/sessionId/writerId` は既存TerminalのPersisted値を用いる。Task Review Roundを推定で入力に加えず、現行Admissionが成功Terminal、Staging履歴、clean Reviewから証明する。既存の `evaluateGatePendingAttemptWithinAuthorizationReviewBoundary()` を、既に親SessionのClaimを保持するReview Completion経路から呼ぶ順序を維持し、新しい独立Evaluator呼出しは追加しない。
 
-### 5.3 D-002 — Actual `initialize()` Execution Order
+### 5.3 D-002 — Actual `initialize()` Execution Order（Fallbackなし）
 
-**既存の前段Finalization Recoveryを維持し、変更しない順序を以下のとおり固定する。** 新規処理はStep 5の1か所だけ。後段処理の置換・削除はしない。
+**現行 `JusticePlugin.initialize()` の実行順序を変更しない。** §5.2で非Staged Fallbackを除外したため、Design R0.1.1の新規Step 5は**削除**し、既存処理だけを以下の順序で維持する。
 
-| Step | Entry | Behavior |
+| Step | Existing Entry | Behavior |
 |---|---|---|
-| 1 | `restoreActivePlans()` | 権威あるAuthorization/Active Plan復元を判定。非authoritativeならStep 3〜8のRecovery書込みを実施しない |
-| 2 | `tieredWisdomStore.loadAll()` → `telemetry.load()` → `initializeProjectionCache()` | 既存初期化を維持 |
-| 3 | `recoverPendingFinalizations()` | **既存の前段**Finalization Recoveryを維持 |
-| 4 | `recoverStagedReviewCompletionsAfterRestart()` | 既存Staged経路を優先して実行 |
-| 5 | **限定非Staged GatePending Recovery（新規）** | §5.2の現在Durable状態から候補を抽出し、通常Evaluatorへ再入。Staged対象はスキップ |
-| 6 | `authorizationStore.hydrate()` → Active Bindingごとの `recoverAcceptedTaskProgress(binding.sessionId)` | Lifecycle `accepted` のDurable確認後のみPlan Progress更新 |
-| 7 | `recoverPendingFinalizations()` | **既存の後段**Finalization Recoveryを維持 |
-| 8 | `recoverReviewDispatchesAfterRestart()` | 既存Dispatch Recoveryを維持 |
-| 9 | 既存Notifier | 従来どおり初期化継続 |
+| 1 | `restoreActivePlans()` | `"authoritative"` かを判定。成立しなければStep 3〜7のRecovery書込みを行わない |
+| 2 | `tieredWisdomStore.loadAll()` → `telemetry.load()` → `observationHandler.initializeProjectionCache()` | 既存初期化のまま |
+| 3 | **前段** `recoverPendingFinalizations()` | 既存の全Task Lifecycle `accepted` 条件を維持。Staged Recoveryより前に実施する |
+| 4 | `reviewCompletionDomain.recoverStagedReviewCompletionsAfterRestart()` | 既存Stage、Failure Staging、Pending PostToolUse、Artifact Read Attemptを各既存契約で処理。§5.1の正当なStageのみS3-b Recoveryを実行する |
+| 5 | Active Bindingごとの `recoverAcceptedTaskProgress(binding.sessionId)` | §6のLifecycle `accepted` のDurable確認後にだけPlan Progressを更新する |
+| 6 | **後段** `recoverPendingFinalizations()` | Staged RecoveryによるTask Lifecycle変化を含め現在の全Taskを再判定する |
+| 7 | `reviewDispatchState.recoverReviewDispatchesAfterRestart()` | 既存Review Dispatch Recoveryを維持 |
+| 8 | 既存Notifier | 既存の初期化継続 |
 
-各Recoveryは既存の失敗通知・Fail-Openな初期化継続特性を維持するが、**Recovery書込み・正式完了・Plan Progressは個別にFail-Closed**とする。ある候補が拒否／未検証でも無関係の正常Taskを停止しない。候補ごとの失敗を保存成功とみなさない。
-
-既存のStaged Recoveryが既に復旧した対象はStep 5の現在Readbackで `gate_pending` / `final_gate_pending` ではないため再書込みしない。Step 5が復旧したTaskのみStep 6のDurable確認を通じてPlan Progress更新の候補となる。既存前段Finalization Recoveryは維持し、Step 7で再度現在の全Task LifecycleによりFinalizationが判定される。
+Step 3〜7は `restoreActivePlans() === "authoritative"` の場合だけ実施する。各既存RecoveryのAdvisoryと初期化継続特性は維持し、**個別のLifecycle書込み、Review Completion、Plan Progress更新はFail-Closed**とする。Step 4で復旧したTaskに加え、既にDurableなLifecycle `accepted` を持つ正当なTaskも、Step 5で最新Durable確認を経て進捗更新候補となる。Step 4で復旧できない非Staged/競合候補はStep 5で進捗確定せず、Step 6のFinalizationも全Task Lifecycleがacceptedでなければ進めない。新規Fallback Step・独立Review・新規Attemptは追加しない。
 
 ## 6. Plan Progress Safety
 
@@ -305,8 +307,11 @@ Lifecycleの永続更新とPlanファイルの更新は原子的な単一トラ�
 - 同一Correlationの繰返し実行・同時要求
 - Authorization失効・別Attempt・別Round・Decision競合
 - 暫定 `blocked` から確定Acceptanceへの正常遷移
-- Restart後のStaged Completion再入
-- Staged Completionのない限定候補の検出または非受理
+- Restart: matching TerminalありのStaged Recovery（Claimed-only Binding不在でもDurable Claim→Staging→Terminal履歴、Delegated Binding、Artifact Reservationを検証し、Lifecycle限定Recovery）
+- Restart: matching TerminalなしのStaged Recovery（Projected Claimed SlotとStaging/Delegated/Reservationの一致、Terminal append後のDurable履歴再検証）
+- Staging欠落（成功TerminalとGate/Acceptanceだけ存在する場合を含む）は非受理。独立Fallback・Evaluator再入なし
+- Staged履歴のIdentity競合、重複Claim/Terminal/Staging、Artifact ID/Digest不一致、Authorization失効、Active Plan不一致でFail-Closed
+- 既存initialize()順序の維持（前段/後段Finalizationを含む）、非Staged Fallbackなし
 - Lifecycle未完了時のPlan Progress更新禁止
 - Lifecycle復旧後のPlan Progress更新と再実行No-op
 - Plan Progress書込み失敗・再試行・Authorization失効
@@ -317,16 +322,16 @@ Build/Test/CI/Runtime Recoveryは、この設計作成時点では **NOT_VERIFIE
 ## 9. Residual Risks and Owner Decisions
 
 1. 複数プロセス間の排他保証は `NOT_PROVEN`。単一プロセスの既存境界を超えるImplementation GOはHuman Owner判断待ち。
-2. Staged Recoveryで証明できない履歴・非StagedでTerminal/Decisionが不足する履歴は自動補完しない。限定Fallbackの実到達性とRestart動作は `NOT_VERIFIED`。
+2. Staging欠落（Terminal/Decisionが存在していても）は現行Admission上正式受理できず、非Staged Fallbackを採用しない。Staged RecoveryのRestart実動作は `NOT_VERIFIED`。
 3. ファイルI/Oの耐久性、外部Writer競合の保証は未確認。
 4. Plan Progressの論理的一度限りの更新は設計目標であり、実装で保証済みではない。
 5. S3-a M-2、Host Enforcement、全面Semantic Recoveryは対象外。
 6. **D-001の正式完了境界:** `terminalized`、Plan Progress、Plan complete後のreleaseは§2.5/§3.2のDurable整合確認に依存する。Task LifecycleにReview RoundがないためTerminal・Decision・TaskExecutionRefの結合証明が必要。現行Source Codeは未変更であり、この保証が実装済みとは主張しない。
-7. **D-002のRestart境界:** 既存前段Finalizationを維持したStep 3〜8を設計上固定し、追加処理は非Staged限定。非受理候補をOwner判断なしに再Review・再評価・自動補完しない。
+7. **D-002のRestart境界:** §5.1のClaimed→Staging→TerminalとDelegated BindingのDurable証明を必須とし、matching Terminalあり／なしの2分岐だけを扱う。現行initialize()のStep 3〜7を維持し、新規Fallback Stepは存在しない。非受理候補をOwner判断なしに再Review・再評価・自動補完しない。
 
 ## 10. Completion and Stop Conditions
 
-- Design R0.1に対するD-001/D-002の文書限定訂正版として作成し、Owner Design Adoptionを先取りしない。
+- Design R0.1.1に対するD-002限定文書訂正版（R0.1.2）として作成し、D-001の正式完了契約を維持する。Owner Design Adoptionを先取りしない。
 - Requirements R0.1.1を変更しない。
 - 新規Frameworkを作らない。
 - Source Code、Test、CI、Gate/HOLDを変更しない。
