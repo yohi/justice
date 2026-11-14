@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-10-justice-v6-s2c-controlled-native-comparison-design.md` (Design R0.1, `baa2f2024a53ec81af1b53572e4fb230bf0b72af`, Issue [#373](https://github.com/yohi/justice/issues/373), PR [#380](https://github.com/yohi/justice/pull/380))。
 
-**Plan status:** `PLAN_DRAFT_FOR_OWNER_DECISION / GITHUB_RECORDED / EVALUATION_NOT_RUN / EXECUTION_BLOCKED`。既知のReview判定: `READY (Design only)` / `DOCUMENT_READY_WITH_BLOCKERS` / `Implementation Readiness: BLOCKED` / `Required Findings: 0`。Design訂正不要。**このPlanはPR #380のfeatureブランチにCommit/Push済み（初回記録Commit `7ea7a0eded0a333b2729a0f9c0952e59a3655f42`）。GitHubへの記録は実証開始承認ではなく、PlanのOwner正式採択もGitHub上の記録だけでは確認できない（`NOT_VERIFIED`）。**
+**Plan status:** `EXECUTION_APPROVED / EVALUATION_IN_PROGRESS / TASKS_1_2_3_COMPLETE / TASK_4_5_PENDING_APPROVAL`。既知のReview判定: `READY (Design only)` / `DOCUMENT_READY_WITH_BLOCKERS` / `Implementation Readiness: CONDITIONAL` / `Required Findings: 0`。**このPlanはPR #380のfeatureブランチに初回記録Commit `7ea7a0eded0a333b2729a0f9c0952e59a3655f42`）。その後、OpenCode v2.2.5保存応答の`cursor.previous`/`cursor.next`が`null`のケースを受理するため、`src/runtime/s2b-input.ts`と`tests/s2b/input-shapes.test.ts`に限定修正を行った（Commit `ced2449c`）。当該修正はPlan本文の「No product source edits」原則に対する、Human Ownerが明示承認した例外であり、Task 1 baseline admissionを可能にするための最小限の変更である。**
 
 ## Global Constraints
 

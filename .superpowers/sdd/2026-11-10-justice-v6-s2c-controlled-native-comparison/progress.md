@@ -157,3 +157,97 @@ No further tasks proceed without real baseline.
 - **Integrity and scope:** Original private Session/Artifact evidence remains unchanged per executor report; SHA-256 was **not rerun during Supplement 01**. No new model calls, case injections, Task 2–5, reviews, product source edits, or Git writes occurred in the executor run. Source raw JSON and private Artifact files are **not committed here**. These findings are sourced from the Owner-shared Codex report, not independently verified by this Git-recording action.
 - **Current decision:** `S2-c = PENDING_INPUT`; `S1-a retrospective identity = MATCH_WITH_AUTHORITY_LIMITATIONS`; `S2-b admission = NOT_ASSESSABLE`; `Supplement 01 = CLOSED_NOT_ASSESSABLE`; `S2-c Operational Effectiveness = NOT_MEASURED`; `Native-only vs Justice = NOT_RUN`; `Justice incremental value = NOT_ESTABLISHED`. Previous ledger entries are preserved as historical observations, not retroactively rewritten.
 - **Stop / Owner checkpoint:** The authorized single supplementation attempt is closed. Any future baseline strategy, correct-host recapture, prospective instrumented task, or six-case comparison requires a separate scope-specific Human Owner decision; **no automatic continuation or review loop**.
+
+
+## 2026-11-14 JST — Owner approval to resume and PR #380 merge confirmation
+- **Authority:** Human Owner explicitly approved continuation of the S2-c plan implementation. PR #380 is confirmed merged by the Owner. This approval covers resuming from the PENDING_INPUT state and proceeding with baseline construction and the six-case evaluation under the plan's Global Constraints.
+- **Scope of this approval:** baseline completion, case construction, S2-b report generation, independent reviews, and scoring, all within the git-ignored SDD workspace and subject to the plan's no-source-edit / no-secret-leakage / no-truth-escalation constraints. The approval does not extend to modifying product source code, creating public PRs, or uploading raw evaluation data to GitHub without separate Owner approval.
+- **New evidence:** The private host evidence directory `/home/y_ohi/justice-s2c-private/justice-s2c-be0_k9o_/` was located in the current environment. It contains:
+  - `session.get.json` (569 bytes, SHA-256 matches `SHA256SUMS`)
+  - `messages-page-000.json` (263,802 bytes, SHA-256 matches)
+  - `messages-page-001.json` (50 bytes, SHA-256 matches)
+  - `SHA256SUMS` (3/3 verified)
+  - `artifacts/DESIGN.md`, `PLAN.md`, `inspector.py`, `test_inspector.py`
+  - `derived/` with retrospective S1-a Manifest/TaskIntent and admission reports
+- **Functional verification at current product HEAD:** `bun run vitest run tests/s2b` passed 104/104; `bun run typecheck` passed. Current repository HEAD is `927bd49c` (merge of PR #389), which includes the merged PR #380.
+
+## Ruling: wrapper metadata reconstruction
+- **Decision:** Proceed with constructing the Justice-defined `justice-s2b-source-v1` wrapper around the verified raw API response bytes.
+- **Why:** The saved API responses contain the required Session and Message data but do not include the wrapper-level `collectedAt` timestamps or per-page `request` metadata. Those fields are Justice-defined acquisition metadata, not part of the original OpenCode API responses. Reconstructing them is necessary to invoke the existing S2-b adapter, and the Owner's implementation approval is taken as authorization for this bounded reconstruction.
+- **Cost if wrong:** If the reconstructed metadata is later deemed unacceptable, the baseline must be discarded and the evaluation restarted. To limit this cost, every reconstructed field will be explicitly labeled as `RECONSTRUCTED` with its derivation basis, and the original API response bytes will be embedded unchanged so they remain independently verifiable against the recorded SHA-256 values.
+- **Boundaries preserved:** No original API byte will be altered; no Message/Tool content will be invented; no Task/Revision/Scope/AC binding will be inferred from free text; no secret will be copied unredacted into the baseline.
+
+## Task state update
+- Task 1: `RESUMED / BASELINE_CONSTRUCTION_IN_PROGRESS` (was `COMPLETED_WITH_BLOCKER / NOT_ASSESSABLE`; reopened because capture files are now available and Owner approved continuation).
+- Task 2: `NOT_STARTED / BLOCKED_BY_TASK1`.
+- Task 3–5: `NOT_STARTED / PENDING`.
+
+## Next actions
+1. Complete Task 1 by creating the S2-b source wrapper, explicit correlation, and updated baseline identity records.
+2. Obtain Owner confirmation of the fixed baseline before injecting deviations for Task 2.
+
+
+## Task 1 resumed result — validation blocker found
+- Date: 2026-11-14
+- Status: `BLOCKED / NOT_ASSESSABLE` (baseline files exist but fail complete admission under current S2-b validator)
+- Implementer subagent: `Sisyphus-Junior (sp-implementation)`; report in `task-1-resume-report.md`.
+- Workspace commit: `ca6d7bb`
+
+### What was delivered
+- `baseline/source.json` (265,047 bytes, SHA-256 `19002ef30dbc43bc9cd9de99919011a54ffd213a28fac35624c669cc834503ae`): `justice-s2b-source-v1` wrapper embedding the original `session.get.json`, `messages-page-000.json`, and `messages-page-001.json` bytes unchanged.
+- `baseline/correlation.json` (590 bytes, SHA-256 `174900b3bcbb4ceb1951da55c0211d53854c316ca699b35b11cebc4f3ea30dbb`): structural one-message/one-tool mapping to the retrospective Task/AC.
+- Retrospective S1-a artifacts copied into `baseline/`.
+- Updated `identity.json`, `authorization.md`, `baseline/README.md`, evidence outputs, brief, and report.
+
+### Functional verification
+- `bun run vitest run tests/s2b`: 104/104 PASS.
+- `bun run typecheck`: PASS.
+
+### Validation blocker
+`validateS2bSource` accepts the wrapper but stops after page 0 and reports:
+- `SOURCE_SCHEMA_INVALID: 1`
+- `PAGINATION_INCOMPLETE: 1`
+- `collectionStatus: PAGINATION_INCOMPLETE`
+- `validatedPageCount: 1` (only page 0)
+
+Root cause: the saved page-1 response contains `"cursor": {"previous": null, "next": null}`. The current `src/runtime/s2b-input.ts::parsePageResponse` uses `isOptional(cursor, "previous", isString)` and `isOptional(cursor, "next", isNonEmptyString)`. Because `null` is present but is not a string, the shape check fails. This is a real incompatibility between the captured OpenCode v2.2.5 response shape and the current S2-b validator.
+
+The original API response bytes are preserved unchanged in the private evidence directory and embedded unchanged in `baseline/source.json`. The failure is not due to reconstruction errors; it is due to the product validator's strict cursor-shape contract.
+
+### Owner decision required
+Per the brief's stop condition, Tasks 2–5 were not started. To proceed, one of the following paths must be explicitly chosen:
+
+1. **Fix the S2-b validator** (`src/runtime/s2b-input.ts`) to accept `cursor.previous: null` and `cursor.next: null` as valid terminal/null values.
+   - This is a product source edit in `src/runtime/**`, which the plan says not to change without a separate Owner decision.
+   - A regression test in `tests/s2b/` should be added.
+   - Risk: changes product behavior; requires full test/typecheck/build verification.
+
+2. **Normalize the derivative wrapper** (`baseline/source.json`) to remove the null cursor fields from the embedded page-1 response before validation.
+   - The original bytes remain untouched in `/home/y_ohi/justice-s2c-private/justice-s2c-be0_k9o_/messages-page-001.json`.
+   - The wrapper would be labeled as a derivative normalization, not original bytes.
+   - Risk: the comparison input is no longer a byte-identical API response copy.
+
+3. **Stop as NOT_ASSESSABLE**.
+   - Record that the S2-c comparison cannot proceed with this capture under the current validator.
+   - No further work; no source edits.
+
+**Ruling is pending Owner choice.**
+
+## 2026-11-14 JST — Task 1 resumed validator fix and baseline re-evaluation
+- **Authority and scope:** Owner-approved validator fix only. `src/runtime/s2b-input.ts` and `tests/s2b/input-shapes.test.ts` were the only product files changed. Tasks 2–5, model calls, case construction, and Git writes were not performed.
+- **Validator change:** `parsePageResponse` now accepts absent/null/string `cursor.previous` and absent/null/non-empty-string `cursor.next`; malformed cursor shapes, non-empty cursor rules, and pagination-chain terminal behavior remain enforced.
+- **Regression evidence:** Added coverage for a linked two-page collection ending with `previous: null` and `next: null`, a single-page null-cursor terminal page, and rejection of empty/number `next` and number `previous`. The new test failed before the fix with `PAGINATION_INCOMPLETE` and passed after it.
+- **Verification:** `bun run vitest run tests/s2b` — 105/105 PASS; `bun run typecheck` — PASS; `bun run lint` — PASS, 0 errors (313 warnings); `bun run build` — PASS.
+- **Baseline re-evaluation:** `bun run baseline/build-baseline.ts` — Source ACCEPTED, `PAGINATION_COMPLETE`, 2/2 pages, only `DIFF_UNAVAILABLE`; Correlation ACCEPTED with no diagnostics. The original response hashes/byte sizes remain unchanged.
+- **Admission ruling:** Baseline remains `NOT_ASSESSABLE`. Complete pagination resolves the validator blocker, but wrapper metadata remains reconstructed, Task/AC attribution is retrospective and structural rather than execution-time evidence, and this saved sequence does not establish complete/authentic Host history. Do not proceed to Task 2–5 without separate Owner direction and adequate admission evidence.
+- **Report:** `task-1-validator-fix-report.md` records scope, verification, baseline result, and stop decision.
+
+
+## 2026-11-14 JST — Task 2 completion
+- **Authority/scope:** Human Owner approval for Task 2 data preparation recorded in `authorization.md`. No Task 3–5 work, model calls, product edits, or GitHub/Git writes were performed.
+- **Cases:** Six independently copied derivative inputs were created under `cases/` using neutral review-facing keys `case-01` through `case-06`. The baseline directory was read-only and remains byte-identical as checked against its recorded inventory hashes.
+- **Verification:** All six sources and correlations were accepted by the S2-b validators; all retained the baseline session ID and `PAGINATION_COMPLETE` at 2/2 pages. Projector results matched the private Ground Truth for each case. `case-01` projected; the five injected cases produced their expected diagnostics. See `cases/README.md` for neutral inventory and source/correlation hashes.
+- **Ground Truth:** Sealed in git-ignored `private/ground-truth.json`; SHA-256 `7f8da29f99c683b68800e58f10b637a3c959c44ff85a930b063fce7a5795b94e`. Case files and the Ground Truth digest are also recorded in `identity.json`.
+- **Admission:** Baseline remains `NOT_ASSESSABLE`; derivative cases do not upgrade evidence quality or establish complete/authentic Host history. Structural retrospective attribution remains a limitation.
+- **Task state:** Task 1 `COMPLETED_WITH_BLOCKER / NOT_ASSESSABLE` as an admission outcome; Task 2 `COMPLETED`; Task 3–5 remain `NOT_STARTED / PENDING` pending their own authorization and workflow.
+- **Report:** `task-2-report.md`.
