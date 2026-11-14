@@ -13,6 +13,7 @@ const codes = (r: { diagnostics: readonly { code: DiagnosticCode }[] }): Diagnos
 
 function expectRejected(r: SourceResult, code: DiagnosticCode): void {
   expect(r.state).toBe("REJECTED");
+  if (r.state !== "REJECTED") throw new Error("expected REJECTED result");
   expect(codes(r)).toContain(code);
 }
 
@@ -249,6 +250,27 @@ describe("S2-b fixed v2.2.5 shapes", () => {
     }
     expectRejected(source(buildSource({ pages: [{ pageIndex: 1, request: firstRequest(), response: pageResponse([]) }] })), "SOURCE_SCHEMA_INVALID");
     expectRejected(validateS2bSource(new Uint8Array([0x7b, 0xff, 0x7d])), "SOURCE_SCHEMA_INVALID");
+  });
+
+  it("acceptsNullTerminalCursorsAndRejectsMalformedCursorValues", () => {
+    const pages = [
+      { request: firstRequest(2), response: pageResponse([userMessage("msg_301")], "cur-1") },
+      { request: laterRequest("cur-1", 2), response: JSON.stringify({ data: [idleMessage("msg_302")], cursor: { previous: null, next: null } }) },
+    ];
+    const complete = accepted(source(buildSource({ pages })));
+    expect(complete.collectionStatus).toBe("PAGINATION_COMPLETE");
+    expect(complete.validatedPageCount).toBe(2);
+
+    const terminal = accepted(source(buildSource({
+      pages: [{ request: firstRequest(), response: JSON.stringify({ data: [idleMessage("msg_303")], cursor: { previous: null, next: null } }) }],
+    })));
+    expect(terminal.collectionStatus).toBe("PAGINATION_COMPLETE");
+
+    for (const cursor of [{ previous: null, next: "" }, { previous: null, next: 1 }, { previous: 1, next: null }]) {
+      expect(source(buildSource({
+        pages: [{ request: firstRequest(), response: JSON.stringify({ data: [idleMessage("msg_304")], cursor }) }],
+      }))).toMatchObject({ state: "REJECTED", diagnostics: expect.arrayContaining([expect.objectContaining({ code: "SOURCE_SCHEMA_INVALID" })]) });
+    }
   });
 });
 

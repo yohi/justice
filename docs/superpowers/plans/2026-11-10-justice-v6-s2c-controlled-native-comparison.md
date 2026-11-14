@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-10-justice-v6-s2c-controlled-native-comparison-design.md` (Design R0.1, `baa2f2024a53ec81af1b53572e4fb230bf0b72af`, Issue [#373](https://github.com/yohi/justice/issues/373), PR [#380](https://github.com/yohi/justice/pull/380))。
 
-**Plan status:** `PLAN_DRAFT_FOR_OWNER_DECISION / GITHUB_RECORDED / EVALUATION_NOT_RUN / EXECUTION_BLOCKED`。既知のReview判定: `READY (Design only)` / `DOCUMENT_READY_WITH_BLOCKERS` / `Implementation Readiness: BLOCKED` / `Required Findings: 0`。Design訂正不要。**このPlanはPR #380のfeatureブランチにCommit/Push済み（初回記録Commit `7ea7a0eded0a333b2729a0f9c0952e59a3655f42`）。GitHubへの記録は実証開始承認ではなく、PlanのOwner正式採択もGitHub上の記録だけでは確認できない（`NOT_VERIFIED`）。**
+**Plan status:** `DOCUMENT_APPROVED_AND_TASKS_1_2_3_EXECUTION_APPROVED; TASKS_4_5_PUBLIC_SKELETON_APPROVED; FULL_COMPARISON_PENDING_APPROVAL`。既知のReview判定: `READY (Design only)` / `DOCUMENT_READY_WITH_BLOCKERS` / `Implementation Readiness: CONDITIONAL` / `Required Findings: 0`。**Plan文書の初回CommitはPR #380 featureブランチ `7ea7a0eded0a333b2729a0f9c0952e59a3655f42`。その後、Human Ownerが明示承認した例外として、OpenCode v2.2.5保存応答の`cursor.previous`/`cursor.next`が`null`のケースを受理するため、`src/runtime/s2b-input.ts`と`tests/s2b/input-shapes.test.ts`に限定修正を行った（Commit `ced2449c`）。当該修正はPlan本文の「No product source edits」原則に対する承認済み例外であり、Task 1 baseline admissionを可能にするための最小限の変更である。**
 
 ## Global Constraints
 
@@ -183,9 +183,18 @@ type ReviewAnswer = Readonly<{
 
 ## Completion / Human Owner checkpoint
 
-**このwriting-plans Taskの完了条件:** Design R0.1に対応する、具体的な5つの実証Taskとファイル責務、既存API・検証・エラー分類・非機能・STOP・採点ルールを明記したPlan文書を提示すること。**この文書の存在はPlanの正式採択や実証着手承認ではない。**
+**このwriting-plans Taskの完了条件:** Design R0.1に対応する、具体的な5つの実証Taskとファイル責務、既存API・検証・エラー分類・非機能・STOP・採点ルールを明記したPlan文書を提示すること。
 
-**GitHub記録:** Plan文書のCommit/Pushおよび既存PR #380への反映は実施済み。**未承認:** 本F-001限定訂正以外の追加書込み、実Host/実Session読取り・機密除去、Dataset作成、実モデルレビュー、Build/Test/CI、ソース変更、新規PR、Issue更新、Gate/HOLD、S3開始。
+**承認済み（過去の記録）:**
+- Plan文書のGitHub記録（Commit/Push、PR #380への反映）。
+- F-001限定訂正（S2-b input-shape修正、Commit `ced2449c`）。
+- Task 1〜3の実行承認。
+- Task 4〜5の「限定公開スケルトンレポート作成」として、`docs/reports/2026-11-14-justice-v6-s2c-limited-comparison.md` における未実行・比較不能の停止記録のみを公開すること。本承認は実レビュー実施、Ground Truth開示、S2-bレポート以外の評価データ公開、または比較不能を超える因果的主張を含まない。
+
+**未承認（現行状態）:** 以下はHuman Ownerによる明示的な実行承認・Host/Secrets/Network/費用/出力先の個別指定がない限り実施しない。
+- Task 4の実際の独立レビュー実行（Native-only / Native + Justice両アームのモデル呼出し）。
+- Task 5の厳格採点・限定レポートへの実際のレビュー回答・Ground Truth・S2-b診断詳細の追加。
+- `docs/reports/2026-11-14-justice-v6-s2c-limited-comparison.md` を未実行・比較不能のスケルトンを超えて更新すること。
 
 **停止条件:** 別の実証範囲または新CLI／新診断機能を要することが分かった場合は、ここで止めてOwner判断とする。追加Findingが出てもレビュー→訂正→再レビューを自動連鎖させない。
 
