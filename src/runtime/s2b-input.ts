@@ -517,7 +517,7 @@ function parsePageResponse(raw: Uint8Array, span: Span): PageParse {
     return { ok: false, count };
   }
   const cursor = parsed["cursor"];
-  if (!isRecord(cursor) || !hasOnlyKeys(cursor, CURSOR_KEYS) || !isOptional(cursor, "previous", isString) || !isOptional(cursor, "next", isNonEmptyString)) {
+  if (!isRecord(cursor) || !hasOnlyKeys(cursor, CURSOR_KEYS) || !isOptional(cursor, "previous", (v) => v === null || isString(v)) || !isOptional(cursor, "next", (v) => v === null || isNonEmptyString(v))) {
     return { ok: false, count };
   }
   if (!data.every(isMessage)) return { ok: false, count };
