@@ -2,6 +2,83 @@
 
 ## Unreleased
 
+## [4.1.0](https://github.com/yohi/justice/compare/v4.0.0...v4.1.0) (2026-11-14)
+
+
+### Features
+
+* **justice-v6:** add S1-a read-only artifact identity loader and fixtures ([#350](https://github.com/yohi/justice/issues/350)) ([23b86fd](https://github.com/yohi/justice/commit/23b86fd24f84f7260d2aaeabfa7e0cfba5d62ef6))
+* **justice:** add bounded S1-d inputs and Plan snapshot ([addeabf](https://github.com/yohi/justice/commit/addeabfe222973f9ed42ca4f3b677ab20c0abded))
+* **justice:** add conditional S1-d scope fallback ([7205da6](https://github.com/yohi/justice/commit/7205da619b199e885c8dd3442ba25cc1861f7628))
+* **justice:** add S1-d report projection ([e3e1d6e](https://github.com/yohi/justice/commit/e3e1d6ecc568931683434556e3c3a3fde22e63a1))
+* **justice:** expose standalone S1-d diagnostics CLI ([790a943](https://github.com/yohi/justice/commit/790a94340dd36c534acfa703f3e7e3d7a3169912))
+* **justice:** format S1-d Text and JSON diagnostics ([1412620](https://github.com/yohi/justice/commit/14126200f2605038da84a202f3ac632f2f317ec3))
+* **justice:** implement S1-d integrated CLI and explainable report ([694433a](https://github.com/yohi/justice/commit/694433a3976da3450dbe012264ce2501448d4d31))
+* **justice:** orchestrate S1-a–c READ_ONLY diagnostics ([9837995](https://github.com/yohi/justice/commit/98379953c6caf37442711020744c9e873083c67e))
+* **s1b:** bind evidence and assess AC reference presence ([f84f8be](https://github.com/yohi/justice/commit/f84f8be1154e0ede447c35a6a5497ffa37d0c431))
+* **s1b:** define typed evidence contract and atomic validation ([702c85f](https://github.com/yohi/justice/commit/702c85f964ae033ca581e2abcf1397db310da9a0))
+* **s1b:** implement typed evidence binder for S1-a identity candidates ([678db1f](https://github.com/yohi/justice/commit/678db1f820c0857db56120f9db272f33e07bf982))
+* **s1b:** validate S1-a comparison candidate ([ca25bc3](https://github.com/yohi/justice/commit/ca25bc33fefb0d1608e2069c529f658c93f39928))
+* **s1c:** add bounded path comparison contract ([a125e38](https://github.com/yohi/justice/commit/a125e385d2fd51db0d930f931fe120b3b3389df5))
+* **s1c:** compose scope and evidence diagnostics ([46e2c0e](https://github.com/yohi/justice/commit/46e2c0e38c5e3ac952fe2a674cac2f395ca5e96c))
+* **s1c:** extract unambiguous task scope from plan ([092b397](https://github.com/yohi/justice/commit/092b3973ae5f3d2b19a727c7b65de50bb98c678e))
+* **s1c:** implement bounded deviation rules core and acceptance fixtures ([da4b625](https://github.com/yohi/justice/commit/da4b625ead4c6764d32a19831f6bcc5af3d93e3f))
+* **s2b:** bridge frozen TaskIntent to S1-d offline ([2208d24](https://github.com/yohi/justice/commit/2208d2434e46d4679b32f1166211feb1072c33e0))
+* **s2b:** bridge frozen TaskIntent to S1-d offline ([a248a62](https://github.com/yohi/justice/commit/a248a62d139a66e67e320b7969465d04aa3def9e))
+* **s2b:** project bounded Evidence with partial status ([899aa54](https://github.com/yohi/justice/commit/899aa54d4d5b8084b66d88d0795b66217c332ae7))
+* **s2b:** project bounded Evidence with partial status ([882256d](https://github.com/yohi/justice/commit/882256d81efb21ea6185663e95dce42fbabaaec0))
+* **s2b:** validate saved v2.2.5 API inputs ([c015068](https://github.com/yohi/justice/commit/c0150686f009943ca7f373c6a9ef00334df6ad2c))
+* **s2b:** validate saved v2.2.5 API inputs ([0d886a5](https://github.com/yohi/justice/commit/0d886a5a98b87cd142ee088462a1b89d288c1055))
+
+
+### Bug Fixes
+
+* blocked Acceptanceの再評価を安全化 ([b6cd4df](https://github.com/yohi/justice/commit/b6cd4df852bd1740ca8461c322a0587cc6ab2414))
+* blocked判定と旧Decisionの復元を修正 ([5ae5e0e](https://github.com/yohi/justice/commit/5ae5e0ea5276a6b52ddb8d8038df9ce4e7ad150b))
+* GateなしのAcceptance受理を拒否 ([39db33e](https://github.com/yohi/justice/commit/39db33e81ca5699f1508129b449925db59aa106a))
+* **justice-v6-s1a:** preserve observed mismatches across incomplete references ([#350](https://github.com/yohi/justice/issues/350)) ([9df9719](https://github.com/yohi/justice/commit/9df971900a5fab86ebfb686e852169b4656a3b73))
+* **justice:** address S1-d report review findings ([1ddad06](https://github.com/yohi/justice/commit/1ddad06ef0c0c29234e73afd39cf86bb08a5a360))
+* **justice:** admit current completed review correlation ([b212eb1](https://github.com/yohi/justice/commit/b212eb1065d3823d2e4c85f20386e64aa34d0bba))
+* **justice:** advance finalization only from gate-agreeing accepted decisions ([2396af2](https://github.com/yohi/justice/commit/2396af218ff2557f3b91644068e4e44ae716eaf1))
+* **justice:** associate captured S1-d Plan snapshots ([409c730](https://github.com/yohi/justice/commit/409c730ed152dd867ff45ca11d1b0d873c6a51f9))
+* **justice:** keep missing advisory evidence as formal rework ([e4ab1d2](https://github.com/yohi/justice/commit/e4ab1d2190094191347d613999d154530ff593bc))
+* **justice:** keep observed gate failures when other evidence is unproven ([85509ee](https://github.com/yohi/justice/commit/85509eeaf0e135645451c6f342324615748e891a))
+* **justice:** persist and validate round-safe decisions ([764fe8b](https://github.com/yohi/justice/commit/764fe8be4fe5505eda2132902444cf49bf034020))
+* **justice:** persist minimal execution call attribution ([25e6121](https://github.com/yohi/justice/commit/25e6121143ef36d32ee6843e7dc412f0abe78f9f))
+* **justice:** redact S1-d paths before control escaping ([f737683](https://github.com/yohi/justice/commit/f7376835d06aefbed2cc11afd20f27ba56ddd2d9))
+* **justice:** reject mismatched observed review execution before staging ([1aefe7b](https://github.com/yohi/justice/commit/1aefe7b996f67472d21d5ef00a123182395f0445))
+* **justice:** restore plan progress only from round-safe accepted decisions ([fc758d9](https://github.com/yohi/justice/commit/fc758d9696023b744f904e136999ccba1a7a4c3d))
+* **justice:** S3-a F-001 現在のReview Correlationを確証してからGate判定 ([1776c56](https://github.com/yohi/justice/commit/1776c56f0195563336bdbb7d350344b3ab556656))
+* **justice:** S3-a F-002 実行Evidenceの帰属を永続Bindingで確証 ([dd62b1c](https://github.com/yohi/justice/commit/dd62b1ce94c87d64638e1444143f85a1a6e348b5))
+* **justice:** S3-a F-003 Round付きDecisionの生成・保存・検証 ([a8e54fb](https://github.com/yohi/justice/commit/a8e54fb15919d9ee2c5c8b1ef3ffc4cb829f33c2))
+* S1-a識別子順序とCLIリンク起動を修正 ([e9813f5](https://github.com/yohi/justice/commit/e9813f5df13dc4922f5ba5ab190c3e8a19814637))
+* S1-cの厳密キー検証を修正 ([4bad21e](https://github.com/yohi/justice/commit/4bad21ea7c79b43acae22423ea135279fff4577b))
+* S1-cの診断分類とPolicy境界を修正 ([021d42a](https://github.com/yohi/justice/commit/021d42a1277efa6050d8c8ab42f535118a206cdc))
+* S1-cポリシー境界と認可記述を修正 ([bd1212f](https://github.com/yohi/justice/commit/bd1212fc8b073f8f450b238ef55487e59ba6151d))
+* S1-cレビュー指摘を修正 ([ecde467](https://github.com/yohi/justice/commit/ecde4671557d71794f9b510f60db103b559af3b9))
+* S1-c計画と評価処理の指摘を反映 ([4185f19](https://github.com/yohi/justice/commit/4185f19bac8c5d2c314ebe620dfbe64a7f61055f))
+* S1-d Text診断情報の表示を補完 ([2d7956e](https://github.com/yohi/justice/commit/2d7956e81b1c4a525b0facd5124622b03bfa8d3e))
+* S1-dレポートの順序を決定的にする ([0888429](https://github.com/yohi/justice/commit/0888429ff6fef9378423192b9c098e0b526850fe))
+* **s1b:** bound evidence iteration and snapshot fields ([211bfd2](https://github.com/yohi/justice/commit/211bfd2be91149b9bb082b268dc0b94b3c9ba9b2))
+* **s1b:** compare task revision only for selected task ([008b28f](https://github.com/yohi/justice/commit/008b28f84024dfe1df65c2b29b1ab2ebdfe99739))
+* **s1b:** 基線検査の件数上限と重複判定を修正 ([6228356](https://github.com/yohi/justice/commit/622835623be10111867d892ec1e1e00cddcaf31f))
+* **s1b:** 基線配列の検証を一貫化 ([5a85a68](https://github.com/yohi/justice/commit/5a85a687feba1e4a841a8374b1650863a2166249))
+* **s1b:** 欠陥分類と基線キー検証を修正 ([3281e82](https://github.com/yohi/justice/commit/3281e82ba55fd41451552a4fa36747e182179b97))
+* **s1c:** harden ChangeSet validation, independent diagnostics, CRLF limits ([8ac7f73](https://github.com/yohi/justice/commit/8ac7f730d0a7a9c02364732e6da4102ab2bd15ba))
+* **s2b:** accept null cursor.previous and cursor.next in page responses ([ced2449](https://github.com/yohi/justice/commit/ced2449c1b5fc959da66fe98089bfaf5f6352699))
+* SonarCloud指摘を修正 ([4bcf80b](https://github.com/yohi/justice/commit/4bcf80b335627675cb07aa847bf8018bfd1a9847))
+* レビュー相関関数の古い参照を修正 ([8a0097e](https://github.com/yohi/justice/commit/8a0097ef308be0cfd0c199e61f4c1a8adf636540))
+* 決定記録とレビュー実行の検証を強化 ([aaba468](https://github.com/yohi/justice/commit/aaba4680899b9ae767f97002e8c96aed1a79a70a))
+* 無効Intentのscope情報を投影しない ([35dde1c](https://github.com/yohi/justice/commit/35dde1c0bb59dab4914bad3e127a69e9667dc1fb))
+* 疎配列のS1-a基線を拒否 ([0d91ed3](https://github.com/yohi/justice/commit/0d91ed3b4a87d4346b11fab1f97505a5c6b483e8))
+* 疎配列のS1-a基線を拒否 ([a1e5add](https://github.com/yohi/justice/commit/a1e5add8978641f24a444c43482343d306b94047))
+* 評価記録と実行証跡の整合性を修正 ([a2ed8b8](https://github.com/yohi/justice/commit/a2ed8b841e40eb0b1ad04c611f37f1ee37bc024e))
+
+
+### Performance Improvements
+
+* **justice:** index evidence refs once per execution admission ([288b47d](https://github.com/yohi/justice/commit/288b47d14aea4debdb448870a11bea56f476d7ce))
+
 ## [4.0.0](https://github.com/yohi/justice/compare/v3.0.0...v4.0.0) (2026-09-27)
 
 
