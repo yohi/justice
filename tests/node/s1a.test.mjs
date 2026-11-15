@@ -125,7 +125,7 @@ test('CLI invoked through a symlink handles unknown commands with exit 64',async
  }finally{await rm(root,{recursive:true,force:true});}
 });
 test('CLI module import with non-file argv[1] does not crash',()=>{
- const result=spawnSync(execPath,['--input-type=module','-e','import("./dist/runtime/s1a-cli.js")'],{encoding:'utf8'});
+ const result=spawnSync(execPath,['--input-type=module','-e','process.argv[1]="-"; await import("./dist/runtime/s1a-cli.js")'],{encoding:'utf8'});
  assert.equal(result.status,0);
 });
 test('N-DIAG-01/02 complete JSON matches contract and never emits input secrets',async()=>{
