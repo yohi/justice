@@ -22,7 +22,15 @@ export async function runS1aCli(argv:readonly string[],source:S1aReadOnlySource)
   return {stdout:JSON.stringify(result)+'\n',exitCode};
  }catch{return invalid();}
 }
-if(process.argv[1]&&realpathSync(process.argv[1])===realpathSync(fileURLToPath(import.meta.url))){
+let isDirectEntry=false;
+if(process.argv[1]){
+ try{
+  isDirectEntry=realpathSync(process.argv[1])===realpathSync(fileURLToPath(import.meta.url));
+ }catch{
+  isDirectEntry=false;
+ }
+}
+if(isDirectEntry){
  runS1aCli(process.argv.slice(2),createS1aReadOnlySource()).then(r=>{process.stdout.write(r.stdout);process.exitCode=r.exitCode;},()=>{
   const safe=makeS1aResult('unknown',[makeCheck('task-intent','cli_arguments','UNKNOWN','CLI_ARGUMENT_INVALID','INPUT_INVALID')]);
   process.stdout.write(JSON.stringify(safe)+'\n');process.exitCode=64;
