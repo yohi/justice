@@ -28,7 +28,7 @@
 | G-EXEC | 実装、テスト、build、runtimeを対象ごとに別途Owner許可 | **NOT_AUTHORIZED** |
 | G-ACCEPT | 84基準試験、CT-R9-001..028、CF/EF、CLI/Remote byte identity、TOCTOU、Gate独立判定 | **EXECUTED_PASS=0 / BLOCKED** |
 
-`G-DOC`がPASSでも`G-ARCH/G-EXEC`を自動解除しない。失敗・未確認はfail-closed。
+`G-ACCEPT`は`R9-IMP-08`の開始前提ではなく、`IMP-06`・`IMP-07`および独立の同一バイト証拠を入力とする独立監査とHuman Ownerの個別判断を経て確定する**受入判定結果**である。現時点は`EXECUTED_PASS=0 / BLOCKED`を維持する。`G-DOC`がPASSでも`G-ARCH/G-OWNER/G-SCOPE/G-EXEC`を自動解除しない。失敗・未確認はfail-closed。
 
 ## P-03. Document-only tasks — current authorized scope
 
@@ -53,7 +53,7 @@
 | R9-IMP-05 | G-SCOPE/G-EXEC | Implementer | staging/fs/resource cleanup境界 | 不明所有のunlink禁止、quarantine不変、TOCTOU拒否 | **BLOCKED** |
 | R9-IMP-06 | G-EXEC | Test Engineer | CF-R9-001..019、EF-R9-020..026、CT-R9-001..028 | 必須ネガティブ反例・失敗時0の意味を区別し、実行証拠を作成 | **BLOCKED** |
 | R9-IMP-07 | G-EXEC | Test Engineer | R8 84件基準 + 正規結果整合 | 比較可能な固定基準、退行テスト結果、mock/worker/R8 pairing | **BLOCKED** |
-| R9-IMP-08 | G-ACCEPT | Independent Reviewer + Owner | 実行証拠監査・Gate判断 | 受入条件が独立に満たされ、Ownerが個別に採択 | **BLOCKED** |
+| R9-IMP-08 | G-ARCH/G-OWNER/G-SCOPE/G-EXEC（適用Gateの承認）＋IMP-06/07実行証拠・独立の同一バイト証拠 | Independent Reviewer + Owner | 実行証拠の独立監査・G-ACCEPT判定 | 受入条件を独立に検証し、Ownerが個別に採択した場合に限りG-ACCEPTの結果を確定 | **BLOCKED** |
 
 上表は将来の作業内容の**分類**であり、実装順序・ファイル編集・試験実行を指示する承認ではない。`R9-IMP-01` も新規成立可能性探索を現時点で許可しない。
 
