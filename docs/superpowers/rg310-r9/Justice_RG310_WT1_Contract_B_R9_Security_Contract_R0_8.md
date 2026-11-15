@@ -25,7 +25,7 @@
 
 ## 01 — Executive Summary & Design Premise
 
-Following the independent static review of `Justice_RG310_WT1_Contract_B_R9_Security_Contract_R0_7.md` (SHA-256: `8dce32ee29eeb42eeabc34ad056667eade7d876594e118dc7640b7d9ed1553f6`), which returned `REVISION_REQUIRED / R9_IMPLEMENTATION_HOLD` with findings `FND-R9-CON-R07-001` through `FND-R9-CON-R07-004`, this **R0.8 Limited Correction Document** delivers the definitive, uncompromised, mathematically closed, and runtime-verified security architecture specification for WT1 Contract B R9.
+Following the independent static review of `Justice_RG310_WT1_Contract_B_R9_Security_Contract_R0_7.md` (SHA-256: `8dce32ee29eeb42eeabc34ad056667eade7d876594e118dc7640b7d9ed1553f6`), which returned `REVISION_REQUIRED / R9_IMPLEMENTATION_HOLD` with findings `FND-R9-CON-R07-001` through `FND-R9-CON-R07-004`, this **R0.8 Limited Correction Document** presents a proposed security architecture specification for WT1 Contract B R9. It is a static design document, not a runtime-verified result; tests were not executed and the security claims remain unproven (see §16).
 
 This correction incorporates the confirmed Human Owner Boundary Decision:
 `OWNER_BOUNDARY_DECISION = ACCEPTED`: **Defend against unauthorized Callers holding genuine StageEligibility who attempt to exploit public Harness Session issuance APIs.**
@@ -1246,7 +1246,7 @@ stateDiagram-v2
   - *NOT_REPRODUCED Criteria*: Harness session cannot be initialized in test environment.
   - *NOT_PROVEN Criteria*: Memory corruption tampering with V8 internal object pointers.
   - *Scope Limitation*: Offline TypeScript mock harness execution.
-  - *Composition Root Bypass Refutation*: Formally and experimentally proves that the public `ArtifactVerifier.coordinatePublish()` entrypoint and session issuance authority cannot be circumvented, spoofed, or replayed to execute unauthorized publications even when caller possesses genuine StageEligibility.
+  - *Composition Root Bypass Refutation*: Specifies the intended counter-evidence for attempts to circumvent, spoof, or replay the public `ArtifactVerifier.coordinatePublish()` entrypoint and session issuance authority, including callers possessing genuine StageEligibility. This is a proposed test criterion, not an experimental result; the tests were not executed and the refutation remains unproven (see §16).
   - *Related Finding*: FND-R9-CON-R07-001, FND-R9-CON-R07-002, FND-R9-CON-R07-003, FND-R9-CON-R06-001, FND-R9-CON-R06-002, FND-R9-CON-R06-003
   - *Related Failure Path*: EF-R9-026
 

@@ -35,7 +35,7 @@ WT1 Contract Bが、stagingした一意なtarballのバイト整合性、正規�
 
 ### Owner採択済みの不変条件
 
-- `OWNER_ADVERSARY_BOUNDARY = B0_PLUS_B1 / ACCEPTED`。B0はgenuine StageEligibilityを持つ非認可Callerの公開操作、B1は同一worker/realmで初期化より前の任意JS・先行import・公開bootstrap競争・prototype/global操作などを含む。通常B1操作を理由なくB2へ再分類しない。
+- `OWNER_ADVERSARY_BOUNDARY = B0 / ACCEPTED; B1 / DEFENSE_TARGET, OWNER_ADOPTION_UNCONFIRMED`。R0.8で確認できる採択範囲は、genuine StageEligibilityを持つ非認可Callerの公開Harness Session発行API悪用（B0）の防御である。B1（同一worker/realmで初期化より前の任意JS・先行import・公開bootstrap競争・prototype/global操作など）は設計上の防御対象として維持するが、Ownerの採択記録が確認できるまでは採択済みと扱わない。通常B1操作を理由なくB2へ再分類しない。
 - `THREE_FILE_CONSTRAINT = MAINTAINED`（A/M/T）。緩和は将来のOwner判断候補であり**未採択**。
 - `FEASIBILITY_NOT_ESTABLISHED`。3ファイル方式の**実現可能性**も**普遍的不可能性**も未証明。
 - `R9_IMPLEMENTATION_HOLD = ACTIVE`、`STOP-01..10 = ACTIVE`、`CT-R9 EXECUTED_PASS=0`。
