@@ -1,7 +1,19 @@
-import {describe,it,expect} from 'vitest';
+import {describe,it,expect,vi} from 'vitest';
+import {argv} from 'node:process';
 import {runS1aCli} from '../../src/runtime/s1a-cli.js';
 import {s1aFixture,jsonBytes,sha256} from '../helpers/s1a-fixtures.js';
 describe('justice-s1a standalone CLI',()=>{
+ it('module import survives a non-file process argv entry',async()=>{
+  const originalArgv1=argv[1];
+  argv[1]='/nonexistent/s1a-cli-entry';
+  vi.resetModules();
+  try{
+   await import('../../src/runtime/s1a-cli.js');
+  }finally{
+   if(originalArgv1===undefined)delete argv[1];
+   else argv[1]=originalArgv1;
+  }
+ });
  it('P-01 emits deterministic MATCH without Owner authorization',async()=>{
   const f=s1aFixture();const argv=['check','--manifest','manifest','--manifest-sha256',f.input.expectedManifestSha256!,'--intent','intent','--artifacts-root','root'];
   const r=await runS1aCli(argv,f.source);expect(r.exitCode).toBe(0);expect(r.stdout).toBe((await runS1aCli(argv,f.source)).stdout);
