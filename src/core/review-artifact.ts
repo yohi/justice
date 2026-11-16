@@ -1145,6 +1145,18 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
       staged.parentSessionId,
       async (): Promise<ReviewCompletionOutcome> => {
         const records = await dependencies.readDurableRecords();
+        const hasCompletionStaging = records.some(
+          (record) =>
+            record.recordType === "observation" &&
+            record.kind === "review_completion_staged" &&
+            record.parentSessionId === staged.parentSessionId &&
+            record.staging.callId === staged.callId &&
+            sameReviewCorrelation(record.staging.correlation, staged.correlation),
+        );
+        if (hasCompletionStaging) {
+          await dependencies.recordAdvisory("review_staged_failure_completion_conflict");
+          return { kind: "stale" };
+        }
         const existingTerminal = findMatchingArtifactFailureTerminal(records, staged);
         if (existingTerminal !== undefined) {
           const reservation = usableReservationForTerminal(records, existingTerminal);

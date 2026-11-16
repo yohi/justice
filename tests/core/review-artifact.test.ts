@@ -151,7 +151,7 @@ describe("review artifact completion (Task 3.6)", () => {
     });
   });
 
-  it("does not fail-terminalize or clean an attempt whose completion staging is rejected", async () => {
+  it("does not let failure staging terminalize an attempt whose completion staging is rejected", async () => {
     const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
     const stagedRecord = {
       schemaVersion: 1 as const,
@@ -197,6 +197,19 @@ describe("review artifact completion (Task 3.6)", () => {
       artifactId: fixture.reservation.artifactId,
       artifactPath: fixture.reservation.artifactPath,
     });
+    await fixture.appendPendingRecord({
+      schemaVersion: 1,
+      timestamp: "2026-09-05T00:00:00.800Z",
+      agentId: fixture.agentId,
+      sessionId: fixture.parentSessionId,
+      writerId: fixture.writerId,
+      recordType: "observation",
+      kind: "review_artifact_failure_staged",
+      parentSessionId: fixture.parentSessionId,
+      callId: fixture.callId,
+      correlation: fixture.correlation,
+      terminalReason: "artifact_read_failed",
+    });
 
     await fixture.completion.recoverStagedReviewCompletionsAfterRestart();
 
@@ -208,6 +221,10 @@ describe("review artifact completion (Task 3.6)", () => {
     expect(records.filter(
       (record) => record.recordType === "observation" &&
         record.kind === "review_artifact_failure_staged",
+    )).toHaveLength(1);
+    expect(records.filter(
+      (record) => record.recordType === "observation" &&
+        record.kind === "review_artifact_cleanup",
     )).toHaveLength(0);
     expect(await fixture.artifactExists()).toBe(true);
   });
