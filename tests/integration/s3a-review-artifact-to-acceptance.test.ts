@@ -901,3 +901,152 @@ describe("S3-b staged restart recovery", () => {
     expect(taskAcceptanceDecisions(after)).toHaveLength(1);
   });
 });
+
+/**
+ * S3-b Task 6 — integration acceptance across the evaluator, the completion domain
+ * and the staged restart entry (single process). Written after Tasks 1–5, so these
+ * are acceptance/regression checks, not RED-first tests.
+ */
+describe("S3-b integration acceptance", () => {
+  type Scope = "task" | "plan";
+  const stateOf = (records: readonly PersistedLogRecord[], scope: Scope): string | undefined => {
+    const lifecycle = project(records, "2026-09-05T01:00:00.000Z").lifecycle;
+    return scope === "task"
+      ? lifecycle.taskStates.values().next().value
+      : lifecycle.finalization.values().next().value?.state;
+  };
+  const lifecycleRecordsTo = (records: readonly PersistedLogRecord[], to: string): number =>
+    records.filter(
+      (record) =>
+        "kind" in record &&
+        (record.kind === "task_lifecycle_transition" ||
+          record.kind === "plan_finalization_transition") &&
+        record.to === to,
+    ).length;
+  const decisionCount = (records: readonly PersistedLogRecord[]): number =>
+    records.filter((record) => record.recordType === "decision").length;
+  const restart = async (
+    fixture: ReviewArtifactCompletionFixture,
+  ): Promise<{ readonly kind: string }> => {
+    fixture.setLifecycleAppendFault(() => undefined);
+    const staged = ofKind(await fixture.durableRecords(), "review_completion_staged");
+    if (staged[0] === undefined) throw new Error("expected a staging");
+    return fixture.completion.recoverStagedReviewCompletion(staged[0]);
+  };
+  const failingGate = (verdict: "WARN" | "FAIL") =>
+    async ({ context }: EvaluateRulesInput): Promise<unknown> => ({
+      recordType: "decision",
+      verdict,
+      reachableEnforcementLevel: "L1",
+      appliedEnforcementLevel: "L0",
+      ruleResults: [],
+      ...(context.scope === "task"
+        ? {
+            gateType: "task",
+            taskId: context.taskExecutionRef.taskId,
+            taskExecutionRef: context.taskExecutionRef,
+            reviewRound: context.reviewRound,
+          }
+        : {
+            gateType: "plan",
+            authorizationId: context.authorizationId,
+            planPath: context.planPath,
+            finalizationAttemptId: context.finalizationAttemptId,
+            finalReviewRound: context.finalReviewRound,
+          }),
+    });
+
+  it.each([
+    ["task", "WARN"],
+    ["task", "FAIL"],
+    ["plan", "WARN"],
+    ["plan", "FAIL"],
+  ] as const)(
+    "S3-b: %s Gate %s with durable decisions and a failed Lifecycle append converges to rework after restart, never to acceptance",
+    async (scope, verdict) => {
+      const fixture = await arrangeReviewArtifactCompletionFixture("claimed", { scope });
+      await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
+      fixture.evaluateRules.mockImplementation(failingGate(verdict));
+      const rework = scope === "task" ? "rework_required" : "final_rework_required";
+      const accepted = scope === "task" ? "accepted" : "complete";
+      fixture.setLifecycleAppendFault(({ to }) => (to === rework ? "fail" : undefined));
+
+      await expect(fixture.consume()).resolves.toEqual({ kind: "blocked" });
+      const before = await fixture.durableRecords();
+      expect(decisionCount(before)).toBe(2);
+      expect(lifecycleRecordsTo(before, rework)).toBe(0);
+
+      await expect(restart(fixture)).resolves.toEqual({ kind: "terminalized" });
+      await expect(restart(fixture)).resolves.toEqual({ kind: "terminalized" });
+
+      const after = await fixture.durableRecords();
+      expect(stateOf(after, scope)).toBe(rework);
+      expect(lifecycleRecordsTo(after, rework)).toBe(1);
+      expect(lifecycleRecordsTo(after, accepted)).toBe(0);
+      expect(decisionCount(after)).toBe(2);
+      expect(fixture.evaluateRules).toHaveBeenCalledTimes(1);
+      expect(fixture.releaseCompletedAuthorization).not.toHaveBeenCalled();
+    },
+  );
+
+  it("S3-b: a Lifecycle append that is acknowledged but not durable is never completed, and one retry repairs it", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+    await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
+    fixture.setLifecycleAppendFault(({ to }) => (to === "accepted" ? "lose" : undefined));
+
+    await expect(fixture.consume()).resolves.toEqual({ kind: "blocked" });
+    expect(fixture.gateEvaluation).toHaveBeenCalledTimes(1);
+    await expect(fixture.gateEvaluation.mock.results[0]?.value).resolves.toEqual({
+      kind: "blocked",
+      advisory: "lifecycle_readback_not_verified",
+    });
+    expect(stateOf(await fixture.durableRecords(), "task")).toBe("gate_pending");
+
+    await expect(restart(fixture)).resolves.toEqual({ kind: "terminalized" });
+
+    const after = await fixture.durableRecords();
+    expect(stateOf(after, "task")).toBe("accepted");
+    expect(lifecycleRecordsTo(after, "accepted")).toBe(1);
+    expect(decisionCount(after)).toBe(2);
+  });
+
+  it("S3-b: concurrent recoveries of the same correlation converge with one transition and no duplicate decision", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+    await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
+    fixture.setLifecycleAppendFault(({ to }) => (to === "accepted" ? "fail" : undefined));
+    await expect(fixture.consume()).resolves.toEqual({ kind: "blocked" });
+    fixture.setLifecycleAppendFault(() => undefined);
+    const staged = ofKind(await fixture.durableRecords(), "review_completion_staged")[0];
+    if (staged === undefined) throw new Error("expected a staging");
+
+    const outcomes = await Promise.all([
+      fixture.completion.recoverStagedReviewCompletion(staged),
+      fixture.completion.recoverStagedReviewCompletion(staged),
+      fixture.completion.recoverStagedReviewCompletion(staged),
+    ]);
+
+    expect(outcomes).toEqual([
+      { kind: "terminalized" },
+      { kind: "terminalized" },
+      { kind: "terminalized" },
+    ]);
+    const after = await fixture.durableRecords();
+    expect(lifecycleRecordsTo(after, "accepted")).toBe(1);
+    expect(decisionCount(after)).toBe(2);
+    expect(completedTerminals(after)).toHaveLength(1);
+  });
+
+  it("S3-b: the normal clean completion still decides exactly once with no recovery needed", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+    await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
+
+    await expect(fixture.consume()).resolves.toEqual({ kind: "terminalized" });
+    await expect(restart(fixture)).resolves.toEqual({ kind: "terminalized" });
+
+    const after = await fixture.durableRecords();
+    expect(stateOf(after, "task")).toBe("accepted");
+    expect(lifecycleRecordsTo(after, "accepted")).toBe(1);
+    expect(decisionCount(after)).toBe(2);
+    expect(fixture.evaluateRules).toHaveBeenCalledTimes(1);
+  });
+});

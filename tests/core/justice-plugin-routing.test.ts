@@ -1849,3 +1849,99 @@ describe("JusticePlugin accepted task progress requires the durable accepted Lif
     expect(records.filter((record) => record.kind === "plan_finalization_transition")).toEqual([]);
   });
 });
+
+describe("JusticePlugin S3-b restart acceptance (initialize order)", () => {
+  it("S3-b: initialize() recovers the Lifecycle from the staged review, then ticks progress, then advances finalization — idempotently", async () => {
+    const fs: MockFileSystem = createMockFileSystem({ "plan.md": progressPlan });
+    const first = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    const authorization = await internalsOf(first).authorizationStore.approve({
+      sessionId: "s-1",
+      planPath: "plan.md",
+      planFingerprint: computePlanFingerprint(progressPlan, ["task-1"]),
+      canonicalSnapshot: buildCanonicalSnapshot(progressPlan, ["task-1"]),
+      approvedAt: "2026-09-05T00:00:00.000Z",
+    });
+    if (authorization === null) throw new Error("test setup: authorization approval failed");
+    const authorizationId = authorization.authorizationId;
+    const correlation = taskReviewCorrelation(authorizationId);
+    // Durable state after "Gate + Acceptance persisted, Lifecycle append failed, process died".
+    await seedAcceptedTaskLifecycle(first, authorizationId, "task-1", "gate_pending");
+    await seedClaimedReviewDispatch(first, authorizationId);
+    await appendObservation(first, {
+      recordType: "observation",
+      kind: "delegated_execution_binding",
+      relation: {
+        kind: "delegated_execution_relation_observed",
+        provenance: "observed",
+        runtimeEventId: "event-review-call",
+        parentSessionId: "s-1",
+        parentCallId: "review-call",
+        childSessionId: "child-review-call",
+        category: "sp-review",
+      },
+      binding: {
+        relationId: "event-review-call",
+        parentSessionId: "s-1",
+        parentCallId: "review-call",
+        childSessionId: "child-review-call",
+        scope: {
+          kind: "task",
+          taskExecutionRef: { authorizationId, taskId: "task-1", attemptId: "attempt-1" },
+          reviewRound: 1,
+        },
+        correlation,
+      },
+    });
+    await seedCompletedReviewAfterClaim(first, authorizationId);
+    await seedAcceptedDecision(first, authorizationId);
+    let planWrites = 0;
+    const writeFile = fs.writeFile.bind(fs);
+    fs.writeFile = async (path, content): Promise<void> => {
+      if (path === "plan.md") planWrites += 1;
+      await writeFile(path, content);
+    };
+    const summarize = async (plugin: JusticePlugin): Promise<Record<string, number>> => {
+      const records = await internalsOf(plugin).observationLogStore.readAll();
+      const count = (predicate: (record: Record<string, unknown>) => boolean): number =>
+        records.filter(predicate).length;
+      return {
+        accepted: count(
+          (record) => record.kind === "task_lifecycle_transition" && record.to === "accepted",
+        ),
+        decisions: count((record) => record.recordType === "decision"),
+        terminals: count(
+          (record) => record.kind === "review_dispatch_transition" && record.to === "terminal",
+        ),
+        finalReviewPending: count(
+          (record) =>
+            record.kind === "plan_finalization_transition" && record.to === "final_review_pending",
+        ),
+      };
+    };
+
+    const restarted = new JusticePlugin(fs, fs, { writerId: "w-restarted-1" });
+    await restarted.initialize();
+
+    expect(await summarize(restarted)).toEqual({
+      accepted: 1,
+      decisions: 2,
+      terminals: 1,
+      finalReviewPending: 1,
+    });
+    const plan = await fs.readFile("plan.md");
+    expect(plan).toContain("- [x] first");
+    expect(plan).toContain("- [x] second");
+    expect(planWrites).toBe(1);
+
+    const again = new JusticePlugin(fs, fs, { writerId: "w-restarted-2" });
+    await again.initialize();
+
+    expect(await summarize(again)).toEqual({
+      accepted: 1,
+      decisions: 2,
+      terminals: 1,
+      finalReviewPending: 1,
+    });
+    expect(planWrites).toBe(1);
+  });
+});
