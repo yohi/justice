@@ -102,7 +102,27 @@ export type ReviewArtifactCompletionFixture = {
   >;
   /** Consumes a review completion through the real completion domain with explicit input. */
   readonly consumeWith: (input: ReviewCompletionInput) => Promise<ReviewCompletionOutcome>;
+  /** S3-b: the real completion domain (restart recovery entries). */
+  readonly completion: ReturnType<typeof createReviewCompletionDomain>;
+  /** S3-b: `sp-review` for the task scope, `sp-final-review` for the plan scope. */
+  readonly expectedCategory: "sp-review" | "sp-final-review";
+  /**
+   * S3-b: injects a Lifecycle append fault. `fail` reports a failed append; `lose`
+   * reports `committed` without persisting the record (readback cannot see it).
+   */
+  readonly setLifecycleAppendFault: (fault: LifecycleAppendFault) => void;
+  /** S3-b: spy for the Plan `complete` Authorization release side effect. */
+  readonly releaseCompletedAuthorization: ReturnType<
+    typeof vi.fn<(parentSessionId: string, authorizationId: string) => Promise<void>>
+  >;
+  /** S3-b: a complete review worker result carrying one finding. */
+  readonly findingsReviewWorkerJson: string;
 };
+
+export type LifecycleAppendFault = (transition: {
+  readonly from: string;
+  readonly to: string;
+}) => "fail" | "lose" | undefined;
 
 export type ReviewCompletionDependenciesForTest = Parameters<
   typeof createReviewCompletionDomain
@@ -126,7 +146,10 @@ export function assembleStagingForTest(): typeof assembleReviewCompletionStaging
  */
 export async function arrangeReviewArtifactCompletionFixture(
   mode: CompletionFixtureMode,
+  options: { readonly scope?: "task" | "plan" } = {},
 ): Promise<ReviewArtifactCompletionFixture> {
+  const planScope = options.scope === "plan";
+  const expectedCategory = planScope ? ("sp-final-review" as const) : ("sp-review" as const);
   const files = createMockFileSystem();
   const parentSessionId = "parent-review-artifact";
   const childSessionId = "child-review-artifact";
@@ -156,11 +179,21 @@ export async function arrangeReviewArtifactCompletionFixture(
     taskId: "task-1",
     attemptId: "attempt-review-artifact",
   };
-  const correlation: ReviewCorrelation = {
-    reviewKind: "task-review",
-    taskExecutionRef,
-    reviewRound: 1,
-  };
+  const finalizationAttemptId = "finalization-review-artifact";
+  const correlation: ReviewCorrelation = planScope
+    ? {
+        reviewKind: "final-review",
+        planPath,
+        authorizationId: authorization.authorizationId,
+        planFingerprint: authorization.planFingerprint,
+        finalizationAttemptId,
+        finalReviewRound: 1,
+      }
+    : {
+        reviewKind: "task-review",
+        taskExecutionRef,
+        reviewRound: 1,
+      };
 
   const artifactPath = ".justice/reviews/review-artifact.json";
   const leasePath = ".justice/reviews/.leases/review-artifact.json.lease";
@@ -227,7 +260,7 @@ export async function arrangeReviewArtifactCompletionFixture(
     transitionId: "review-artifact-pending",
     parentSessionId,
     correlation,
-    expectedCategory: "sp-review",
+    expectedCategory,
     from: null,
     to: "pending",
   });
@@ -237,7 +270,7 @@ export async function arrangeReviewArtifactCompletionFixture(
     transitionId: "review-artifact-claimed",
     parentSessionId,
     correlation,
-    expectedCategory: "sp-review",
+    expectedCategory,
     from: "pending",
     to: "claimed",
     callId,
@@ -254,18 +287,28 @@ export async function arrangeReviewArtifactCompletionFixture(
         parentSessionId,
         parentCallId: callId,
         childSessionId,
-        category: "sp-review",
+        category: expectedCategory,
       },
       binding: {
         relationId: "review-artifact-execution",
         parentSessionId,
         parentCallId: callId,
         childSessionId,
-        scope: {
-          kind: "task",
-          taskExecutionRef,
-          reviewRound: 1,
-        },
+        scope:
+          correlation.reviewKind === "final-review"
+            ? {
+                kind: "finalization",
+                planPath: correlation.planPath,
+                authorizationId: correlation.authorizationId,
+                planFingerprint: correlation.planFingerprint,
+                finalizationAttemptId: correlation.finalizationAttemptId,
+                finalReviewRound: correlation.finalReviewRound,
+              }
+            : {
+                kind: "task",
+                taskExecutionRef,
+                reviewRound: 1,
+              },
         correlation,
       },
     });
@@ -283,16 +326,37 @@ export async function arrangeReviewArtifactCompletionFixture(
     ["worker_reported", "evidence_pending"],
     ["evidence_pending", "review_pending"],
   ];
-  for (const [from, to] of lifecycleSteps) {
-    await appendPendingRecord({
-      ...envelope(),
-      kind: "task_lifecycle_transition",
-      parentSessionId,
-      taskExecutionRef,
-      from,
-      to,
-    });
+  if (planScope) {
+    // S3-b: seed the Finalization lifecycle into `final_review_pending`.
+    for (const [from, to] of [
+      ["tasks_pending", "all_tasks_accepted"],
+      ["all_tasks_accepted", "final_review_pending"],
+    ] as const) {
+      await appendPendingRecord({
+        ...envelope(),
+        kind: "plan_finalization_transition",
+        parentSessionId,
+        authorizationId: authorization.authorizationId,
+        planPath,
+        finalizationAttemptId,
+        finalReviewRound: 1,
+        from,
+        to,
+      });
+    }
+  } else {
+    for (const [from, to] of lifecycleSteps) {
+      await appendPendingRecord({
+        ...envelope(),
+        kind: "task_lifecycle_transition",
+        parentSessionId,
+        taskExecutionRef,
+        from,
+        to,
+      });
+    }
   }
+  let lifecycleAppendFault: LifecycleAppendFault = () => undefined;
 
   // Resolve through the real AuthorizationStore so a durable revocation is observed.
   const findAuthorizationById: ReviewCompletionDependenciesForTest["findAuthorizationById"] = (
@@ -305,11 +369,17 @@ export async function arrangeReviewArtifactCompletionFixture(
     });
   const appendTaskLifecycleTransition: ReviewCompletionDependenciesForTest["appendTaskLifecycleTransition"] =
     async (input) => {
+      const fault = lifecycleAppendFault(input);
+      if (fault === "fail") return { kind: "failed" as const };
+      if (fault === "lose") return { kind: "committed" as const };
       await appendPendingRecord({ ...envelope(), kind: "task_lifecycle_transition", ...input });
       return { kind: "committed" as const };
     };
   const appendPlanFinalizationTransition: ReviewCompletionDependenciesForTest["appendPlanFinalizationTransition"] =
     async (input) => {
+      const fault = lifecycleAppendFault(input);
+      if (fault === "fail") return { kind: "failed" as const };
+      if (fault === "lose") return { kind: "committed" as const };
       await appendPendingRecord({ ...envelope(), kind: "plan_finalization_transition", ...input });
       return { kind: "committed" as const };
     };
@@ -373,6 +443,9 @@ export async function arrangeReviewArtifactCompletionFixture(
   const cleanupArtifact: ReviewCompletionDependenciesForTest["cleanupArtifact"] = async (
     usableReservation,
   ) => baseArtifactIo.cleanup(usableReservation);
+  const releaseCompletedAuthorization = vi.fn(
+    async (_parentSessionId: string, _authorizationId: string): Promise<void> => undefined,
+  );
   const completion = createReviewCompletionDomain({
     readDurableRecords: () => logStore.readAll(),
     findAuthorizationById,
@@ -408,6 +481,7 @@ export async function arrangeReviewArtifactCompletionFixture(
     evaluateGatePendingAttemptWithinAuthorizationReviewBoundary: gateEvaluation,
     appendTaskLifecycleTransition,
     appendPlanFinalizationTransition,
+    releaseCompletedAuthorization,
     recordAdvisory,
     dispatch: {
       withReviewDispatchParentSessionClaim: boundary.withParentSession,
@@ -485,8 +559,8 @@ export async function arrangeReviewArtifactCompletionFixture(
   if (mode === "terminalized") {
     const reviewArtifact = {
       schemaVersion: 1 as const,
-      reviewKind: "task-review" as const,
-      reviewSource: "sp-review" as const,
+      reviewKind: correlation.reviewKind,
+      reviewSource: expectedCategory,
       correlation,
       observedExecution,
       complete: true,
@@ -514,7 +588,7 @@ export async function arrangeReviewArtifactCompletionFixture(
       transitionId: "review-artifact-terminal",
       parentSessionId,
       correlation,
-      expectedCategory: "sp-review",
+      expectedCategory,
       from: "claimed",
       to: "terminal",
       callId,
@@ -617,5 +691,18 @@ export async function arrangeReviewArtifactCompletionFixture(
     injectReviewRequiredDirective,
     gateEvaluation,
     consumeWith: (input) => completion.consumeReviewCompletion(input),
+    completion,
+    expectedCategory,
+    setLifecycleAppendFault: (fault) => {
+      lifecycleAppendFault = fault;
+    },
+    releaseCompletedAuthorization,
+    findingsReviewWorkerJson: JSON.stringify({
+      schemaVersion: 1,
+      complete: true,
+      findings: [
+        { itemKey: "finding-1", severity: "major", summary: "summary", location: "src/file.ts" },
+      ],
+    }),
   };
 }

@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
   authorizationIdFor,
-  findCurrentAcceptanceDecision,
-  findCurrentGateDecision,
+  inspectDurableLifecycleTransition,
+  inspectFormalReviewCompletion,
   isCurrentActiveAuthorization,
 } from "./acceptance-decision";
 import {
@@ -491,6 +491,68 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
     }
   };
 
+  /**
+   * S3-b: the durable terminal record of `terminal`'s parent/correlation must be
+   * unique and be this very terminal (same transition, call and reason).
+   */
+  const terminalIsUniqueInHistory = (
+    records: readonly PersistedLogRecord[],
+    terminal: ReviewDispatchTransitionRecord,
+  ): boolean => {
+    const candidates = records.filter(
+      (record): record is ReviewDispatchTransitionRecord =>
+        record.recordType === "observation" &&
+        record.kind === "review_dispatch_transition" &&
+        record.to === "terminal" &&
+        record.parentSessionId === terminal.parentSessionId &&
+        sameReviewCorrelation(record.correlation, terminal.correlation),
+    );
+    const only = candidates[0];
+    return (
+      candidates.length === 1 &&
+      only !== undefined &&
+      only.transitionId === terminal.transitionId &&
+      ("callId" in only ? only.callId : undefined) ===
+        ("callId" in terminal ? terminal.callId : undefined) &&
+      "terminalReason" in only &&
+      "terminalReason" in terminal &&
+      only.terminalReason === terminal.terminalReason
+    );
+  };
+
+  const isLifecycleAt = (
+    lifecycle: ReturnType<typeof project>["lifecycle"],
+    terminal: ReviewDispatchTransitionRecord,
+    taskState: string,
+    planState: string,
+  ): boolean => {
+    const correlation = terminal.correlation;
+    if (correlation.reviewKind === "task-review")
+      return (
+        lifecycle.taskStates.get(
+          taskLifecycleKey(terminal.parentSessionId, correlation.taskExecutionRef),
+        ) === taskState
+      );
+    return Array.from(lifecycle.finalization.values()).some(
+      (finalization) =>
+        finalization.parentSessionId === terminal.parentSessionId &&
+        finalization.authorizationId === correlation.authorizationId &&
+        finalization.planPath === correlation.planPath &&
+        finalization.finalizationAttemptId === correlation.finalizationAttemptId &&
+        finalization.finalReviewRound === correlation.finalReviewRound &&
+        finalization.state === planState,
+    );
+  };
+
+  /**
+   * Applies the outcome of a durable review terminal. S3-b (Design R0.1.2 §2.5):
+   * `terminalized` is returned only from a FRESH durable readback.
+   * - `completed`: the Gate evaluator answer alone is never enough; the readback must
+   *   prove formal completion (agreeing Gate/Acceptance + durable terminal Lifecycle).
+   * - `completed_with_findings`: Review-Rework only. No Gate/Acceptance is created;
+   *   the durable `review_pending -> rework_required` (Plan:
+   *   `final_review_pending -> final_rework_required`) transition must be proven.
+   */
   const ensureTerminalReviewOutcomeApplied = async (
     terminal: ReviewDispatchTransitionRecord,
   ): Promise<ReviewCompletionOutcome> => {
@@ -498,85 +560,66 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
     if (!(await isCurrentActiveAuthorization(terminal.correlation, dependencies.findAuthorizationById))) {
       return { kind: "blocked" };
     }
+    const task = terminal.correlation.reviewKind === "task-review";
     if (terminal.terminalReason !== "completed") {
-      if (terminal.terminalReason === "completed_with_findings") {
-        const lifecycle = project(await dependencies.readDurableRecords(), new Date().toISOString()).lifecycle;
-        const task = terminal.correlation.reviewKind === "task-review";
-        let pending: boolean;
-        if (terminal.correlation.reviewKind === "task-review") {
-          pending = lifecycle.taskStates.get(
-              taskLifecycleKey(terminal.parentSessionId, terminal.correlation.taskExecutionRef),
-            ) === "review_pending";
-        } else {
-          const correlation = terminal.correlation;
-          pending = Array.from(lifecycle.finalization.values()).some(
-            (finalization) =>
-              finalization.parentSessionId === terminal.parentSessionId &&
-              finalization.authorizationId === correlation.authorizationId &&
-              finalization.planPath === correlation.planPath &&
-              finalization.finalizationAttemptId === correlation.finalizationAttemptId &&
-              finalization.finalReviewRound === correlation.finalReviewRound &&
-              finalization.state === "final_review_pending",
-          );
-        }
-        if (!pending) return { kind: "terminalized" };
-        const result = task
+      if (terminal.terminalReason !== "completed_with_findings") return { kind: "blocked" };
+      const lifecycle = project(await dependencies.readDurableRecords(), new Date().toISOString()).lifecycle;
+      if (isLifecycleAt(lifecycle, terminal, "review_pending", "final_review_pending")) {
+        const result = terminal.correlation.reviewKind === "task-review"
           ? await dependencies.appendTaskLifecycleTransition({ parentSessionId: terminal.parentSessionId, taskExecutionRef: terminal.correlation.taskExecutionRef, from: "review_pending", to: "rework_required", agentId: terminal.agentId, sessionId: terminal.sessionId, writerId: terminal.writerId })
           : await dependencies.appendPlanFinalizationTransition({ parentSessionId: terminal.parentSessionId, authorizationId: terminal.correlation.authorizationId, planPath: terminal.correlation.planPath, finalizationAttemptId: terminal.correlation.finalizationAttemptId, finalReviewRound: terminal.correlation.finalReviewRound, from: "final_review_pending", to: "final_rework_required", agentId: terminal.agentId, sessionId: terminal.sessionId, writerId: terminal.writerId });
         if (result.kind !== "committed") return { kind: "blocked" };
-        return { kind: "terminalized" };
       }
-      return { kind: "blocked" };
+      const readback = await dependencies.readDurableRecords();
+      const reworked =
+        terminalIsUniqueInHistory(readback, terminal) &&
+        inspectDurableLifecycleTransition(
+          readback,
+          project(readback, new Date().toISOString()),
+          terminal.parentSessionId,
+          terminal.correlation,
+          task ? "review_pending" : "final_review_pending",
+          task ? "rework_required" : "final_rework_required",
+        ) === null;
+      return reworked ? { kind: "terminalized" } : { kind: "stale" };
     }
     const records = await dependencies.readDurableRecords();
     const lifecycle = project(records, new Date().toISOString()).lifecycle;
-    const task = terminal.correlation.reviewKind === "task-review";
-    const pending = task
-      ? lifecycle.taskStates.get(
-          taskLifecycleKey(terminal.parentSessionId, terminal.correlation.taskExecutionRef),
-        ) === "review_pending"
-      : Array.from(lifecycle.finalization.values()).some(
-          (finalization) => finalization.state === "final_review_pending",
-        );
-    if (pending) {
-      const transition = task
+    if (isLifecycleAt(lifecycle, terminal, "review_pending", "final_review_pending")) {
+      const transition = terminal.correlation.reviewKind === "task-review"
         ? await dependencies.appendTaskLifecycleTransition({ parentSessionId: terminal.parentSessionId, taskExecutionRef: terminal.correlation.taskExecutionRef, from: "review_pending", to: "gate_pending", agentId: terminal.agentId, sessionId: terminal.sessionId, writerId: terminal.writerId })
         : await dependencies.appendPlanFinalizationTransition({ parentSessionId: terminal.parentSessionId, authorizationId: terminal.correlation.authorizationId, planPath: terminal.correlation.planPath, finalizationAttemptId: terminal.correlation.finalizationAttemptId, finalReviewRound: terminal.correlation.finalReviewRound, from: "final_review_pending", to: "final_gate_pending", agentId: terminal.agentId, sessionId: terminal.sessionId, writerId: terminal.writerId });
       if (transition.kind !== "committed") return { kind: "blocked" };
     }
-    const context: GatePendingAttemptContext = task
+    const context: GatePendingAttemptContext = terminal.correlation.reviewKind === "task-review"
       ? { scope: "task", trigger: "task_complete", parentSessionId: terminal.parentSessionId, taskExecutionRef: terminal.correlation.taskExecutionRef, agentId: terminal.agentId, sessionId: terminal.sessionId, writerId: terminal.writerId }
       : { scope: "plan", trigger: "final_review_complete", parentSessionId: terminal.parentSessionId, authorizationId: terminal.correlation.authorizationId, planPath: terminal.correlation.planPath, finalizationAttemptId: terminal.correlation.finalizationAttemptId, finalReviewRound: terminal.correlation.finalReviewRound, agentId: terminal.agentId, sessionId: terminal.sessionId, writerId: terminal.writerId };
     const gate = await dependencies.evaluateGatePendingAttemptWithinAuthorizationReviewBoundary(context);
     if (gate.kind === "blocked") return { kind: "blocked" };
+    // `decided` and `not_applicable` are both re-proven from a fresh durable readback.
     const current = await dependencies.readDurableRecords();
-    return findCurrentGateDecision(current, terminal.correlation).kind === "found" &&
-      findCurrentAcceptanceDecision(current, terminal.correlation).kind === "found"
+    return terminalIsUniqueInHistory(current, terminal) &&
+      inspectFormalReviewCompletion(current, terminal.parentSessionId, terminal.correlation).kind === "consistent"
       ? { kind: "terminalized" }
       : { kind: "stale" };
   };
 
+  /**
+   * S3-b: releases the Authorization only when the Plan `complete` is formally
+   * proven (Gate PASS + Acceptance `complete` + durable Finalization `complete`).
+   * A Decision alone, or a `complete` value without an agreeing Gate, never releases.
+   */
   const releaseCompletedPlanAuthorization = async (
     correlation: ReviewCorrelation,
     parentSessionId: string,
   ): Promise<void> => {
     if (correlation.reviewKind !== "final-review" || dependencies.releaseCompletedAuthorization === undefined) return;
-    const records = await dependencies.readDurableRecords();
-    const acceptance = findCurrentAcceptanceDecision(records, correlation);
-    const finalization = [...project(records, new Date().toISOString()).lifecycle.finalization.values()].find(
-      (candidate) =>
-        candidate.parentSessionId === parentSessionId &&
-        candidate.authorizationId === correlation.authorizationId &&
-        candidate.planPath === correlation.planPath &&
-        candidate.finalizationAttemptId === correlation.finalizationAttemptId &&
-        candidate.finalReviewRound === correlation.finalReviewRound,
+    const formal = inspectFormalReviewCompletion(
+      await dependencies.readDurableRecords(),
+      parentSessionId,
+      correlation,
     );
-    if (
-      acceptance.kind !== "found" ||
-      acceptance.decision.kind !== "plan-acceptance" ||
-      acceptance.decision.verdict !== "complete" ||
-      finalization?.state !== "complete"
-    ) return;
+    if (formal.kind !== "consistent" || formal.gate.verdict !== "PASS") return;
     await dependencies.releaseCompletedAuthorization(parentSessionId, correlation.authorizationId);
   };
 

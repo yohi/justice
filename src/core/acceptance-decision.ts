@@ -618,7 +618,12 @@ export function inspectFormalReviewCompletion(
 ):
   | { readonly kind: "consistent"; readonly gate: GateDecision }
   | { readonly kind: "not_consistent"; readonly reason: string } {
-  const inconsistent = (reason: string) => ({ kind: "not_consistent" as const, reason });
+  const inconsistent = (
+    reason: string,
+  ): { readonly kind: "not_consistent"; readonly reason: string } => ({
+    kind: "not_consistent",
+    reason,
+  });
   const gate = findCurrentGateDecision(records, correlation);
   const acceptance = findCurrentAcceptanceDecision(records, correlation);
   if (gate.kind === "conflict" || acceptance.kind === "conflict")

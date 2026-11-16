@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   arrangeReviewArtifactCompletionFixture,
 } from "../helpers/review-artifact-e2e-fixture";
+import type { ReviewArtifactCompletionFixture } from "../helpers/review-artifact-e2e-fixture";
 import { parseReviewWorkerResult } from "../../src/core/review-artifact";
+import { project } from "../../src/core/v2/state-projection";
+import type { PendingDecisionRecord } from "../../src/core/v2/decision-model";
+import type { PersistedLogRecord } from "../../src/core/v2/observation-model";
 
 /**
  * Task 3.6 — review artifact I/O and completion-domain coverage. The fixture
@@ -145,5 +149,213 @@ describe("review artifact completion (Task 3.6)", () => {
       correlation: fixture.correlation,
       reviewScope: "task:task-1",
     });
+  });
+});
+
+/**
+ * S3-b Task 3 — the Review Completion caller decides `terminalized` only from a
+ * fresh durable readback that proves formal completion (Design R0.1.2 §2.5 / §3.2).
+ */
+describe("review completion formal completion boundary (S3-b Task 3)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const decisionEnvelope = (fixture: ReviewArtifactCompletionFixture) => ({
+    schemaVersion: 1 as const,
+    timestamp: "2026-09-05T00:00:00.500Z",
+    agentId: fixture.agentId,
+    sessionId: fixture.parentSessionId,
+    writerId: fixture.writerId,
+    recordType: "decision" as const,
+  });
+
+  /** Seeds an agreeing durable Gate PASS + final Acceptance for the fixture correlation. */
+  async function seedAgreeingDecisions(
+    fixture: ReviewArtifactCompletionFixture,
+    include: { readonly gate: boolean } = { gate: true },
+  ): Promise<void> {
+    const correlation = fixture.correlation;
+    const identity =
+      correlation.reviewKind === "task-review"
+        ? {
+            taskId: correlation.taskExecutionRef.taskId,
+            taskExecutionRef: correlation.taskExecutionRef,
+            reviewRound: correlation.reviewRound,
+          }
+        : {
+            authorizationId: correlation.authorizationId,
+            planPath: correlation.planPath,
+            finalizationAttemptId: correlation.finalizationAttemptId,
+            finalReviewRound: correlation.finalReviewRound,
+          };
+    if (include.gate)
+      await fixture.appendPendingDecision({
+        ...decisionEnvelope(fixture),
+        ...identity,
+        gateType: correlation.reviewKind === "task-review" ? "task" : "plan",
+        verdict: "PASS",
+        reachableEnforcementLevel: "L1",
+        appliedEnforcementLevel: "L0",
+        ruleResults: [],
+      } as unknown as PendingDecisionRecord);
+    await fixture.appendPendingDecision({
+      ...decisionEnvelope(fixture),
+      ...identity,
+      kind: correlation.reviewKind === "task-review" ? "task-acceptance" : "plan-acceptance",
+      verdict: correlation.reviewKind === "task-review" ? "accepted" : "complete",
+    } as unknown as PendingDecisionRecord);
+  }
+
+  const taskState = (records: readonly PersistedLogRecord[]): string | undefined =>
+    project(records, "2026-09-05T01:00:00.000Z").lifecycle.taskStates.values().next().value;
+  const planState = (records: readonly PersistedLogRecord[]): string | undefined =>
+    project(records, "2026-09-05T01:00:00.000Z").lifecycle.finalization.values().next().value
+      ?.state;
+  const decisions = (records: readonly PersistedLogRecord[]): readonly PersistedLogRecord[] =>
+    records.filter((record) => record.recordType === "decision");
+
+  it("formal completion: a decided evaluator answer without a durable terminal Lifecycle is not terminalized", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+    await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
+    await seedAgreeingDecisions(fixture);
+    fixture.gateEvaluation.mockResolvedValueOnce({
+      kind: "decided",
+      decision: {} as never,
+    });
+
+    await expect(fixture.consume()).resolves.toEqual({ kind: "stale" });
+    expect(taskState(await fixture.durableRecords())).toBe("gate_pending");
+  });
+
+  it("formal completion: not_applicable is never a success unless the durable Lifecycle proves it", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+    await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
+    await seedAgreeingDecisions(fixture);
+    fixture.gateEvaluation.mockResolvedValueOnce({ kind: "not_applicable" });
+
+    await expect(fixture.consume()).resolves.toEqual({ kind: "stale" });
+  });
+
+  it("formal completion: a blocked evaluator answer is not promoted by existing Gate/Acceptance", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+    await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
+    await seedAgreeingDecisions(fixture);
+    fixture.gateEvaluation.mockResolvedValueOnce({ kind: "blocked", advisory: "test" });
+
+    await expect(fixture.consume()).resolves.toEqual({ kind: "blocked" });
+  });
+
+  it("formal completion: a failed Lifecycle append after durable decisions stays blocked at gate_pending", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+    await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
+    fixture.setLifecycleAppendFault(({ to }) => (to === "accepted" ? "fail" : undefined));
+
+    await expect(fixture.consume()).resolves.toEqual({ kind: "blocked" });
+
+    const records = await fixture.durableRecords();
+    await expect(fixture.durableGateDecisions()).resolves.toHaveLength(1);
+    await expect(fixture.durableAcceptanceDecisions()).resolves.toHaveLength(1);
+    expect(taskState(records)).toBe("gate_pending");
+  });
+
+  it("formal completion: completed_with_findings terminalizes only as durable Review-Rework, never as acceptance", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+    await fixture.writeReservedArtifact(fixture.reservation, fixture.findingsReviewWorkerJson);
+
+    await expect(fixture.consume()).resolves.toEqual({ kind: "terminalized" });
+
+    const records = await fixture.durableRecords();
+    expect(taskState(records)).toBe("rework_required");
+    expect(
+      records.filter(
+        (record) =>
+          "kind" in record &&
+          record.kind === "task_lifecycle_transition" &&
+          record.from === "review_pending" &&
+          record.to === "rework_required",
+      ),
+    ).toHaveLength(1);
+    expect(decisions(records)).toEqual([]);
+    expect(fixture.gateEvaluation).not.toHaveBeenCalled();
+    expect(fixture.releaseCompletedAuthorization).not.toHaveBeenCalled();
+  });
+
+  it("formal completion: completed_with_findings is not terminalized when the Rework transition is not durable", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+    await fixture.writeReservedArtifact(fixture.reservation, fixture.findingsReviewWorkerJson);
+    fixture.setLifecycleAppendFault(({ to }) => (to === "rework_required" ? "lose" : undefined));
+
+    await expect(fixture.consume()).resolves.toEqual({ kind: "stale" });
+    expect(taskState(await fixture.durableRecords())).toBe("review_pending");
+  });
+
+  it("formal completion: a Plan findings review becomes final_rework_required without decisions or release", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed", { scope: "plan" });
+    await fixture.writeReservedArtifact(fixture.reservation, fixture.findingsReviewWorkerJson);
+
+    await expect(fixture.consume()).resolves.toEqual({ kind: "terminalized" });
+
+    const records = await fixture.durableRecords();
+    expect(planState(records)).toBe("final_rework_required");
+    expect(decisions(records)).toEqual([]);
+    expect(fixture.releaseCompletedAuthorization).not.toHaveBeenCalled();
+  });
+
+  it("formal completion: Plan complete releases the Authorization once the Lifecycle is durably complete", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed", { scope: "plan" });
+    await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
+
+    await expect(fixture.consume()).resolves.toEqual({ kind: "terminalized" });
+
+    expect(planState(await fixture.durableRecords())).toBe("complete");
+    expect(fixture.releaseCompletedAuthorization).toHaveBeenCalledTimes(1);
+    expect(fixture.releaseCompletedAuthorization).toHaveBeenCalledWith(
+      fixture.parentSessionId,
+      fixture.authorizationId,
+    );
+  });
+
+  it("formal completion: Plan release is withheld while the Finalization Lifecycle append fails", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed", { scope: "plan" });
+    await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
+    fixture.setLifecycleAppendFault(({ to }) => (to === "complete" ? "fail" : undefined));
+
+    await expect(fixture.consume()).resolves.toEqual({ kind: "blocked" });
+
+    expect(planState(await fixture.durableRecords())).toBe("final_gate_pending");
+    expect(fixture.releaseCompletedAuthorization).not.toHaveBeenCalled();
+  });
+
+  it("formal completion: Plan release is withheld when a complete Acceptance and Lifecycle have no agreeing Gate", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed", { scope: "plan" });
+    await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
+    await seedAgreeingDecisions(fixture, { gate: false });
+    const correlation = fixture.correlation;
+    if (correlation.reviewKind !== "final-review") throw new Error("plan fixture expected");
+    fixture.gateEvaluation.mockImplementationOnce(async () => {
+      await fixture.appendPendingRecord({
+        schemaVersion: 1,
+        timestamp: "2026-09-05T00:00:00.900Z",
+        agentId: fixture.agentId,
+        sessionId: fixture.parentSessionId,
+        writerId: fixture.writerId,
+        recordType: "observation",
+        kind: "plan_finalization_transition",
+        parentSessionId: fixture.parentSessionId,
+        authorizationId: correlation.authorizationId,
+        planPath: correlation.planPath,
+        finalizationAttemptId: correlation.finalizationAttemptId,
+        finalReviewRound: correlation.finalReviewRound,
+        from: "final_gate_pending",
+        to: "complete",
+      });
+      return { kind: "blocked", advisory: "test" };
+    });
+
+    await expect(fixture.consume()).resolves.toEqual({ kind: "blocked" });
+
+    expect(planState(await fixture.durableRecords())).toBe("complete");
+    expect(fixture.releaseCompletedAuthorization).not.toHaveBeenCalled();
   });
 });
