@@ -47,21 +47,23 @@ Superpowers First / OpenCode V2 Native Firstを維持する。
 
 ### S2 — OpenCode V2 Adapter
 
-- 実OpenCode V2の限定SourceをREAD_ONLYで取得
-- S1契約への変換
-- Task / Revision / Scope等の帰属維持
-- 欠測・不可信Sourceの明示
+- **S5実Host受入のSource取得:** 別途承認された隔離HostでOpenCode V2の限定Sourceを取得する。Source取得は既存S2-b Offline Adapterの責務・オンライン機能ではない。
+- **保存入力の検証:** 取得済みSource wrapperと明示Correlationを入力として検証し、取得範囲・Task / Revision / Scope等の帰属と欠測を区別する。Host全履歴の完全性・Sourceの真正性を自己申告だけで証明しない。
+- **既存Adapterでの変換:** 検証した保存入力を既存S2-b Offline READ_ONLY Adapterに渡してS1契約へ変換・診断する。オンライン収集機能を新規追加する前提にしない。
+- **保証水準の維持:** 不足・不可信・収集範囲外の情報は `UNKNOWN` / `NOT_VERIFIED` / `NOT_PROVEN` を適切に保持し、承認や実行の真正性を昇格させない。
 - Native-onlyに対する追加価値の未実証状態を保持
 
-S2-cの比較未成立を隠蔽しない。S2親Issueの限定受入判断はS5の最終Owner判断に含める。
+S2-cの `COMPARISON_NOT_ESTABLISHED` を保持する。S2親Issueの限定受入判断はS5の最終Owner判断に含める。Source取得手順・安全条件・入力固定方式は、別途承認されるS5 Designで決定し、この文書ではHost操作や新たなAdapter機能を承認しない。
 
 ### S3 — Safety / Authority / Recovery
 
 - S3-a Authority / Review Boundary
-- S3-b単一プロセスSemantic Recovery
-- Durable LifecycleとDecisionの整合性
+- S3-b — 採択済み単一プロセス限定Decision / Lifecycle Consistency Recovery
+- 採択済み範囲でのDecisionと対応するDurable Lifecycleの整合性
 - 不整合時の影響範囲限定Fail-Closed
 - 既存Gate/HOLDの保護境界維持
+
+**S3-b保証境界:** 全面的なSemantic Recovery、任意Task / Revision / Findingの復元、外部Tool副作用の巻戻し、複数プロセスRecoveryは保証対象としない。実HostにおけるDecision / Lifecycle Consistency Recoveryの安全性は未検証（`RUNTIME_NOT_VERIFIED`）。
 
 ### 非対象
 
@@ -79,9 +81,9 @@ S2-cの比較未成立を隠蔽しない。S2親Issueの限定受入判断はS5�
 
 | ID | シナリオ | 必須成立条件 |
 |---|---|---|
-| AC-H01 | S1/S2正常連携 | 実Session情報からREAD_ONLY診断を生成でき、帰属と保証範囲を維持する |
+| AC-H01 | S1/S2正常連携 | 別途承認された隔離Hostで取得した実Sessionの限定Sourceを、保存Source wrapperと明示Correlationにより入力検証し、既存S2-b Offline READ_ONLY AdapterでS1契約へ変換して診断を生成できる。取得・検証・変換を区別し、帰属と未証明の保証範囲を維持する |
 | AC-H02 | Authority / Evidence異常 | 不整合・欠測・権限不一致を誤受入れせず、保証対象の操作を適切に制限する |
-| AC-H03 | S3-b Recovery | 単一プロセスの再起動前後でLifecycleとDecisionの整合性を確認し、不整合な進行を認めない |
+| AC-H03 | S3-b Decision / Lifecycle Consistency Recovery | 採択済みの単一プロセス限定範囲で再起動前後のDecisionと対応するLifecycleの整合性を実Hostで確認し、不整合なTask / Plan進行を認めない。任意状態の全面復元・外部Tool副作用の巻戻し・複数プロセス保証は要求しない |
 
 ### 証拠要件
 
@@ -96,7 +98,7 @@ S2-cの比較未成立を隠蔽しない。S2親Issueの限定受入判断はS5�
 
 自己申告・静的Fixture・mock-I/O・CI成功だけで実Host PASSに昇格しない。
 
-AC-H02でのJustice内部の受入拒否はHost実行前拒否を証明しない。AC-H03のPASSは複数プロセスの安全性を証明しない。
+AC-H02でのJustice内部の受入拒否はHost実行前拒否を証明しない。AC-H01のPASSは収集したSourceの全履歴完全性・真正性を証明しない。AC-H03のPASSは採択済みDecision / Lifecycle Consistency Recoveryの限定実Host証拠であり、全面Semantic Recovery、外部Tool副作用の巻戻し、複数プロセスの安全性を証明しない。
 
 ## 5. 運用要件
 
@@ -159,6 +161,8 @@ AC-H01〜H03の結果、証拠、実行条件、残余リスクを記録する�
 5. 必要な保護を迂回しないOpt-in・停止・切戻し手順が成立している。
 6. Human Ownerが完成を明示的に採択する。
 
+AC-H03の完成対象は採択済み単一プロセス限定Decision / Lifecycle Consistency Recoveryのみとし、任意Task / Revision / Findingの復元や外部Tool副作用の巻戻しを必須PASSまたは達成保証へ拡張しない。AC-H01では隔離HostによるSource取得、保存Source wrapper・明示Correlationの入力検証、既存S2-b Offline Adapterによる変換を区別し、未証明を成功に昇格させない。
+
 未実行・未証明・観測失敗をPASSへ読み替えない。
 
 対象範囲で重大な安全性・権限・データ保全リスクが未解決なら、影響する操作の完成認定を保留する。
@@ -168,6 +172,7 @@ AC-H01〜H03の結果、証拠、実行条件、残余リスクを記録する�
 次は、影響範囲を明示して利用を制限できる限り、無条件の完成阻止条件としない。
 
 - 複数プロセスRecovery未証明
+- S3-bの全面Semantic Recovery、任意Task / Revision / Finding復元および外部Tool副作用巻戻しは採択済み保証範囲外（AC-H03の必須PASSを免除するものではない）
 - S3-c Host Enforcement未実装
 - S4未採択
 - S2-c比較効果未確立
