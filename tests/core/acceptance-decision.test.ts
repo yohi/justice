@@ -3037,6 +3037,42 @@ describe("formal completion evidence (S3-b Task 1)", () => {
       inspectFormalReviewCompletion(contradictory, "session-1", taskCorrelation(1)).kind,
     ).toBe("not_consistent");
   });
+
+  it("formal completion: distinguishes conflicting decisions from an absent decision", () => {
+    const base = decided();
+    const gate = authoritativeGateRecord();
+    const acceptance = taskAcceptanceRecord();
+
+    expect(
+      inspectFormalReviewCompletion(
+        [...base, { ...gate, sequence: 20 }, taskTerminalLifecycleRecord("accepted")],
+        "session-1",
+        taskCorrelation(1),
+      ),
+    ).toEqual({ kind: "not_consistent", reason: "decision_conflict" });
+
+    expect(
+      inspectFormalReviewCompletion(
+        [...base, { ...acceptance, sequence: 21 }, taskTerminalLifecycleRecord("accepted")],
+        "session-1",
+        taskCorrelation(1),
+      ),
+    ).toEqual({ kind: "not_consistent", reason: "decision_conflict" });
+  });
+
+  it("formal completion: identifies a Gate and Acceptance verdict mismatch", () => {
+    const records = [
+      ...lifecycleRecords(),
+      authoritativeGateRecord(),
+      taskAcceptanceRecord("rework-required"),
+      taskTerminalLifecycleRecord("accepted"),
+    ];
+
+    expect(inspectFormalReviewCompletion(records, "session-1", taskCorrelation(1))).toEqual({
+      kind: "not_consistent",
+      reason: "decision_mismatch",
+    });
+  });
 });
 
 /**

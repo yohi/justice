@@ -1851,6 +1851,48 @@ describe("JusticePlugin accepted task progress requires the durable accepted Lif
 });
 
 describe("JusticePlugin S3-b restart acceptance (initialize order)", () => {
+  it("does not write plan progress when a decision conflicts after candidate enumeration", async () => {
+    const fs: MockFileSystem = createMockFileSystem({ "plan.md": progressPlan });
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    const authorizationId = await approvePlanAuthorization(plugin);
+    await seedAcceptedTaskLifecycle(plugin, authorizationId, "task-1");
+    await seedClaimedReviewDispatch(plugin, authorizationId);
+    await seedCompletedReviewAfterClaim(plugin, authorizationId);
+    await seedAcceptedDecision(plugin, authorizationId);
+
+    const store = internalsOf(plugin).observationLogStore;
+    const readAll = store.readAll.bind(store);
+    let injectConflictingGate = true;
+    store.readAll = async (): Promise<readonly Record<string, unknown>[]> => {
+      const snapshot = await readAll();
+      if (injectConflictingGate) {
+        injectConflictingGate = false;
+        await appendObservation(plugin, {
+          recordType: "decision",
+          gateType: "task",
+          taskId: "task-1",
+          taskExecutionRef: {
+            authorizationId,
+            taskId: "task-1",
+            attemptId: taskAttemptId("task-1"),
+          },
+          reviewRound: 1,
+          verdict: "FAIL",
+          reachableEnforcementLevel: "L1",
+          appliedEnforcementLevel: "L0",
+          ruleResults: [],
+        });
+      }
+      return snapshot;
+    };
+
+    await (plugin as unknown as {
+      recoverAcceptedTaskProgress: (parentSessionId: string) => Promise<void>;
+    }).recoverAcceptedTaskProgress("s-1");
+
+    expect(await fs.readFile("plan.md")).toBe(progressPlan);
+  });
+
   it("S3-b: initialize() recovers the Lifecycle from the staged review, then ticks progress, then advances finalization — idempotently", async () => {
     const fs: MockFileSystem = createMockFileSystem({ "plan.md": progressPlan });
     const first = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });

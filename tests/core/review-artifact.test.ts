@@ -358,4 +358,64 @@ describe("review completion formal completion boundary (S3-b Task 3)", () => {
     expect(planState(await fixture.durableRecords())).toBe("complete");
     expect(fixture.releaseCompletedAuthorization).not.toHaveBeenCalled();
   });
+
+  it("restart recovery rejects a second durable terminal for the same staged review", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+    await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
+    await expect(fixture.consume()).resolves.toEqual({ kind: "terminalized" });
+
+    const records = await fixture.durableRecords();
+    const staging = records.find(
+      (record) => record.recordType === "observation" && record.kind === "review_completion_staged",
+    );
+    const terminal = records.find(
+      (record) => record.recordType === "observation" &&
+        record.kind === "review_dispatch_transition" && record.to === "terminal",
+    );
+    if (staging === undefined || terminal === undefined) {
+      throw new Error("test setup: expected durable staging and terminal records");
+    }
+    const { sequence: _sequence, ...duplicateTerminal } = terminal;
+    expect(_sequence).toBeGreaterThan(0);
+    await fixture.appendPendingRecord(duplicateTerminal);
+
+    await expect(fixture.completion.recoverStagedReviewCompletion(staging)).resolves.toEqual({
+      kind: "stale",
+    });
+    expect(fixture.recordAdvisory).toHaveBeenCalledWith(
+      "review_staged_completion_identity_mismatch",
+    );
+  });
+
+  it("restart recovery rejects a staged review contradicted by a later observation", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+    await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
+    await expect(fixture.consume()).resolves.toEqual({ kind: "terminalized" });
+
+    const records = await fixture.durableRecords();
+    const staging = records.find(
+      (record) => record.recordType === "observation" && record.kind === "review_completion_staged",
+    );
+    const observed = records.find(
+      (record) => record.recordType === "observation" && record.kind === "review_observed",
+    );
+    if (staging === undefined || observed === undefined) {
+      throw new Error("test setup: expected durable staging and review observation");
+    }
+    await fixture.appendPendingRecord({
+      ...observed,
+      items: [{
+        itemKey: "contradictory-finding",
+        evidenceId: "evidence-1",
+        severity: "major",
+        summary: "contradictory finding",
+        location: "src/example.ts",
+        status: "open",
+      }],
+    });
+
+    await expect(fixture.completion.recoverStagedReviewCompletion(staging)).resolves.toEqual({
+      kind: "stale",
+    });
+  });
 });
