@@ -717,7 +717,7 @@ describe("S3-b staged restart recovery", () => {
     fixture.setLifecycleAppendFault(() => undefined);
     fixture.setReadIntegrityViolation(true);
     const blockedReleaseRecovery = await restart(fixture);
-    expect(blockedReleaseRecovery.kind).toBe("terminalized");
+    expect(blockedReleaseRecovery.kind).toBe("blocked");
     expect(fixture.releaseCompletedAuthorization).not.toHaveBeenCalled();
 
     fixture.setReadIntegrityViolation(false);

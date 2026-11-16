@@ -769,7 +769,9 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
           : await dependencies.appendPlanFinalizationTransition({ parentSessionId: terminal.parentSessionId, authorizationId: terminal.correlation.authorizationId, planPath: terminal.correlation.planPath, finalizationAttemptId: terminal.correlation.finalizationAttemptId, finalReviewRound: terminal.correlation.finalReviewRound, from: "final_review_pending", to: "final_rework_required", agentId: terminal.agentId, sessionId: terminal.sessionId, writerId: dependencies.writerId });
         if (result.kind !== "committed") return { kind: "blocked" };
       }
-      const readback = await dependencies.readDurableRecords();
+      const snapshot = await dependencies.readDurableSnapshot();
+      if (snapshot.integrity.hasIntegrityViolation) return { kind: "blocked" };
+      const readback = snapshot.records;
       const reworked =
         terminalIsUniqueInHistory(readback, terminal) &&
         inspectDurableLifecycleTransition(
@@ -796,7 +798,9 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
     const gate = await dependencies.evaluateGatePendingAttemptWithinAuthorizationReviewBoundary(context);
     if (gate.kind === "blocked") return { kind: "blocked" };
     // `decided` and `not_applicable` are both re-proven from a fresh durable readback.
-    const current = await dependencies.readDurableRecords();
+    const snapshot = await dependencies.readDurableSnapshot();
+    if (snapshot.integrity.hasIntegrityViolation) return { kind: "blocked" };
+    const current = snapshot.records;
     return terminalIsUniqueInHistory(current, terminal) &&
       inspectFormalReviewCompletion(current, terminal.parentSessionId, terminal.correlation).kind === "consistent"
       ? { kind: "terminalized" }

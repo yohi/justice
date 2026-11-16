@@ -75,6 +75,14 @@ describe("review artifact completion (Task 3.6)", () => {
     await expect(fixture.durableAcceptanceDecisions()).resolves.toHaveLength(1);
   });
 
+  it("formal completion: integrity violations block completed terminalization", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+    await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
+    fixture.setReadIntegrityViolation(true);
+
+    await expect(fixture.consume()).resolves.toEqual({ kind: "blocked" });
+  });
+
   it("stages artifact_read_failed before parsing when the artifact is replaced", async () => {
     const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
     await fixture.replaceArtifactWithDifferentInode("replacement artifact");
@@ -366,6 +374,14 @@ describe("review completion formal completion boundary (S3-b Task 3)", () => {
 
     await expect(fixture.consume()).resolves.toEqual({ kind: "stale" });
     expect(taskState(await fixture.durableRecords())).toBe("review_pending");
+  });
+
+  it("formal completion: integrity violations block Review-Rework terminalization", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+    await fixture.writeReservedArtifact(fixture.reservation, fixture.findingsReviewWorkerJson);
+    fixture.setReadIntegrityViolation(true);
+
+    await expect(fixture.consume()).resolves.toEqual({ kind: "blocked" });
   });
 
   it("formal completion: a Plan findings review becomes final_rework_required without decisions or release", async () => {
