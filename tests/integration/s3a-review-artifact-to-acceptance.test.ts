@@ -651,6 +651,23 @@ describe("S3-b staged restart recovery", () => {
     expect(taskAcceptanceDecisions(after)).toHaveLength(1);
   });
 
+  it("does not release plan authorization when the completion read has an integrity violation", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed", { scope: "plan" });
+    await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
+    fixture.setLifecycleAppendFault(({ to }) => (to === "complete" ? "fail" : undefined));
+    await expect(fixture.consume()).resolves.toEqual({ kind: "blocked" });
+
+    fixture.setLifecycleAppendFault(() => undefined);
+    fixture.setReadIntegrityViolation(true);
+    const blockedReleaseRecovery = await restart(fixture);
+    expect(blockedReleaseRecovery.kind).toBe("terminalized");
+    expect(fixture.releaseCompletedAuthorization).not.toHaveBeenCalled();
+
+    fixture.setReadIntegrityViolation(false);
+    await expect(restart(fixture)).resolves.toEqual({ kind: "terminalized" });
+    expect(fixture.releaseCompletedAuthorization).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     ["task", "terminal"],
     ["task", "no terminal"],

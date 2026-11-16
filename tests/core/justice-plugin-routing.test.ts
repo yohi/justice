@@ -448,6 +448,10 @@ type PluginInternals = {
       record: Record<string, unknown>,
     ) => Promise<number>;
     readAll: () => Promise<readonly Record<string, unknown>[]>;
+    readAllWithIntegrity: () => Promise<{
+      readonly records: readonly Record<string, unknown>[];
+      readonly integrity: { readonly hasIntegrityViolation: boolean };
+    }>;
   };
   reviewCompletionDomain: {
     consumeReviewCompletion: (input: unknown) => Promise<{ kind: string }>;
@@ -1855,6 +1859,7 @@ describe("JusticePlugin S3-b restart acceptance (initialize order)", () => {
     const fs: MockFileSystem = createMockFileSystem({ "plan.md": progressPlan });
     const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
     const authorizationId = await approvePlanAuthorization(plugin);
+    plugin.getPlanBridge().setActivePlan("s-1", "plan.md");
     await seedAcceptedTaskLifecycle(plugin, authorizationId, "task-1");
     await seedClaimedReviewDispatch(plugin, authorizationId);
     await seedCompletedReviewAfterClaim(plugin, authorizationId);
@@ -1885,6 +1890,46 @@ describe("JusticePlugin S3-b restart acceptance (initialize order)", () => {
       }
       return snapshot;
     };
+    await (plugin as unknown as {
+      recoverAcceptedTaskProgress: (parentSessionId: string) => Promise<void>;
+    }).recoverAcceptedTaskProgress("s-1");
+
+    expect(await fs.readFile("plan.md")).toBe(progressPlan);
+  });
+
+  it("updates plan progress when the candidate read is consistent", async () => {
+    const fs: MockFileSystem = createMockFileSystem({ "plan.md": progressPlan });
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    const authorizationId = await approvePlanAuthorization(plugin);
+    plugin.getPlanBridge().setActivePlan("s-1", "plan.md");
+    await seedAcceptedTaskLifecycle(plugin, authorizationId, "task-1");
+    await seedClaimedReviewDispatch(plugin, authorizationId);
+    await seedCompletedReviewAfterClaim(plugin, authorizationId);
+    await seedAcceptedDecision(plugin, authorizationId);
+
+    await (plugin as unknown as {
+      recoverAcceptedTaskProgress: (parentSessionId: string) => Promise<void>;
+    }).recoverAcceptedTaskProgress("s-1");
+
+    expect(await fs.readFile("plan.md")).not.toBe(progressPlan);
+    expect(await fs.readFile("plan.md")).toContain("- [x] first");
+  });
+
+  it("does not write plan progress when the durable snapshot reports an integrity violation", async () => {
+    const fs: MockFileSystem = createMockFileSystem({ "plan.md": progressPlan });
+    const plugin = new JusticePlugin(fs, fs, { writerId: PROGRESS_WRITER_ID });
+    const authorizationId = await approvePlanAuthorization(plugin);
+    plugin.getPlanBridge().setActivePlan("s-1", "plan.md");
+    await seedAcceptedTaskLifecycle(plugin, authorizationId, "task-1");
+    await seedClaimedReviewDispatch(plugin, authorizationId);
+    await seedCompletedReviewAfterClaim(plugin, authorizationId);
+    await seedAcceptedDecision(plugin, authorizationId);
+    const store = internalsOf(plugin).observationLogStore;
+    const readAllWithIntegrity = store.readAllWithIntegrity.bind(store);
+    store.readAllWithIntegrity = async () => ({
+      records: (await readAllWithIntegrity()).records,
+      integrity: { hasIntegrityViolation: true },
+    });
 
     await (plugin as unknown as {
       recoverAcceptedTaskProgress: (parentSessionId: string) => Promise<void>;

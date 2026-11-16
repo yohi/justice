@@ -111,6 +111,7 @@ export type ReviewArtifactCompletionFixture = {
    * reports `committed` without persisting the record (readback cannot see it).
    */
   readonly setLifecycleAppendFault: (fault: LifecycleAppendFault) => void;
+  readonly setReadIntegrityViolation: (violates: boolean) => void;
   /** S3-b: makes the next `claimed -> terminal` dispatch append report `failed`. */
   readonly failNextTerminalAppend: () => void;
   /** S3-b: spy for the Plan `complete` Authorization release side effect. */
@@ -452,8 +453,16 @@ export async function arrangeReviewArtifactCompletionFixture(
   const releaseCompletedAuthorization = vi.fn(
     async (_parentSessionId: string, _authorizationId: string): Promise<void> => undefined,
   );
+  let readIntegrityViolation = false;
   const completion = createReviewCompletionDomain({
     readDurableRecords: () => logStore.readAll(),
+    readDurableSnapshot: async () => {
+      const snapshot = await logStore.readAllWithIntegrity();
+      return readIntegrityViolation
+        ? { ...snapshot, integrity: { hasIntegrityViolation: true } }
+        : snapshot;
+    },
+    writerId,
     findAuthorizationById,
     appendReviewCompletionStaging: async (input) => ({
       kind: "committed" as const,
@@ -701,6 +710,9 @@ export async function arrangeReviewArtifactCompletionFixture(
     expectedCategory,
     setLifecycleAppendFault: (fault) => {
       lifecycleAppendFault = fault;
+    },
+    setReadIntegrityViolation: (violates) => {
+      readIntegrityViolation = violates;
     },
     failNextTerminalAppend: () => {
       failTerminalAppend = true;

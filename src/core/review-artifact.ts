@@ -43,6 +43,7 @@ import type {
   PendingReviewCompletionStagingRecord,
   PendingReviewDispatchTransitionRecord,
   PendingReviewPostToolUseRecord,
+  DurableLogSnapshot,
   PersistedLogRecord,
   PersistedReviewCompletionStagingRecord,
   PersistedReviewArtifactCleanupRecord,
@@ -202,6 +203,8 @@ type ClaimedSlot = ReviewDispatchSlot & { readonly state: "claimed"; readonly ca
 
 export type ReviewCompletionDependencies = {
   readonly readDurableRecords: () => Promise<readonly PersistedLogRecord[]>;
+  readonly readDurableSnapshot: () => Promise<DurableLogSnapshot>;
+  readonly writerId: string;
   readonly findAuthorizationById: (authorizationId: string) => Promise<import("./plan-authorization").ApprovedPlanBinding | null>;
   readonly isAuthorizationPlanCurrent?: (correlation: ReviewCorrelation) => Promise<boolean>;
   readonly appendReviewCompletionStaging: (input: PendingReviewCompletionStagingRecord) => Promise<{ readonly kind: "committed"; readonly record: PendingReviewCompletionStagingRecord & { readonly sequence: number } } | { readonly kind: "failed" }>;
@@ -539,7 +542,7 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
       callId: staging.staging.callId,
       postToolUse: { type: "PostToolUse", sessionId: staging.parentSessionId, callId: staging.staging.callId },
       agentId: staging.agentId,
-      writerId: staging.writerId,
+      writerId: dependencies.writerId,
     }),
     kind: "review_dispatch_transition",
     transitionId: randomUUID(),
@@ -586,7 +589,7 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
           callId: staging.staging.callId,
           postToolUse: { type: "PostToolUse", sessionId: staging.parentSessionId, callId: staging.staging.callId },
           agentId: staging.agentId,
-          writerId: staging.writerId,
+          writerId: dependencies.writerId,
         }),
         ...(taskId === undefined ? {} : { taskId }),
         kind: "review_observed",
@@ -810,8 +813,10 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
     parentSessionId: string,
   ): Promise<void> => {
     if (correlation.reviewKind !== "final-review" || dependencies.releaseCompletedAuthorization === undefined) return;
+    const snapshot = await dependencies.readDurableSnapshot();
+    if (snapshot.integrity.hasIntegrityViolation) return;
     const formal = inspectFormalReviewCompletion(
-      await dependencies.readDurableRecords(),
+      snapshot.records,
       parentSessionId,
       correlation,
     );

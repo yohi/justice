@@ -1,6 +1,6 @@
 // src/runtime/observation-log-store.ts
 import type { FileReader, FileWriter, ShardId } from "../core/types";
-import type { PendingLogRecord, PersistedLogRecord } from "../core/v2/observation-model";
+import type { DurableLogSnapshot, PendingLogRecord, PersistedLogRecord } from "../core/v2/observation-model";
 import {
   fromPhysicalPath,
   shardKeyOf,
@@ -59,6 +59,7 @@ function rotationTimestamp(now: Date): string {
 /** Read-only capability exposed to query tools that must not mutate the log. */
 export interface ReadOnlyObservationLog {
   readAll(): Promise<readonly PersistedLogRecord[]>;
+  readAllWithIntegrity(): Promise<DurableLogSnapshot>;
   getRotationHealth?(): {
     readonly consecutiveFailures: number;
     readonly degraded: boolean;
@@ -246,6 +247,10 @@ export class ObservationLogStore {
   }
 
   async readAll(): Promise<readonly PersistedLogRecord[]> {
+    return (await this.readAllWithIntegrity()).records;
+  }
+
+  async readAllWithIntegrity(): Promise<DurableLogSnapshot> {
     let hasIntegrityViolation = false;
     this.lastReadIntegrity = { hasIntegrityViolation: false };
     const activePaths = await this.fileReader.listFiles(EVENTS_ROOT);
@@ -360,7 +365,7 @@ export class ObservationLogStore {
       }
     }
     this.lastReadIntegrity = { hasIntegrityViolation };
-    return validRecords;
+    return { records: validRecords, integrity: this.lastReadIntegrity };
   }
 
   /**

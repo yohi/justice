@@ -535,6 +535,8 @@ export class JusticePlugin {
     };
     this.reviewCompletionDomain = createReviewCompletionDomain({
       readDurableRecords: () => this.observationLogStore.readAll(),
+      readDurableSnapshot: () => this.observationLogStore.readAllWithIntegrity(),
+      writerId: this.writerId,
       findAuthorizationById: (authorizationId) => this.authorizationStore.findByAuthorizationId(authorizationId),
       isAuthorizationPlanCurrent: (correlation) => this.isAuthorizationPlanCurrent(correlation),
       appendReviewCompletionStaging: appendReviewObservation,
@@ -1190,7 +1192,9 @@ export class JusticePlugin {
     try {
       await this.authorizationReviewBoundary.withParentSession(parentSessionId, async () => {
         if (!(await this.isAuthorizationPlanCurrent(correlation))) return;
-        const records = await this.observationLogStore.readAll();
+        const snapshot = await this.observationLogStore.readAllWithIntegrity();
+        if (snapshot.integrity.hasIntegrityViolation) return;
+        const records = snapshot.records;
         // S3-b: a Decision alone never confirms progress. The same durable readback
         // must prove formal completion — Gate PASS, final Acceptance, the review
         // history and the durable `gate_pending -> accepted` Lifecycle transition.
@@ -1368,7 +1372,9 @@ export class JusticePlugin {
             taskExecutionRef: candidate.taskExecutionRef,
             reviewRound: candidate.reviewRound,
           };
-          const current = await this.observationLogStore.readAll();
+          const snapshot = await this.observationLogStore.readAllWithIntegrity();
+          if (snapshot.integrity.hasIntegrityViolation) return;
+          const current = snapshot.records;
           const formal = inspectFormalReviewCompletion(current, parentSessionId, correlation);
           if (formal.kind !== "consistent" || formal.gate.verdict !== "PASS") return;
           const decision = findAgreedAcceptedTaskDecision(current, correlation);
