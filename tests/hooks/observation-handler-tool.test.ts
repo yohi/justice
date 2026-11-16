@@ -356,7 +356,11 @@ describe("ObservationHandler gate evaluator integration", () => {
     });
     const handler = new ObservationHandler({
       logStore: {
-        readAll: async () => taskGateRecords(),
+        // S3-b: the evaluator proves completion from a durable readback.
+        readAll: async () => [
+          ...taskGateRecords(),
+          ...appended.map((record, index) => ({ ...record, sequence: 100 + index })),
+        ],
         append,
       } as unknown as ObservationLogStore,
       sessionStateProvider: new SessionStateProvider(),
@@ -390,7 +394,11 @@ describe("ObservationHandler gate evaluator integration", () => {
     });
     const handler = new ObservationHandler({
       logStore: {
-        readAll: async () => planGateRecords(),
+        // S3-b: the evaluator proves completion from a durable readback.
+        readAll: async () => [
+          ...planGateRecords(),
+          ...appended.map((record, index) => ({ ...record, sequence: 100 + index })),
+        ],
         append,
       } as unknown as ObservationLogStore,
       sessionStateProvider: new SessionStateProvider(),

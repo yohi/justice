@@ -1039,6 +1039,42 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
       if (tails.get(identity) === current) tails.delete(identity);
     }
   };
+  /**
+   * S3-b limited recovery + durable readback (Design R0.1.2 §2.2 / §3.3). With the
+   * Gate and final Acceptance of `correlation` durable, appends only the missing
+   * `gate_pending -> terminal` transition after re-proving authority and the
+   * transition source, then re-reads the durable log. `decided` is returned only when
+   * that readback proves formal completion; an append response alone never is.
+   */
+  const finalizeLifecycle = async (
+    context: GatePendingAttemptContext,
+    correlation: ReviewCorrelation,
+    decision: GateDecisionPayload,
+  ): Promise<GatePendingAttemptResult> => {
+    if (!(await isCurrentActiveAuthorization(correlation, dependencies.findAuthorizationById)))
+      return { kind: "blocked", advisory: "review_authorization_not_active" };
+    const source = await dependencies.readDurableRecords();
+    if (isGatePending(context, project(source, new Date().toISOString()))) {
+      const lifecycle = await applyGateOutcomeLifecycle(dependencies, context, decision);
+      if (lifecycle.kind !== "committed")
+        return { kind: "blocked", advisory: "lifecycle_append_failed" };
+    }
+    let formal: ReturnType<typeof inspectFormalReviewCompletion>;
+    try {
+      formal = inspectFormalReviewCompletion(
+        await dependencies.readDurableRecords(),
+        context.parentSessionId,
+        correlation,
+      );
+    } catch {
+      return { kind: "blocked", advisory: "lifecycle_readback_not_verified" };
+    }
+    if (formal.kind !== "consistent" || formal.gate.verdict !== decision.verdict)
+      return { kind: "blocked", advisory: "lifecycle_readback_not_verified" };
+    if (!(await isCurrentActiveAuthorization(correlation, dependencies.findAuthorizationById)))
+      return { kind: "blocked", advisory: "review_authorization_not_active" };
+    return { kind: "decided", decision };
+  };
   const evaluateWithin = async (
     context: GatePendingAttemptContext,
   ): Promise<GatePendingAttemptResult> => {
@@ -1069,9 +1105,11 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
       if (gate.kind === "conflict" || acceptance.kind === "conflict")
         return { kind: "blocked", advisory: "decision_integrity_violation" };
       if (gate.kind === "found" && acceptance.kind === "found") {
+        // S3-b: agreeing durable Decisions are never a completion by themselves.
+        // Only the missing Lifecycle transition is recovered, then proven by readback.
         if (acceptance.decision.verdict !== "blocked")
           return acceptanceAgreesWithGate(gate.decision, acceptance.decision)
-            ? { kind: "decided", decision: gate.decision }
+            ? await finalizeLifecycle(context, correlation, gate.decision)
             : { kind: "blocked", advisory: "decision_integrity_violation" };
       }
       if (acceptance.kind === "found" && acceptance.decision.verdict !== "blocked")
@@ -1084,10 +1122,7 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
         );
         if (appended.kind !== "committed")
           return { kind: "blocked", advisory: "acceptance_append_failed" };
-        const lifecycle = await applyGateOutcomeLifecycle(dependencies, context, gate.decision);
-        if (lifecycle.kind !== "committed")
-          return { kind: "blocked", advisory: "lifecycle_append_failed" };
-        return { kind: "decided", decision: gate.decision };
+        return await finalizeLifecycle(context, correlation, gate.decision);
       }
       // F-002: Rules see only admitted inputs — the current-correlation review
       // summary and execution evidence proven by the durable implementation binding.
@@ -1162,10 +1197,7 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
         if (acceptanceAppended.kind !== "committed")
           return { kind: "blocked", advisory: "acceptance_append_failed" };
       }
-      const lifecycle = await applyGateOutcomeLifecycle(dependencies, context, result);
-      if (lifecycle.kind !== "committed")
-        return { kind: "blocked", advisory: "lifecycle_append_failed" };
-      return { kind: "decided", decision: result };
+      return await finalizeLifecycle(context, correlation, result);
     } catch {
       return { kind: "blocked", advisory: "gate_evaluation_failed" };
     }

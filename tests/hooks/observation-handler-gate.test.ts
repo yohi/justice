@@ -7,6 +7,8 @@ import type { ApprovedPlanBinding } from "../../src/core/plan-authorization";
 import type { GateLoader } from "../../src/runtime/gate-loader";
 import type { ObservationLogStore } from "../../src/runtime/observation-log-store";
 import { ObservationHandler } from "../../src/hooks/observation-handler";
+import { inspectFormalReviewCompletion } from "../../src/core/acceptance-decision";
+import { project } from "../../src/core/v2/state-projection";
 
 type EvaluateGateFn = (
   trigger: "task_complete" | "tool_observed",
@@ -466,5 +468,148 @@ describe("ObservationHandler gate evaluation", () => {
     expect(response).toEqual({ action: "proceed" });
     expect(appended).toHaveLength(0);
     expect(logger.warn).not.toHaveBeenCalled();
+  });
+});
+
+/** Log store whose committed appends are visible to the next `readAll()` (S3-b readback). */
+function makeDurableLogStore(
+  events: readonly PersistedLogRecord[],
+  failAppend: (record: PendingLogRecord) => boolean = () => false,
+): { store: ObservationLogStore; appended: AppendedRecord[]; records: () => PersistedLogRecord[] } {
+  const appended: AppendedRecord[] = [];
+  const records = (): PersistedLogRecord[] => [
+    ...events,
+    ...appended.map(
+      (entry, index) => ({ ...entry.record, sequence: 1000 + index }) as PersistedLogRecord,
+    ),
+  ];
+  const store = {
+    readAll: vi.fn(async () => records()),
+    append: vi.fn(async (shardId: ShardId, record: PendingLogRecord) => {
+      if (failAppend(record)) throw new Error("append failed");
+      appended.push({ shardId, record });
+      return appended.length;
+    }),
+    destroySession: vi.fn(),
+  } as unknown as ObservationLogStore;
+  return { store, appended, records };
+}
+
+describe("ObservationHandler gate evaluation — S3-b existing evaluateGateIfTriggered caller", () => {
+  const taskExecutionRef = { authorizationId: "auth-1", taskId: "task-1", attemptId: "attempt-1" };
+  const reviewCorrelation = { reviewKind: "task-review", taskExecutionRef, reviewRound: 1 } as const;
+  const envelope = {
+    schemaVersion: 1,
+    timestamp: "2026-07-01T00:02:00.000Z",
+    agentId: "atlas",
+    sessionId: "s-1",
+    writerId: "w-test",
+    taskId: "task-1",
+  };
+  const reviewObserved = {
+    ...envelope,
+    recordType: "observation",
+    sequence: 7,
+    kind: "review_observed",
+    reviewScope: "task:task-1",
+    correlation: reviewCorrelation,
+    items: [],
+    isCompleteSnapshot: true,
+  } as unknown as PersistedLogRecord;
+  const gatePendingEvents = (): readonly PersistedLogRecord[] => [
+    ...currentTaskLifecycleEvents(),
+    reviewObserved,
+    ...completedReviewDispatch(reviewCorrelation),
+  ];
+  const durableDecisions = (
+    verdict: "PASS" | "FAIL",
+    acceptance: "accepted" | "rework-required",
+  ): readonly PersistedLogRecord[] =>
+    [
+      {
+        ...envelope,
+        sequence: 8,
+        recordType: "decision",
+        gateType: "task",
+        taskExecutionRef,
+        reviewRound: 1,
+        verdict,
+        reachableEnforcementLevel: "L1",
+        appliedEnforcementLevel: "L0",
+        ruleResults: [],
+      },
+      {
+        ...envelope,
+        sequence: 9,
+        recordType: "decision",
+        kind: "task-acceptance",
+        taskExecutionRef,
+        reviewRound: 1,
+        verdict: acceptance,
+      },
+    ] as unknown as readonly PersistedLogRecord[];
+  const handlerFor = (store: ObservationLogStore): ObservationHandler =>
+    new ObservationHandler({
+      logStore: store,
+      sessionStateProvider,
+      writerId: "w-test",
+      gateLoader: makeGateLoader([reviewGate("all-clear", "fail", "tool_observed")]),
+      findAuthorizationById: vi.fn(async () => activeAuthorization),
+      getActiveAuthorization: vi.fn(async () => null),
+    });
+  const taskState = (records: readonly PersistedLogRecord[]): string | undefined =>
+    project(records, "2026-07-01T01:00:00.000Z").lifecycle.taskStates.values().next().value;
+  const lifecycleAppends = (appended: readonly AppendedRecord[]): readonly unknown[] =>
+    appended
+      .map((entry) => entry.record as unknown as { kind?: string; to?: string })
+      .filter((record) => record.kind === "task_lifecycle_transition")
+      .map((record) => record.to);
+
+  it("still decides a fresh PASS through the caller, now proven by the durable accepted Lifecycle", async () => {
+    const { store, appended, records } = makeDurableLogStore(gatePendingEvents());
+    const handler = handlerFor(store);
+
+    const first = await callGate(handler, "tool_observed", "task-1", "call-1", "atlas", "s-1");
+    const second = await callGate(handler, "tool_observed", "task-1", "call-1", "atlas", "s-1");
+
+    expect(first).toEqual({ action: "proceed" });
+    expect(second).toEqual({ action: "proceed" });
+    // Gate + Acceptance + one Lifecycle transition; the repeat call writes nothing.
+    expect(appended).toHaveLength(3);
+    expect(lifecycleAppends(appended)).toEqual(["accepted"]);
+    expect(taskState(records())).toBe("accepted");
+    expect(inspectFormalReviewCompletion(records(), "s-1", reviewCorrelation).kind).toBe(
+      "consistent",
+    );
+  });
+
+  it("recovers only the missing Lifecycle from durable decisions and reports the decided FAIL as an advisory", async () => {
+    const { store, appended, records } = makeDurableLogStore([
+      ...gatePendingEvents(),
+      ...durableDecisions("FAIL", "rework-required"),
+    ]);
+    const handler = handlerFor(store);
+
+    const response = await callGate(handler, "tool_observed", "task-1", "call-1", "atlas", "s-1");
+
+    // Only a `decided` non-PASS result produces the gate advisory.
+    expect(response).toMatchObject({ action: "inject", variant: "gate_advisory" });
+    expect(appended).toHaveLength(1);
+    expect(lifecycleAppends(appended)).toEqual(["rework_required"]);
+    expect(taskState(records())).toBe("rework_required");
+  });
+
+  it("degrades to PROCEED with no transition when the recovery Lifecycle append fails", async () => {
+    const { store, appended, records } = makeDurableLogStore(
+      [...gatePendingEvents(), ...durableDecisions("FAIL", "rework-required")],
+      (record) => "kind" in record && record.kind === "task_lifecycle_transition",
+    );
+    const handler = handlerFor(store);
+
+    const response = await callGate(handler, "tool_observed", "task-1", "call-1", "atlas", "s-1");
+
+    expect(response).toEqual({ action: "proceed" });
+    expect(appended).toHaveLength(0);
+    expect(taskState(records())).toBe("gate_pending");
   });
 });
