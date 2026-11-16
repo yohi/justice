@@ -13,6 +13,7 @@
  * (`justice_review.resolve`), which covers a different, approval-gated path.
  */
 import { describe, expect, it } from "vitest";
+import { JusticePlugin } from "../../src/core/justice-plugin";
 import { arrangeReviewArtifactCompletionFixture } from "../helpers/review-artifact-e2e-fixture";
 import type { ReviewArtifactCompletionFixture } from "../helpers/review-artifact-e2e-fixture";
 import type { ReviewCorrelation, ObservedReviewExecutionV1 } from "../../src/core/types";
@@ -649,6 +650,36 @@ describe("S3-b staged restart recovery", () => {
     expect(lifecycleTo(after, "accepted")).toHaveLength(1);
     expect(taskGateDecisions(after)).toHaveLength(1);
     expect(taskAcceptanceDecisions(after)).toHaveLength(1);
+  });
+
+  it("recovers a staged completion through a fresh plugin instance and writer", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+    await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
+    fixture.setLifecycleAppendFault(({ to }) => (to === "accepted" ? "fail" : undefined));
+    await expect(fixture.consume()).resolves.toEqual({ kind: "blocked" });
+
+    const before = await fixture.durableRecords();
+    expect(lifecycleState(before, "task")).toBe("gate_pending");
+    expect(terminals(before)).toHaveLength(1);
+    expect(decisionRecords(before)).toHaveLength(2);
+
+    const restarted = new JusticePlugin(fixture.files, fixture.files, { writerId: "w-restarted" });
+    await restarted.initialize();
+    const after = await restarted.getObservationHandler().getLogStore().readAll();
+
+    expect(lifecycleState(after, "task")).toBe("accepted");
+    expect(transitions(after, "task", "gate_pending", "accepted")).toHaveLength(1);
+    expect(terminals(after)).toHaveLength(1);
+    expect(decisionRecords(after)).toHaveLength(2);
+    expect(
+      after.some(
+        (record) =>
+          record.recordType === "observation" &&
+          record.kind === "task_lifecycle_transition" &&
+          record.to === "accepted" &&
+          record.writerId === "w-restarted",
+      ),
+    ).toBe(true);
   });
 
   it("does not release plan authorization when the completion read has an integrity violation", async () => {
