@@ -419,3 +419,8 @@ export type ObservationRecord = (PendingObservationRecord | LifecycleObservation
 };
 export type PendingLogRecord = PendingObservationRecord | PendingDecisionRecord;
 export type PersistedLogRecord = ObservationRecord | DecisionRecord;
+
+export type DurableLogSnapshot = {
+  readonly records: readonly PersistedLogRecord[];
+  readonly integrity: { readonly hasIntegrityViolation: boolean };
+};

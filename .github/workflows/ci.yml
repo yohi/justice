@@ -7,13 +7,42 @@ on:
     branches: [ master ]
 
 jobs:
+  lint:
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+
   test:
     runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
       - name: Install supported OpenCode CLI
         run: bun install --global opencode-ai@1.18.29
+      - run: bun install --frozen-lockfile
+      - name: Build native review artifact provider
+        run: bun run build:native:review-artifact
+
+      - run: bun run typecheck
+      - run: bun run build
+      - run: bun run test
+      - run: bun run vitest run --config vitest.dist.config.ts
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: justice-dist
+          path: dist/
+
+  native:
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
       - run: bun install --frozen-lockfile
@@ -27,14 +56,5 @@ jobs:
         run: |
           cargo fmt --manifest-path native/review-artifact-linux/Cargo.toml -- --check
           cargo clippy --manifest-path native/review-artifact-linux/Cargo.toml --all-targets --features test -- -D warnings
-      - run: bun run lint
-      - run: bun run typecheck
       - run: bun run build
-      - run: bun run test
-      - run: bun run vitest run --config vitest.dist.config.ts
       - run: bun run vitest run --config vitest.integration.config.ts
-      - name: Upload Build Artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: justice-dist
-          path: dist/

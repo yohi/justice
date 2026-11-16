@@ -358,6 +358,19 @@ describe("observation log projection rebuild integration", () => {
     expect(Object.keys(written.integrity.maxSequenceByShard)).toEqual([]);
   });
 
+  it("returns records and their integrity status from the same read", async () => {
+    const { files, reader, writer } = createMemFs();
+    const store = new ObservationLogStore(writer, reader, INTEGRATION_SHARD.writerId);
+    await seedValidShard(store, 2);
+    const path = toPhysicalPath(INTEGRATION_SHARD);
+    files.set(path, `${files.get(path) ?? ""}not-json\n`);
+
+    const snapshot = await store.readAllWithIntegrity();
+
+    expect(snapshot.records).toEqual([]);
+    expect(snapshot.integrity.hasIntegrityViolation).toBe(true);
+  });
+
   it("rebuilds state.json and warns on a duplicate sequence within a shard", async () => {
     const { files, reader, writer } = createMemFs();
     const store = new ObservationLogStore(writer, reader, INTEGRATION_SHARD.writerId);
