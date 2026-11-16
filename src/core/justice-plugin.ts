@@ -74,6 +74,7 @@ import {
 } from "./review-artifact";
 import {
   findAgreedAcceptedTaskDecision,
+  inspectFormalReviewCompletion,
 } from "./acceptance-decision";
 import { PlanParser } from "./plan-parser";
 import { updatePlanProgress } from "./progress-updater";
@@ -1190,6 +1191,11 @@ export class JusticePlugin {
       await this.authorizationReviewBoundary.withParentSession(parentSessionId, async () => {
         if (!(await this.isAuthorizationPlanCurrent(correlation))) return;
         const records = await this.observationLogStore.readAll();
+        // S3-b: a Decision alone never confirms progress. The same durable readback
+        // must prove formal completion — Gate PASS, final Acceptance, the review
+        // history and the durable `gate_pending -> accepted` Lifecycle transition.
+        const formal = inspectFormalReviewCompletion(records, parentSessionId, correlation);
+        if (formal.kind !== "consistent" || formal.gate.verdict !== "PASS") return;
         // Round-safe: only a current accepted decision that agrees with its Gate.
         const accepted = findAgreedAcceptedTaskDecision(records, correlation);
         if (accepted === null) return;
@@ -1353,8 +1359,20 @@ export class JusticePlugin {
         });
         return decision === null ? [] : [decision];
       });
-      for (const decision of accepted) {
+      // The enumeration above only lists candidates. Whether a write is allowed is
+      // decided inside the boundary from the latest durable state (S3-b).
+      for (const candidate of accepted) {
         await this.authorizationReviewBoundary.withParentSession(parentSessionId, async () => {
+          const correlation = {
+            reviewKind: "task-review" as const,
+            taskExecutionRef: candidate.taskExecutionRef,
+            reviewRound: candidate.reviewRound,
+          };
+          const current = await this.observationLogStore.readAll();
+          const formal = inspectFormalReviewCompletion(current, parentSessionId, correlation);
+          if (formal.kind !== "consistent" || formal.gate.verdict !== "PASS") return;
+          const decision = findAgreedAcceptedTaskDecision(current, correlation);
+          if (decision === null) return;
           const binding = await this.authorizationStore.findByAuthorizationId(
             decision.taskExecutionRef.authorizationId,
           );

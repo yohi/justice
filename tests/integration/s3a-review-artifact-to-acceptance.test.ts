@@ -841,7 +841,10 @@ describe("S3-b staged restart recovery", () => {
         staging: {
           callId: fixture.callId,
           correlation: fixture.correlation,
-          artifactConsumption: { artifactId: fixture.reservation.artifactId, digest: "sha256:x" },
+          artifactConsumption: {
+            artifactId: fixture.reservation.artifactId,
+            digest: `sha256:${"0".repeat(64)}`,
+          },
           reviewArtifact: {
             schemaVersion: 1,
             reviewKind: "task-review",
@@ -855,6 +858,8 @@ describe("S3-b staged restart recovery", () => {
         },
       });
       const before = await fixture.durableRecords();
+      // The staging is durable and valid; only the delegated identity disagrees.
+      expect(ofKind(before, "review_completion_staged")).toHaveLength(1);
 
       await expect(
         fixture.completion.recoverStagedReviewCompletion(staging as StagingRecord),
