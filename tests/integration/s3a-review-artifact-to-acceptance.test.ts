@@ -682,6 +682,32 @@ describe("S3-b staged restart recovery", () => {
     ).toBe(true);
   });
 
+  it("uses the restarted writer for terminal Lifecycle and cleanup appends", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("terminalized");
+
+    const restarted = new JusticePlugin(fixture.files, fixture.files, { writerId: "w-restarted" });
+    await restarted.initialize();
+    const records = await restarted.getObservationHandler().getLogStore().readAll();
+
+    expect(lifecycleState(records, "task")).toBe("rework_required");
+    expect(
+      records.some(
+        (record) => record.recordType === "observation" &&
+          record.kind === "task_lifecycle_transition" &&
+          record.to === "gate_pending" &&
+          record.writerId === "w-restarted",
+      ),
+    ).toBe(true);
+    expect(
+      records.some(
+        (record) => record.recordType === "observation" &&
+          record.kind === "review_artifact_cleanup" &&
+          record.phase === "finished" &&
+          record.writerId === "w-restarted",
+      ),
+    ).toBe(true);
+  });
+
   it("does not release plan authorization when the completion read has an integrity violation", async () => {
     const fixture = await arrangeReviewArtifactCompletionFixture("claimed", { scope: "plan" });
     await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);

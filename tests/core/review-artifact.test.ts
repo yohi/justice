@@ -150,6 +150,67 @@ describe("review artifact completion (Task 3.6)", () => {
       reviewScope: "task:task-1",
     });
   });
+
+  it("does not fail-terminalize or clean an attempt whose completion staging is rejected", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+    const stagedRecord = {
+      schemaVersion: 1 as const,
+      timestamp: "2026-09-05T00:00:00.500Z",
+      agentId: fixture.agentId,
+      sessionId: fixture.parentSessionId,
+      writerId: fixture.writerId,
+      recordType: "observation" as const,
+      kind: "review_completion_staged" as const,
+      parentSessionId: fixture.parentSessionId,
+      staging: {
+        callId: fixture.callId,
+        correlation: fixture.correlation,
+        artifactConsumption: {
+          artifactId: fixture.reservation.artifactId,
+          digest: `sha256:${"0".repeat(64)}`,
+        },
+        reviewArtifact: {
+          schemaVersion: 1 as const,
+          reviewKind: fixture.correlation.reviewKind,
+          reviewSource: fixture.expectedCategory,
+          correlation: fixture.correlation,
+          observedExecution: fixture.observedExecution,
+          complete: true,
+          findings: [],
+        },
+        observedExecution: fixture.observedExecution,
+      },
+    };
+    await fixture.appendPendingRecord(stagedRecord);
+    await fixture.appendPendingRecord({ ...stagedRecord, timestamp: "2026-09-05T00:00:00.600Z" });
+    await fixture.appendPendingRecord({
+      schemaVersion: 1,
+      timestamp: "2026-09-05T00:00:00.700Z",
+      agentId: fixture.agentId,
+      sessionId: fixture.parentSessionId,
+      writerId: fixture.writerId,
+      recordType: "observation",
+      kind: "review_artifact_read_started",
+      parentSessionId: fixture.parentSessionId,
+      callId: fixture.callId,
+      correlation: fixture.correlation,
+      artifactId: fixture.reservation.artifactId,
+      artifactPath: fixture.reservation.artifactPath,
+    });
+
+    await fixture.completion.recoverStagedReviewCompletionsAfterRestart();
+
+    const records = await fixture.durableRecords();
+    expect(records.filter(
+      (record) => record.recordType === "observation" &&
+        record.kind === "review_dispatch_transition" && record.to === "terminal",
+    )).toHaveLength(0);
+    expect(records.filter(
+      (record) => record.recordType === "observation" &&
+        record.kind === "review_artifact_failure_staged",
+    )).toHaveLength(0);
+    expect(await fixture.artifactExists()).toBe(true);
+  });
 });
 
 /**

@@ -644,7 +644,7 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
         callId,
         postToolUse: { type: "PostToolUse", sessionId: terminal.parentSessionId, callId },
         agentId: terminal.agentId,
-        writerId: terminal.writerId,
+        writerId: dependencies.writerId,
       }),
       kind: "review_artifact_cleanup",
       ...identity,
@@ -667,7 +667,7 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
         callId,
         postToolUse: { type: "PostToolUse", sessionId: terminal.parentSessionId, callId },
         agentId: terminal.agentId,
-        writerId: terminal.writerId,
+        writerId: dependencies.writerId,
       }),
       kind: "review_artifact_cleanup",
       ...identity,
@@ -765,8 +765,8 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
       const lifecycle = project(await dependencies.readDurableRecords(), new Date().toISOString()).lifecycle;
       if (isLifecycleAt(lifecycle, terminal, "review_pending", "final_review_pending")) {
         const result = terminal.correlation.reviewKind === "task-review"
-          ? await dependencies.appendTaskLifecycleTransition({ parentSessionId: terminal.parentSessionId, taskExecutionRef: terminal.correlation.taskExecutionRef, from: "review_pending", to: "rework_required", agentId: terminal.agentId, sessionId: terminal.sessionId, writerId: terminal.writerId })
-          : await dependencies.appendPlanFinalizationTransition({ parentSessionId: terminal.parentSessionId, authorizationId: terminal.correlation.authorizationId, planPath: terminal.correlation.planPath, finalizationAttemptId: terminal.correlation.finalizationAttemptId, finalReviewRound: terminal.correlation.finalReviewRound, from: "final_review_pending", to: "final_rework_required", agentId: terminal.agentId, sessionId: terminal.sessionId, writerId: terminal.writerId });
+          ? await dependencies.appendTaskLifecycleTransition({ parentSessionId: terminal.parentSessionId, taskExecutionRef: terminal.correlation.taskExecutionRef, from: "review_pending", to: "rework_required", agentId: terminal.agentId, sessionId: terminal.sessionId, writerId: dependencies.writerId })
+          : await dependencies.appendPlanFinalizationTransition({ parentSessionId: terminal.parentSessionId, authorizationId: terminal.correlation.authorizationId, planPath: terminal.correlation.planPath, finalizationAttemptId: terminal.correlation.finalizationAttemptId, finalReviewRound: terminal.correlation.finalReviewRound, from: "final_review_pending", to: "final_rework_required", agentId: terminal.agentId, sessionId: terminal.sessionId, writerId: dependencies.writerId });
         if (result.kind !== "committed") return { kind: "blocked" };
       }
       const readback = await dependencies.readDurableRecords();
@@ -786,13 +786,13 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
     const lifecycle = project(records, new Date().toISOString()).lifecycle;
     if (isLifecycleAt(lifecycle, terminal, "review_pending", "final_review_pending")) {
       const transition = terminal.correlation.reviewKind === "task-review"
-        ? await dependencies.appendTaskLifecycleTransition({ parentSessionId: terminal.parentSessionId, taskExecutionRef: terminal.correlation.taskExecutionRef, from: "review_pending", to: "gate_pending", agentId: terminal.agentId, sessionId: terminal.sessionId, writerId: terminal.writerId })
-        : await dependencies.appendPlanFinalizationTransition({ parentSessionId: terminal.parentSessionId, authorizationId: terminal.correlation.authorizationId, planPath: terminal.correlation.planPath, finalizationAttemptId: terminal.correlation.finalizationAttemptId, finalReviewRound: terminal.correlation.finalReviewRound, from: "final_review_pending", to: "final_gate_pending", agentId: terminal.agentId, sessionId: terminal.sessionId, writerId: terminal.writerId });
+        ? await dependencies.appendTaskLifecycleTransition({ parentSessionId: terminal.parentSessionId, taskExecutionRef: terminal.correlation.taskExecutionRef, from: "review_pending", to: "gate_pending", agentId: terminal.agentId, sessionId: terminal.sessionId, writerId: dependencies.writerId })
+        : await dependencies.appendPlanFinalizationTransition({ parentSessionId: terminal.parentSessionId, authorizationId: terminal.correlation.authorizationId, planPath: terminal.correlation.planPath, finalizationAttemptId: terminal.correlation.finalizationAttemptId, finalReviewRound: terminal.correlation.finalReviewRound, from: "final_review_pending", to: "final_gate_pending", agentId: terminal.agentId, sessionId: terminal.sessionId, writerId: dependencies.writerId });
       if (transition.kind !== "committed") return { kind: "blocked" };
     }
     const context: GatePendingAttemptContext = terminal.correlation.reviewKind === "task-review"
-      ? { scope: "task", trigger: "task_complete", parentSessionId: terminal.parentSessionId, taskExecutionRef: terminal.correlation.taskExecutionRef, agentId: terminal.agentId, sessionId: terminal.sessionId, writerId: terminal.writerId }
-      : { scope: "plan", trigger: "final_review_complete", parentSessionId: terminal.parentSessionId, authorizationId: terminal.correlation.authorizationId, planPath: terminal.correlation.planPath, finalizationAttemptId: terminal.correlation.finalizationAttemptId, finalReviewRound: terminal.correlation.finalReviewRound, agentId: terminal.agentId, sessionId: terminal.sessionId, writerId: terminal.writerId };
+      ? { scope: "task", trigger: "task_complete", parentSessionId: terminal.parentSessionId, taskExecutionRef: terminal.correlation.taskExecutionRef, agentId: terminal.agentId, sessionId: terminal.sessionId, writerId: dependencies.writerId }
+      : { scope: "plan", trigger: "final_review_complete", parentSessionId: terminal.parentSessionId, authorizationId: terminal.correlation.authorizationId, planPath: terminal.correlation.planPath, finalizationAttemptId: terminal.correlation.finalizationAttemptId, finalReviewRound: terminal.correlation.finalReviewRound, agentId: terminal.agentId, sessionId: terminal.sessionId, writerId: dependencies.writerId };
     const gate = await dependencies.evaluateGatePendingAttemptWithinAuthorizationReviewBoundary(context);
     if (gate.kind === "blocked") return { kind: "blocked" };
     // `decided` and `not_applicable` are both re-proven from a fresh durable readback.
@@ -939,6 +939,20 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
       );
       for (const attempt of pending) {
         const current = await dependencies.readDurableRecords();
+        const hasStaging = current.some(
+          (record) =>
+            record.recordType === "observation" &&
+            (record.kind === "review_completion_staged" ||
+              record.kind === "review_artifact_failure_staged") &&
+            record.parentSessionId === attempt.parentSessionId &&
+            (record.kind === "review_completion_staged"
+              ? record.staging.callId === attempt.callId
+              : record.callId === attempt.callId) &&
+            sameReviewCorrelation(record.kind === "review_completion_staged"
+              ? record.staging.correlation
+              : record.correlation, attempt.correlation),
+        );
+        if (hasStaging) continue;
         const hasTerminal = projectReviewDispatchSlots(current).some(
           (slot) =>
             slot.key.parentSessionId === attempt.parentSessionId &&
@@ -956,7 +970,7 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
             timestamp: new Date().toISOString(),
             agentId: attempt.agentId,
             sessionId: attempt.sessionId,
-            writerId: attempt.writerId,
+            writerId: dependencies.writerId,
             recordType: "observation",
             kind: "review_artifact_failure_staged",
             parentSessionId: attempt.parentSessionId,
@@ -970,7 +984,7 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
             timestamp: new Date().toISOString(),
             agentId: attempt.agentId,
             sessionId: attempt.sessionId,
-            writerId: attempt.writerId,
+            writerId: dependencies.writerId,
             recordType: "observation",
             kind: "review_dispatch_transition",
             transitionId: randomUUID(),
@@ -1167,7 +1181,7 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
           timestamp: new Date().toISOString(),
           agentId: staged.agentId,
           sessionId: staged.sessionId,
-          writerId: staged.writerId,
+          writerId: dependencies.writerId,
           recordType: "observation",
           kind: "review_dispatch_transition",
           transitionId: randomUUID(),
@@ -1219,7 +1233,7 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
       postToolUse: { type: "PostToolUse", sessionId: parentSessionId, callId },
       observedExecution,
       agentId: marker.agentId,
-      writerId: marker.writerId,
+      writerId: dependencies.writerId,
     });
   };
 
