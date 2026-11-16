@@ -414,12 +414,40 @@ export function admitCurrentReview(
   if (!bindingCoversContext(context, state, binding))
     return { kind: "not_proven", reason: "lifecycle_or_authorization_mismatch" };
 
+  const terminal = findCompletedTerminalCorrelation(
+    records,
+    state,
+    context.parentSessionId,
+    (correlation) => matchesExecutionIdentity(correlation, context, binding),
+  );
+  if (terminal.kind !== "admitted") return terminal;
+  const correlation = terminal.correlation;
+  if (
+    context.scope === "plan" &&
+    correlation.reviewKind === "final-review" &&
+    correlation.finalReviewRound !== context.finalReviewRound
+  )
+    return { kind: "not_proven", reason: "final_review_round_mismatch" };
+  return proveCleanCompletedReview(records, context.parentSessionId, correlation);
+}
+
+/**
+ * The single successful (`completed`) terminal for an execution identity, taken from
+ * both the projected slot and the durable terminal record. Competing successful
+ * rounds for the same execution are a conflict, never resolved by max/latest.
+ */
+function findCompletedTerminalCorrelation(
+  records: readonly PersistedLogRecord[],
+  state: ProjectedState,
+  parentSessionId: string,
+  matchesIdentity: (correlation: ReviewCorrelation) => boolean,
+): CurrentReviewAdmission {
   const slots = state.reviewDispatchSlots.filter(
     (slot) =>
-      slot.key.parentSessionId === context.parentSessionId &&
+      slot.key.parentSessionId === parentSessionId &&
       slot.state === "terminal" &&
       slot.terminalReason === "completed" &&
-      matchesExecutionIdentity(slot.key.correlation, context, binding),
+      matchesIdentity(slot.key.correlation),
   );
   const terminalTransitions = records.filter(
     (record): record is ReviewDispatchTerminalRecord =>
@@ -427,8 +455,8 @@ export function admitCurrentReview(
       record.kind === "review_dispatch_transition" &&
       record.to === "terminal" &&
       record.terminalReason === "completed" &&
-      record.parentSessionId === context.parentSessionId &&
-      matchesExecutionIdentity(record.correlation, context, binding),
+      record.parentSessionId === parentSessionId &&
+      matchesIdentity(record.correlation),
   );
   if (slots.length > 1 || terminalTransitions.length > 1)
     return { kind: "conflict", reason: "multiple_completed_terminal_candidates" };
@@ -440,25 +468,27 @@ export function admitCurrentReview(
     !sameReviewCorrelation(slot.key.correlation, transition.correlation)
   )
     return { kind: "not_proven", reason: "completed_terminal_missing" };
+  return { kind: "admitted", correlation: slot.key.correlation };
+}
 
-  const correlation = slot.key.correlation;
-  if (
-    context.scope === "plan" &&
-    correlation.reviewKind === "final-review" &&
-    correlation.finalReviewRound !== context.finalReviewRound
-  )
-    return { kind: "not_proven", reason: "final_review_round_mismatch" };
-
-  // F-002: the terminal slot no longer carries the claimed call, so prove the
-  // review call from the durable claimed -> staged -> terminal history.
-  const history = projectCompletedReviewCallHistory(records, context.parentSessionId, correlation);
+/**
+ * F-002: the terminal slot no longer carries the claimed call, so prove the review
+ * call from the durable claimed -> staged -> terminal history, then require the
+ * correlation's review observations to be clean, complete and uncontradicted.
+ */
+function proveCleanCompletedReview(
+  records: readonly PersistedLogRecord[],
+  parentSessionId: string,
+  correlation: ReviewCorrelation,
+): CurrentReviewAdmission {
+  const history = projectCompletedReviewCallHistory(records, parentSessionId, correlation);
   if (history.kind === "conflict") return { kind: "conflict", reason: history.reason };
   if (history.kind === "missing") return { kind: "not_proven", reason: history.reason };
 
   const scoped = records.filter(
     (record) =>
       record.recordType === "observation" &&
-      isCurrentReviewObservation(record, context, correlation),
+      isCurrentReviewObservation(record, parentSessionId, correlation),
   );
   const clean = scoped.filter(
     (record) =>
@@ -479,19 +509,154 @@ export function admitCurrentReview(
  */
 function isCurrentReviewObservation(
   record: ObservationRecord,
-  context: GatePendingAttemptContext,
+  parentSessionId: string,
   correlation: ReviewCorrelation,
 ): boolean {
   return (
     record.kind === "review_observed" &&
     record.correlation !== undefined &&
     sameReviewCorrelation(record.correlation, correlation) &&
-    record.sessionId === context.parentSessionId &&
-    (context.scope === "task"
-      ? record.taskId === context.taskExecutionRef.taskId &&
-        record.reviewScope === `task:${context.taskExecutionRef.taskId}`
+    record.sessionId === parentSessionId &&
+    (correlation.reviewKind === "task-review"
+      ? record.taskId === correlation.taskExecutionRef.taskId &&
+        record.reviewScope === `task:${correlation.taskExecutionRef.taskId}`
       : record.reviewScope === "final")
   );
+}
+
+/** Same execution identity ignoring the review round (see `matchesExecutionIdentity`). */
+function sameExecutionIdentity(left: ReviewCorrelation, right: ReviewCorrelation): boolean {
+  if (left.reviewKind === "task-review")
+    return (
+      right.reviewKind === "task-review" && sameTask(left.taskExecutionRef, right.taskExecutionRef)
+    );
+  return (
+    right.reviewKind === "final-review" &&
+    left.authorizationId === right.authorizationId &&
+    left.planPath === right.planPath &&
+    samePlanFingerprint(left.planFingerprint, right.planFingerprint) &&
+    left.finalizationAttemptId === right.finalizationAttemptId
+  );
+}
+
+/**
+ * S3-b: proves that the current projected Lifecycle of `correlation`'s identity is
+ * `to` AND that exactly one durable `from -> to` transition record of that identity
+ * exists. A terminal value alone, an unapplied record, or competing transitions out
+ * of `from` are never enough. Task Lifecycle records carry no review round: the
+ * round is proven by the caller from the terminal/decision correlation.
+ * Returns `null` when proven, otherwise the reason.
+ */
+export function inspectDurableLifecycleTransition(
+  records: readonly PersistedLogRecord[],
+  state: ProjectedState,
+  parentSessionId: string,
+  correlation: ReviewCorrelation,
+  from: string,
+  to: string,
+): string | null {
+  let current: string | undefined;
+  let outgoing: readonly { readonly to: string }[];
+  if (correlation.reviewKind === "task-review") {
+    const ref = correlation.taskExecutionRef;
+    const key = taskLifecycleKey(parentSessionId, ref);
+    const currentRef = state.lifecycle.currentTaskExecutionRefs.get(key);
+    if (currentRef === undefined || !sameTask(currentRef, ref))
+      return "lifecycle_identity_not_current";
+    current = state.lifecycle.taskStates.get(key);
+    outgoing = records.filter(
+      (record) =>
+        record.recordType === "observation" &&
+        record.kind === "task_lifecycle_transition" &&
+        record.parentSessionId === parentSessionId &&
+        sameTask(record.taskExecutionRef, ref) &&
+        record.from === from,
+    ) as unknown as readonly { readonly to: string }[];
+  } else {
+    const matches = (candidate: {
+      readonly parentSessionId: string;
+      readonly authorizationId: string;
+      readonly planPath: string;
+      readonly finalizationAttemptId: string;
+      readonly finalReviewRound: number;
+    }): boolean =>
+      candidate.parentSessionId === parentSessionId &&
+      candidate.authorizationId === correlation.authorizationId &&
+      candidate.planPath === correlation.planPath &&
+      candidate.finalizationAttemptId === correlation.finalizationAttemptId &&
+      candidate.finalReviewRound === correlation.finalReviewRound;
+    const finalization = Array.from(state.lifecycle.finalization.values()).find(matches);
+    if (finalization === undefined) return "lifecycle_identity_not_current";
+    current = finalization.state;
+    outgoing = records.filter(
+      (record) =>
+        record.recordType === "observation" &&
+        record.kind === "plan_finalization_transition" &&
+        matches(record) &&
+        record.from === from,
+    ) as unknown as readonly { readonly to: string }[];
+  }
+  if (current !== to) return "lifecycle_not_terminal";
+  if (outgoing.length === 0) return "lifecycle_transition_missing";
+  if (outgoing.length !== 1 || outgoing[0]?.to !== to) return "lifecycle_transition_conflict";
+  return null;
+}
+
+/**
+ * S3-b formal completion (Design R0.1.2 §3.2): a pure check over one durable
+ * readback that the `completed` review of `correlation` is formally complete —
+ * agreeing current Gate/Acceptance, the unique successful terminal with its
+ * claimed -> staged -> terminal history and clean review observations, and the
+ * durable, projection-applied terminal Lifecycle transition of the same identity.
+ * Decisions alone never prove it. Authorization status and plan currency are NOT
+ * checked here: the caller proves them inside its Authorization Review Boundary.
+ */
+export function inspectFormalReviewCompletion(
+  records: readonly PersistedLogRecord[],
+  parentSessionId: string,
+  correlation: ReviewCorrelation,
+):
+  | { readonly kind: "consistent"; readonly gate: GateDecision }
+  | { readonly kind: "not_consistent"; readonly reason: string } {
+  const inconsistent = (reason: string) => ({ kind: "not_consistent" as const, reason });
+  const gate = findCurrentGateDecision(records, correlation);
+  const acceptance = findCurrentAcceptanceDecision(records, correlation);
+  if (gate.kind === "conflict" || acceptance.kind === "conflict")
+    return inconsistent("decision_conflict");
+  if (gate.kind !== "found" || acceptance.kind !== "found") return inconsistent("decision_missing");
+  if (!acceptanceAgreesWithGate(gate.decision, acceptance.decision))
+    return inconsistent("decision_mismatch");
+
+  const state = project(records, new Date().toISOString());
+  const terminal = findCompletedTerminalCorrelation(records, state, parentSessionId, (candidate) =>
+    sameExecutionIdentity(candidate, correlation),
+  );
+  if (terminal.kind !== "admitted") return inconsistent(terminal.reason);
+  if (!sameReviewCorrelation(terminal.correlation, correlation))
+    return inconsistent("review_round_not_current");
+  const review = proveCleanCompletedReview(records, parentSessionId, correlation);
+  if (review.kind !== "admitted") return inconsistent(review.reason);
+
+  const passed = gate.decision.verdict === "PASS";
+  const lifecycle =
+    correlation.reviewKind === "task-review"
+      ? inspectDurableLifecycleTransition(
+          records,
+          state,
+          parentSessionId,
+          correlation,
+          "gate_pending",
+          passed ? "accepted" : "rework_required",
+        )
+      : inspectDurableLifecycleTransition(
+          records,
+          state,
+          parentSessionId,
+          correlation,
+          "final_gate_pending",
+          passed ? "complete" : "final_rework_required",
+        );
+  return lifecycle === null ? { kind: "consistent", gate: gate.decision } : inconsistent(lifecycle);
 }
 
 export type ExecutionEvidenceAdmission = {
@@ -928,7 +1093,7 @@ export function createGatePendingAttemptEvaluator(dependencies: GateEvaluationDe
       // summary and execution evidence proven by the durable implementation binding.
       const admittedReviewSummary = aggregateAdmittedReviews(
         records.filter((record): record is ObservationRecord => record.recordType === "observation"),
-        (record) => isCurrentReviewObservation(record, context, correlation),
+        (record) => isCurrentReviewObservation(record, context.parentSessionId, correlation),
       );
       const execution: ExecutionEvidenceAdmission =
         context.scope === "task"

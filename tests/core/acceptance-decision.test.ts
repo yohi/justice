@@ -6,6 +6,7 @@ import {
   deriveAcceptanceDecision,
   findCurrentAcceptanceDecision,
   findCurrentGateDecision,
+  inspectFormalReviewCompletion,
   isCurrentActiveAuthorization,
   sameReviewCorrelation,
 } from "../../src/core/acceptance-decision";
@@ -2737,5 +2738,241 @@ describe("round-safe GateDecision / AcceptanceDecision (F-003)", () => {
       kind: "found",
       decision: { verdict: "blocked" },
     });
+  });
+});
+
+/** Durable `gate_pending -> terminal` Task Lifecycle record. It carries no review round. */
+function taskTerminalLifecycleRecord(
+  to: "accepted" | "rework_required",
+  overrides: Record<string, unknown> = {},
+): PersistedLogRecord {
+  return {
+    ...lifecycleRecords()[0],
+    sequence: 10,
+    from: "gate_pending",
+    to,
+    ...overrides,
+  } as unknown as PersistedLogRecord;
+}
+
+function planTerminalLifecycleRecord(
+  to: "complete" | "final_rework_required",
+  overrides: Record<string, unknown> = {},
+): PersistedLogRecord {
+  return {
+    ...planLifecycleRecords()[0],
+    sequence: 7,
+    from: "final_gate_pending",
+    to,
+    ...overrides,
+  } as unknown as PersistedLogRecord;
+}
+
+function taskRework(record: PersistedLogRecord): PersistedLogRecord {
+  return { ...record, verdict: "FAIL" } as unknown as PersistedLogRecord;
+}
+
+describe("formal completion evidence (S3-b Task 1)", () => {
+  const decided = (): readonly PersistedLogRecord[] => [
+    ...lifecycleRecords(),
+    authoritativeGateRecord(),
+    taskAcceptanceRecord(),
+  ];
+
+  it("formal completion: is not consistent while the Task Lifecycle is still gate_pending", () => {
+    expect(inspectFormalReviewCompletion(decided(), "session-1", taskCorrelation(1))).toEqual({
+      kind: "not_consistent",
+      reason: "lifecycle_not_terminal",
+    });
+  });
+
+  it("formal completion: is consistent with matching decisions, review history and a round-less durable accepted transition", () => {
+    const terminal = taskTerminalLifecycleRecord("accepted");
+    expect("reviewRound" in terminal).toBe(false);
+    const result = inspectFormalReviewCompletion(
+      [...decided(), terminal],
+      "session-1",
+      taskCorrelation(1),
+    );
+    expect(result.kind).toBe("consistent");
+    if (result.kind === "consistent") expect(result.gate.verdict).toBe("PASS");
+  });
+
+  it("formal completion: maps a FAIL Gate and rework-required Acceptance to rework_required only", () => {
+    const base = [
+      ...lifecycleRecords(),
+      taskRework(authoritativeGateRecord()),
+      taskAcceptanceRecord("rework-required"),
+    ];
+    expect(
+      inspectFormalReviewCompletion(
+        [...base, taskTerminalLifecycleRecord("rework_required")],
+        "session-1",
+        taskCorrelation(1),
+      ).kind,
+    ).toBe("consistent");
+    expect(
+      inspectFormalReviewCompletion(
+        [...base, taskTerminalLifecycleRecord("accepted")],
+        "session-1",
+        taskCorrelation(1),
+      ).kind,
+    ).toBe("not_consistent");
+  });
+
+  it("formal completion: proves Plan complete and final_rework_required from the Finalization identity", () => {
+    expect(
+      inspectFormalReviewCompletion(
+        [...planLifecycleRecords(), planGateRecord(), planAcceptanceRecord()],
+        "session-1",
+        finalCorrelation(),
+      ).kind,
+    ).toBe("not_consistent");
+    expect(
+      inspectFormalReviewCompletion(
+        [
+          ...planLifecycleRecords(),
+          planGateRecord(),
+          planAcceptanceRecord(),
+          planTerminalLifecycleRecord("complete"),
+        ],
+        "session-1",
+        finalCorrelation(),
+      ).kind,
+    ).toBe("consistent");
+    expect(
+      inspectFormalReviewCompletion(
+        [
+          ...planLifecycleRecords(),
+          planGateRecord("FAIL"),
+          planAcceptanceRecord("rework-required"),
+          planTerminalLifecycleRecord("final_rework_required"),
+        ],
+        "session-1",
+        finalCorrelation(),
+      ).kind,
+    ).toBe("consistent");
+    expect(
+      inspectFormalReviewCompletion(
+        [
+          ...planLifecycleRecords(),
+          planGateRecord("FAIL"),
+          planAcceptanceRecord("rework-required"),
+          planTerminalLifecycleRecord("complete"),
+        ],
+        "session-1",
+        finalCorrelation(),
+      ).kind,
+    ).toBe("not_consistent");
+    expect(
+      inspectFormalReviewCompletion(
+        [
+          ...planLifecycleRecords(),
+          planGateRecord(),
+          planAcceptanceRecord(),
+          planTerminalLifecycleRecord("complete", { finalReviewRound: 2 }),
+        ],
+        "session-1",
+        finalCorrelation(),
+      ).kind,
+    ).toBe("not_consistent");
+  });
+
+  it("formal completion: rejects missing staging, competing terminals, another round, another attempt and another parent", () => {
+    const complete = [...decided(), taskTerminalLifecycleRecord("accepted")];
+    const withoutStaging = complete.filter(
+      (record) => !("kind" in record && record.kind === "review_completion_staged"),
+    );
+    expect(
+      inspectFormalReviewCompletion(withoutStaging, "session-1", taskCorrelation(1)).kind,
+    ).toBe("not_consistent");
+
+    const competing = [
+      ...taskTransitionRecords(),
+      ...reviewRecords([
+        { type: "terminal", correlation: taskCorrelation(1) },
+        { type: "observed", correlation: taskCorrelation(1) },
+        { type: "terminal", correlation: taskCorrelation(2) },
+      ]),
+      authoritativeGateRecord(),
+      taskAcceptanceRecord(),
+      taskTerminalLifecycleRecord("accepted"),
+    ];
+    expect(inspectFormalReviewCompletion(competing, "session-1", taskCorrelation(1)).kind).toBe(
+      "not_consistent",
+    );
+
+    expect(inspectFormalReviewCompletion(complete, "session-1", taskCorrelation(2)).kind).toBe(
+      "not_consistent",
+    );
+    expect(
+      inspectFormalReviewCompletion(
+        complete,
+        "session-1",
+        taskCorrelation(1, { ...ref, attemptId: "attempt-2" }),
+      ).kind,
+    ).toBe("not_consistent");
+    expect(inspectFormalReviewCompletion(complete, "session-2", taskCorrelation(1)).kind).toBe(
+      "not_consistent",
+    );
+  });
+
+  it("formal completion: rejects a lifecycle record the projection did not apply, and duplicate terminal transitions", () => {
+    // The task never reached gate_pending, so the projection ignores the record.
+    const notApplied = [
+      ...taskTransitionRecords().slice(0, 5),
+      ...lifecycleRecords().slice(6),
+      authoritativeGateRecord(),
+      taskAcceptanceRecord(),
+      taskTerminalLifecycleRecord("accepted"),
+    ];
+    expect(
+      project(notApplied, "2026-09-18T00:10:00.000Z").lifecycle.taskStates.values().next().value,
+    ).toBe("review_pending");
+    expect(inspectFormalReviewCompletion(notApplied, "session-1", taskCorrelation(1)).kind).toBe(
+      "not_consistent",
+    );
+
+    const duplicated = [
+      ...decided(),
+      taskTerminalLifecycleRecord("accepted"),
+      taskTerminalLifecycleRecord("rework_required", { sequence: 11 }),
+    ];
+    expect(inspectFormalReviewCompletion(duplicated, "session-1", taskCorrelation(1))).toEqual({
+      kind: "not_consistent",
+      reason: "lifecycle_transition_conflict",
+    });
+  });
+
+  it("formal completion: rejects a provisional blocked Acceptance, a missing Gate and contradictory review observations", () => {
+    const terminal = taskTerminalLifecycleRecord("accepted");
+    expect(
+      inspectFormalReviewCompletion(
+        [...lifecycleRecords(), authoritativeGateRecord(), taskAcceptanceRecord("blocked"), terminal],
+        "session-1",
+        taskCorrelation(1),
+      ).kind,
+    ).toBe("not_consistent");
+    expect(
+      inspectFormalReviewCompletion(
+        [...lifecycleRecords(), taskAcceptanceRecord(), terminal],
+        "session-1",
+        taskCorrelation(1),
+      ).kind,
+    ).toBe("not_consistent");
+    const contradictory = [
+      ...taskTransitionRecords(),
+      ...reviewRecords([
+        { type: "terminal", correlation: taskCorrelation(1) },
+        { type: "observed", correlation: taskCorrelation(1) },
+        { type: "observed", correlation: taskCorrelation(1), items: [{ itemKey: "finding-1", evidenceId: "evidence-1", severity: "major", summary: "finding", location: "file.ts", status: "open" }] },
+      ]),
+      authoritativeGateRecord(),
+      taskAcceptanceRecord(),
+      terminal,
+    ];
+    expect(
+      inspectFormalReviewCompletion(contradictory, "session-1", taskCorrelation(1)).kind,
+    ).toBe("not_consistent");
   });
 });
