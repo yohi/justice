@@ -19,6 +19,7 @@ import type { ReviewCorrelation, ObservedReviewExecutionV1 } from "../../src/cor
 import type { PendingEnvelope, PersistedLogRecord } from "../../src/core/v2/observation-model";
 import type { EvaluateRulesInput } from "../../src/core/acceptance-decision";
 import type { HistoricalTaskGateDecisionPayload } from "../../src/core/v2/decision-model";
+import { project } from "../../src/core/v2/state-projection";
 
 type TaskReviewCorrelation = Extract<ReviewCorrelation, { readonly reviewKind: "task-review" }>;
 
@@ -547,5 +548,351 @@ describe("S3-a review artifact to acceptance (F-004)", () => {
       expect(taskGateDecisions(records)).toHaveLength(0);
       await expectNoFormalAcceptance(fixture);
     });
+  });
+});
+
+/**
+ * S3-b Task 4 — Staged Restart Recovery (Design R0.1.2 §5.1). The durable log is
+ * left in a partial state by a fault on the live path; "restart" is the existing
+ * `recoverStagedReviewCompletion` entry driven from the durable staging record.
+ */
+describe("S3-b staged restart recovery", () => {
+  type Scope = "task" | "plan";
+  type StagingRecord = Extract<PersistedLogRecord, { readonly kind: "review_completion_staged" }>;
+
+  const lifecycleState = (records: readonly PersistedLogRecord[], scope: Scope): string | undefined => {
+    const lifecycle = project(records, "2026-09-05T01:00:00.000Z").lifecycle;
+    return scope === "task"
+      ? lifecycle.taskStates.values().next().value
+      : lifecycle.finalization.values().next().value?.state;
+  };
+  const transitions = (
+    records: readonly PersistedLogRecord[],
+    scope: Scope,
+    from: string,
+    to: string,
+  ): readonly PersistedLogRecord[] =>
+    records.filter(
+      (record) =>
+        "kind" in record &&
+        record.kind === (scope === "task" ? "task_lifecycle_transition" : "plan_finalization_transition") &&
+        record.from === from &&
+        record.to === to,
+    );
+  const terminals = (records: readonly PersistedLogRecord[]): readonly PersistedLogRecord[] =>
+    ofKind(records, "review_dispatch_transition").filter((record) => record.to === "terminal");
+  const decisionRecords = (records: readonly PersistedLogRecord[]): readonly PersistedLogRecord[] =>
+    records.filter((record) => record.recordType === "decision");
+  const stagingOf = async (fixture: ReviewArtifactCompletionFixture): Promise<StagingRecord> => {
+    const staged = ofKind(await fixture.durableRecords(), "review_completion_staged");
+    if (staged.length !== 1 || staged[0] === undefined) throw new Error("expected one staging");
+    return staged[0];
+  };
+  const claimedBindingGone = async (fixture: ReviewArtifactCompletionFixture): Promise<boolean> =>
+    project(await fixture.durableRecords(), "2026-09-05T01:00:00.000Z").reviewDispatchSlots.every(
+      (slot) => slot.state !== "claimed",
+    );
+  const restart = async (
+    fixture: ReviewArtifactCompletionFixture,
+  ): Promise<{ readonly kind: string }> => {
+    fixture.setLifecycleAppendFault(() => undefined);
+    return fixture.completion.recoverStagedReviewCompletion(await stagingOf(fixture));
+  };
+
+  it.each(["task", "plan"] as const)(
+    "staged restart: %s completed with a matching terminal recovers only the Lifecycle from durable decisions",
+    async (scope) => {
+      const fixture = await arrangeReviewArtifactCompletionFixture("claimed", { scope });
+      await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
+      const terminalState = scope === "task" ? "accepted" : "complete";
+      const pendingState = scope === "task" ? "gate_pending" : "final_gate_pending";
+      fixture.setLifecycleAppendFault(({ to }) => (to === terminalState ? "fail" : undefined));
+      await expect(fixture.consume()).resolves.toEqual({ kind: "blocked" });
+      const before = await fixture.durableRecords();
+      expect(lifecycleState(before, scope)).toBe(pendingState);
+      expect(decisionRecords(before)).toHaveLength(2);
+      // The claimed-only review call binding no longer exists after the terminal.
+      await expect(claimedBindingGone(fixture)).resolves.toBe(true);
+      expect(fixture.releaseCompletedAuthorization).not.toHaveBeenCalled();
+
+      await expect(restart(fixture)).resolves.toEqual({ kind: "terminalized" });
+      // A second restart converges to the same state without any new record.
+      const once = await fixture.durableRecords();
+      await expect(restart(fixture)).resolves.toEqual({ kind: "terminalized" });
+      const after = await fixture.durableRecords();
+
+      expect(lifecycleState(after, scope)).toBe(terminalState);
+      expect(transitions(after, scope, pendingState, terminalState)).toHaveLength(1);
+      expect(decisionRecords(after)).toHaveLength(2);
+      expect(terminals(after)).toHaveLength(1);
+      expect(fixture.evaluateRules).toHaveBeenCalledTimes(1);
+      expect(after.filter((record) => !("kind" in record && record.kind === "review_artifact_cleanup")))
+        .toHaveLength(once.filter((record) => !("kind" in record && record.kind === "review_artifact_cleanup")).length);
+      expect(fixture.releaseCompletedAuthorization).toHaveBeenCalledTimes(scope === "plan" ? 2 : 0);
+    },
+  );
+
+  it("staged restart: completed without a matching terminal appends the terminal once and requires the proven history", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+    await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
+    fixture.failNextTerminalAppend();
+    await expect(fixture.consume()).resolves.toEqual({ kind: "blocked" });
+    expect(terminals(await fixture.durableRecords())).toHaveLength(0);
+
+    await expect(restart(fixture)).resolves.toEqual({ kind: "terminalized" });
+    await expect(restart(fixture)).resolves.toEqual({ kind: "terminalized" });
+
+    const after = await fixture.durableRecords();
+    expect(terminals(after)).toHaveLength(1);
+    expect(completedTerminals(after)).toHaveLength(1);
+    expect(lifecycleState(after, "task")).toBe("accepted");
+    expect(lifecycleTo(after, "accepted")).toHaveLength(1);
+    expect(taskGateDecisions(after)).toHaveLength(1);
+    expect(taskAcceptanceDecisions(after)).toHaveLength(1);
+  });
+
+  it.each([
+    ["task", "terminal"],
+    ["task", "no terminal"],
+    ["plan", "terminal"],
+    ["plan", "no terminal"],
+  ] as const)(
+    "staged restart: %s completed_with_findings with %s converges to durable Review-Rework only",
+    async (scope, terminalCase) => {
+      const fixture = await arrangeReviewArtifactCompletionFixture("claimed", { scope });
+      await fixture.writeReservedArtifact(fixture.reservation, fixture.findingsReviewWorkerJson);
+      const pendingState = scope === "task" ? "review_pending" : "final_review_pending";
+      const reworkState = scope === "task" ? "rework_required" : "final_rework_required";
+      if (terminalCase === "terminal") {
+        fixture.setLifecycleAppendFault(({ to }) => (to === reworkState ? "fail" : undefined));
+      } else {
+        fixture.failNextTerminalAppend();
+      }
+      await expect(fixture.consume()).resolves.toEqual({ kind: "blocked" });
+      const before = await fixture.durableRecords();
+      expect(terminals(before)).toHaveLength(terminalCase === "terminal" ? 1 : 0);
+      expect(lifecycleState(before, scope)).toBe(pendingState);
+
+      await expect(restart(fixture)).resolves.toEqual({ kind: "terminalized" });
+      await expect(restart(fixture)).resolves.toEqual({ kind: "terminalized" });
+
+      const after = await fixture.durableRecords();
+      // Durable transition record and projection are asserted separately.
+      expect(transitions(after, scope, pendingState, reworkState)).toHaveLength(1);
+      expect(lifecycleState(after, scope)).toBe(reworkState);
+      expect(terminals(after)).toHaveLength(1);
+      expect(terminals(after)[0]).toMatchObject({ terminalReason: "completed_with_findings" });
+      expect(decisionRecords(after)).toEqual([]);
+      expect(fixture.gateEvaluation).not.toHaveBeenCalled();
+      expect(fixture.releaseCompletedAuthorization).not.toHaveBeenCalled();
+      expect(transitions(after, scope, scope === "task" ? "gate_pending" : "final_gate_pending", scope === "task" ? "accepted" : "complete")).toEqual([]);
+    },
+  );
+
+  it("staged restart: a missing staging is never replaced by a terminal plus decisions", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+    await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
+    fixture.setLifecycleAppendFault(({ to }) => (to === "accepted" ? "fail" : undefined));
+    await expect(fixture.consume()).resolves.toEqual({ kind: "blocked" });
+    fixture.setLifecycleAppendFault(() => undefined);
+    const staging = await stagingOf(fixture);
+    const before = await fixture.durableRecords();
+
+    // A staging whose call does not exist in the durable log (no staged record for it).
+    const forged: StagingRecord = {
+      ...staging,
+      staging: { ...staging.staging, callId: "another-call" },
+    };
+    await expect(fixture.completion.recoverStagedReviewCompletion(forged)).resolves.toEqual({
+      kind: "stale",
+    });
+    expect(await fixture.durableRecords()).toHaveLength(before.length);
+    expect(lifecycleState(await fixture.durableRecords(), "task")).toBe("gate_pending");
+  });
+
+  it.each([
+    ["artifact id", (staging: StagingRecord): StagingRecord => ({ ...staging, staging: { ...staging.staging, artifactConsumption: { ...staging.staging.artifactConsumption, artifactId: "other-artifact" } } })],
+    ["artifact digest", (staging: StagingRecord): StagingRecord => ({ ...staging, staging: { ...staging.staging, artifactConsumption: { ...staging.staging.artifactConsumption, digest: "sha256:other" } } })],
+    ["child session", (staging: StagingRecord): StagingRecord => ({ ...staging, staging: { ...staging.staging, observedExecution: { ...staging.staging.observedExecution, childSessionId: "other-child" } } })],
+    ["review round", (staging: StagingRecord): StagingRecord => ({ ...staging, staging: { ...staging.staging, correlation: { ...staging.staging.correlation, reviewRound: 2 } as ReviewCorrelation } })],
+    ["terminal reason", (staging: StagingRecord): StagingRecord => ({ ...staging, staging: { ...staging.staging, reviewArtifact: { ...staging.staging.reviewArtifact, findings: [{ itemKey: "f", severity: "major", summary: "s", location: "l" }] } } })],
+  ] as const)(
+    "staged restart: a staging whose %s disagrees with the durable history writes nothing",
+    async (_name, tamper) => {
+      const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+      await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
+      fixture.setLifecycleAppendFault(({ to }) => (to === "accepted" ? "fail" : undefined));
+      await expect(fixture.consume()).resolves.toEqual({ kind: "blocked" });
+      fixture.setLifecycleAppendFault(() => undefined);
+      const before = await fixture.durableRecords();
+
+      const outcome = await fixture.completion.recoverStagedReviewCompletion(
+        tamper(await stagingOf(fixture)),
+      );
+
+      expect(outcome.kind).not.toBe("terminalized");
+      expect(await fixture.durableRecords()).toHaveLength(before.length);
+      expect(lifecycleState(await fixture.durableRecords(), "task")).toBe("gate_pending");
+    },
+  );
+
+  it("staged restart: duplicate stagings, a competing terminal or a duplicated delegated binding fail closed", async () => {
+    for (const corrupt of ["staging", "terminal", "delegated"] as const) {
+      const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+      await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
+      fixture.setLifecycleAppendFault(({ to }) => (to === "accepted" ? "fail" : undefined));
+      await expect(fixture.consume()).resolves.toEqual({ kind: "blocked" });
+      fixture.setLifecycleAppendFault(() => undefined);
+      const staging = await stagingOf(fixture);
+      const records = await fixture.durableRecords();
+      const source =
+        corrupt === "staging"
+          ? staging
+          : corrupt === "terminal"
+            ? terminals(records)[0]
+            : ofKind(records, "delegated_execution_binding")[0];
+      if (source === undefined) throw new Error("fixture record missing");
+      const duplicate = Object.fromEntries(
+        Object.entries(source).filter(([key]) => key !== "sequence"),
+      );
+      await fixture.appendPendingRecord(
+        (corrupt === "terminal"
+          ? { ...duplicate, transitionId: "competing-terminal" }
+          : duplicate) as never,
+      );
+      const before = await fixture.durableRecords();
+
+      const outcome = await fixture.completion.recoverStagedReviewCompletion(staging);
+
+      expect(outcome.kind, corrupt).not.toBe("terminalized");
+      expect(await fixture.durableRecords(), corrupt).toHaveLength(before.length);
+      expect(lifecycleState(await fixture.durableRecords(), "task"), corrupt).toBe("gate_pending");
+    }
+  });
+
+  it("staged restart: a revoked Authorization blocks recovery without any Lifecycle write", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+    await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
+    fixture.setLifecycleAppendFault(({ to }) => (to === "accepted" ? "fail" : undefined));
+    await expect(fixture.consume()).resolves.toEqual({ kind: "blocked" });
+    await fixture.revokeAuthorization();
+
+    await expect(restart(fixture)).resolves.toEqual({ kind: "blocked" });
+
+    const after = await fixture.durableRecords();
+    expect(lifecycleState(after, "task")).toBe("gate_pending");
+    expect(lifecycleTo(after, "accepted")).toHaveLength(0);
+  });
+
+  it("staged restart: review_incomplete stays non-accepted and creates no decision", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+    await fixture.writeReservedArtifact(
+      fixture.reservation,
+      JSON.stringify({ schemaVersion: 1, complete: false, findings: [] }),
+    );
+    await expect(fixture.consume()).resolves.toEqual({ kind: "blocked" });
+
+    await expect(restart(fixture)).resolves.toEqual({ kind: "blocked" });
+
+    const after = await fixture.durableRecords();
+    expect(decisionRecords(after)).toEqual([]);
+    expect(lifecycleState(after, "task")).toBe("review_pending");
+  });
+
+  it("staged restart: a staging of a superseded attempt is stale and appends nothing", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+    await fixture.writeReservedArtifact(fixture.reservation, fixture.findingsReviewWorkerJson);
+    await expect(fixture.consume()).resolves.toEqual({ kind: "terminalized" });
+    const correlation = taskCorrelation(fixture);
+    // The task was reworked under a new attempt that is again awaiting review.
+    const nextRef = { ...correlation.taskExecutionRef, attemptId: "attempt-next" };
+    for (const [from, to] of [
+      ["rework_required", "in_progress"],
+      ["in_progress", "worker_reported"],
+      ["worker_reported", "evidence_pending"],
+      ["evidence_pending", "review_pending"],
+    ] as const) {
+      await fixture.appendPendingRecord({
+        ...envelope(fixture),
+        kind: "task_lifecycle_transition",
+        parentSessionId: fixture.parentSessionId,
+        taskExecutionRef: nextRef,
+        from,
+        to,
+      });
+    }
+    const before = await fixture.durableRecords();
+    expect(lifecycleState(before, "task")).toBe("review_pending");
+
+    await expect(restart(fixture)).resolves.toEqual({ kind: "stale" });
+
+    expect(await fixture.durableRecords()).toHaveLength(before.length);
+  });
+
+  it.each(["childSessionId", "reviewExecutionEventId"] as const)(
+    "staged restart: a durable staging whose observed %s is not the persisted delegated binding is rejected",
+    async (field) => {
+      const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+      const observedExecution = { ...fixture.observedExecution, [field]: "not-the-delegated-one" };
+      const staging = await fixture.appendPendingRecord({
+        ...envelope(fixture),
+        kind: "review_completion_staged",
+        parentSessionId: fixture.parentSessionId,
+        staging: {
+          callId: fixture.callId,
+          correlation: fixture.correlation,
+          artifactConsumption: { artifactId: fixture.reservation.artifactId, digest: "sha256:x" },
+          reviewArtifact: {
+            schemaVersion: 1,
+            reviewKind: "task-review",
+            reviewSource: "sp-review",
+            correlation: fixture.correlation,
+            observedExecution,
+            complete: true,
+            findings: [],
+          },
+          observedExecution,
+        },
+      });
+      const before = await fixture.durableRecords();
+
+      await expect(
+        fixture.completion.recoverStagedReviewCompletion(staging as StagingRecord),
+      ).resolves.toEqual({ kind: "stale" });
+
+      expect(await fixture.durableRecords()).toHaveLength(before.length);
+      expect(terminals(await fixture.durableRecords())).toHaveLength(0);
+    },
+  );
+
+  it("staged restart: a not_applicable Gate without durable decisions is stale, never terminalized", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+    await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
+    fixture.evaluateRules.mockResolvedValue({ verdict: "SKIP", reason: "no gate" });
+    await expect(fixture.consume()).resolves.toEqual({ kind: "stale" });
+
+    await expect(restart(fixture)).resolves.toEqual({ kind: "stale" });
+
+    const after = await fixture.durableRecords();
+    expect(decisionRecords(after)).toEqual([]);
+    expect(lifecycleState(after, "task")).toBe("gate_pending");
+    expect(lifecycleTo(after, "accepted")).toHaveLength(0);
+  });
+
+  it("staged restart: the restart entry replays every durable staging through the same recovery", async () => {
+    const fixture = await arrangeReviewArtifactCompletionFixture("claimed");
+    await fixture.writeReservedArtifact(fixture.reservation, fixture.validReviewWorkerJson);
+    fixture.setLifecycleAppendFault(({ to }) => (to === "accepted" ? "fail" : undefined));
+    await expect(fixture.consume()).resolves.toEqual({ kind: "blocked" });
+    fixture.setLifecycleAppendFault(() => undefined);
+
+    await fixture.completion.recoverStagedReviewCompletionsAfterRestart();
+    await fixture.completion.recoverStagedReviewCompletionsAfterRestart();
+
+    const after = await fixture.durableRecords();
+    expect(lifecycleState(after, "task")).toBe("accepted");
+    expect(lifecycleTo(after, "accepted")).toHaveLength(1);
+    expect(taskGateDecisions(after)).toHaveLength(1);
+    expect(taskAcceptanceDecisions(after)).toHaveLength(1);
   });
 });

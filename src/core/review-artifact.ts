@@ -7,6 +7,7 @@ import {
 } from "./acceptance-decision";
 import {
   project,
+  projectCompletedReviewCallHistory,
   projectDelegatedExecutionBindings,
   projectObservedReviewExecution,
   taskLifecycleKey,
@@ -16,6 +17,7 @@ import {
   projectTaskCallBindings,
   type ReviewDispatchSlot,
 } from "./review-dispatch-state";
+import { sameTask } from "./review-correlation";
 import { hashString } from "./v2/hash";
 import { orderEventsForProjection } from "./v2/integrity";
 import type {
@@ -264,43 +266,239 @@ function stagingMatchesSlot(
   );
 }
 
-/**
- * Restart-recovery identity check (N1): the observed child binding recorded in
- * the durable staging must still match the CURRENT durable child binding for
- * the same parent/call, and the purpose must agree with the correlation.
- */
-function stagingMatchesCurrentIdentity(
-  records: readonly PersistedLogRecord[],
-  staging: PersistedReviewCompletionStagingRecord,
-): boolean {
-  const delegated = projectDelegatedExecutionBindings(records).find(
-    (candidate) =>
-      candidate.parentSessionId === staging.parentSessionId &&
-      candidate.parentCallId === staging.staging.callId &&
-      sameReviewCorrelation(candidate.correlation, staging.staging.correlation),
-  );
-  if (delegated === undefined) return false;
-  if (delegated.childSessionId !== staging.staging.observedExecution.childSessionId) return false;
-  return stagingMatchesSlotWithCurrentBinding(records, staging);
+type StagedTerminalReason = "completed" | "completed_with_findings" | "review_incomplete";
+
+function terminalReasonFor(artifact: ReviewArtifactV1): StagedTerminalReason {
+  if (!artifact.complete) return "review_incomplete";
+  return artifact.findings.length === 0 ? "completed" : "completed_with_findings";
 }
 
-function stagingMatchesSlotWithCurrentBinding(
+function categoryForCorrelation(correlation: ReviewCorrelation): "sp-review" | "sp-final-review" {
+  return correlation.reviewKind === "task-review" ? "sp-review" : "sp-final-review";
+}
+
+/**
+ * S3-b (Design R0.1.2 §5.1-1): the staging must belong to the CURRENT execution
+ * identity — the task's current TaskExecutionRef, or the plan's current
+ * Finalization attempt and final review round. Superseded attempts/rounds are stale.
+ */
+function stagingIdentityIsCurrent(
   records: readonly PersistedLogRecord[],
   staging: PersistedReviewCompletionStagingRecord,
 ): boolean {
-  const binding = projectTaskCallBindings(records).find(
-    (candidate): candidate is ReviewTaskCallBinding =>
-      candidate.purpose !== "implementation" &&
-      candidate.parentSessionId === staging.parentSessionId &&
-      candidate.callId === staging.staging.callId &&
-      sameReviewCorrelation(candidate.correlation, staging.staging.correlation),
+  const lifecycle = project(records, new Date().toISOString()).lifecycle;
+  const correlation = staging.staging.correlation;
+  if (correlation.reviewKind === "task-review") {
+    const current = lifecycle.currentTaskExecutionRefs.get(
+      taskLifecycleKey(staging.parentSessionId, correlation.taskExecutionRef),
+    );
+    return current !== undefined && sameTask(current, correlation.taskExecutionRef);
+  }
+  return Array.from(lifecycle.finalization.values()).some(
+    (finalization) =>
+      finalization.parentSessionId === staging.parentSessionId &&
+      finalization.authorizationId === correlation.authorizationId &&
+      finalization.planPath === correlation.planPath &&
+      finalization.finalizationAttemptId === correlation.finalizationAttemptId &&
+      finalization.finalReviewRound === correlation.finalReviewRound,
   );
-  if (binding === undefined) return false;
+}
+
+/**
+ * S3-b restart identity proof from DURABLE history only (Design R0.1.2 §5.1-1/3/4/5).
+ * After a terminal the claimed-only `projectTaskCallBindings` is empty, so the
+ * review call is proven from the unique `review_completion_staged`, the unique
+ * durable `pending -> claimed` record (call, category, usable reservation), the
+ * staging's artifact/observed identity, and the unique persisted delegated binding
+ * with its observed execution. Missing, duplicated or disagreeing pieces reject.
+ */
+function proveStagedReviewIdentity(
+  records: readonly PersistedLogRecord[],
+  staging: PersistedReviewCompletionStagingRecord,
+):
+  | { readonly kind: "proven"; readonly reservation: Extract<ReviewArtifactReservation, { readonly status: "usable" }> }
+  | { readonly kind: "rejected" } {
+  const rejected = { kind: "rejected" } as const;
+  const parentSessionId = staging.parentSessionId;
+  const { callId, correlation, artifactConsumption, reviewArtifact, observedExecution } = staging.staging;
+
+  const stagings = records.filter(
+    (record) =>
+      record.recordType === "observation" &&
+      record.kind === "review_completion_staged" &&
+      record.parentSessionId === parentSessionId &&
+      (record.staging.callId === callId ||
+        sameReviewCorrelation(record.staging.correlation, correlation)),
+  );
+  const durableStaging = stagings[0];
+  if (
+    stagings.length !== 1 ||
+    durableStaging === undefined ||
+    durableStaging.recordType !== "observation" ||
+    durableStaging.kind !== "review_completion_staged" ||
+    JSON.stringify(durableStaging.staging) !== JSON.stringify(staging.staging)
+  )
+    return rejected;
+
+  const claims = records.filter(
+    (record): record is ReviewDispatchTransitionRecord =>
+      record.recordType === "observation" &&
+      record.kind === "review_dispatch_transition" &&
+      record.from === "pending" &&
+      record.to === "claimed" &&
+      record.parentSessionId === parentSessionId &&
+      (record.callId === callId || sameReviewCorrelation(record.correlation, correlation)),
+  );
+  const claim = claims[0];
+  if (
+    claims.length !== 1 ||
+    claim === undefined ||
+    !("callId" in claim) ||
+    claim.callId !== callId ||
+    !sameReviewCorrelation(claim.correlation, correlation) ||
+    claim.expectedCategory !== categoryForCorrelation(correlation) ||
+    !("artifactReservation" in claim) ||
+    claim.artifactReservation === undefined ||
+    claim.artifactReservation.status !== "usable"
+  )
+    return rejected;
+  const reservation = claim.artifactReservation;
+
+  if (
+    artifactConsumption.artifactId !== reservation.artifactId ||
+    reviewArtifact.reviewSource !== categoryForCorrelation(correlation) ||
+    !sameReviewCorrelation(reviewArtifact.correlation, correlation) ||
+    observedExecution.parentSessionId !== parentSessionId ||
+    observedExecution.callId !== callId ||
+    !sameReviewCorrelation(observedExecution.correlation, correlation) ||
+    reviewArtifact.observedExecution.parentSessionId !== parentSessionId ||
+    reviewArtifact.observedExecution.callId !== callId ||
+    reviewArtifact.observedExecution.childSessionId !== observedExecution.childSessionId ||
+    reviewArtifact.observedExecution.reviewExecutionEventId !==
+      observedExecution.reviewExecutionEventId ||
+    !sameReviewCorrelation(reviewArtifact.observedExecution.correlation, correlation)
+  )
+    return rejected;
+
+  const delegatedRecords = records.filter(
+    (record) =>
+      record.recordType === "observation" &&
+      record.kind === "delegated_execution_binding" &&
+      record.binding.parentSessionId === parentSessionId &&
+      record.binding.parentCallId === callId,
+  );
+  const delegatedRecord = delegatedRecords[0];
+  if (
+    delegatedRecords.length !== 1 ||
+    delegatedRecord === undefined ||
+    delegatedRecord.recordType !== "observation" ||
+    delegatedRecord.kind !== "delegated_execution_binding"
+  )
+    return rejected;
+  const delegated = delegatedRecord.binding;
+  const observed = projectObservedReviewExecution(records, delegated);
+  if (
+    !sameReviewCorrelation(delegated.correlation, correlation) ||
+    delegated.childSessionId !== observedExecution.childSessionId ||
+    observed === undefined ||
+    observed.reviewExecutionEventId !== observedExecution.reviewExecutionEventId ||
+    !projectDelegatedExecutionBindings(records).some(
+      (candidate) =>
+        candidate.relationId === delegated.relationId &&
+        candidate.parentSessionId === parentSessionId &&
+        candidate.parentCallId === callId &&
+        candidate.childSessionId === delegated.childSessionId &&
+        sameReviewCorrelation(candidate.correlation, correlation),
+    )
+  )
+    return rejected;
+  return { kind: "proven", reservation };
+}
+
+/**
+ * S3-b: the durable terminal of a staging — `none`, the unique matching `found`
+ * terminal (claimed origin, same call/category, reason derived from the staged
+ * artifact, same artifact id/digest), or a `conflict`. Never guessed from ordering.
+ */
+function findDurableTerminalForStaging(
+  records: readonly PersistedLogRecord[],
+  staging: PersistedReviewCompletionStagingRecord,
+):
+  | { readonly kind: "none" }
+  | { readonly kind: "conflict" }
+  | { readonly kind: "found"; readonly terminal: ReviewDispatchTransitionRecord } {
+  const { callId, correlation, artifactConsumption, reviewArtifact } = staging.staging;
+  const terminals = records.filter(
+    (record): record is ReviewDispatchTransitionRecord =>
+      record.recordType === "observation" &&
+      record.kind === "review_dispatch_transition" &&
+      record.to === "terminal" &&
+      record.parentSessionId === staging.parentSessionId &&
+      (record.callId === callId || sameReviewCorrelation(record.correlation, correlation)),
+  );
+  const terminal = terminals[0];
+  if (terminal === undefined) return { kind: "none" };
+  if (
+    terminals.length !== 1 ||
+    terminal.to !== "terminal" ||
+    terminal.from !== "claimed" ||
+    terminal.callId !== callId ||
+    !sameReviewCorrelation(terminal.correlation, correlation) ||
+    terminal.expectedCategory !== categoryForCorrelation(correlation) ||
+    terminal.terminalReason !== terminalReasonFor(reviewArtifact) ||
+    (terminal.artifactConsumption !== undefined &&
+      (terminal.artifactConsumption.artifactId !== artifactConsumption.artifactId ||
+        terminal.artifactConsumption.digest !== artifactConsumption.digest))
+  )
+    return { kind: "conflict" };
+  return { kind: "found", terminal };
+}
+
+/** `completed` only: the success-review history must be `proven` for this very call/artifact. */
+function completedHistoryMatchesStaging(
+  records: readonly PersistedLogRecord[],
+  staging: PersistedReviewCompletionStagingRecord,
+): boolean {
+  const history = projectCompletedReviewCallHistory(
+    records,
+    staging.parentSessionId,
+    staging.staging.correlation,
+  );
   return (
-    binding.purpose === purposeForCorrelation(staging.staging.correlation) &&
-    binding.artifactReservation.status === "usable" &&
-    binding.artifactReservation.artifactId === staging.staging.artifactConsumption.artifactId
+    history.kind === "proven" &&
+    history.callId === staging.staging.callId &&
+    history.artifactId === staging.staging.artifactConsumption.artifactId
   );
+}
+
+/**
+ * S3-b: `review_observed` records of the staging's correlation versus the staged
+ * artifact. `conflict` when any of them disagrees on completeness or findings.
+ */
+function stagedReviewObservation(
+  records: readonly PersistedLogRecord[],
+  staging: PersistedReviewCompletionStagingRecord,
+): "missing" | "consistent" | "conflict" {
+  const artifact = staging.staging.reviewArtifact;
+  const keys = JSON.stringify(artifact.findings.map((finding) => finding.itemKey));
+  let seen = false;
+  for (const record of records) {
+    if (
+      record.recordType !== "observation" ||
+      record.kind !== "review_observed" ||
+      record.correlation === undefined ||
+      !sameReviewCorrelation(record.correlation, staging.staging.correlation)
+    )
+      continue;
+    if (
+      record.sessionId !== staging.parentSessionId ||
+      record.isCompleteSnapshot !== artifact.complete ||
+      JSON.stringify(record.items.map((item) => item.itemKey)) !== keys
+    )
+      return "conflict";
+    seen = true;
+  }
+  return seen ? "consistent" : "missing";
 }
 
 /**
@@ -332,13 +530,6 @@ function usableReservationForTerminal(
 }
 
 export function createReviewCompletionDomain(dependencies: ReviewCompletionDependencies) {
-  const terminalReasonFor = (artifact: ReviewArtifactV1): "completed" | "completed_with_findings" | "review_incomplete" =>
-    !artifact.complete
-      ? "review_incomplete"
-      : artifact.findings.length === 0
-        ? "completed"
-        : "completed_with_findings";
-
   const terminalFor = (
     staging: PersistedReviewCompletionStagingRecord,
     slot: ClaimedSlot,
@@ -527,12 +718,17 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
     planState: string,
   ): boolean => {
     const correlation = terminal.correlation;
-    if (correlation.reviewKind === "task-review")
+    if (correlation.reviewKind === "task-review") {
+      // The lifecycle key ignores the attempt: require the CURRENT TaskExecutionRef
+      // so a superseded attempt's terminal never writes into the current attempt.
+      const key = taskLifecycleKey(terminal.parentSessionId, correlation.taskExecutionRef);
+      const current = lifecycle.currentTaskExecutionRefs.get(key);
       return (
-        lifecycle.taskStates.get(
-          taskLifecycleKey(terminal.parentSessionId, correlation.taskExecutionRef),
-        ) === taskState
+        current !== undefined &&
+        sameTask(current, correlation.taskExecutionRef) &&
+        lifecycle.taskStates.get(key) === taskState
       );
+    }
     return Array.from(lifecycle.finalization.values()).some(
       (finalization) =>
         finalization.parentSessionId === terminal.parentSessionId &&
@@ -807,6 +1003,15 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
         sameReviewCorrelation(record.correlation, staging.staging.correlation),
     );
 
+  /**
+   * S3-b Staged Restart Recovery (Design R0.1.2 §5.1) — the only restart entry for
+   * Decision/Lifecycle recovery. Identity is re-proven from durable history, never
+   * from the claimed-only binding once a terminal exists. Two branches only:
+   * A. matching durable terminal exists; B. still claimed (terminal appended once).
+   * `completed` continues to the Gate evaluator's limited Lifecycle recovery;
+   * `completed_with_findings` takes the Review-Rework branch and never creates a
+   * Gate/Acceptance. A missing staging is never replaced by other evidence.
+   */
   const recoverStagedReviewCompletion = async (
     staging: PersistedReviewCompletionStagingRecord,
   ): Promise<ReviewCompletionOutcome> =>
@@ -814,33 +1019,51 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
       staging.parentSessionId,
       async (): Promise<ReviewCompletionOutcome> => {
         const records = await dependencies.readDurableRecords();
-        const existingTerminal = findMatchingTerminalForStaging(records, staging);
-        if (existingTerminal !== undefined) {
-          // Identity must be re-validated against the CURRENT projection before
-          // replaying review_observed or terminal outcomes from durable staging (N1).
-          if (!stagingMatchesCurrentIdentity(records, staging)) {
+        const correlation = staging.staging.correlation;
+        const reason = terminalReasonFor(staging.staging.reviewArtifact);
+        // Superseded attempts / rounds are never replayed into the current identity.
+        if (!stagingIdentityIsCurrent(records, staging)) return { kind: "stale" };
+        const identity = proveStagedReviewIdentity(records, staging);
+        const durableTerminal = findDurableTerminalForStaging(records, staging);
+        if (
+          identity.kind === "rejected" ||
+          durableTerminal.kind === "conflict" ||
+          stagedReviewObservation(records, staging) === "conflict"
+        ) {
+          await dependencies.recordAdvisory("review_staged_completion_identity_mismatch");
+          return { kind: "stale" };
+        }
+        const authorityIsCurrent = async (): Promise<boolean> => {
+          // Authorization must be active BEFORE any terminalization replay (N1).
+          if (!(await isCurrentActiveAuthorization(correlation, dependencies.findAuthorizationById))) {
+            await dependencies.recordAdvisory("review_staged_completion_authorization_inactive");
+            return false;
+          }
+          return (
+            dependencies.isAuthorizationPlanCurrent === undefined ||
+            (await dependencies.isAuthorizationPlanCurrent(correlation))
+          );
+        };
+        /** Idempotent `review_observed` completion, proven by a fresh durable readback. */
+        const reviewObservedIsDurable = async (): Promise<boolean> =>
+          (await appendReviewObserved(staging)) &&
+          stagedReviewObservation(await dependencies.readDurableRecords(), staging) === "consistent";
+
+        if (durableTerminal.kind === "found") {
+          // A. Matching terminal: the claimed slot is gone, prove from durable history.
+          if (reason === "completed" && !completedHistoryMatchesStaging(records, staging)) {
             await dependencies.recordAdvisory("review_staged_completion_identity_mismatch");
             return { kind: "stale" };
           }
-          // Authorization must be active BEFORE any terminalization replay (N1).
-          if (!(await isCurrentActiveAuthorization(staging.staging.correlation, dependencies.findAuthorizationById))) {
-            await dependencies.recordAdvisory("review_staged_completion_authorization_inactive");
-            return { kind: "blocked" };
-          }
-          if (dependencies.isAuthorizationPlanCurrent !== undefined &&
-            !(await dependencies.isAuthorizationPlanCurrent(staging.staging.correlation))) {
-            return { kind: "blocked" };
-          }
-          if (!(await appendReviewObserved(staging))) return { kind: "blocked" };
-          const outcome = await ensureTerminalReviewOutcomeApplied(existingTerminal);
-          await releaseCompletedPlanAuthorization(staging.staging.correlation, staging.parentSessionId);
-          const current = await dependencies.readDurableRecords();
-          const reservation = usableReservationForTerminal(current, existingTerminal);
-          if (reservation !== undefined) {
-            await clean(existingTerminal, reservation);
-          }
+          if (!(await authorityIsCurrent())) return { kind: "blocked" };
+          if (!(await reviewObservedIsDurable())) return { kind: "blocked" };
+          const outcome = await ensureTerminalReviewOutcomeApplied(durableTerminal.terminal);
+          await releaseCompletedPlanAuthorization(correlation, staging.parentSessionId);
+          await clean(durableTerminal.terminal, identity.reservation);
           return outcome;
         }
+
+        // B. No terminal yet: the projected claimed slot must still match the staging.
         const slot = claimedSlot(records, staging.parentSessionId, staging.staging.callId);
         if (slot === undefined || !stagingMatchesSlot(records, staging, slot)) {
           if (slot !== undefined) {
@@ -848,23 +1071,22 @@ export function createReviewCompletionDomain(dependencies: ReviewCompletionDepen
           }
           return { kind: "stale" };
         }
-        // Authorization must still be active BEFORE appending the terminal (N1).
-        if (!(await isCurrentActiveAuthorization(slot.key.correlation, dependencies.findAuthorizationById))) {
-          await dependencies.recordAdvisory("review_staged_completion_authorization_inactive");
-          return { kind: "blocked" };
-        }
-        if (dependencies.isAuthorizationPlanCurrent !== undefined &&
-          !(await dependencies.isAuthorizationPlanCurrent(slot.key.correlation))) {
-          return { kind: "blocked" };
-        }
+        if (!(await authorityIsCurrent())) return { kind: "blocked" };
         const terminal = await dependencies.appendReviewDispatchTransition(terminalFor(staging, slot));
         if (terminal.kind !== "committed") return { kind: "blocked" };
-        if (!(await appendReviewObserved(staging))) return { kind: "blocked" };
-        const outcome = await ensureTerminalReviewOutcomeApplied(terminal.record);
-        await releaseCompletedPlanAuthorization(staging.staging.correlation, staging.parentSessionId);
-        if (slot.artifactReservation?.status === "usable") {
-          await clean(terminal.record, slot.artifactReservation);
-        }
+        // Re-prove the appended terminal from a fresh durable readback (no claimed binding).
+        const appended = await dependencies.readDurableRecords();
+        const readback = findDurableTerminalForStaging(appended, staging);
+        if (
+          readback.kind !== "found" ||
+          readback.terminal.transitionId !== terminal.record.transitionId ||
+          (reason === "completed" && !completedHistoryMatchesStaging(appended, staging))
+        )
+          return { kind: "blocked" };
+        if (!(await reviewObservedIsDurable())) return { kind: "blocked" };
+        const outcome = await ensureTerminalReviewOutcomeApplied(readback.terminal);
+        await releaseCompletedPlanAuthorization(correlation, staging.parentSessionId);
+        await clean(readback.terminal, identity.reservation);
         await dependencies.dispatch.offerNextMandatoryReviewWithinParentSessionClaim(
           staging.parentSessionId,
         );

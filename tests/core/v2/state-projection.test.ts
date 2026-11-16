@@ -1222,4 +1222,20 @@ describe("durable completed review call history (F-002)", () => {
     ).toBe(false);
     expect(projectCompletedReviewCallHistory(records, "parent-1", correlation).kind).toBe("proven");
   });
+
+  it("never proves a completed_with_findings terminal as a successful review (S3-b)", () => {
+    // Review-Rework must be proven by its own durable history, not by this success-only function.
+    const records = history({
+      artifactFindings: [{ itemKey: "f-1", severity: "major", summary: "s", location: "l" }],
+    }).map((record) =>
+      "kind" in record && record.kind === "review_dispatch_transition" && record.to === "terminal"
+        ? ({ ...record, terminalReason: "completed_with_findings" } as typeof record)
+        : record,
+    );
+
+    expect(projectCompletedReviewCallHistory(records, "parent-1", correlation)).toEqual({
+      kind: "missing",
+      reason: "completed_terminal_missing",
+    });
+  });
 });

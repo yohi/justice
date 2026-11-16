@@ -111,6 +111,8 @@ export type ReviewArtifactCompletionFixture = {
    * reports `committed` without persisting the record (readback cannot see it).
    */
   readonly setLifecycleAppendFault: (fault: LifecycleAppendFault) => void;
+  /** S3-b: makes the next `claimed -> terminal` dispatch append report `failed`. */
+  readonly failNextTerminalAppend: () => void;
   /** S3-b: spy for the Plan `complete` Authorization release side effect. */
   readonly releaseCompletedAuthorization: ReturnType<
     typeof vi.fn<(parentSessionId: string, authorizationId: string) => Promise<void>>
@@ -357,16 +359,20 @@ export async function arrangeReviewArtifactCompletionFixture(
     }
   }
   let lifecycleAppendFault: LifecycleAppendFault = () => undefined;
+  let failTerminalAppend = false;
 
   // Resolve through the real AuthorizationStore so a durable revocation is observed.
   const findAuthorizationById: ReviewCompletionDependenciesForTest["findAuthorizationById"] = (
     id,
   ) => seedAuthorizationStore.findByAuthorizationId(id);
   const appendReviewDispatchTransition: ReviewCompletionDependenciesForTest["appendReviewDispatchTransition"] =
-    async (input) => ({
-      kind: "committed" as const,
-      record: await appendPendingRecord(input),
-    });
+    async (input) => {
+      if (failTerminalAppend && input.to === "terminal") {
+        failTerminalAppend = false;
+        return { kind: "failed" as const };
+      }
+      return { kind: "committed" as const, record: await appendPendingRecord(input) };
+    };
   const appendTaskLifecycleTransition: ReviewCompletionDependenciesForTest["appendTaskLifecycleTransition"] =
     async (input) => {
       const fault = lifecycleAppendFault(input);
@@ -695,6 +701,9 @@ export async function arrangeReviewArtifactCompletionFixture(
     expectedCategory,
     setLifecycleAppendFault: (fault) => {
       lifecycleAppendFault = fault;
+    },
+    failNextTerminalAppend: () => {
+      failTerminalAppend = true;
     },
     releaseCompletedAuthorization,
     findingsReviewWorkerJson: JSON.stringify({
