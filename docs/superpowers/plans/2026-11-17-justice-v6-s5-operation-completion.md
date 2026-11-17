@@ -54,7 +54,7 @@
 4. 通常開発環境・本番・歴史Gate/HOLD・既存Secretsに影響しない独立隔離を証明する。
 5. 信頼できるOwner固定Artifact参照がない場合、承認の真正性を `NOT_PROVEN` として、実証不可能なACはPASSにしない。
 
-Gate不成立時は以下Taskを起動せず停止する。未実行は `NOT_RUN`、証拠欠落は `NOT_VERIFIED`、観測した不一致は `FAIL` と分ける。
+**実Host GO不成立時の停止範囲:** 上記Gateは実Hostを利用するTask 3〜5の操作（Source取得、実Host診断、異常系検証、プロセス再起動、Host上のCleanup等）に適用し、未承認なら実行せず停止する。Secrets / Network / 外部書込みを含むHost操作は、文書作業の承認によって許可されない。Task 1・2およびTask 6の**文書準備のみ**は、別途Human Ownerが承認した文書作業の範囲で実施可能とする。Host / Version / Scope / Operation等が未固定の場合は未固定と明記し、実Host受入結果を創作しない。未実行は `NOT_RUN`、証拠欠落は `NOT_VERIFIED`、観測した不一致は `FAIL` と分ける。AC-H01〜H03の実Host PASSとOwnerの明示判断が揃うまで `BOUNDED_COMPLETE` を認定しない。`RELEASE_APPROVED` を推定・自動設定しない。
 
 ---
 
@@ -73,7 +73,7 @@ Gate不成立時は以下Taskを起動せず停止する。未実行は `NOT_RUN
 - [ ] **Step 3 — 過去情報の継承:** S2-c=`COMPARISON_NOT_ESTABLISHED`、S3-a M-2、Legacy Staging制限、外部Writer durability未証明、S3-b Runtime未検証等を既知制限欄へ出典付きで記録する。
 - [ ] **Step 4 — 文書検査:** `rg -n 'AC-H0[123]|NOT_RUN|COMPARISON_NOT_ESTABLISHED|M-2|BOUNDED_COMPLETE|RELEASE_APPROVED' docs/superpowers/acceptance/justice-v6-s5-host-acceptance-record.md` を実行し、各項目が存在することを確認する。これは**文書整合**であって実Host受入ではない。
 
-**Task exit:** 3件のACが未実行のままでも、証拠・帰属・制限を記録可能。Host未固定ならこのTaskの文書以外は開始しない。
+**Task exit:** 3件のACが未実行のままでも、証拠・帰属・制限を記録可能。Host未固定の場合も、別途Ownerが承認したTask 2・Task 6の文書準備は妨げない。実Host利用操作はGlobal GO / STOP Gate成立と個別承認まで開始しない。
 
 ### Task 2: Minimal Operation Runbookの安全境界を作成
 
@@ -150,7 +150,7 @@ Gate不成立時は以下Taskを起動せず停止する。未実行は `NOT_RUN
 - [ ] **Step 3 — 二つの独立Decision欄:** `Bounded completion: APPROVED / NOT_APPROVED / PENDING` と `Opt-in release: APPROVED / NOT_APPROVED / PENDING` を分ける。AIがOwnerの承認値を埋めない。
 - [ ] **Step 4 — 終了:** Human Owner判断を受けて該当レコードだけ更新する。完成済みでもRelease未承認なら導入しない。自動のPR・Merge・Deploy・Review・次Taskを開始しない。
 
-**Task exit:** Human Ownerが完成とOpt-in開始を混同せず、明示判断できる。判断が得られなくても `PENDING` で本計画の作成作業は停止可能。
+**Task exit:** Task 6のOwner Decision文書の準備は、文書作業のOwner承認範囲内なら実Host GO前でも可能。Human Ownerが完成とOpt-in開始を混同せず明示判断できる状態にするが、AC-H01〜H03の実Host PASS前に `BOUNDED_COMPLETE` を認定せず、`RELEASE_APPROVED` を推定・自動設定しない。判断が得られなくても `PENDING` で本計画の作成作業は停止可能。
 
 ## 受入トレーサビリティ
 
