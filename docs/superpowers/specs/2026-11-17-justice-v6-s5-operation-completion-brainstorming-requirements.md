@@ -145,10 +145,10 @@ AC-H01〜H03の結果、証拠、実行条件、残余リスクを記録する�
 
 少なくとも次の2判断を分離する。
 
-1. **BOUNDED_COMPLETE:** S1〜S3の採択済み範囲について、必須受入PASSを根拠に限定完成を認める。
+1. **BOUNDED_COMPLETE:** S1〜S3の採択済み範囲について、AC-H01〜H03の必須PASS、対象Scope / Versionの特定、証拠と診断結果の帰属確認、既知制限・未実証事項の明示、必要な保護を迂回しないOpt-in・停止・切戻し手順の成立をすべて確認し、Human Ownerが限定完成を明示的に採択する。
 2. **RELEASE_APPROVED:** 指定環境でのOpt-in利用開始を別途承認する。
 
-`BOUNDED_COMPLETE` は自動的に `RELEASE_APPROVED` を意味しない。
+`BOUNDED_COMPLETE` は自動的に `RELEASE_APPROVED` を意味しない。`RELEASE_APPROVED`は指定環境で運用を開始するための独立したOpt-in許可として、別途Human Ownerが判断する。
 
 ## 7. 完成条件
 

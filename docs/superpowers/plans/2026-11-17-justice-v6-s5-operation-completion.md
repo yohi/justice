@@ -49,7 +49,7 @@
 実Host作業は次の**すべて**が個別に満たされた後に限る。
 
 1. S5 DesignをHuman Ownerが明示採択し、本計画との齟齬を解消する。
-2. 対象Host / OpenCode Version / Justice Commit / Scope / Operation / 許可する副作用 / Network / Secrets / Cleanup / 停止条件を固定する。
+2. 対象Host / OpenCode Version / Justice Commit / Scope / Operation / 許可する副作用 / Network / Secrets / Cleanup / 停止条件を固定する。OpenCode Versionと保存Source wrapperの`hostVersion`は既存S2-b Adapterの対応Versionである`2.2.5`に一致させる。未設定・未知・不一致の場合は`SOURCE_VERSION_UNSUPPORTED`として実Host作業を開始しない。`hostVersion`はSource内の申告値であり、実Host Versionの独立検証とは区別して記録する。
 3. AC-H01〜H03の具体的な入力と観測方法を定め、正式なHost実行承認を得る。
 4. 通常開発環境・本番・歴史Gate/HOLD・既存Secretsに影響しない独立隔離を証明する。
 5. 信頼できるOwner固定Artifact参照がない場合、承認の真正性を `NOT_PROVEN` として、実証不可能なACはPASSにしない。
@@ -145,12 +145,12 @@
 
 **Produces:** `BOUNDED_COMPLETE` と `RELEASE_APPROVED` の独立判断、対象Host/Version/Scope、既知制限、署名/参照可能なOwner判断記録。
 
-- [ ] **Step 1 — 受入総括:** AC-H01〜H03の3結果と個別証拠を表に記載。いずれかがFAIL / NOT_RUN / NOT_VERIFIEDなら `BOUNDED_COMPLETE` を採択済みとして書かない。
+- [ ] **Step 1 — 受入総括:** AC-H01〜H03の3結果と個別証拠を表に記載。いずれかがFAIL / NOT_RUN / NOT_VERIFIEDなら `BOUNDED_COMPLETE` を採択済みとして書かない。さらに、対象Scope / Versionの特定、証拠と診断結果の帰属確認、既知制限・未実証事項の明示、必要な保護を迂回しないOpt-in・停止・切戻し手順の成立を確認し、Human Ownerの限定完成に対する明示判断を記録する。これらが揃わない場合も限定完成を採択しない。`RELEASE_APPROVED`は別のOpt-in許可として独立に判断する。
 - [ ] **Step 2 — 残余リスク区分:** S2-c比較未成立、S3-a M-2、Legacy Staging、外部Writer durability、複数プロセス・S3-c・S4非対象、Source完全性/真正性限界を記載。安全上重要で制限不能な操作のみ停止対象として提示。
 - [ ] **Step 3 — 二つの独立Decision欄:** `Bounded completion: APPROVED / NOT_APPROVED / PENDING` と `Opt-in release: APPROVED / NOT_APPROVED / PENDING` を分ける。AIがOwnerの承認値を埋めない。
 - [ ] **Step 4 — 終了:** Human Owner判断を受けて該当レコードだけ更新する。完成済みでもRelease未承認なら導入しない。自動のPR・Merge・Deploy・Review・次Taskを開始しない。
 
-**Task exit:** Task 6のOwner Decision文書の準備は、文書作業のOwner承認範囲内なら実Host GO前でも可能。Human Ownerが完成とOpt-in開始を混同せず明示判断できる状態にするが、AC-H01〜H03の実Host PASS前に `BOUNDED_COMPLETE` を認定せず、`RELEASE_APPROVED` を推定・自動設定しない。判断が得られなくても `PENDING` で本計画の作成作業は停止可能。
+**Task exit:** Task 6のOwner Decision文書の準備は、文書作業のOwner承認範囲内なら実Host GO前でも可能。`BOUNDED_COMPLETE`は、AC-H01〜H03の実Host PASS、対象Scope / Versionの特定、証拠と診断結果の帰属確認、既知制限・未実証事項の明示、必要な保護を迂回しないOpt-in・停止・切戻し手順の成立、およびHuman Ownerの明示採択がすべて揃った場合に限る。`RELEASE_APPROVED`は独立したOpt-in許可として別に判断し、推定・自動設定しない。判断が得られなくても `PENDING` で本計画の作成作業は停止可能。
 
 ## 受入トレーサビリティ
 
@@ -167,6 +167,6 @@
 
 - 計画は **S5 Designを代替しない**。正式Designを採択するまでHostの手順・実際の対象値を固定したものと扱わない。
 - この計画では新規Runtime API、State Schema、Code/Tests/CI改変を要求しない。既存機能で足りない場合は未実証のままOwnerへ報告し、勝手に補完しない。
-- `BOUNDED_COMPLETE`の条件は実Host AC-H01/H02/H03のPASSとOwner明示判断。`RELEASE_APPROVED`は独立したOpt-in許可。
+- `BOUNDED_COMPLETE`の条件は、実Host AC-H01/H02/H03のPASS、対象Scope / Versionの特定、証拠と診断結果の帰属確認、既知制限・未実証事項の明示、必要な保護を迂回しないOpt-in・停止・切戻し手順の成立、およびHuman Ownerの明示採択。`RELEASE_APPROVED`は独立したOpt-in許可。
 - 次工程を自動実行しない。新規Findingや新Versionだけを理由に独立レビュー/訂正/再レビューを繰り返さない。
 - Plan自体の作成でGitHub反映、Host実行、利用開始は承認されたとみなさない。
