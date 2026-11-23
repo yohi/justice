@@ -386,8 +386,10 @@ AWAITING_OWNER_AUTHORIZATION
 | Bootstrap | 固定RUN_IDにより専用Root/非実行Launcher/最小Configを作成、静的Preflight `BOOTSTRAP_STATIC_PASS`。既存Stateは未変更と報告 | 専用準備成果物を再利用。Launcher実行・Plugin Load・State非干渉は未実証 |
 | H2（新・専用Artifact） | Merge HEADのgit archiveから隔離Build完了。`SHA-256=9b17708f374f01cb7f1cb530438ae9784ccc308e0afc0e965d87abbce92db92a`、来歴記録あり | `VERIFIED_STATIC`候補（専用Artifactのみ）。Ownerの採否前に正式昇格しない。再Buildを無条件に要求しない |
 | H2（共有Artifact） | 従来の`dist/opencode-plugin.js`は現在Sourceとの具体的不一致あり、共有ファイルは変更していない | `OBSERVED_MISMATCH`を歴史的な共有Artifactの状態として維持し、新専用Artifactと混同しない |
-| H3 | 専用Configは`{"plugins":[]}`で未登録。固定OpenCode **v2.3.2** `packages/core/src/plugin/module.ts` L81–94, L168–186は、`default`が`{ id: string, effect: function }`または`{ id: string, setup: function }`であることを要求。Justice `src/opencode-plugin.ts`は`@opencode-ai/plugin@1.14.21`に基づく**関数型**`OpenCodePlugin`を`default` exportする | **`LOADER_SOURCE_CONTRACT_MISMATCH_OBSERVED`**（具体的な静的契約不一致）。`CONFIGURED`不成立、`RUNTIME_LOADED=NOT_VERIFIED`、実ArtifactのRuntimeロード失敗は**未観測**。`id/setup`への機械的置換やV1 Hook全面移植は未採択 |
+| H3 | 専用Configは`{"plugins":[]}`で未登録。固定OpenCode **v2.3.2** `packages/core/src/plugin/module.ts` L81–94, L168–186は、`default`が`{ id: string, effect: function }`または`{ id: string, setup: function }`であることを要求。Justice `src/opencode-plugin.ts`は`@opencode-ai/plugin@1.14.21`に基づく**関数型**`OpenCodePlugin`を`default` exportする | **静的Loader契約=`OBSERVED_MISMATCH`**、**`CONFIGURED=NOT_ESTABLISHED`**、**`RUNTIME_LOADED=NOT_VERIFIED`**、**`E1_EXECUTION=HOLD`**を独立して扱う。実ArtifactのRuntimeロード失敗は**未観測**。`id/setup`への機械的置換やV1 Hook全面移植は未採択 |
 | H4/H5 | 専用State/Stop/CleanupのOwner境界方針は採択済み。実効Runtime書込み先、Supervisor/Process Identityは未証明 | 両方`NOT_VERIFIED`。Bootstrap PASSを静的条件全成立やE1 GOへ読み替えない |
+
+**H3状態の区別：** `H3_STATIC_LOADER_CONTRACT=OBSERVED_MISMATCH`はSource間の静的不一致という**Evidence Verdict**、`H3_CONFIGURED=NOT_ESTABLISHED`は未登録、`H3_RUNTIME_LOADED=NOT_VERIFIED`はRuntime未実測、`E1_EXECUTION=HOLD`は**実行権限**を示す。前3項からRuntime失敗の観測やE1実行許可を推定しない。E2/E3もHOLDを維持する。
 
 EvidenceはHostの既存非公開記録を正本とし、GitHub文書へSession/Credential/Private Pathを転載しない。Build依存関係のlockとの完全整合・再現性・Runtime互換性は未証明である。既存T09〜T15/AC-H01〜H03の証拠と形式的受入裁定を混同しない。
 
@@ -414,8 +416,8 @@ EvidenceはHostの既存非公開記録を正本とし、GitHub文書へSession/
 
 **入口条件：** (1) 固定版`v2.3.2`との**静的Loader契約不一致は証明済み**、(2) その不一致がS5採択済みACのどの必要機能を妨げるかを特定、(3) 既存機能・設定/Offline経路だけでは対処できない理由を示す、(4) 対応方式（最小修正か別エントリか、必要なV2 Domainのみか等）をHuman Ownerが選択、(5) 対象Source/Test・実行境界・Git操作を別途承認する。**未選択の方式を実装者が採択してはならない。** (2)〜(5)が揃わなければ実装しない。
 
-1. **RED：** 固定版の契約・受入要件に対応する最小失敗テストを先に作り、現在の実装が失敗することを隔離Test環境で確認・記録する。単なるAPI形式の推測に対するテストは作らない。既存テストに相当する証拠がある場合は重複追加せず再利用する。
-2. **GREEN：** 証明された不一致だけを解消する最小変更を行い、同一テストのPASSを観測する。不要な新Pluginエントリ・新Runtime API・全Hooks移植を追加しない。
+1. **RED：** Owner承認後、**「対象Pluginのdefault exportが固定v2.3.2 Loaderの`{id,effect}`または`{id,setup}`互換契約を満たす」**ことを期待する最小テストを先に作り、現行Sourceでは**FAIL**することを隔離Test環境で確認・記録する。Ownerが選択したS5必要Domain/型だけを評価対象に含め、別方式を勝手に採択しない。**「現行Sourceの構造不適合を検出する」診断AssertionはPASSし得るため、TDDのREDに数えない。** 既存の同等テストは再利用する。テスト作成・実行は別承認まで`NOT_RUN`。
+2. **GREEN：** 別途Ownerが承認した範囲で、証明された不一致だけを解消する最小変更を行い、**REDでFAILした同一の適合テストがPASS**することを観測する。診断AssertionのPASSをGREENの代用にしない。Runtime Pluginロードの成功とは区別し、不要な新Pluginエントリ・新Runtime API・全Hooks移植を追加しない。
 3. **REFACTOR / Regression：** 必要な限定整理と既存V1/採択済みS1/S2/S3の関連回帰テスト、typecheck/lint/配布出力の検証を行い、結果・未実行を区別する。再Buildや共有`dist/`変更は事前の実行境界承認が必要。
 4. **Owner Checkpoint：** RED/GREEN/Regression証拠、変更Diff、残余リスクを報告して停止。Runtime Plugin Load、AC-H01〜H03、Opt-in/Releaseは別判断とする。
 
@@ -425,6 +427,6 @@ EvidenceはHostの既存非公開記録を正本とし、GitHub文書へSession/
 
 ### 11.4 完了・停止
 
-この補足の完了は「元のPlanに対する対象/証拠/未承認差分が明示され、必要時のTDD復帰条件を固定したこと」であり、Findingゼロ・全H VERIFIED・追加独立レビューを条件としない。現時点の`E1/E2/E3=HOLD`、`BOUNDED_COMPLETE=PENDING`、`RELEASE_APPROVED=PENDING`を維持する。**既知の静的Loader契約不一致は記録済み**だが、修正方式とRuntime対応範囲はOwner未決定。Source変更・Plugin登録・追加Taskを自動開始しない。H3のみの問題で無関係なS5文書準備は停止しない。
+この補足の完了は「元のPlanに対する対象/証拠/未承認差分が明示され、必要時のTDD復帰条件を固定したこと」であり、Findingゼロ・全H VERIFIED・追加独立レビューを条件としない。H3は**静的`OBSERVED_MISMATCH`／設定`NOT_ESTABLISHED`／Runtime`NOT_VERIFIED`**、実行権限は別に**`E1/E2/E3=HOLD`**。`H4/H5=NOT_VERIFIED`、`BOUNDED_COMPLETE=PENDING`、`RELEASE_APPROVED=PENDING`を維持する。修正方式とRuntime対応範囲はOwner未決定。Source変更・Plugin登録・追加Taskを自動開始しない。H3のみの問題で無関係なS5文書準備は停止しない。
 
 **R0.1.2 documentation-only alignment proposal end.**
