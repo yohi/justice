@@ -1,8 +1,8 @@
 # Justice v6 S5 — H1〜H5 Read-only Host Identity / Plugin Boundary Design
 
-**Version:** R0.1  
+**Version:** R0.1.1 (RG-S5-HOST-001 limited documentation remediation)  
 **Date:** 2026-11-23 (JST)  
-**Status:** DESIGN_ACCEPTED_BY_OWNER / EXECUTION_NOT_AUTHORIZED  
+**Status:** R0.1 OWNER_ADOPTED / R0.1.1 LIMITED_REMEDIATION_OWNER_CHECKPOINT / EXECUTION_NOT_AUTHORIZED  
 **Repository:** `yohi/justice`  
 **Reference Commit:** `master@3c2b5a3f38f4440a622b8ee53705f5a6193518f1`  
 **Target Host:** `coreultra7-270k`  
@@ -83,7 +83,7 @@ T09〜T15の既存Evidenceは保持・再利用する。新しいHEADへの適�
 - Build、Install、依存関係変更
 - Credential本文・Session本文の閲覧、Provider通信
 - E1/E2/E3の実行、Fault Injection、Recovery、Rollbackの実行
-- Source・設定・Host State変更、GitHub書込み（設計書の承認済みGit commit/pushを除く）
+- Source・設定・Host State変更、GitHub書込み（過去のGit commit/push承認を本限定訂正へ流用しない。今回のCommit/Push/PRは別途Owner承認が必要）
 - 新規Issue、追加レビュー、別Taskの自動開始
 
 ### 3.3 Anti-goals
@@ -198,7 +198,17 @@ Credentialを含むおそれのある設定ファイルについては本文全�
 
 Justice Pluginの初期化やRecovery処理にはState書込みが発生し得るため、Pluginロードを「確認のためだけのRead-only操作」と扱わない。今回、専用Directoryの作成・設定変更・既存Stateへの書込みは行わない。
 
-**期待するEvidence：** 既存Pathと将来の専用Pathの衝突有無、初期化時の書込みリスク、分離の未解決条件。
+**H4 静的 `VERIFIED` 条件（すべて必要）：**
+
+1. **既存Stateの所有境界：** 対象Hostで使用中のWorkspace、既存`.justice`、Global Wisdom、OpenCode Config/Data/State、SessionおよびEvidenceについて、確認可能な実Path・所有者/利用主体・共有/専用の別・想定書込み可否を記録する。秘密情報やSession本文は読まない。未列挙の書込み先を「存在しない」と推定しない。
+2. **将来の専用State固定：** E1用のWorkspace Root、Local `.justice`、Global Wisdom、OpenCode Config/Data/State、Session、Evidenceそれぞれに対し、Ownerが固定した具体的Pathまたは一意に展開できる固定命名規則と専用Rootを記録する。単なる候補Pathは`VERIFIED`条件を満たさない。専用化不要とする場所には、書込みを生じない根拠または安全な抑止条件を明記する。対象Pathを実際に作成しない。
+3. **Local / Globalの非交差：** Workspace依存のLocal Storeと`JUSTICE_GLOBAL_WISDOM_PATH`の解決先を個別に示し、Global Storeの既定値`~/.justice/wisdom.json`へ誤って書き込まないための実行前固定条件を定める。既存と専用のPathは正規化し、既存のシンボリックリンク・解決可能な親Path・共有Mount等をRead-onlyで照合する。未作成Pathの将来の非交差は、親Directoryと命名規則の検査に基づく**静的な条件付き評価**であり、Runtime保証としない。
+4. **OpenCode固有の境界：** LauncherのXDG Config/Data/State（必要な場合はCache）、Session保存、Justice PluginのLocal/Global Store、Evidenceの参照・書込み先を対応付ける。既存OpenCode V2 Sessionや共有設定と書込み先が重なる、あるいは参照先を特定できない領域を専用と見なさない。`--standalone`やWorkspace分離だけから非干渉を推定しない。
+5. **初期化時の書込みリスク：** `createGlobalFs()`、`JusticePlugin.initialize()`のRestore/Recovery、OpenCode/Pluginの初期化に伴うStore作成・ログ・Cache・State更新等、確認済みの潜在書込みを分類し、各書込み先を専用Allowlistへ対応付ける。Read-onlyでは副作用の不存在を実測できないため、未解明の書込み先が残る場合は`NOT_VERIFIED`、既存共有Stateへ避けられない書込みが認められる場合は`OBSERVED_MISMATCH`とする。
+
+**H4 `VERIFIED` の意味：** 上記の所有・Path・衝突・初期化リスクを**静的証拠で説明でき、将来の専用PathがOwner固定済み**という意味だけである。実行時の非干渉、秘密・Network隔離、OS隔離を証明しない。専用Path未固定・リンク未解決・未評価書込み先があれば`VERIFIED`にしない。
+
+**期待するEvidence：** 既存Pathと専用Pathの対応表（Owner固定条件を含む）、所有/書込み区分、Path正規化・衝突/共有/シンボリックリンク判定、初期化時の書込み先Allowlist、未解決条件。
 
 ### H5 — Stop / Rollback
 
@@ -214,9 +224,18 @@ Justice Pluginの初期化やRecovery処理にはState書込みが発生し得�
 
 **必須条件：** 停止対象が一意に特定できない場合、共有OpenCodeを停止しない。Rollbackは検証専用の変更範囲だけに限定し、共有Stateの復元・削除を含めない。
 
+**H5 静的 `VERIFIED` 条件（すべて必要）：**
+
+1. **専用プロセスの識別契約：** 将来のE1専用起動に用いるOwner固定のLauncher/実バイナリ、専用Workspace、専用Config/Session、実行単位の識別子を明記する。起動後にPIDだけでなく開始時刻・実体Path・専用実行単位との対応を確認してから停止対象を一意に選ぶ方式を固定する。Read-only時点では未来のPIDや稼働実績を創作しない。
+2. **Stop対象の一意性：** 専用プロセス（必要なら当該実行単位だけの子プロセス）の所有関係を起動後に照合する条件と、照合不成立時は停止操作そのものを`HOLD`にする手順を定める。共有OpenCodeの既存PID、汎用プロセス名、無限定のプロセスグループ、一括終了コマンドを停止対象にしない。予期しない副作用時も、特定できない共有プロセスを停止しない。
+3. **撤収対象の所有境界：** H4で固定した専用Config/State/Session/Fixture/Evidence等から、Ownerが後に承認する**実際に専用実行で生成されたものだけ**をExact Path Allowlistで管理する方式を固定する。Symlinkや既存/共有Pathへ到達するCleanup、既存Gate/HOLDの変更、共有Stateの復元・削除は除外する。証拠の保持・削除は別のOwner判断に従う。
+4. **非干渉・失敗時動作：** StopとRollbackの前提として実行単位・Process Identity・Path所有がすべて一致することを要求し、不一致・欠測・共有範囲への波及がある場合は対象操作を`HOLD`しOwner判断へ戻す。既存OpenCode V2の起動・停止、共有設定変更、Credential参照、無関係Sessionの変更を含めない。
+
+**H5 `VERIFIED` の意味：** 将来の専用プロセスを特定し、**そのプロセス・専用生成物だけ**を停止/撤収するための固定条件が静的に成立すること。実際のStop、Rollback、起動後の子プロセス追跡、Runtime非干渉を実証したという意味ではない。Owner固定の識別条件や撤収Allowlistがない場合、`VERIFIED`にしない。
+
 H5で確認するのは停止・撤収方式の安全性と準備状況であり、実際の停止・削除ではない。
 
-**期待するEvidence：** 専用範囲の識別条件、停止条件、撤収条件、未解決のリスク。
+**期待するEvidence：** 専用プロセスの起動後同定条件、Stopの照合/拒否条件、専用生成物のExact Path Allowlist定義、共有OpenCode非干渉条件、未解決のリスク。
 
 ## 6. Execution Boundary
 
@@ -277,18 +296,29 @@ Verdict
 
 `NOT_VERIFIED`と`OBSERVED_MISMATCH`を混同しない。
 
+**判定の適用範囲：** H1〜H5の`VERIFIED`は各節で指定された**静的条件**に限る。特にH4は既存/専用State・書込み先Allowlistの対応が全て示された場合、H5はOwner固定の専用プロセス識別・Stop・撤収契約が全て示された場合のみ`VERIFIED`とする。計画上の候補、Source上の分離可能性、未作成Pathの名前だけでは証拠にならない。個別の未確認条件は理由・Evidenceの欠落とともに記録する。`BLOCKED`は検証不能を示し実装のFAILではない。
+
+静的`VERIFIED`は`RUNTIME_LOADED`、Runtimeでの非干渉保証、AC-H01/H02/H03のPASS、E1実行GO、`BOUNDED_COMPLETE`または`RELEASE_APPROVED`の根拠にはならない。H1〜H5全件の`VERIFIED`は**設計書の完成・今回の文書Task終了条件ではない**。
+
 ### 7.3 E1 Decision
 
-H1〜H5の結果から次のいずれかをHuman Ownerへ提示する。
+H1〜H5の静的Evidenceを根拠とし、Human Ownerへ**次の判断候補**を1件提示する。E1実行はどの候補でも自動承認されない。
 
-**E1_READY_FOR_OWNER_DECISION**：静的な実行前提が成立し、重大な分離・停止リスクが残っていない。これはE1実行の承認でもPluginロード成功の証明でもない。
+| 優先順 | 証拠付き条件 | Ownerへの提示候補 |
+|---|---|---|
+| 1 | 既存共有Stateへの不可避な書込み、専用プロセスを限定停止できない等、**重大で解消策が未確定の安全上の問題**を具体的に確認 | `E1_SAFETY_HOLD` |
+| 2 | 安全上の重大問題は確認されていないが、接続不可・Path/Writer/実体・登録経路・衝突情報等の**証拠が不足**し、限定準備の安全性も確定できない | `E1_NOT_VERIFIED` |
+| 3 | 不足箇所と安全な限定準備策をEvidenceから具体化できるが、H1〜H5の必要な静的条件が未成立。例：H4専用Path、H5 Stop同定方式/撤収Allowlistが**未固定だが安全に固定可能と裏付けられる** | `E1_LIMITED_PREPARATION_REQUIRED` |
+| 4 | **H1〜H5の各静的`VERIFIED`が成立**し、H4の専用Path・書込みAllowlist、H5の専用停止対象の同定契約・撤収AllowlistがOwner固定済み。H1実Host/バイナリ、H2実Build、H3設定からArtifactへの参照整合も証拠化。重大な衝突・未評価の書込み先が残らない | `E1_READY_FOR_OWNER_DECISION` |
 
-**E1_LIMITED_PREPARATION_REQUIRED**：Plugin登録、Build来歴、専用State設定などに限定的な準備が必要。必要な変更と理由のみを提示し、自動実施しない。
+**判定の具体例：**
 
-**E1_SAFETY_HOLD**：安全上の未解決問題により実行すべきでない。
+- H4/H5の必要Path、専用Process識別または撤収対象が**候補だけ／未固定**なら、他項目が良好でも`READY`へ昇格しない。安全な限定準備の内容が特定できれば`LIMITED_PREPARATION_REQUIRED`、特定できなければ`NOT_VERIFIED`。
+- H4で共有Global Storeへの避けられない書込み、またはH5で共有OpenCodeしか停止できないことが確定した場合、当該操作は`SAFETY_HOLD`。安全な代替方式を新たに実装して解消するものとは扱わない。
+- H1〜H3の未検証をGitHub Source、Launcher名、Plugin登録候補だけから補わない。H3の`CONFIGURED`/`RESOLVABLE`が静的に成立しても`RUNTIME_LOADED`は依然として未確認。
+- `READY`は**E1についてOwnerが実行承認可否を審議できる静的準備状態**であり、E1実行GO、Runtimeロード成功、実行時の非干渉、OS/Network/Credential隔離、ACのPASSを意味しない。E1の具体的な操作、Secrets/Network範囲、Owner承認は別のGateに残す。
 
-**E1_NOT_VERIFIED**：接続・証拠不足により判断できない。
-
+**競合時の優先：** 確認済み重大安全問題があれば`SAFETY_HOLD`を優先し、そうでなければ安全な限定準備を立証できない証拠欠落は`NOT_VERIFIED`とする。既知で安全に限定できる不足だけを`LIMITED_PREPARATION_REQUIRED`とし、すべて成立した場合だけ`READY`とする。いずれもE1/E2/E3の既存`HOLD`を変更しない。
 ## 8. Relationship to E1 / E2 / E3
 
 ### E1 — Normal Integration
@@ -337,4 +367,4 @@ RELEASE_APPROVED=PENDING
 AWAITING_OWNER_AUTHORIZATION
 ```
 
-**Design R0.1 End**
+**Design R0.1.1 Limited Remediation Draft End**
