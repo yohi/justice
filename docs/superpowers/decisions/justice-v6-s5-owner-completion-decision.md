@@ -6,7 +6,7 @@ an approved value: both Decision fields in section 4 are `PENDING` until the
 Human Owner enters a decision.
 
 Current state: **`BOUNDED_COMPLETE` is not adopted.** AC-H01 to AC-H03 are all
-`NOT_RUN`, no real-Host acceptance has been run, but the **D-S5-08 design Addendum is Owner-adopted as design policy only**; Source implementation and Host GO remain on HOLD. `RELEASE_APPROVED` is a separate opt-in permission and is not
+`NOT_RUN`, no real-Host acceptance has been run, but the **D-S5-08 design Addendum is Owner-adopted as design policy only**; the separately authorized bounded S2-b Source/Test code was committed at `204567a` without executed test evidence, while **further Source/Test operations and Host GO remain on HOLD**. `RELEASE_APPROVED` is a separate opt-in permission and is not
 established either. Even a future `BOUNDED_COMPLETE` would not introduce
 anything: without `RELEASE_APPROVED`, nothing is introduced.
 
@@ -58,7 +58,7 @@ Other items are disclosed limitations, not blockers by themselves.
 
 Related tracking: Issues #355, #356, #358 and #388.
 
-**Separate design decision (2026-11-23):** Owner adopted D-S5-08/Approach A Addendum and authorized this one-time **document-only** alignment. This is **not** either Owner Completion/Release decision. All three ACs remain `NOT_RUN`. Current S2-b rejects truthful 2.3.2 Source pending separate implementation/test authorization; existing-host isolation is logical-only and inherited Credentials/Network effects remain unverified. `oc225-msg-` / `issuerId="opencode-v225-record"` do not attest Host Version.
+**Separate design decision (2026-11-23):** Owner adopted D-S5-08/Approach A Addendum and authorized this one-time **document-only** alignment. This is **not** either Owner Completion/Release decision. All three ACs remain `NOT_RUN`. S2-b 2.2.5/2.3.2 Source admission code was separately Owner-authorized and committed at `204567a`, while Vitest/typecheck/lint are NOT_RUN and positive 2.3.2 multi-page test NOT_ADDED; existing-host isolation is logical-only and inherited Credentials/Network effects remain unverified. `oc225-msg-` / `issuerId="opencode-v225-record"` do not attest Host Version.
 
 ## 3. Target
 

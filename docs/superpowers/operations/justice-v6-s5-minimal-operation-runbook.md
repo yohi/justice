@@ -28,7 +28,7 @@ prohibited. Absence of confirmation is never read as satisfaction.
 | Item | Required condition | Current value |
 | --- | --- | --- |
 | Host | D-S5-08 existing Ubuntu `coreultra7-270k`; dedicated Workdir/Session/Fixture/Private Evidence; logical-only, not OS isolation | Owner-observed candidate; exact identity and writable boundaries NOT_FIXED |
-| Version | Real 2.3.2 executable SHA and truthful Source wrapper; current S2-b 2.2.5-only needs separate compatibility implementation/tests | 2.3.2 Owner-observed; binary hash NOT_MEASURED; Host GO HOLD |
+| Version | Real 2.3.2 executable SHA and truthful Source wrapper; S2-b exact 2.2.5/2.3.2 Source code COMMITTED at `204567a`, but Vitest/typecheck/lint NOT_RUN and multi-page positive 2.3.2 test NOT_ADDED | 2.3.2 Owner-observed; binary hash NOT_MEASURED; Host GO HOLD |
 | Scope | Accepted bounded range only (candidate: S1, S2, S3 per D-S5-01) | 未固定 |
 | Default | OFF; nothing is installed or enabled automatically | OFF |
 | Owner permission | Explicit Human Owner approval of the use scope (D-S5-03), recorded as a reference | None |
@@ -115,7 +115,7 @@ done without a separate Owner approval and S5 Design:
 
 ## 5. Compatibility and known limitations
 
-Target Host is Owner-observed OpenCode V2.3.2, not yet accepted. Current S2-b only supports 2.2.5, so 2.3.2 compatibility remains a separate Source authorization/verification gate. Unknown Versions fail closed. The inherited known limitations are listed in section
+Target Host is Owner-observed OpenCode V2.3.2, not yet accepted. S2-b now includes the exact 2.2.5/2.3.2 guard committed at `204567a`, but executed regression/compatibility verification is NOT_RUN. Unknown Versions are designed to fail closed, not yet validated by test PASS. Additional Test/Host GO remains separately authorized. The inherited known limitations are listed in section
 4 of the acceptance record and are not repeated as guarantees here, including
 `COMPARISON_NOT_ESTABLISHED`, `RUNTIME_NOT_VERIFIED`, unproven multi-process
 Recovery, and the absence of Host enforcement.

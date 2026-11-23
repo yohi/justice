@@ -10,11 +10,11 @@
 
 **Requirements:** `docs/superpowers/specs/2026-11-17-justice-v6-s5-operation-completion-brainstorming-requirements.md`（R0.1、feature HEAD `f19859bcd20bcc85e64acb24a82bee4ae3b9d630`）。
 
-**Design:** Human Owner adopted the D-S5-08/Approach A [Design Addendum](../specs/2026-11-23-justice-v6-s5-d08-host-v232-design-addendum.md) as bounded **design policy**. This Plan is document-aligned but **does not authorize** Source/Test implementation or Host execution. Host binary SHA, dedicated paths/Scope, GET mechanism, Secrets/Network, S3-b restart/readback, stop/rollback and Opt-in operations still require separate fixing and approval.決めていない操作を推測で実行してはならない。
+**Design:** Human Owner adopted the D-S5-08/Approach A [Design Addendum](../specs/2026-11-23-justice-v6-s5-d08-host-v232-design-addendum.md) as bounded **design policy**. This Plan is document-aligned and **does not itself authorize** Source/Test implementation or Host execution. Human Owner **separately authorized** bounded Source/Test implementation at `204567a` (without test execution); Host GO is still separate. Host binary SHA, dedicated paths/Scope, GET mechanism, Secrets/Network, S3-b restart/readback, stop/rollback and Opt-in operations still require separate fixing and approval.決めていない操作を推測で実行してはならない。
 
 **Issue:** [#358](https://github.com/yohi/justice/issues/358) / 全体進捗 [#388](https://github.com/yohi/justice/issues/388)。
 
-**Status:** `DESIGN_ADDENDUM_ADOPTED / PLAN_DOCUMENT_ALIGNED / SOURCE_IMPLEMENTATION_NOT_AUTHORIZED / HOST_GO_HOLD / AC_H01_H03_NOT_RUN / RELEASE_NOT_AUTHORIZED`。
+**Status after `204567a`:** `DESIGN_ADDENDUM_ADOPTED / PLAN_DOCUMENT_ALIGNED / S2B_V232_CODE_COMMITTED_TESTS_NOT_RUN / FURTHER_SOURCE_TEST_WORK_NOT_AUTHORIZED / HOST_GO_HOLD / AC_H01_H03_NOT_RUN / RELEASE_NOT_AUTHORIZED`。
 
 ## Global Constraints
 
@@ -26,7 +26,7 @@
 - 権限・Evidence・Lifecycleの不整合は影響対象をFail-Closedとし、独立した正常作業まで自動停止しない。Justice内部の拒否をHost実行前強制として主張しない。
 - Gate/HOLD・v4/v5歴史状態は不変。既存環境にデフォルト導入しない。Hostでの作成・削除・実行、Secrets、Network、GitHub書込みは個別のOwner承認範囲だけで許可。
 - 生Session/Message/Tool、秘密、Host固有の私的パス、Ground TruthをGitHubの公開文書に転記しない。保存したローカル証拠と公開可能な要約・Digestを区別。
-- `S1aReadOnlySource` / `runS2bOfflineAdapter` の `READ_ONLY` は**入力処理の契約**でありSourceコード変更許可ではない。現行S2-bは `S2B_SUPPORTED_HOST_VERSION="2.2.5"` で、実2.3.2 wrapperを `SOURCE_VERSION_UNSUPPORTED` で拒否する。2.2.5/2.3.2限定AllowlistとValidator/Test変更は別Owner承認まで実装しない。
+- `S1aReadOnlySource` / `runS2bOfflineAdapter` の `READ_ONLY` は**入力処理の契約**であり、Source編集権限ではない。別途Owner承認されたSource/Test変更は `204567a` にCommit済みで、`S2B_SUPPORTED_HOST_VERSIONS=["2.2.5","2.3.2"]` の完全一致判定を追加した。**Vitest/typecheck/lint/RED→GREENはNOT_RUN**であり、互換性PASSは未認定。追加Source/Test変更・実行は別承認。
 - 各Taskの終了時にOwnerの判断Checkpointを設ける。Taskの列挙は一括実行承認を意味しない。追加レビュー・新Finding修正・Handoff作成を自動連鎖させない。
 
 ## File Map / Responsibilities
@@ -49,7 +49,7 @@
 実Host作業は次の**すべて**が個別に満たされた後に限る。
 
 1. D-S5-08 Design AddendumはOwner採択済みだが、**Host GO/Source実装GOとは別**。実行用Manifestの旧条件と本Planの照合・独立Owner承認が必要。
-2. 既存Ubuntu `coreultra7-270k` / OpenCode V2.3.2はOwner実測（**バイナリSHA未測定**）。Source wrapperは実Versionに忠実な `hostVersion="2.3.2"` を使用し偽装しない。現行S2-b 2.2.5-only gateでは拒否されるため、別承認の互換実装/正負テストが終わるまでAC-H01はHOLD。Host ID/Justice Commit/Scope/Operation/Session/Network/Secrets/Writable/停止/切戻しもGO前に個別固定。未知VersionはFail-Closed。
+2. 既存Ubuntu `coreultra7-270k` / OpenCode V2.3.2はOwner実測（**バイナリSHA未測定**）。Source wrapperは実Versionに忠実な `hostVersion="2.3.2"` を使用し偽装しない。Sourceに2.2.5/2.3.2の限定Allowlistは追加済みだが、正負テストの実行証拠がなく、AC-H01は引き続きHOLD。Host ID/Justice Commit/Scope/Operation/Session/Network/Secrets/Writable/停止/切戻しもGO前に個別固定。未知VersionはFail-Closed。
 3. AC-H01〜H03の具体的な入力と観測方法を定め、正式なHost実行承認を得る。
 4. 専用Workdir/Session/Task/Fixture/Private Evidence/Single Writerの非干渉を確認する。既存HostはOSユーザー権限/Network/継承Secretsを共有し得る。XDG分離/`--standalone`は強制隔離ではない。安全性を証明できない操作だけHOLD。
 5. 信頼できるOwner固定Artifact参照がない場合、承認の真正性を `NOT_PROVEN` として、実証不可能なACはPASSにしない。
@@ -154,11 +154,11 @@
 
 ## D-S5-08 implementation/acceptance contract — documentation-only, NOT_RUN
 
-- **Version:** 2.2.5 existing regression preserved; bounded 2.3.2 target **NOT_IMPLEMENTED**; unknown/missing/misdeclared Version rejected. `oc225-msg-` origin and `issuerId="opencode-v225-record"` are historical Evidence labels, not Host attestation.
+- **Version:** 2.2.5/2.3.2 exact membership gate **COMMITTED** at `204567a`; regression、unknown/missing/misdeclared Version rejection and real 2.3.2 behavior are **NOT_VERIFIED by executed tests**. `oc225-msg-` origin and `issuerId="opencode-v225-record"` are historical Evidence labels, not Host attestation.
 - **API/input:** native `session.get` and `session.messages` GET, initial `order=asc`, fixed `limit=1..200`, subsequent `cursor.next`, no `type` filter; raw response bytes in `justice-s2b-source-v1`, independent `justice-s2b-correlation-v1`. The actual `--standalone` read mechanism is NOT_VERIFIED/NOT_AUTHORIZED. S2-b `S2bRequest={loaderInput,sourcePath,correlationPath}` + `S1aReadOnlySource` stays offline READ_ONLY.
-- **Test design:** adopt Addendum §3.3 P-01..P-04, N-01..N-05B, with explicit 2.2.5 regression and unknown Version fail closed. Existing `isMessage()` does **not validate** optional `time.firstToken`; malformed firstToken alone is **not automatically REJECTED**. Complete well-formed foreign-only Correlation may give `FOREIGN_TASK_EXCLUDED`, `PROJECTED`, **zero selected Evidence**; that is not AC-H01 PASS. Malformed/competing/missing bindings retain conditional `REJECTED/LIMITED`; no cross-task Evidence admission. `coverageCompleteness=NOT_ESTABLISHED`. These are unexecuted expectations.
+- **Test design:** adopt Addendum §3.3 P-01..P-04, N-01..N-05B, with explicit 2.2.5 regression and unknown Version fail closed. Existing `isMessage()` does **not validate** optional `time.firstToken`; malformed firstToken alone is **not automatically REJECTED**. Complete well-formed foreign-only Correlation may give `FOREIGN_TASK_EXCLUDED`, `PROJECTED`, **zero selected Evidence**; that is not AC-H01 PASS. Malformed/competing/missing bindings retain conditional `REJECTED/LIMITED`; no cross-task Evidence admission. `coverageCompleteness=NOT_ESTABLISHED`. These are unexecuted expectations. Dedicated positive **2.3.2 multi-page** Cursor completion test is NOT_ADDED, despite existing 2.2.5 multi-page and 2.3.2 broken-Cursor tests; the missing case belongs in a separately authorized continuation of this **existing** Test verification work.
 - **AC-H03:** only existing `JusticePlugin.initialize()` authoritative recovery path, dedicated durable FileReader/FileWriter and single Writer, reversible injection/restart and independent Readback. No Host-safe method verified; if unsafe, HOLD.
-- **Nonfunctional:** preserve existing credentials/Session/Workspace/Gate/HOLD, no shared config edits, uncontrolled Network or external Tool effects, and no destructive cleanup. The untracked local Host Manifest remains unreconciled. **Source implementation NOT_AUTHORIZED / Host GO HOLD / ACs NOT_RUN**.
+- **Nonfunctional:** preserve existing credentials/Session/Workspace/Gate/HOLD, no shared config edits, uncontrolled Network or external Tool effects, and no destructive cleanup. The untracked local Host Manifest remains unreconciled. **Bounded Source/Test code COMMITTED; Vitest/typecheck/lint NOT_RUN; further Source/Test/CI work NOT_AUTHORIZED / Host GO HOLD / ACs NOT_RUN**.
 
 ## 受入トレーサビリティ
 
