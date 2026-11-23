@@ -2,8 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` or `superpowers:executing-plans` **only after separately authorized execution**. This plan is a **read-only verification plan**, not a source-code implementation plan. Steps use checkbox (`- [ ]`) syntax. No automatic review, Host access, code changes, commit, push, E1 or release.
 
-**Version:** R0.1 (plan draft, 2026-11-23 JST)  
-**Status:** PLAN_DRAFT / DESIGN_R0.1.1_ADOPTION_PENDING / HOST_EXECUTION_NOT_AUTHORIZED  
+**Version:** R0.1 (2026-11-23 JST)  
+**Status:** PLAN_R0.1_ADOPTED / DESIGN_R0.1.1_ADOPTION_HOLD / HOST_EXECUTION_NOT_AUTHORIZED  
 **Repository:** `yohi/justice` · **Issue:** [#358](https://github.com/yohi/justice/issues/358)  
 **Design Reviewed HEAD:** `2a097bb2deccc7728254a50b770978b81e4ee297`  
 **Source Baseline:** `master@3c2b5a3f38f4440a622b8ee53705f5a6193518f1`
@@ -20,7 +20,7 @@
 
 ## Global Constraints
 
-- **Authority:** Design R0.1.1はレビュー上 `DOCUMENT_READY_WITH_BLOCKERS` / `RG-S5-HOST-001=RESOLVED` だが、**R0.1.1のOwner AdoptionはPENDING**。Plan作成の依頼は採択・Host GO・GitHub書込み承認の代用ではない。採択判断後もHost Read-only実行には独立した明示承認が必要。
+- **Authority:** Design R0.1.1はレビュー上`DOCUMENT_READY_WITH_BLOCKERS` / `RG-S5-HOST-001=RESOLVED`、**Owner判断は`ADOPTION_HOLD`**。Plan R0.1は**`ADOPTED`**だが、Designの保留を解除しない。Plan採択はHost GO・GitHub書込み・E1実行の承認ではない。Host Read-only実行には別途Human Ownerの明示承認が必要。
 - **Fixed identity:** Repository `yohi/justice`、Design HEAD `2a097bb2deccc7728254a50b770978b81e4ee297`、GitHub Source Baseline `3c2b5a3f38f4440a622b8ee53705f5a6193518f1`、Host `coreultra7-270k`、OpenCode V2.3.2。Host HEADや実バイナリSHAは未測定のため推測しない。
 - **Connection:** 既存Filesystem Tunnelは `Tunnel-client has not been seen for 300 seconds` で接続不能だった。接続復旧は自動再実行承認ではない。接続不可なら **1度の接続結果で停止**し、別経路・再試行・サービス起動へ進まない。
 - **Allowed only after approval:** 既存非機密ファイルのRead-onlyメタデータ・限定ファイル内容取得、読取可能な対象バイト列からのDigest計算、証拠の整理。使用する取得方式自体が書込みしないと確認できない場合は実行しない。
@@ -63,7 +63,7 @@
 
 **Files:** Read-only: 上記Design §2/§6/§10。Write: なし（回答は会話内で可能）。
 
-**Interfaces:** Consumes: Owner adoptionと限定Host確認の明示承認。Produces: `GO_READ_ONLY` または `STOP_NOT_AUTHORIZED / STOP_CONNECTION_BLOCKED / STOP_UNSAFE_METHOD` とEvidenceの取得可否。後続Taskは `GO_READ_ONLY` の場合だけ許可される。
+**Interfaces:** Consumes: Design R0.1.1のOwner採択とH1〜H5限定Host確認の**別個の明示承認**。Produces: `GO_READ_ONLY` または `STOP_NOT_AUTHORIZED / STOP_CONNECTION_BLOCKED / STOP_UNSAFE_METHOD` と取得可否・停止理由。**Task 2/3によるHostアクセスは`GO_READ_ONLY`の場合だけ許可する。Task 4の文書整理・停止理由のEvidence Recordへの記録・Owner報告はSTOP時も可能**であり、Hostアクセスや未承認の外部書込みを伴わない。
 
 - [ ] **Step 1 — Authorityを照合:** R0.1.1採択判断とH1〜H5限定Host確認承認が別々に存在するか確認する。片方でもない場合は `STOP_NOT_AUTHORIZED` としてTask終了。
 - [ ] **Step 2 — Methodを判定:** 承認された既存のFilesystem Read-only手段で、非機密Pathの情報を取得できるか・副作用なしが確認できるか評価する。不可なら `STOP_UNSAFE_METHOD`。Shell、別Tunnel、サービス起動へ移行しない。
@@ -104,14 +104,14 @@
 
 **Files:** Produce: `H1〜H5 Read-only Identity / Boundary Evidence Record`（会話内又はOwner指定の保存先）。Read-only: Design §7.1〜7.3、既存S5 Plan/Runbook。No repository mutation.
 
-**Interfaces:** Consumes: Task 1〜3の観測または停止理由。Produces: H1〜H5の5Verdict、保証限界、E1判断候補**1件**、未承認事項、Human Ownerの判断材料。
+**Interfaces:** Consumes: Task 1の`GO_READ_ONLY`に続くTask 2/3の観測、またはTask 1の`STOP_*`と停止理由（Task 2/3は未実行）。Produces: H1〜H5のVerdict/未確認事項、停止理由、保証限界、E1判断候補**1件**、未承認事項、Owner判断材料。**Task 4は`GO_READ_ONLY`を前提としない文書作業**であり、Hostへの追加アクセス・GitHub書込みは行わない。
 
-- [ ] **Step 1 — Recordを構成:** 各Hについて固定対象、取得方法、時点、非機密の事実、Digest、検証条件の成立/不足、制限、Verdict、Owner承認参照を記載。実行できない場合は該当部分をBLOCKED/NOT_VERIFIEDと区別して記録。
-- [ ] **Step 2 — 1件のE1判断候補を選ぶ:** Design §7.3の**優先順**（重大・未解消安全問題→証拠不足→安全に限定可能な準備不足→全H静的条件成立）をそのまま適用する。`E1_SAFETY_HOLD / E1_NOT_VERIFIED / E1_LIMITED_PREPARATION_REQUIRED / E1_READY_FOR_OWNER_DECISION` のいずれかを提示する。H4/H5専用Path、Stop対象、Cleanup Allowlist未固定ならREADYは禁止。
+- [ ] **Step 1 — Recordを構成:** 各Hについて固定対象、取得方法、時点、非機密の事実、Digest、検証条件の成立/不足、制限、Verdict、Owner承認参照を記載。`STOP_*`時はTask 1の停止理由と発生段階をEvidence Recordに記録し、Task 2/3を未実行と明記してH1〜H5を根拠なく`VERIFIED`へ変更しない。停止時も会話内でOwnerへ報告できる。
+- [ ] **Step 2 — 1件のE1判断候補を選ぶ:** Design §7.3の**優先順**（重大・未解消安全問題→確定した非重大`OBSERVED_MISMATCH`で安全な限定準備策が未立証→証拠不足→安全に限定可能な準備不足→全H静的条件成立）を適用し、`E1_SAFETY_HOLD / E1_OBSERVED_MISMATCH_OWNER_DECISION / E1_NOT_VERIFIED / E1_LIMITED_PREPARATION_REQUIRED / E1_READY_FOR_OWNER_DECISION`のいずれかを提示する。確定した不一致を証拠欠落に含めず、併存する未確認事項を別記する。H4/H5専用Path、Stop対象、Cleanup Allowlist未固定ならREADYは禁止。
 - [ ] **Step 3 — 安全状態を照合:** `E1/E2/E3=HOLD`、`BOUNDED_COMPLETE=PENDING`、`RELEASE_APPROVED=PENDING`を維持し、Runtimeロード/非干渉やAC PASSを主張していないことを確認する。T09〜T15を再利用可能な既存Evidenceとして保全する。
 - [ ] **Step 4 — Owner Checkpointで停止:** 達成事項・残余リスク・未承認事項・実質的な次の選択肢を簡潔に報告して終了する。接続不能でも次Task・再試行を自動開始しない。
 
-**Task test:** 5件の静的VerdictとE1候補の条件が一貫し、不明値や未承認操作をPASS/GOに転換していない。証拠がなくても本Planの文書完成は可能。
+**Task test:** 5件の静的VerdictとE1候補の条件が一貫し、`OBSERVED_MISMATCH`と証拠欠落を混同せず、`STOP_*`でもTask 4が停止理由を記録・Ownerへ報告しTask 2/3のHostアクセスを実行しない。不明値や未承認操作をPASS/GOに転換していない。証拠がなくても本Planの文書完成は可能。
 
 ## Plan Acceptance / Stop
 
@@ -123,4 +123,4 @@
 
 **残余リスク:** Runtime Pluginロード、実行時非干渉、Credential/Network有効隔離、E2/E3の安全なFault Injection/Restartは本Planでは証明しない。E1の実行方法はH1〜H5結果と独立Owner承認に依存する。
 
-**STOP / NO AUTO HANDOFF:** R0.1.1 Owner Adoption PENDING / H1〜H5 NOT_VERIFIED / E1〜E3 HOLD / BOUNDED_COMPLETE PENDING / RELEASE_APPROVED PENDING。Planを採択してもHost操作・GitHub書込み・E1は承認されない。追加レビュー、実装、次Taskを自動開始しない。
+**STOP / NO AUTO HANDOFF:** Design R0.1.1 `ADOPTION_HOLD` / Plan R0.1 `ADOPTED` / H1〜H5 `NOT_VERIFIED` / E1〜E3 `HOLD` / `BOUNDED_COMPLETE=PENDING` / `RELEASE_APPROVED=PENDING`。Plan採択はDesign保留を解除せず、Host操作・GitHub書込み・E1を承認しない。追加レビュー、実装、次Taskを自動開始しない。
