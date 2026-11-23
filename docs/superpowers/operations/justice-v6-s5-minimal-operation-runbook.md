@@ -4,7 +4,7 @@ This document defines the safety boundary for a future, Owner-approved Opt-in
 of Justice v6. It is an operation runbook skeleton for the Human Owner. It is
 not a runtime approval object, a Gate state, or a product status field.
 
-Current state: **D-S5-08 Design Addendum adopted as policy; no Source implementation, Host GO or Release authorized.**
+Current state: **D-S5-08 Design adopted; bounded S2-b Source/Test implementation Owner-authorized and COMMITTED at `204567a`; positive P-04 test `v232PositiveTwoPageCursorChainCompletes` ADDED at `fa90f9d`. Vitest/typecheck/lint NOT_RUN and result NOT_VERIFIED. Further Source/Test/CI changes and test execution require new Owner approval; Host GO HOLD, AC-H01/H02/H03 NOT_RUN, Completion/Release PENDING.**
 No real-Host acceptance has been run (see the sibling acceptance record). This
 runbook therefore contains no enable command and no destructive Cleanup
 command. Every Host or Version value that has not been fixed is recorded as
@@ -28,7 +28,7 @@ prohibited. Absence of confirmation is never read as satisfaction.
 | Item | Required condition | Current value |
 | --- | --- | --- |
 | Host | D-S5-08 existing Ubuntu `coreultra7-270k`; dedicated Workdir/Session/Fixture/Private Evidence; logical-only, not OS isolation | Owner-observed candidate; exact identity and writable boundaries NOT_FIXED |
-| Version | Real 2.3.2 executable SHA and truthful Source wrapper; S2-b exact 2.2.5/2.3.2 Source code COMMITTED at `204567a`, but Vitest/typecheck/lint NOT_RUN and multi-page positive 2.3.2 test NOT_ADDED | 2.3.2 Owner-observed; binary hash NOT_MEASURED; Host GO HOLD |
+| Version | Real 2.3.2 executable SHA and truthful Source wrapper; S2-b exact 2.2.5/2.3.2 Source code COMMITTED at `204567a`, but Vitest/typecheck/lint NOT_RUN and P-04 positive 2.3.2 test `v232PositiveTwoPageCursorChainCompletes` ADDED in `fa90f9d`, NOT_RUN / NOT_VERIFIED | 2.3.2 Owner-observed; binary hash NOT_MEASURED; Host GO HOLD |
 | Scope | Accepted bounded range only (candidate: S1, S2, S3 per D-S5-01) | 未固定 |
 | Default | OFF; nothing is installed or enabled automatically | OFF |
 | Owner permission | Explicit Human Owner approval of the use scope (D-S5-03), recorded as a reference | None |

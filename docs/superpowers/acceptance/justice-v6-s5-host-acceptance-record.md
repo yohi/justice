@@ -15,7 +15,7 @@ artifact, not real-Host acceptance evidence.
 | Item | Value |
 | --- | --- |
 | Host | Existing Ubuntu `coreultra7-270k` candidate (Owner-observed; AC identity NOT_VERIFIED) |
-| Version | OpenCode V2.3.2 candidate (Owner-observed); binary digest NOT_MEASURED; S2-b exact 2.2.5/2.3.2 Source code COMMITTED at `204567a`, tests NOT_RUN |
+| Version | OpenCode V2.3.2 candidate (Owner-observed); binary digest NOT_MEASURED; S2-b exact 2.2.5/2.3.2 Source COMMITTED at `204567a`; P-04 `v232PositiveTwoPageCursorChainCompletes` ADDED at `fa90f9d`, execution NOT_RUN / NOT_VERIFIED |
 | Justice Commit | Design baseline `d644734090aa4ad8cadbefd2d78908067fe36931`; AC execution commit not fixed |
 | Scope | 未固定 (candidate scope: adopted bounded ranges of S1, S2 and S3 per D-S5-01) |
 | Operation | 未固定 |
@@ -106,7 +106,7 @@ on a real Host, and no inconsistent Task / Plan progression is allowed.
 | Owner approval ref | None |
 | Missing | Owner GO for dedicated Durable State and single Writer, reversible failure injection, bounded restart, independent Decision/Lifecycle readback |
 
-**D-S5-08/Approach A gate:** Exact real-Host 2.3.2 Source remains required. S2-b now contains the exact 2.2.5/2.3.2 Allowlist and related test code at `204567a`, but Vitest/typecheck/lint are NOT_RUN, positive 2.3.2 multi-page test NOT_ADDED, and actual Host GO is separately unauthorized. Code presence is not a 2.3.2 runtime PASS. `isMessage()` does not validate optional `firstToken`. Complete foreign-only bindings can be `PROJECTED` / zero Evidence while **not** proving the selected AC. The `oc225-msg-` origin and `issuerId="opencode-v225-record"` are historical projection identifiers, not Host-version proofs. OS-level separation, network deny, credential noninheritance, dedicated durable Writer/restart injection and cleanup are NOT_VERIFIED; all AC remain `NOT_RUN`.
+**D-S5-08/Approach A gate:** Exact real-Host 2.3.2 Source remains required. S2-b now contains the exact 2.2.5/2.3.2 Allowlist and related test code at `204567a`, but Vitest/typecheck/lint are NOT_RUN, positive 2.3.2 multi-page test `v232PositiveTwoPageCursorChainCompletes` ADDED at `fa90f9d` (NOT_RUN / NOT_VERIFIED), and actual Host GO is separately unauthorized. Code presence is not a 2.3.2 runtime PASS. `isMessage()` does not validate optional `firstToken`. Complete foreign-only bindings can be `PROJECTED` / zero Evidence while **not** proving the selected AC. The `oc225-msg-` origin and `issuerId="opencode-v225-record"` are historical projection identifiers, not Host-version proofs. OS-level separation, network deny, credential noninheritance, dedicated durable Writer/restart injection and cleanup are NOT_VERIFIED; all AC remain `NOT_RUN`.
 
 ## 4. Known limitations (inherited)
 
