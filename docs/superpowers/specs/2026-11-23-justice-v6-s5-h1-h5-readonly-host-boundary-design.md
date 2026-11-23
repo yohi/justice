@@ -2,7 +2,7 @@
 
 **Version:** R0.1.1 (RG-S5-HOST-001 limited documentation remediation)  
 **Date:** 2026-11-23 (JST)  
-**Status:** R0.1 OWNER_ADOPTED / R0.1.1 LIMITED_REMEDIATION_OWNER_CHECKPOINT / EXECUTION_NOT_AUTHORIZED  
+**Status:** R0.1 OWNER_ADOPTED / R0.1.1 ADOPTION_HOLD / HOST_READ_ONLY_EXECUTION_NOT_AUTHORIZED  
 **Repository:** `yohi/justice`  
 **Reference Commit:** `master@3c2b5a3f38f4440a622b8ee53705f5a6193518f1`  
 **Target Host:** `coreultra7-270k`  
@@ -294,7 +294,7 @@ Verdict
 | BLOCKED | 接続・権限・安全制約により確認できない |
 | OBSERVED_MISMATCH | 対象と固定条件の具体的な不一致を観測 |
 
-`NOT_VERIFIED`と`OBSERVED_MISMATCH`を混同しない。
+`NOT_VERIFIED`（必要な証拠がない）と`OBSERVED_MISMATCH`（具体的な不一致を証拠付きで観測）は異なる。`OBSERVED_MISMATCH`を証拠欠落に含めず、重大な安全問題か、限定準備で安全に解消可能かを別途評価する。不一致の影響範囲に未確認事項があれば、その欠落も独立して記録する。
 
 **判定の適用範囲：** H1〜H5の`VERIFIED`は各節で指定された**静的条件**に限る。特にH4は既存/専用State・書込み先Allowlistの対応が全て示された場合、H5はOwner固定の専用プロセス識別・Stop・撤収契約が全て示された場合のみ`VERIFIED`とする。計画上の候補、Source上の分離可能性、未作成Pathの名前だけでは証拠にならない。個別の未確認条件は理由・Evidenceの欠落とともに記録する。`BLOCKED`は検証不能を示し実装のFAILではない。
 
@@ -307,18 +307,20 @@ H1〜H5の静的Evidenceを根拠とし、Human Ownerへ**次の判断候補**�
 | 優先順 | 証拠付き条件 | Ownerへの提示候補 |
 |---|---|---|
 | 1 | 既存共有Stateへの不可避な書込み、専用プロセスを限定停止できない等、**重大で解消策が未確定の安全上の問題**を具体的に確認 | `E1_SAFETY_HOLD` |
-| 2 | 安全上の重大問題は確認されていないが、接続不可・Path/Writer/実体・登録経路・衝突情報等の**証拠が不足**し、限定準備の安全性も確定できない | `E1_NOT_VERIFIED` |
-| 3 | 不足箇所と安全な限定準備策をEvidenceから具体化できるが、H1〜H5の必要な静的条件が未成立。例：H4専用Path、H5 Stop同定方式/撤収Allowlistが**未固定だが安全に固定可能と裏付けられる** | `E1_LIMITED_PREPARATION_REQUIRED` |
-| 4 | **H1〜H5の各静的`VERIFIED`が成立**し、H4の専用Path・書込みAllowlist、H5の専用停止対象の同定契約・撤収AllowlistがOwner固定済み。H1実Host/バイナリ、H2実Build、H3設定からArtifactへの参照整合も証拠化。重大な衝突・未評価の書込み先が残らない | `E1_READY_FOR_OWNER_DECISION` |
+| 2 | **重大な安全問題ではない確定した`OBSERVED_MISMATCH`**があり、固定対象・対応方針にOwner判断が必要で、安全な限定準備策をまだ立証できない。別の証拠欠落があれば併記し、欠落扱いへ置き換えない | `E1_OBSERVED_MISMATCH_OWNER_DECISION` |
+| 3 | 上記1・2に該当せず、接続不可・Path/Writer/実体・登録経路・衝突情報等の**証拠が不足**し、必要な限定準備の安全性も確定できない | `E1_NOT_VERIFIED` |
+| 4 | 未成立の静的条件または重大でない確定不一致について、安全な**限定準備策をEvidenceから立証**でき、他に未分類の証拠欠落が残らない。例：H4専用PathやH5 Stop同定方式/撤収Allowlistの安全な固定が必要 | `E1_LIMITED_PREPARATION_REQUIRED` |
+| 5 | **H1〜H5の各静的`VERIFIED`が成立**し、H4の専用Path・書込みAllowlist、H5の専用停止対象の同定契約・撤収AllowlistがOwner固定済み。H1実Host/バイナリ、H2実Build、H3設定からArtifactへの参照整合も証拠化。重大な衝突・未評価の書込み先が残らない | `E1_READY_FOR_OWNER_DECISION` |
 
 **判定の具体例：**
 
-- H4/H5の必要Path、専用Process識別または撤収対象が**候補だけ／未固定**なら、他項目が良好でも`READY`へ昇格しない。安全な限定準備の内容が特定できれば`LIMITED_PREPARATION_REQUIRED`、特定できなければ`NOT_VERIFIED`。
+- H4/H5の必要Path、専用Process識別または撤収対象が**候補だけ／未固定**なら、他項目が良好でも`READY`へ昇格しない。安全な限定準備の内容が立証できれば`LIMITED_PREPARATION_REQUIRED`、証拠欠落だけなら`NOT_VERIFIED`。
+- H1〜H3で実バイナリ・Build・登録先等の**非重大な不一致を観測**したときは、`NOT_VERIFIED`に置き換えない。安全な限定準備が立証できなければ`E1_OBSERVED_MISMATCH_OWNER_DECISION`としてOwnerへ不一致と未確認事項を提示し、自動的な対象変更・修正・再試行を行わない。
 - H4で共有Global Storeへの避けられない書込み、またはH5で共有OpenCodeしか停止できないことが確定した場合、当該操作は`SAFETY_HOLD`。安全な代替方式を新たに実装して解消するものとは扱わない。
 - H1〜H3の未検証をGitHub Source、Launcher名、Plugin登録候補だけから補わない。H3の`CONFIGURED`/`RESOLVABLE`が静的に成立しても`RUNTIME_LOADED`は依然として未確認。
 - `READY`は**E1についてOwnerが実行承認可否を審議できる静的準備状態**であり、E1実行GO、Runtimeロード成功、実行時の非干渉、OS/Network/Credential隔離、ACのPASSを意味しない。E1の具体的な操作、Secrets/Network範囲、Owner承認は別のGateに残す。
 
-**競合時の優先：** 確認済み重大安全問題があれば`SAFETY_HOLD`を優先し、そうでなければ安全な限定準備を立証できない証拠欠落は`NOT_VERIFIED`とする。既知で安全に限定できる不足だけを`LIMITED_PREPARATION_REQUIRED`とし、すべて成立した場合だけ`READY`とする。いずれもE1/E2/E3の既存`HOLD`を変更しない。
+**競合時の優先：** 重大な安全問題の実観測は`SAFETY_HOLD`。それ以外の確定した非重大`OBSERVED_MISMATCH`で安全な限定準備策を立証できない場合は`OBSERVED_MISMATCH_OWNER_DECISION`とし、他の証拠欠落を併記する。不一致への限定準備が立証済みでも別の未解消な証拠欠落があれば`NOT_VERIFIED`。不一致を含む必要な準備がすべて安全に限定可能と立証できた場合だけ`LIMITED_PREPARATION_REQUIRED`とし、全Hの静的条件が成立した場合だけ`READY`とする。いずれもE1/E2/E3の既存`HOLD`を変更しない。
 ## 8. Relationship to E1 / E2 / E3
 
 ### E1 — Normal Integration
@@ -355,7 +357,7 @@ E1後に安全なLifecycle失敗注入と専用Restartの可否を個別判断�
 
 ## 10. Human Owner Checkpoint
 
-本設計の採択は、Read-only Host確認の実行承認とは別である。設計を採択した後も、新たな明示承認がない限りHost操作は行わない。
+R0.1は過去にOwner採択済みだが、**本R0.1.1は`ADOPTION_HOLD`**。本設計の採択はRead-only Host確認の実行承認とは別であり、新たな明示承認がない限りHost操作は行わない。
 
 S5の正式状態は変更しない。
 
