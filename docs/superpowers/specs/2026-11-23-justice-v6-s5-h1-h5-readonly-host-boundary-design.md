@@ -1,8 +1,8 @@
 # Justice v6 S5 — H1〜H5 Read-only Host Identity / Plugin Boundary Design
 
-**Version:** R0.1.2 (TDD / implementation-plan realignment; documentation-only proposal, retaining R0.1.1 history)  
+**Version:** R0.1.3 (H3 TDD entry boundary proposal; R0.1.2 adopted baseline retained)  
 **Date:** 2026-11-23 (JST)  
-**Status:** R0.1.1 subsequently OWNER_ADOPTED (separate Owner decision) / R0.1.2 ALIGNMENT_DRAFT_OWNER_CHECKPOINT / H1 VERIFIED_STATIC / H2 dedicated Build PASS / H3 HOLD / H4-H5 NOT_VERIFIED / E1-E3 HOLD  
+**Status:** R0.1.2 OWNER_ADOPTED (Owner conversation; recorded adoption, not Runtime GO) / R0.1.3 DOCUMENT_CORRECTION_DRAFT_OWNER_CHECKPOINT / H1 VERIFIED_STATIC / H2 dedicated Build PASS / H3 STATIC_MISMATCH / H3 RUNTIME_NOT_VERIFIED / H4-H5 NOT_VERIFIED / E1-E3 HOLD  
 **Repository:** `yohi/justice`  
 **Reference Commit (historical read-only baseline):** `master@3c2b5a3f38f4440a622b8ee53705f5a6193518f1`  
 **Current Host Source HEAD (Owner-reported, 2026-11-23):** `bf6bcda41820b1b7550f8215afc4ceec20859409`  
@@ -412,6 +412,24 @@ EvidenceはHostの既存非公開記録を正本とし、GitHub文書へSession/
 
 固定TagのPlugin Domain API差分は機能分類のための入力であり、Hookの互換性や実Runtime結果を証明するものではない。E1でのProvider不要・Provider有りの成立性も未実証。既存S5文書成果物3件の準備はH3 HOLDとは独立して進められる。
 
+### 11.2.1 H3 TDD entry boundary — SDK preparation separated from E1 (R0.1.3 proposal; 2026-11-24)
+
+**Reason for change.** Prior H3 SDK Plan tied an offline type-resolution prerequisite to the fixed E1 ROOT. The E1 RUN_ID/ROOT and its H4/H5 checks are required for future **E1 real-Host execution**, not for a standalone compiler probe or a deterministic compatibility-positive RED test. The previous agent correctly stopped under the old Plan; this supplement changes only the *proposed future boundary* and does not retrospectively authorize prior operations.
+
+**Two independently gated areas:**
+
+1. **H3_TDD_PREP:** A one-use, separately Owner-authorized, isolated SDK/type-probe workdir (`<H3_TDD_ROOT>`) with unique identity, owner-only `0700` access, canonical non-symlink root, private HOME/TMP/cache, and an exact write allowlist. Its provenance must identify its actual host/container, version and tools; its location **must not** masquerade as E1. A stable, owned private scratch directory may be chosen without proving the E1 ROOT. Verify its own ownership and path before any writes. No E1 State, Launcher, Session, shared repository dependencies, or existing Host configuration may be changed. No new VM is required. Network package acquisition, if separately authorized, is one bounded attempt restricted to the approved npm Registry and transitive URLs; a registry option is not an OS-enforced egress policy. If egress cannot be constrained as approved, stop rather than inventing isolation.
+2. **E1_REAL_HOST:** The unchanged Owner-fixed RUN_ID/ROOT, H1–H5 ownership, State, process identity, stop/rollback allowlists and separate execution approval remain mandatory **only when entering E1/plugin live load**. `<H3_TDD_ROOT>` is never evidence of E1 identity. E1/E2/E3 stay HOLD.
+
+**Actual TDD order, not a preparatory review loop:**
+
+- **RED (before Source):** Once Owner separately authorizes bounded Test changes and execution, define a *compatibility-positive* assertion requiring the S5-selected entry to expose a v2.3.2 loader-compatible default (`id` and a callable `setup` or `effect`). Use the fixed-tag loader Source as the known contract; its shape check can be implemented as an isolated contract test **without resolving `@opencode/plugin@2.3.2` types**. The existing V1 export (or a genuinely absent selected V2 entry) must FAIL. A test designed to PASS when V1 is incompatible is a diagnosis, not RED. Record the **same unchanged test identity** across RED/GREEN. Absent-file failure alone is not sufficient evidence of working V2 behavior.
+- **SDK type prerequisite for typed GREEN:** Acquire the exact `@opencode/plugin@2.3.2` and required dependencies only inside the approved `<H3_TDD_ROOT>`. Verify version, integrity, toolchain and local type resolution before claiming *typed* GREEN or compatibility. No 2.1.4/2.2.5 or hand-authored type substitutes. Missing SDK blocks typed GREEN, **not the already approved dependency-free RED**.
+- **GREEN / next RED:** After separate Owner approval of the selected interface and Source boundary, implement the minimum entry, pass **the same RED test**, then write focused behavior-first tests for only S5-essential typed V2 Domain hooks. Hook timing, input/output shape, cleanup/disposal, error propagation and Fail-Closed semantics require separate real evidence; no API 1:1 assumption. Preserve V1 API and existing regression tests. Type-only/structural GREEN is **not** a runtime load or an AC-H01/H02/H03 PASS.
+- **Stop:** No SDK or approved scratch path, unbounded egress, unapproved Test/Source/Build writes, or unknown mandatory hook semantics => record the exact blocker and stop only the affected operation; do not spawn new design, Host Identity investigation, independent review, PR, or implementation Task automatically.
+
+**Owner and state contract:** R0.1.2 Design is adopted (Owner conversation), this R0.1.3 delta remains adoption-pending. Nothing here approves SDK installation, Test/Source edits, Git changes, Plugin registration/load or E1. `H3_STATIC_LOADER_CONTRACT=OBSERVED_MISMATCH`, `H3_CONFIGURED=NOT_ESTABLISHED`, `H3_RUNTIME_LOADED=NOT_VERIFIED`, `H4/H5=NOT_VERIFIED`, `E1/E2/E3=HOLD`, `BOUNDED_COMPLETE=PENDING`, `RELEASE_APPROVED=PENDING` remain unchanged. An Owner adoption/implementation-scope decision, not a fresh independent review, is the only next gate.
+
 ### 11.3 追加Source/Test修正が本当に必要になった場合のTDD契約
 
 **入口条件：** (1) 固定版`v2.3.2`との**静的Loader契約不一致は証明済み**、(2) その不一致がS5採択済みACのどの必要機能を妨げるかを特定、(3) 既存機能・設定/Offline経路だけでは対処できない理由を示す、(4) 対応方式（最小修正か別エントリか、必要なV2 Domainのみか等）をHuman Ownerが選択、(5) 対象Source/Test・実行境界・Git操作を別途承認する。**未選択の方式を実装者が採択してはならない。** (2)〜(5)が揃わなければ実装しない。
@@ -429,4 +447,4 @@ EvidenceはHostの既存非公開記録を正本とし、GitHub文書へSession/
 
 この補足の完了は「元のPlanに対する対象/証拠/未承認差分が明示され、必要時のTDD復帰条件を固定したこと」であり、Findingゼロ・全H VERIFIED・追加独立レビューを条件としない。H3は**静的`OBSERVED_MISMATCH`／設定`NOT_ESTABLISHED`／Runtime`NOT_VERIFIED`**、実行権限は別に**`E1/E2/E3=HOLD`**。`H4/H5=NOT_VERIFIED`、`BOUNDED_COMPLETE=PENDING`、`RELEASE_APPROVED=PENDING`を維持する。修正方式とRuntime対応範囲はOwner未決定。Source変更・Plugin登録・追加Taskを自動開始しない。H3のみの問題で無関係なS5文書準備は停止しない。
 
-**R0.1.2 documentation-only alignment proposal end.**
+**R0.1.2 Owner-adopted baseline retained; R0.1.3 H3 TDD-entry amendment is an Owner-adoption proposal. No Source/Test, SDK, Host, Plugin registration, E1/E2/E3, commit/push or Release permission follows from this text.**
