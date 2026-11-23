@@ -369,7 +369,7 @@ RELEASE_APPROVED=PENDING
 AWAITING_OWNER_AUTHORIZATION
 ```
 
-**Design R0.1.1 Limited Remediation Draft End**
+**R0.1.1 historical remediation ends here; the R0.1.2 alignment addendum follows.**
 
 ## 11. 2026-11-23 Post-verification alignment — implementation / TDD return gate (R0.1.2 proposal)
 
@@ -379,12 +379,12 @@ AWAITING_OWNER_AUTHORIZATION
 
 | 項目 | 2026-11-23のOwner報告に基づく現状 | 後続判断への意味 |
 | --- | --- | --- |
-| H1 | Host \`coreultra7-270k\`、Merge HEAD \`bf6bcda41820b1b7550f8215afc4ceec20859409\`、OpenCode 2.3.2実バイナリDigestを静的確認。Merge第2親にPR Head \`8a62ada2...\`、第1親にBaselineを含む | \`VERIFIED_STATIC\`。Runtimeの成功ではない。Identity調査のやり直しは不要 |
-| Bootstrap | 固定RUN_IDにより専用Root/非実行Launcher/最小Configを作成、静的Preflight \`BOOTSTRAP_STATIC_PASS\`。既存Stateは未変更と報告 | 専用準備成果物を再利用。Launcher実行・Plugin Load・State非干渉は未実証 |
-| H2（新・専用Artifact） | Merge HEADのgit archiveから隔離Build完了。\`SHA-256=9b17708f374f01cb7f1cb530438ae9784ccc308e0afc0e965d87abbce92db92a\`、来歴記録あり | \`VERIFIED_STATIC\`候補（専用Artifactのみ）。Ownerの採否前に正式昇格しない。再Buildを無条件に要求しない |
-| H2（共有Artifact） | 従来の\`dist/opencode-plugin.js\`は現在Sourceとの具体的不一致あり、共有ファイルは変更していない | \`OBSERVED_MISMATCH\`を歴史的な共有Artifactの状態として維持し、新専用Artifactと混同しない |
-| H3 | 専用Configの\`plugins\`は空。Justiceは\`@opencode-ai/plugin@1.14.21\`の関数型export。固定OpenCode **2.3.2** ローダの要求契約は未立証 | \`CONFIGURED\`不成立、\`RUNTIME_LOADED\`未証明。別バージョン/現行Web仕様の\`id/setup\`主張だけでSource変更しない |
-| H4/H5 | 専用State/Stop/CleanupのOwner境界方針は採択済み。実効Runtime書込み先、Supervisor/Process Identityは未証明 | 両方\`NOT_VERIFIED\`。Bootstrap PASSを静的条件全成立やE1 GOへ読み替えない |
+| H1 | Host `coreultra7-270k`、Merge HEAD `bf6bcda41820b1b7550f8215afc4ceec20859409`、OpenCode 2.3.2実バイナリDigestを静的確認。Merge第2親にPR Head `8a62ada2...`、第1親にBaselineを含む | `VERIFIED_STATIC`。Runtimeの成功ではない。Identity調査のやり直しは不要 |
+| Bootstrap | 固定RUN_IDにより専用Root/非実行Launcher/最小Configを作成、静的Preflight `BOOTSTRAP_STATIC_PASS`。既存Stateは未変更と報告 | 専用準備成果物を再利用。Launcher実行・Plugin Load・State非干渉は未実証 |
+| H2（新・専用Artifact） | Merge HEADのgit archiveから隔離Build完了。`SHA-256=9b17708f374f01cb7f1cb530438ae9784ccc308e0afc0e965d87abbce92db92a`、来歴記録あり | `VERIFIED_STATIC`候補（専用Artifactのみ）。Ownerの採否前に正式昇格しない。再Buildを無条件に要求しない |
+| H2（共有Artifact） | 従来の`dist/opencode-plugin.js`は現在Sourceとの具体的不一致あり、共有ファイルは変更していない | `OBSERVED_MISMATCH`を歴史的な共有Artifactの状態として維持し、新専用Artifactと混同しない |
+| H3 | 専用Configの`plugins`は空。Justiceは`@opencode-ai/plugin@1.14.21`の関数型export。固定OpenCode **2.3.2** ローダの要求契約は未立証 | `CONFIGURED`不成立、`RUNTIME_LOADED`未証明。別バージョン/現行Web仕様の`id/setup`主張だけでSource変更しない |
+| H4/H5 | 専用State/Stop/CleanupのOwner境界方針は採択済み。実効Runtime書込み先、Supervisor/Process Identityは未証明 | 両方`NOT_VERIFIED`。Bootstrap PASSを静的条件全成立やE1 GOへ読み替えない |
 
 EvidenceはHostの既存非公開記録を正本とし、GitHub文書へSession/Credential/Private Pathを転載しない。Build依存関係のlockとの完全整合・再現性・Runtime互換性は未証明である。既存T09〜T15/AC-H01〜H03の証拠と形式的受入裁定を混同しない。
 
@@ -392,23 +392,23 @@ EvidenceはHostの既存非公開記録を正本とし、GitHub文書へSession/
 
 - **S5本来の成果：** AC-H01〜H03の限定実Host受入、Acceptance Evidence Record、Minimal Operation Runbook、Owner Completion Decision。新Plugin Frameworkや包括的V2移行は採択された要件ではない。
 - **H1/H2/Bootstrap：** 静的証拠収集・限定隔離Buildは完了した準備作業。新たなSource変更の理由にせず、取得済み証拠を再利用する。
-- **H3の実際の欠落：** 専用ConfigにJustice Pluginの参照がない。まず固定\`v2.3.2\`の実ローダ/SDK/型または信頼できる同Versionの既存テスト証拠と、現行関数型Artifactを比較する。読み込み可能な公開文書と実際の固定版の契約を混同しない。**未証明なら\`PLUGIN_CONTRACT_NOT_VERIFIED\`で停止**する。
-- **H3の分岐：** 関数型exportが固定版の契約に適合すると証明できれば、Source変更を起こさず専用Configの限定登録と静的参照検証を、別のOwner承認を得て実施する。具体的不適合が証明された場合だけ、その不適合とS5の必要機能を対応づけて、既存Design/Planの最小差分をOwnerへ提示する。**\`id/setup\`形式、新V2エントリ、Hooks移植を既定解として採択しない。**
+- **H3の実際の欠落：** 専用ConfigにJustice Pluginの参照がない。まず固定`v2.3.2`の実ローダ/SDK/型または信頼できる同Versionの既存テスト証拠と、現行関数型Artifactを比較する。読み込み可能な公開文書と実際の固定版の契約を混同しない。**未証明なら`PLUGIN_CONTRACT_NOT_VERIFIED`で停止**する。
+- **H3の分岐：** 関数型exportが固定版の契約に適合すると証明できれば、Source変更を起こさず専用Configの限定登録と静的参照検証を、別のOwner承認を得て実施する。具体的不適合が証明された場合だけ、その不適合とS5の必要機能を対応づけて、既存Design/Planの最小差分をOwnerへ提示する。**`id/setup`形式、新V2エントリ、Hooks移植を既定解として採択しない。**
 - **H4/H5：** 専用Launcher・State・Stop/cleanupの設計上の固定と実際のRuntime非干渉は区別し、E1起動の前提が満たせない操作はHOLD。H3解消を理由にE1/E2/E3へ自動進行しない。
 
 ### 11.3 追加Source/Test修正が本当に必要になった場合のTDD契約
 
-**入口条件：** (1) 固定版\`v2.3.2\`との具体的な契約不一致をEvidenceで特定、(2) その差が採択済みS5の受入要件を妨げることを示す、(3) 既存機能/設定だけでは対処できない理由を示す、(4) Human Ownerが対象Source・Test・実行環境・書込みを限定して別途承認する。どれか欠ければ実装しない。
+**入口条件：** (1) 固定版`v2.3.2`との具体的な契約不一致をEvidenceで特定、(2) その差が採択済みS5の受入要件を妨げることを示す、(3) 既存機能/設定だけでは対処できない理由を示す、(4) Human Ownerが対象Source・Test・実行環境・書込みを限定して別途承認する。どれか欠ければ実装しない。
 
 1. **RED：** 固定版の契約・受入要件に対応する最小失敗テストを先に作り、現在の実装が失敗することを隔離Test環境で確認・記録する。単なるAPI形式の推測に対するテストは作らない。既存テストに相当する証拠がある場合は重複追加せず再利用する。
 2. **GREEN：** 証明された不一致だけを解消する最小変更を行い、同一テストのPASSを観測する。不要な新Pluginエントリ・新Runtime API・全Hooks移植を追加しない。
-3. **REFACTOR / Regression：** 必要な限定整理と既存V1/採択済みS1/S2/S3の関連回帰テスト、typecheck/lint/配布出力の検証を行い、結果・未実行を区別する。再Buildや共有\`dist/\`変更は事前の実行境界承認が必要。
+3. **REFACTOR / Regression：** 必要な限定整理と既存V1/採択済みS1/S2/S3の関連回帰テスト、typecheck/lint/配布出力の検証を行い、結果・未実行を区別する。再Buildや共有`dist/`変更は事前の実行境界承認が必要。
 4. **Owner Checkpoint：** RED/GREEN/Regression証拠、変更Diff、残余リスクを報告して停止。Runtime Plugin Load、AC-H01〜H03、Opt-in/Releaseは別判断とする。
 
 **適用の限界：** Read-only観測、Build来歴確認、Bootstrapの静的PreflightにRED→GREENを遡及要求しない。設定登録だけなら、事前の静的設定アサーション→限定更新→Readbackの検証とし、コード改修のTDD Taskを生やさない。
 
 ### 11.4 完了・停止
 
-この補足の完了は「元のPlanに対する対象/証拠/未承認差分が明示され、必要時のTDD復帰条件を固定したこと」であり、Findingゼロ・全H VERIFIED・追加独立レビューを条件としない。現時点の\`E1/E2/E3=HOLD\`、\`BOUNDED_COMPLETE=PENDING\`、\`RELEASE_APPROVED=PENDING\`を維持する。未証明のV2 Plugin契約を埋めるためのSource変更や追加Taskを自動開始しない。
+この補足の完了は「元のPlanに対する対象/証拠/未承認差分が明示され、必要時のTDD復帰条件を固定したこと」であり、Findingゼロ・全H VERIFIED・追加独立レビューを条件としない。現時点の`E1/E2/E3=HOLD`、`BOUNDED_COMPLETE=PENDING`、`RELEASE_APPROVED=PENDING`を維持する。未証明のV2 Plugin契約を埋めるためのSource変更や追加Taskを自動開始しない。
 
 **R0.1.2 documentation-only alignment proposal end.**
