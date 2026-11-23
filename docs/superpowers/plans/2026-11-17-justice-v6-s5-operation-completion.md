@@ -1,4 +1,4 @@
-# Justice v6 S5 — Operation / Completion Implementation Plan R0.1 (D-S5-08-Aligned / Execution HOLD)
+# Justice v6 S5 — Operation / Completion Implementation Plan R0.1.1 (D-S5-08-Aligned / Execution HOLD; TDD re-entry documentation correction)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` or `superpowers:subagent-driven-development` **only after separately authorized execution**. Steps use checkbox (`- [ ]`) syntax. No automatic implementation, Host probe, review dispatch, commit, or release.
 
@@ -10,7 +10,7 @@
 
 **Requirements:** `docs/superpowers/specs/2026-11-17-justice-v6-s5-operation-completion-brainstorming-requirements.md`（R0.1、feature HEAD `f19859bcd20bcc85e64acb24a82bee4ae3b9d630`）。
 
-**Design:** Human Owner adopted the D-S5-08/Approach A [Design Addendum](../specs/2026-11-23-justice-v6-s5-d08-host-v232-design-addendum.md) as bounded **design policy**. This Plan is document-aligned and **does not itself authorize** Source/Test implementation or Host execution. Human Owner **separately authorized** bounded Source/Test implementation at `204567a` (without test execution); Host GO is still separate. Host binary SHA, dedicated paths/Scope, GET mechanism, Secrets/Network, S3-b restart/readback, stop/rollback and Opt-in operations still require separate fixing and approval.決めていない操作を推測で実行してはならない。
+**Design:** Human Owner adopted the D-S5-08/Approach A [Design Addendum](../specs/2026-11-23-justice-v6-s5-d08-host-v232-design-addendum.md) as bounded **design policy**. This Plan is document-aligned and **does not itself authorize** Source/Test implementation or Host execution. Human Owner **separately authorized** bounded Source/Test implementation at `204567a` (without test execution); Host GO is still separate. **Historical at the earlier Source/Test checkpoint:** Host binary SHA, dedicated paths/Scope, GET mechanism, Secrets/Network, S3-b restart/readback, stop/rollback and Opt-in operations were not yet fixed. **Current 2026-11-23 H1:** Host Identity and OpenCode v2.3.2 binary SHA have since been statically verified by Owner-reported Evidence; this does not satisfy Runtime Identity/AC acceptance or authorize Host GO. Remaining execution conditions require separate Owner fixing/approval. 決めていない操作を推測で実行してはならない。
 
 **Issue:** [#358](https://github.com/yohi/justice/issues/358) / 全体進捗 [#388](https://github.com/yohi/justice/issues/388)。
 
@@ -41,36 +41,50 @@
 | --- | --- | --- |
 | H1 → S5 Host前提 | Host `coreultra7-270k`、Merge HEAD `bf6bcda41820b1b7550f8215afc4ceec20859409`、実バイナリDigestの`VERIFIED_STATIC`をOwner報告 | Identity取得のやり直しを既定としない。Runtime受入は別 |
 | H2 → Artifact Identity | 隔離Buildは`H2_BUILD_PASS`。新専用Artifact Digest `9b17708f374f01cb7f1cb530438ae9784ccc308e0afc0e965d87abbce92db92a`、Build元Merge HEAD。共有`dist/`旧Artifactは不一致のまま | 新専用Artifactの`H2=VERIFIED_STATIC`採否をOwnerが限定判断。再Build不要なら省略 |
-| H3 → E1の事前構成 | 専用Configの`plugins: []`、Justice Plugin未登録。`PLUGIN_CONTRACT_NOT_VERIFIED`、V2実ローダ契約未立証 | **固定v2.3.2の実装/SDK契約を証拠で確認するだけ**。推測した`id/setup`形式を要求として採択せず、Source改修のTaskを開始しない |
+| H3 → E1の事前構成 | 専用Configの`plugins: []`、Justice Plugin未登録。固定v2.3.2 `packages/core/src/plugin/module.ts` L81–94/L168–186はdefault exportに`{id,effect}`または`{id,setup}`を要求。Justice `src/opencode-plugin.ts`の関数型default exportとの**静的Source契約不一致は観測済み** | `H3_LOADER_SOURCE_CONTRACT_MISMATCH_OBSERVED`を記録し、**`RUNTIME_LOADED=NOT_VERIFIED`**／実BundleロードFAIL未観測を分離。V2対応方式と機能範囲はOwner未決定。Source/Configの未承認変更を行わない |
 | H4/H5 → E1安全Gate | 専用Root・非実行Launcher・最小Configの`BOOTSTRAP_STATIC_PASS`、境界方針採択済み。実行時書込み/Process Identity/Stop境界は`NOT_VERIFIED` | 実行GOを認定せず、未証明の対象だけHOLDする |
 | Task 3〜5 → AC-H01〜H03 | T09〜T15の限定Host/Offline Evidenceあり。ただしOwnerによる**正式AC PASSは未採択**。既存受入文書の歴史的`NOT_RUN`は現時点の全観測を表さない | 原証拠・Version/Scope/Authority帰属の不足を明記し、採択済みTaskの範囲内でOwnerが別判断 |
 | Task 6 → Bounded Completion / Release | `BOUNDED_COMPLETE=PENDING`、`RELEASE_APPROVED=PENDING` | S5既定のCompletion/Opt-in条件を変更せずOwner判断を待つ |
 
-**H2の単位の注意：** 新専用Artifactに関する静的Build Identityと、共有`dist/opencode-plugin.js`に残る旧版不一致を区別する。H2の正式Verdict更新はOwner採択まで保留できる。Build成功だけでは`RUNTIME_LOADED`・実行時非干渉・AC PASSにはならない。証拠はHost側の非公開原本を参照し、生SessionやPrivate PathをGitHubへ移さない。
+**H2の単位の注意：** 新専用Artifactに関する静的Build Identityと、共有`dist/opencode-plugin.js`に残る旧版不一致を区別する。H2の正式Verdict更新はOwner採択まで保留できる。Build成功だけでは`RUNTIME_LOADED`・実行時非干渉・AC PASSにはならない。証拠はHost側の非公開原本を参照し、生SessionやPrivate PathをGitHubへ移さない。**H1の旧SHA未測定記述はHistoricalであり現行GO根拠ではない。**
 
 ### H3 — required contract diagnosis, not a speculative feature
 
-- **確認する事実：** OpenCode **固定v2.3.2** が実際に受け付けるPluginエントリ、default export、登録キーとPath、必要なHooks/API、現行`@opencode-ai/plugin@1.14.21`との関係。固定Tagの実Source/型/ローダの非機密な既存証拠を優先し、最新版Web docsや別Versionの仕様と区別する。
-- **十分な証拠がない場合：** `PLUGIN_CONTRACT_NOT_VERIFIED`およびH3 HOLDを維持し、不要な再Build・互換化・V2専用エントリの実装を始めない。
-- **関数型Pluginが適合することが立証された場合：** Source修正は不要。Owner別承認のもとで、専用Configの`plugins`に新専用Artifactを登録し、**静的設定アサーション → 限定変更 → Readback**で確認する。これはコード修正TDDではなく設定の検証である。共有Config、Credential、Provider、OpenCode起動は対象外。
-- **固定版との具体的不適合が立証された場合：** まずその不適合がS5の既存ACに必要な機能を阻害するか評価し、既存機能/設定では解決できない理由と、対象Source/Testを限定したDesign/Plan最小差分をOwnerへ提示する。**別途Ownerが設計差分とSource/Test実装を承認するまで変更しない。** `id/setup`への全面移行、別V2 Pluginエントリ、全Hooks移植は採択済みの解ではない。
+- **確定したLoader事実（再調査を既定にしない）：** 固定Tag `anomalyco/opencode@v2.3.2`の`packages/core/src/plugin/module.ts` L81–94は`default`に`{ id: string, effect: function }`または`{ id: string, setup: function }`を要求。L168–186の`loadServer()`は同Schemaを検証し、不適合なら`LoadError`へ写す。Justiceの`src/opencode-plugin.ts`は`@opencode-ai/plugin@1.14.21`由来の**関数型default export**。この**Source契約不一致は静的に観測済み**。未確認なのは実Bundleロード結果・Loaderエラーの実観測・V2 Hooks互換・Runtime非干渉である。
+- **H3の実際の状態：** 専用Configの`plugins`は空、`CONFIGURED`は不成立。`RUNTIME_LOADED=NOT_VERIFIED`であり、`OBSERVED_RUNTIME_FAILURE`ではない。H3の不一致はE1の実Plugin利用準備に関するHOLDであって、S5 Task 1/2/6など無関係な文書準備の停止理由ではない。
+- **Owner未決定の実装方式：** Loader契約の構造上、現行exportをそのまま登録して成立するという以前の仮定は撤回する。ただし`id/effect`か`id/setup`か、既存エントリの変更かV2別エントリか、どのDomainに何を載せるかは未決定。機械的なラッピング、全面的なV1 Hooks移植、汎用V2 Frameworkを採択したことにはしない。S5受入の必須機能とV2 Domain APIの対応・既存機能による代替可否を限定整理し、差分のある部分だけOwnerへ提示する。
+- **登録とSource改修の境界：** 互換対応の方式・設計/TDD Plan・実施環境・Git操作に対する別途Owner承認があるまで、Source/Test改変・専用Config登録・Runtimeロードは一切開始しない。既存H2隔離Build Artifactは再利用し、意味のない再Buildをしない。
 
 ### Conditional TDD work contract — only if a code gap is proven and authorized
 
+**V1 Hook → V2 Domainの評価対象（S5 AC限定、方式はOwner未採択）：**
+
+| 既存Justice Source境界 | 固定v2.3.2の確認済みV2側構造 | S5で判断すべき必要性 |
+| --- | --- | --- |
+| `event`、`chat.message`、`experimental.text.complete`、`tool.execute.after` | `packages/core/src/plugin/hooks.ts`のDomainは`aisdk/session/permission/shell/tool`。従来Callbackと同じ形・順序とは限らない | AC-H01：既存Offline Source/Correlation処理だけで足りるか、Plugin側のSession/Message/Tool観測が必須か |
+| `tool.execute.before`、権限・Evidence判定 | V2のHookはDomainごとに登録し、Error channelも独立（`tool` Domainの`execute.before`の扱いは具体型に照合する） | AC-H02：限定Fail-Closedに必要な範囲だけ。Host実行前強制のPASSを創作しない |
+| `event` → `OpenCodeAdapter` → `JusticePlugin.initialize()` | V2 Context/Session Hookから従来Adapterへ同一引数が渡る保証はない | AC-H03：既存単一Writer/専用Durable StateのRecoveryに実Pluginが必要な箇所だけ |
+| `tool`、`config`、`chat.params`、`command.execute.before`、`experimental.session.compacting` | V2 Domainと旧V1 Hooksは1:1対応未証明。新規Config/Command/Tool登録APIへの全移植は未採択 | ACに不要な機能は今回の対応範囲から除外。追加機能の全面移植をTDD成功条件にしない |
+
+S5外の全互換性やProvider通信を必要条件として追加しない。型・イベントTiming・Error処理の差とRuntimeでの成立性は未証明であり、対応範囲のOwner判断が先である。
+
+
 | TDD stage | 先に示す証拠/操作 | 完了条件と停止条件 |
 | --- | --- | --- |
-| **RED** | 具体的な固定v2.3.2契約とS5の対象ACから**1つの最小失敗テスト**を定義。現在の実装で失敗することをOwner承認済みの隔離環境で実測 | 実際のFAIL記録。契約/失敗を再現できなければ`NOT_VERIFIED`で停止。既存テストが同じFAILを表すなら再利用 |
+| **RED** | 既知のLoader Schema不一致と、Ownerが選択したS5必須Hook/インターフェース契約を入力に**最小失敗テスト**を先に定義。現行exportでの構造不適合を静的にアサートし、コード変更前の隔離テストでREDを実測する。既存テストが同じ失敗を表すなら再利用 | 実際のFAILと、何の仕様を検証したかを記録。Runtime起動を許可せず、テスト実行が承認されなければ`NOT_RUN`で停止 |
 | **GREEN** | REDで観測した欠落だけを最小限のSource修正で解消 | 同一テストがPASS。未証明のHooks移植や汎用機構は追加しない |
 | **REFACTOR / regression** | 変更境界内の限定整理、V1/S1/S2/S3の必要な回帰テスト、型・Lint・配布/Bundle検証を実行 | PASS/FAIL/NOT_RUNを区別。隔離を保証できないBuild/Test実行はHOLD。全Findingゼロ・独立レビュー無限連鎖を要求しない |
 | **Owner Checkpoint** | 変更Diff、RED→GREENログ、Regression結果、残余リスク、未承認のRuntime検証範囲を報告 | 当該限定Taskを終了。Pluginロード・E1・AC・Releaseへ自動進行しない |
 
-**TDDの適用対象：** 新たにOwnerが承認したSource/Test変更のみ。Read-only Host確認・Bootstrap作成・隔離Build/来歴確認にはTDDのRED→GREENを遡及要求しない。S2-b Source互換性については既存D-S5-08の限定Plan/テストを再利用し、H3 Plugin Loader契約の失敗テストと混同しない。仮にTDDの新規失敗テストが必要でも、要件未確認のままテストから仕様を創作してはならない。
+**別承認後にだけ確定する実装Plan項目：** H3の必要対応方式をHuman Ownerが採択した場合、実装開始前に一つの限定Plan内で、(1)対象Source/Testファイル（候補の`src/opencode-plugin.ts`、`src/runtime/opencode-adapter.ts`は採択された変更Pathとは限らない）、(2)固定v2.3.2のLoader `{id,effect|setup}`・V2 Domain Hook型/Interfaceと既存Justice型との差分、(3)対応する最小テスト/Negative Case/Fail-Closed期待、(4) RED→GREENの観測方法、(5)隔離環境と実行コマンド（候補`bun run vitest run <approved-test-file>`、`bun run typecheck`、`bun run lint`、`bun run test`、隔離出力での`bun run build`。いずれも**今は未実行**）、(6)予期したLoader拒否の静的Assertionと未実測Runtime Errorの区別、(7)Regressions/No-Change境界、(8)Commit/Push対象・境界および停止条件を固定する。Ownerが範囲・実行権限・Git操作を別途承認するまでSource/Test修正・テスト実行はしない。
+
+**TDDの適用対象：** 新たにOwnerが承認したSource/Test変更のみ。Read-only Host確認・Bootstrap作成・隔離Build/来歴確認にはTDDのRED→GREENを遡及要求しない。S2-b Source互換性については既存D-S5-08の限定Plan/テストを再利用し、H3 Plugin Loader契約の失敗テストと混同しない。既知のLoader不一致に対して実行者が独自のAPI仕様や修正方針を創作してはならない。
 
 ### Explicit stop
 
 - 本節は新たなTask 7や並行した修正・レビューTaskを作らない。固定契約・Owner承認が欠けたときは現状証拠を保持してOwner Checkpointで停止する。
 - Source/Test/CI変更、共有`dist/`変更、Plugin登録、Runtimeロード、Supervisor作成、E1/E2/E3、Host/外部書込み、PR/Mergeは**この文書訂正によって許可されない**。
-- `H1=VERIFIED_STATIC`、H2新専用Build PASS（正式H2裁定保留）、`H3=HOLD`、`H4/H5=NOT_VERIFIED`、`E1/E2/E3=HOLD`、`BOUNDED_COMPLETE=PENDING`、`RELEASE_APPROVED=PENDING`を維持。追加作業が不要ならここで終了する。
+- `H1=VERIFIED_STATIC`、H2新専用Build PASS（正式H2裁定保留）、`H3=HOLD`（**静的Loader契約不一致は確定、Runtime失敗は未観測**）、`H4/H5=NOT_VERIFIED`、`E1/E2/E3=HOLD`、`BOUNDED_COMPLETE=PENDING`、`RELEASE_APPROVED=PENDING`を維持。H3以外の文書準備まで停止しない。追加作業が不要ならここで終了する。
 
 
 ## File Map / Responsibilities
@@ -93,8 +107,8 @@
 
 実Host作業は次の**すべて**が個別に満たされた後に限る。
 
-1. D-S5-08 Design AddendumはOwner採択済みだが、**Host GO/Source実装GOとは別**。実行用Manifestの旧条件と本Planの照合・独立Owner承認が必要。
-2. 既存Ubuntu `coreultra7-270k` / OpenCode V2.3.2はOwner実測（**バイナリSHA未測定**）。Source wrapperは実Versionに忠実な `hostVersion="2.3.2"` を使用し偽装しない。Sourceに2.2.5/2.3.2の限定Allowlistは追加済みだが、正負テストの実行証拠がなく、AC-H01は引き続きHOLD。Host ID/Justice Commit/Scope/Operation/Session/Network/Secrets/Writable/停止/切戻しもGO前に個別固定。未知VersionはFail-Closed。
+1. D-S5-08 Design AddendumはOwner採択済みだが、**Host GO/Source実装GOとは別**。実行用Manifestの旧条件と本Planの照合・独立Owner承認が必要。H3の確定Loader Source契約不一致は実Pluginを前提にするE1の実行準備をHOLDし、独立した文書準備を止める理由にはしない。
+2. **Historical checkpointではOpenCode実バイナリSHA未測定だったが、現行の2026-11-23 Owner報告ではH1=VERIFIED_STATIC**。固定Host `coreultra7-270k` / HEAD `bf6bcda41820b1b7550f8215afc4ceec20859409` / OpenCode 2.3.2実バイナリSHA-256 `e6543f6e5c39c40971ba38afd1819ac852c29ac735b5a89065d3d148d47f27ad` を静的確認済み。既存の非公開Evidenceを原本とし、GitHubへ秘密やSession本文を転記しない。Digest再測定を既定の反復Taskとしない。**このH1結果はRuntime Identity・Pluginロード・実Host AC PASSを証明しない。** Source wrapperは実Versionに忠実な `hostVersion="2.3.2"` を使用し偽装しない。Sourceに2.2.5/2.3.2の限定Allowlistは追加済みだが、正負テストの実行証拠だけでAC-H01の正式受入を推定しない。Host/Justice Commit/Scope/Operation/Session/Network/Secrets/Writable/Stop/RollbackとH3/H4/H5は必要な段階でOwnerが個別固定・裁定。未知VersionはFail-Closed。
 3. AC-H01〜H03の具体的な入力と観測方法を定め、正式なHost実行承認を得る。
 4. 専用Workdir/Session/Task/Fixture/Private Evidence/Single Writerの非干渉を確認する。既存HostはOSユーザー権限/Network/継承Secretsを共有し得る。XDG分離/`--standalone`は強制隔離ではない。安全性を証明できない操作だけHOLD。
 5. 信頼できるOwner固定Artifact参照がない場合、承認の真正性を `NOT_PROVEN` として、実証不可能なACはPASSにしない。
