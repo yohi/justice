@@ -76,6 +76,8 @@ export type ReviewFailureOutcome =
   | { readonly kind: "blocked" };
 
 export type ReviewDispatchDependencies = {
+  /** Writer identity of the ObservationLogStore that persists transitions created here. */
+  readonly writerId: string;
   readonly readDurableRecords: () => Promise<readonly PersistedLogRecord[]>;
   readonly readDurableAuthorizations: () => Promise<readonly ApprovedPlanBinding[]>;
   readonly findAuthorizationById: GateEvaluationDependencies["findAuthorizationById"];
@@ -389,10 +391,14 @@ function candidatesForParent(
 
 export function createReviewDispatchState(dependencies: ReviewDispatchDependencies) {
   const now = dependencies.now ?? (() => new Date().toISOString());
-  const envelope = (record: Pick<PersistedEnvelope, "agentId" | "sessionId" | "writerId">) => ({
+  // A new transition is written by the *current* writer. Only the shard dimensions that
+  // identify the parent session (agentId / sessionId) are inherited from the historical
+  // record; its writerId is provenance of that record and must never be reused, because the
+  // ObservationLogStore rejects any append whose writerId differs from its own.
+  const envelope = (record: Pick<PersistedEnvelope, "agentId" | "sessionId">) => ({
     agentId: record.agentId,
     sessionId: record.sessionId,
-    writerId: record.writerId,
+    writerId: dependencies.writerId,
   });
   const recordAdvisorySafely = async (advisory: string, cause?: unknown): Promise<void> => {
     try {

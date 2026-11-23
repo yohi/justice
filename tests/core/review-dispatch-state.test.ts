@@ -142,7 +142,7 @@ function seedFinalReviewPending(
   );
 }
 
-function dispatchHarness() {
+function dispatchHarness(currentWriterId = "writer-1") {
   const state = {
     records: [] as PersistedLogRecord[],
     authorizations: [activeAuthorization()] as ApprovedPlanBinding[],
@@ -166,6 +166,7 @@ function dispatchHarness() {
       reservation: ReviewArtifactReservation,
     ) => Promise<void>;
   } = {
+    writerId: currentWriterId,
     readDurableRecords: async () => {
       if (state.readRecordsFailure) throw new Error("records unavailable");
       return state.records;
@@ -772,6 +773,107 @@ describe("review dispatch state machine", () => {
     expect(projectReviewDispatchSlots(recovery.state.records)).toMatchObject([
       { state: "terminal", terminalReason: "cancelled" },
     ]);
+  });
+
+  describe("writer identity of new transitions (restart under a different writer)", () => {
+    const earlierWriter = "writer-1";
+
+    it("offers the pending review under the current writer and leaves earlier records untouched", async () => {
+      const harness = dispatchHarness("writer-2");
+      seedReviewPending(harness.state.records);
+      const before = structuredClone(harness.state.records);
+
+      await expect(harness.dispatch.offerNextMandatoryReview("parent-1")).resolves.toEqual({
+        kind: "offered",
+        correlation,
+      });
+
+      expect(harness.state.records.slice(0, before.length)).toEqual(before);
+      expect(harness.state.records.slice(before.length)).toHaveLength(1);
+      const created = harness.state.records.at(-1);
+      expect(created).toMatchObject({
+        kind: "review_dispatch_transition",
+        from: null,
+        to: "pending",
+        agentId: "atlas",
+        sessionId: "parent-1",
+        writerId: "writer-2",
+        parentSessionId: "parent-1",
+        correlation,
+      });
+      expect(before.every((record) => record.writerId === earlierWriter)).toBe(true);
+      expect(projectReviewDispatchSlots(harness.state.records)).toMatchObject([
+        { state: "pending", key: { parentSessionId: "parent-1", correlation } },
+      ]);
+    });
+
+    it("keeps the same-writer flow intact with monotonic sequences and one Correlation", async () => {
+      const harness = dispatchHarness();
+      seedReviewPending(harness.state.records);
+      await harness.dispatch.offerNextMandatoryReview("parent-1");
+      await expect(harness.dispatch.claimReviewDispatch(claimInput())).resolves.toMatchObject({
+        kind: "claimed",
+      });
+
+      const dispatchRecords = harness.state.records.filter(
+        (record) => record.recordType === "observation" && record.kind === "review_dispatch_transition",
+      );
+      expect(dispatchRecords.map((record) => record.writerId)).toEqual(["writer-1", "writer-1"]);
+      const sequences = harness.state.records.map((record) => record.sequence ?? 0);
+      expect(new Set(sequences).size).toBe(sequences.length);
+      expect(projectReviewDispatchSlots(harness.state.records)).toHaveLength(1);
+      expect(projectReviewDispatchSlots(harness.state.records)[0]).toMatchObject({
+        state: "claimed",
+        key: { correlation },
+      });
+    });
+
+    it("terminalizes an inactive earlier pending/claimed slot under the current writer", async () => {
+      const harness = dispatchHarness("writer-2");
+      harness.state.records.push(pending(), claimed());
+      harness.state.lookupAuthorization = null;
+      const before = structuredClone(harness.state.records);
+
+      await expect(harness.dispatch.recoverReviewDispatchesAfterRestart()).resolves.toBeUndefined();
+
+      expect(harness.state.records.slice(0, before.length)).toEqual(before);
+      const created = harness.state.records.slice(before.length);
+      expect(created).toHaveLength(1);
+      expect(created[0]).toMatchObject({
+        kind: "review_dispatch_transition",
+        from: "claimed",
+        to: "terminal",
+        terminalReason: "cancelled",
+        writerId: "writer-2",
+        correlation,
+      });
+      expect(projectReviewDispatchSlots(harness.state.records)).toMatchObject([
+        { state: "terminal", terminalReason: "cancelled", key: { correlation } },
+      ]);
+    });
+
+    it("does not terminalize or re-offer a slot whose authorization is still active", async () => {
+      const harness = dispatchHarness("writer-2");
+      harness.state.records.push(pending(), claimed());
+      const before = structuredClone(harness.state.records);
+
+      await harness.dispatch.recoverReviewDispatchesAfterRestart();
+
+      expect(harness.state.records).toEqual(before);
+    });
+
+    it("does not report success when the new transition cannot be persisted", async () => {
+      const harness = dispatchHarness("writer-2");
+      seedReviewPending(harness.state.records);
+      const before = structuredClone(harness.state.records);
+      harness.state.appendKind = "failed";
+
+      await expect(harness.dispatch.offerNextMandatoryReview("parent-1")).resolves.toEqual({
+        kind: "blocked",
+      });
+      expect(harness.state.records).toEqual(before);
+      expect(harness.state.directives).toHaveLength(0);
+    });
   });
 
   it("validates queued directives and recovers pending and unusable claimed slots", async () => {
