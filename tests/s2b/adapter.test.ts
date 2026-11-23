@@ -543,6 +543,40 @@ describe("S2-b adapter: Fixed-Fixture MVP acceptance (Task 6)", () => {
     await expectS1Untouched(fx, calls[0]!, report);
   });
 
+
+  it("truthfulV232ProjectsSelectedEvidenceThroughS1dWithoutClaimingHostProof", async () => {
+    const { runner, calls, report } = await run({
+      sourceText: buildSource({ hostVersion: "2.3.2" }),
+    });
+    expect(report.adapter.status).toBe("PROJECTED");
+    expect(report.adapter.selectedTaskRef).toEqual({ artifactId: "task-1", revision: "R1" });
+    expect(report.adapter.projectionScope.scopeKey).toBe("scope-1");
+    expect(report.adapter.coverageCompleteness).toBe("NOT_ESTABLISHED");
+    expect(runner).toHaveBeenCalledTimes(1);
+    expect(calls).toHaveLength(1);
+    const evidence = JSON.parse(dec((await bridgedInputs(calls[0]!)).evidence)) as Array<Record<string, unknown>>;
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0]).toMatchObject({
+      taskRef: { artifactId: "task-1", revision: "R1" },
+      acRef: SELECTED_AC,
+      issuerId: "opencode-v225-record",
+      provenanceClass: "UNVERIFIED_EXTERNAL",
+      reportedOutcome: "UNKNOWN",
+    });
+    expect(evidence[0]!["originId"]).toMatch(/^oc225-msg-/);
+    // Origin identifiers are historical; Source declaration cannot attest the Host binary.
+  });
+
+  it("otherHostVersionsAreRejectedWithoutInvokingS1d", async () => {
+    for (const hostVersion of ["2.2.6", "2.3.3", "2.x"]) {
+      const { runner, report } = await run({ sourceText: buildSource({ hostVersion }) });
+      expect(report.adapter.status).toBe("REJECTED");
+      expect(report.adapter.diagnostics.map((d) => d.code)).toContain("SOURCE_VERSION_UNSUPPORTED");
+      expect(runner).toHaveBeenCalledTimes(0);
+      expect(Object.hasOwn(report, "s1d")).toBe(false);
+    }
+  });
+
   it("t09FilteredUnknownVersionOrExportSourceRejectedWithoutS1d", async () => {
     const variants: Array<[string, string]> = [
       [buildSource({ pages: [{ request: { ...firstRequest(), type: "assistant" }, response: pageResponse([]) }] }), "UNSUPPORTED_FILTERED_COLLECTION"],

@@ -81,6 +81,41 @@ function sessionInfoOnly(): Record<string, unknown> {
   return JSON.parse(sessionResponse()).data as Record<string, unknown>;
 }
 
+
+describe("S2-b exact pinned host versions (D-S5-08)", () => {
+  it("acceptsPinnedHostVersionsOnly", () => {
+    for (const hostVersion of ["2.2.5", "2.3.2"]) {
+      const result = accepted(source(buildSource({ hostVersion })));
+      expect(result.collectionStatus).toBe("PAGINATION_COMPLETE");
+      expect(result.validatedPageCount).toBe(1);
+    }
+  });
+
+  it("rejectsOtherPresentHostVersionsWithoutFallback", () => {
+    for (const hostVersion of ["2.2.6", "2.3.3", "2.x", "", null, 232]) {
+      expectRejected(source(buildSource({ hostVersion })), "SOURCE_VERSION_UNSUPPORTED");
+    }
+    // Missing required wrapper field is a schema defect, not a present unsupported value.
+    const missing = buildSource().replace('"hostVersion":"2.2.5",', "");
+    expectRejected(source(missing), "SOURCE_SCHEMA_INVALID");
+  });
+
+  it("v232FilteredCollectionAndBrokenCursorStayFailClosed", () => {
+    expectRejected(source(buildSource({
+      hostVersion: "2.3.2",
+      pages: [{ request: { ...firstRequest(), type: "assistant" }, response: pageResponse([]) }],
+    })), "UNSUPPORTED_FILTERED_COLLECTION");
+
+    const broken = twoPages();
+    broken[1] = { ...broken[1]!, request: laterRequest("wrong-cursor", 2) };
+    const prefix = accepted(source(buildSource({ hostVersion: "2.3.2", pages: broken })));
+    expect(prefix.collectionStatus).toBe("PAGINATION_INCOMPLETE");
+    expect(prefix.validatedPageCount).toBe(1);
+    expect(prefix.messages.map((m) => m["id"])).toEqual(["msg_001", "msg_002"]);
+    expect(codes(prefix)).toContain("PAGINATION_INCOMPLETE");
+  });
+});
+
 describe("S2-b correlation validation", () => {
   it("acceptsAndPreservesBindings", () => {
     const r = validateS2bCorrelation(enc(JSON.stringify(correlation())));

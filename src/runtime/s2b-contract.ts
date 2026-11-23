@@ -8,7 +8,8 @@ export type { LoaderInput, S1aReadOnlySource, TaskIntent, EvidenceRefV1, S1dRepo
 export const S2B_SOURCE_SCHEMA_VERSION = "justice-s2b-source-v1" as const;
 export const S2B_CORRELATION_SCHEMA_VERSION = "justice-s2b-correlation-v1" as const;
 export const S2B_REPORT_SCHEMA_VERSION = "justice-s2b-report-v1" as const;
-export const S2B_SUPPORTED_HOST_VERSION = "2.2.5" as const;
+export const S2B_SUPPORTED_HOST_VERSION = "2.2.5" as const; // Legacy 2.2.5 contract.
+export const S2B_SUPPORTED_HOST_VERSIONS = ["2.2.5", "2.3.2"] as const;
 
 /** Input/projection limits measured on raw UTF-8 byte spans (never re-serialized JSON). */
 export const S2B_LIMITS = Object.freeze({

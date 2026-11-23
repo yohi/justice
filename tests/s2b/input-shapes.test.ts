@@ -274,6 +274,51 @@ describe("S2-b fixed v2.2.5 shapes", () => {
   });
 });
 
+
+describe("S2-b bounded 2.3.2 Message/Tool shape contract", () => {
+  const v232Source = (messages: readonly unknown[]): string =>
+    buildSource({
+      hostVersion: "2.3.2",
+      pages: [{ request: firstRequest(), response: pageResponse(messages) }],
+    });
+
+  it("acceptsExistingAssistantToolStateVariants", () => {
+    for (const status of ["streaming", "running", "completed", "error"] as const) {
+      const message = assistantMessage("msg_201", [toolPart("tool_001", status)]);
+      expect(accepted(source(v232Source([message]))).messages).toHaveLength(1);
+    }
+  });
+
+  it("keepsFirstTokenOptionalAndExplicitlyUnvalidated", () => {
+    const base = assistantMessage("msg_202");
+    const time = base["time"] as Record<string, unknown>;
+    for (const extra of [{}, { firstToken: 2_500 }, { firstToken: "not-a-timestamp" }]) {
+      const message = { ...base, time: { ...time, ...extra } };
+      // Existing isMessage() checks created/completed, not firstToken.
+      // An accepted wrong-type value does NOT prove upstream timestamp validity.
+      expect(accepted(source(v232Source([message]))).messages).toHaveLength(1);
+    }
+  });
+
+  it("rejectsInvalidFirstPageToolAndCutsInvalidLaterPage", () => {
+    const badTool = { ...toolPart("tool_009"), state: { status: "completed", input: {}, content: [] } };
+    const badMessage = assistantMessage("msg_204", [badTool]);
+    expectRejected(source(v232Source([badMessage])), "SOURCE_SCHEMA_INVALID");
+
+    const prefix = accepted(source(buildSource({
+      hostVersion: "2.3.2",
+      pages: [
+        { request: firstRequest(2), response: pageResponse([userMessage("msg_203")], "cur-1") },
+        { request: laterRequest("cur-1", 2), response: pageResponse([badMessage]) },
+      ],
+    })));
+    expect(prefix.collectionStatus).toBe("PAGINATION_INCOMPLETE");
+    expect(prefix.validatedPageCount).toBe(1);
+    expect(prefix.messages.map((m) => m["id"])).toEqual(["msg_203"]);
+    expect(codes(prefix)).toContain("SOURCE_SCHEMA_INVALID");
+  });
+});
+
 describe("S2-b correlation shapes", () => {
   const run = (value: unknown): ReturnType<typeof validateS2bCorrelation> => validateS2bCorrelation(enc(JSON.stringify(value)));
   const reject = (value: unknown, code: DiagnosticCode = "SOURCE_SCHEMA_INVALID"): void => {
