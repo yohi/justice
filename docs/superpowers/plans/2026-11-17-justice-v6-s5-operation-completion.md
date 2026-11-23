@@ -41,7 +41,7 @@
 | --- | --- | --- |
 | H1 → S5 Host前提 | Host `coreultra7-270k`、Merge HEAD `bf6bcda41820b1b7550f8215afc4ceec20859409`、実バイナリDigestの`VERIFIED_STATIC`をOwner報告 | Identity取得のやり直しを既定としない。Runtime受入は別 |
 | H2 → Artifact Identity | 隔離Buildは`H2_BUILD_PASS`。新専用Artifact Digest `9b17708f374f01cb7f1cb530438ae9784ccc308e0afc0e965d87abbce92db92a`、Build元Merge HEAD。共有`dist/`旧Artifactは不一致のまま | 新専用Artifactの`H2=VERIFIED_STATIC`採否をOwnerが限定判断。再Build不要なら省略 |
-| H3 → E1の事前構成 | 専用Configの`plugins: []`、Justice Plugin未登録。固定v2.3.2 `packages/core/src/plugin/module.ts` L81–94/L168–186はdefault exportに`{id,effect}`または`{id,setup}`を要求。Justice `src/opencode-plugin.ts`の関数型default exportとの**静的Source契約不一致は観測済み** | `H3_LOADER_SOURCE_CONTRACT_MISMATCH_OBSERVED`を記録し、**`RUNTIME_LOADED=NOT_VERIFIED`**／実BundleロードFAIL未観測を分離。V2対応方式と機能範囲はOwner未決定。Source/Configの未承認変更を行わない |
+| H3 → E1の事前構成 | 専用Configの`plugins: []`、Justice Plugin未登録。固定v2.3.2 `packages/core/src/plugin/module.ts` L81–94/L168–186はdefault exportに`{id,effect}`または`{id,setup}`を要求。Justice `src/opencode-plugin.ts`の関数型default exportとの**静的Source契約不一致は観測済み** | **H3静的Loader契約=`OBSERVED_MISMATCH`／`CONFIGURED=NOT_ESTABLISHED`／`RUNTIME_LOADED=NOT_VERIFIED`／`E1_EXECUTION=HOLD`**。実BundleロードFAIL未観測。Verdictと実行権限は独立。V2対応方式はOwner未決定で、Source/Configの未承認変更を行わない |
 | H4/H5 → E1安全Gate | 専用Root・非実行Launcher・最小Configの`BOOTSTRAP_STATIC_PASS`、境界方針採択済み。実行時書込み/Process Identity/Stop境界は`NOT_VERIFIED` | 実行GOを認定せず、未証明の対象だけHOLDする |
 | Task 3〜5 → AC-H01〜H03 | T09〜T15の限定Host/Offline Evidenceあり。ただしOwnerによる**正式AC PASSは未採択**。既存受入文書の歴史的`NOT_RUN`は現時点の全観測を表さない | 原証拠・Version/Scope/Authority帰属の不足を明記し、採択済みTaskの範囲内でOwnerが別判断 |
 | Task 6 → Bounded Completion / Release | `BOUNDED_COMPLETE=PENDING`、`RELEASE_APPROVED=PENDING` | S5既定のCompletion/Opt-in条件を変更せずOwner判断を待つ |
@@ -51,7 +51,7 @@
 ### H3 — required contract diagnosis, not a speculative feature
 
 - **確定したLoader事実（再調査を既定にしない）：** 固定Tag `anomalyco/opencode@v2.3.2`の`packages/core/src/plugin/module.ts` L81–94は`default`に`{ id: string, effect: function }`または`{ id: string, setup: function }`を要求。L168–186の`loadServer()`は同Schemaを検証し、不適合なら`LoadError`へ写す。Justiceの`src/opencode-plugin.ts`は`@opencode-ai/plugin@1.14.21`由来の**関数型default export**。この**Source契約不一致は静的に観測済み**。未確認なのは実Bundleロード結果・Loaderエラーの実観測・V2 Hooks互換・Runtime非干渉である。
-- **H3の実際の状態：** 専用Configの`plugins`は空、`CONFIGURED`は不成立。`RUNTIME_LOADED=NOT_VERIFIED`であり、`OBSERVED_RUNTIME_FAILURE`ではない。H3の不一致はE1の実Plugin利用準備に関するHOLDであって、S5 Task 1/2/6など無関係な文書準備の停止理由ではない。
+- **H3の実際の状態と権限を分離：** `H3_STATIC_LOADER_CONTRACT=OBSERVED_MISMATCH`（既知のSource構造不一致）、`H3_CONFIGURED=NOT_ESTABLISHED`（専用Configの`plugins`は空）、`H3_RUNTIME_LOADED=NOT_VERIFIED`（実Artifactのロード失敗は未観測）、`E1_EXECUTION=HOLD`（Owner未承認）。前3項は**証拠の状態**、最後は**操作の可否**であり相互に代用しない。E2/E3もHOLD。S5 Task 1/2/6など独立した文書準備は停止しない。
 - **Owner未決定の実装方式：** Loader契約の構造上、現行exportをそのまま登録して成立するという以前の仮定は撤回する。ただし`id/effect`か`id/setup`か、既存エントリの変更かV2別エントリか、どのDomainに何を載せるかは未決定。機械的なラッピング、全面的なV1 Hooks移植、汎用V2 Frameworkを採択したことにはしない。S5受入の必須機能とV2 Domain APIの対応・既存機能による代替可否を限定整理し、差分のある部分だけOwnerへ提示する。
 - **登録とSource改修の境界：** 互換対応の方式・設計/TDD Plan・実施環境・Git操作に対する別途Owner承認があるまで、Source/Test改変・専用Config登録・Runtimeロードは一切開始しない。既存H2隔離Build Artifactは再利用し、意味のない再Buildをしない。
 
@@ -68,11 +68,12 @@
 
 S5外の全互換性やProvider通信を必要条件として追加しない。型・イベントTiming・Error処理の差とRuntimeでの成立性は未証明であり、対応範囲のOwner判断が先である。
 
+**静的な不一致診断とTDDを分離する：** `現行Sourceがv2.3.2 Loader契約に不適合である`ことを期待する診断Assertionは、現行実装で**PASS**し得る。これは既知不一致の確認であって**TDDのREDではない**。別途Ownerが対応方式・テスト作成/実行を承認した場合に限り、下表のRED/GREENを実測する。
 
 | TDD stage | 先に示す証拠/操作 | 完了条件と停止条件 |
 | --- | --- | --- |
-| **RED** | 既知のLoader Schema不一致と、Ownerが選択したS5必須Hook/インターフェース契約を入力に**最小失敗テスト**を先に定義。現行exportでの構造不適合を静的にアサートし、コード変更前の隔離テストでREDを実測する。既存テストが同じ失敗を表すなら再利用 | 実際のFAILと、何の仕様を検証したかを記録。Runtime起動を許可せず、テスト実行が承認されなければ`NOT_RUN`で停止 |
-| **GREEN** | REDで観測した欠落だけを最小限のSource修正で解消 | 同一テストがPASS。未証明のHooks移植や汎用機構は追加しない |
+| **RED** | Ownerが選択したS5必須機能に関し、**「対象Pluginのdefault exportが固定v2.3.2 Loaderの`{id,effect}`または`{id,setup}`契約を満たす」**ことを期待する最小テストを、承認後に先に作る。選択済みの必要Domain Hookの型/Interface条件も承認済みの範囲だけ含める。**現行Sourceではこの適合テストがFAILする**ことを隔離環境で確認。既存の同等テストがあれば再利用 | **適合を期待する同一テストの実測FAIL**をREDとして記録。不一致を期待する診断テストのPASSをREDに数えない。テスト作成/実行未承認なら`NOT_RUN`で停止 |
+| **GREEN** | 別途承認された最小Source修正だけで、REDで観測したv2.3.2適合契約の欠落を解消 | **REDでFAILした同一テストがPASS**したことを観測・記録する。Runtimeロード成功は別証拠であり、未証明のHooks移植や汎用機構は追加しない |
 | **REFACTOR / regression** | 変更境界内の限定整理、V1/S1/S2/S3の必要な回帰テスト、型・Lint・配布/Bundle検証を実行 | PASS/FAIL/NOT_RUNを区別。隔離を保証できないBuild/Test実行はHOLD。全Findingゼロ・独立レビュー無限連鎖を要求しない |
 | **Owner Checkpoint** | 変更Diff、RED→GREENログ、Regression結果、残余リスク、未承認のRuntime検証範囲を報告 | 当該限定Taskを終了。Pluginロード・E1・AC・Releaseへ自動進行しない |
 
@@ -84,7 +85,7 @@ S5外の全互換性やProvider通信を必要条件として追加しない。�
 
 - 本節は新たなTask 7や並行した修正・レビューTaskを作らない。固定契約・Owner承認が欠けたときは現状証拠を保持してOwner Checkpointで停止する。
 - Source/Test/CI変更、共有`dist/`変更、Plugin登録、Runtimeロード、Supervisor作成、E1/E2/E3、Host/外部書込み、PR/Mergeは**この文書訂正によって許可されない**。
-- `H1=VERIFIED_STATIC`、H2新専用Build PASS（正式H2裁定保留）、`H3=HOLD`（**静的Loader契約不一致は確定、Runtime失敗は未観測**）、`H4/H5=NOT_VERIFIED`、`E1/E2/E3=HOLD`、`BOUNDED_COMPLETE=PENDING`、`RELEASE_APPROVED=PENDING`を維持。H3以外の文書準備まで停止しない。追加作業が不要ならここで終了する。
+- `H1=VERIFIED_STATIC`、H2新専用Build PASS（正式H2裁定保留）、`H3_STATIC_LOADER_CONTRACT=OBSERVED_MISMATCH`、`H3_CONFIGURED=NOT_ESTABLISHED`、`H3_RUNTIME_LOADED=NOT_VERIFIED`、**`E1/E2/E3=HOLD`（実行権限）**、`H4/H5=NOT_VERIFIED`、`BOUNDED_COMPLETE=PENDING`、`RELEASE_APPROVED=PENDING`を維持。Runtimeの失敗は未観測であり、H3の判定だけで独立した文書準備を停止しない。追加作業が不要ならここで終了する。
 
 
 ## File Map / Responsibilities
