@@ -7,8 +7,8 @@
 **Reviewed addendum commit:** `b428d38c3d94a631b10df8a0be7181df4f1038ff`  
 **Inputs:** S5 Brainstorming Requirements R0.1 (D-S5-01〜07), Owner-provided local Design R0.1 and Host Execution Manifest R0.1, D-S5-08 (existing Ubuntu Host), and selected Approach A  
 **Scope of this remediation:** THIS ADDENDUM ONLY — RG-S5-D08-001/002/003; no changes to source, tests, CI, existing S5 Plan, three PR #394 deliverables, or the two untracked local drafts  
-**Disposition:** `LIMITED_DOCUMENT_REMEDIATION_PREPARED / DESIGN_ADOPTION_PENDING / SOURCE_IMPLEMENTATION_NOT_AUTHORIZED / HOST_GO_HOLD / AC_H01_H03_NOT_RUN / RELEASE_NOT_AUTHORIZED`  
-**Authority:** D-S5-08 and Approach A are Owner-selected *design directions*, not approval of this entire addendum, implementation, Host execution, settings changes, Gate/HOLD changes, or release.
+**Current disposition (2026-11-23 Owner checkpoint):** `D08_DESIGN_ADDENDUM_ADOPTED / TRACKED_DOWNSTREAM_DOCS_ALIGNED / LOCAL_UNTRACKED_DRAFTS_HOLD / SOURCE_IMPLEMENTATION_NOT_AUTHORIZED / HOST_GO_HOLD / AC_H01_H03_NOT_RUN / RELEASE_NOT_AUTHORIZED`  
+**Authority:** Human Owner subsequently adopted this D-S5-08/Approach A Addendum **as design policy**, and approved one-time downstream **document-only alignment and GitHub Commit/Push**. This does not authorize Source/Test/CI changes, Host Sessions, credentials/settings, Gate/HOLD, Completion, Release, PR or merge.
 
 ## 1. Purpose, agreed scope, and alternatives
 
@@ -44,7 +44,7 @@ The launcher isolates OpenCode V1/V2 XDG paths and uses `--standalone`, but it d
 
 ### 2.2 Exact downstream reconciliation boundary (not executed here)
 
-This Addendum **does not claim** that the older documents already agree with D-S5-08. The following are explicit **adoption/Host-GO blockers until reconciled**, not defects silently fixed by changing only this file.
+This table records historical inconsistencies **before** the subsequent Owner-authorized tracked-document alignment. Requirements, Plan and the three PR #394 deliverables are now document-aligned to D-S5-08. The two **local untracked** Design/Host Manifest R0.1 drafts are not modified and remain Host GO HOLD until safely reconciled or explicitly superseded.
 
 | Existing artifact/section | Old assumption or constraint | Limited change required before Host GO |
 | --- | --- | --- |
@@ -56,7 +56,7 @@ This Addendum **does not claim** that the older documents already agree with D-S
 | PR #394 Minimal Operation Runbook, Preconditions / Opt-in / Stop/Rollback | Independent Host, secrets not transferred, network scope unset, no enable/rollback procedure | Replace independent Host prerequisite **only after approved reconciliation** with logical-only boundary and explicit inherited-credential/network/Host-state constraints; define narrowly scoped stop and rollback before GO |
 | PR #394 Owner Completion Decision, Target / Completion | Host/Version/Scope unset; Owner decisions `PENDING` | Preserve `PENDING` now. Only Owner may adopt completion/release based on AC evidence later |
 
-**Plan/source authority separation:** The S2-b `S1aReadOnlySource` and `runS2bOfflineAdapter` enforce READ_ONLY **input processing**. This does not confer permission to modify TypeScript source. Approach A's proposed version allowlist change to `src/runtime/s2b-contract.ts`/`s2b-input.ts` and possible related validation/tests is a **different, currently NOT_AUTHORIZED** implementation task. This remediation edits **no** Plan, source, test, or existing deliverable. A Plan that still requires 2.2.5 cannot authorize running 2.3.2 acceptance; `HOST_GO_HOLD` remains until the inconsistency is resolved and approved.
+**Plan/source authority separation:** The S2-b `S1aReadOnlySource` and `runS2bOfflineAdapter` enforce READ_ONLY **input processing**. This does not confer permission to modify TypeScript source. Approach A's proposed version allowlist change to `src/runtime/s2b-contract.ts`/`s2b-input.ts` and possible related validation/tests is a **different, currently NOT_AUTHORIZED** implementation task. The **original single-file remediation** did not edit Plan/Source/Tests/deliverables. Later Owner-approved **documentation-only alignment** does amend the tracked Plan and three deliverables. Real 2.3.2 Source compatibility remains unimplemented, thus `HOST_GO_HOLD` and Source implementation NOT_AUTHORIZED.
 
 **Security requirements unchanged:** no credential export or reading sensitive values; only explicit network destinations/protocols/durations if needed; no assumption of OS-enforced deny from application flags; dedicated writable locations only; no unapproved external Tool calls, process/network/shared-state changes or cleanup; private raw Evidence with sanitized public references and digests. If a boundary cannot be verified without changing shared Host settings, keep that operation HOLD.
 
@@ -156,6 +156,14 @@ Completion still requires **all** AC-H01/H02/H03 to PASS on the fixed Host/Versi
 **Design readiness:** The addendum describes a bounded approach and outstanding downstream reconciliation; it is **not** a completed, mutually consistent S5 Plan or implemented/verified 2.3.2 adapter. The contradictory older Host/version conditions stay explicitly `HOLD` until an authorized, targeted document reconciliation. Do not mark Implementation Ready or Host GO on the strength of this addendum alone.
 
 **Authorized work stops at this single-document limited remediation.** Do **not** edit other files, commit/push, open a PR, change Issues, start Source/Test/CI work, invoke real OpenCode Sessions/GETs, perform Host resets/cleanup, approve the Owner Decision, trigger independent reviews, or begin follow-on Tasks without separate Owner instruction. `HOST_GO_HOLD`, `SOURCE_IMPLEMENTATION_NOT_AUTHORIZED`, AC-H01/02/03 `NOT_RUN`, `BOUNDED_COMPLETE=PENDING`, `RELEASE_APPROVED=PENDING`.
+
+## 7. Owner adoption and downstream alignment (2026-11-23)
+
+- The Owner explicitly adopted **the bounded D-S5-08/Approach A Addendum**, not AC execution, Completion or Release.
+- This document-only GitHub change updates **Requirements, Plan, Acceptance Evidence Record, Minimal Operation Runbook, Owner Completion Decision and this Addendum**. No Source/Test/CI edits or real-Host tests.
+- Existing local untracked `justice-v6-s5-operation-completion-design-r0.1.md` and `docs/superpowers/operations/justice-v6-s5-host-execution-manifest.md` were **not accessed, overwritten, uploaded or recreated**. Old isolated-Host/2.2.5 assumptions require explicit reconciliation/supersession before Host GO; preserve original worktree.
+- Current S2-b runtime remains **2.2.5-only**; 2.3.2 Source implementation/tests NOT_AUTHORIZED/NOT_RUN. Historical `oc225-msg-` and `issuerId="opencode-v225-record"` are not independent Host Version attestations.
+- `AC-H01/H02/H03=NOT_RUN`, `BOUNDED_COMPLETE=PENDING`, `RELEASE_APPROVED=PENDING`, and Host GO HOLD remain unchanged. Subsequent tasks require separate Owner approval.
 
 ## 7. Immutable read-only references
 

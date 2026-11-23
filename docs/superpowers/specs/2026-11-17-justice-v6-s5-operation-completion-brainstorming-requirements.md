@@ -1,7 +1,8 @@
 # Justice v6 — S5 Operation / Completion
 ## Brainstorming Requirements R0.1
 
-**Status:** `BRAINSTORMING_REQUIREMENTS_CONFIRMED / DESIGN_NOT_ADOPTED / IMPLEMENTATION_NOT_AUTHORIZED`
+**Historical 2026-11-17 status:** `BRAINSTORMING_REQUIREMENTS_CONFIRMED / DESIGN_NOT_ADOPTED / IMPLEMENTATION_NOT_AUTHORIZED`  
+**Current Owner checkpoint (2026-11-23):** `D-S5-08_DESIGN_ADOPTED / SOURCE_IMPLEMENTATION_NOT_AUTHORIZED / HOST_GO_HOLD / AC_H01_H03_NOT_RUN / RELEASE_NOT_AUTHORIZED`. Historical requirements are interpreted with the adopted D-S5-08 Addendum.
 
 **Date:** 2026-11-17 JST  
 **Repository:** `yohi/justice`  
@@ -29,7 +30,9 @@ Superpowers First / OpenCode V2 Native Firstを維持する。
 | D-S5-02 | 最小限の実Host受入確認を必須とする |
 | D-S5-03 | Human Ownerによる明示的Opt-inで運用開始 |
 | D-S5-04 | 異常時は影響範囲限定のFail-Closed |
-| D-S5-05 | 独立した隔離Hostで受入確認 |
+| D-S5-05 | Historical independent-isolated-Host choice; **superseded for this S5 acceptance by D-S5-08** |
+| D-S5-08 (2026-11-23) | Existing Ubuntu Host running OpenCode V2.3.2, dedicated Workdir/Session/Fixture/Evidence and **logical-only**, not OS-enforced, separation. No new VM/Sandbox |
+| Approach A | Future bounded 2.3.2 Source support while preserving 2.2.5. Requires separate Source/Test GO; no automatic Host execution |
 | D-S5-06 | 必須受入PASSと既知制限の明示で完成判定 |
 | D-S5-07 | 最小3成果物方式 |
 
@@ -47,7 +50,7 @@ Superpowers First / OpenCode V2 Native Firstを維持する。
 
 ### S2 — OpenCode V2 Adapter
 
-- **S5実Host受入のSource取得:** 別途承認された隔離HostでOpenCode V2の限定Sourceを取得する。Source取得は既存S2-b Offline Adapterの責務・オンライン機能ではない。
+- **S5実Host受入のSource取得:** 別途承認された既存Ubuntu Hostの専用Sessionから実OpenCode 2.3.2の限定Sourceを取得する。取得方法はHost GO前に固定し、S2-bにはオンライン収集を追加しない。Source取得は既存S2-b Offline Adapterの責務・オンライン機能ではない。
 - **保存入力の検証:** 取得済みSource wrapperと明示Correlationを入力として検証し、取得範囲・Task / Revision / Scope等の帰属と欠測を区別する。Host全履歴の完全性・Sourceの真正性を自己申告だけで証明しない。
 - **既存Adapterでの変換:** 検証した保存入力を既存S2-b Offline READ_ONLY Adapterに渡してS1契約へ変換・診断する。オンライン収集機能を新規追加する前提にしない。
 - **保証水準の維持:** 不足・不可信・収集範囲外の情報は `UNKNOWN` / `NOT_VERIFIED` / `NOT_PROVEN` を適切に保持し、承認や実行の真正性を昇格させない。
@@ -77,11 +80,11 @@ S2-cの `COMPARISON_NOT_ESTABLISHED` を保持する。S2親Issueの限定受入
 
 ## 4. 必須の実Host受入
 
-対象は独立した隔離Hostとし、OpenCode V2の具体的なVersion・Source・操作を実施前に固定する。
+対象はD-S5-08既存Ubuntu HostのOpenCode V2.3.2。実バイナリDigest、Justice Commit、専用Session/Task/Scope/Operation、Secrets/Network、非干渉と停止/切戻しをHost GO前に固定する。現行S2-bは2.2.5専用であり、2.3.2互換実装と検証の別承認がない限りAC-H01をHOLDする。
 
 | ID | シナリオ | 必須成立条件 |
 |---|---|---|
-| AC-H01 | S1/S2正常連携 | 別途承認された隔離Hostで取得した実Sessionの限定Sourceを、保存Source wrapperと明示Correlationにより入力検証し、既存S2-b Offline READ_ONLY AdapterでS1契約へ変換して診断を生成できる。取得・検証・変換を区別し、帰属と未証明の保証範囲を維持する |
+| AC-H01 | S1/S2正常連携 | 別途承認された既存Host専用Sessionで取得した実2.3.2 Sessionの限定Sourceを、保存Source wrapperと明示Correlationにより入力検証し、既存S2-b Offline READ_ONLY AdapterでS1契約へ変換して診断を生成できる。取得・検証・変換を区別し、帰属と未証明の保証範囲を維持する |
 | AC-H02 | Authority / Evidence異常 | 不整合・欠測・権限不一致を誤受入れせず、保証対象の操作を適切に制限する |
 | AC-H03 | S3-b Decision / Lifecycle Consistency Recovery | 採択済みの単一プロセス限定範囲で再起動前後のDecisionと対応するLifecycleの整合性を実Hostで確認し、不整合なTask / Plan進行を認めない。任意状態の全面復元・外部Tool副作用の巻戻し・複数プロセス保証は要求しない |
 
@@ -209,7 +212,7 @@ AC-H03の完成対象は採択済み単一プロセス限定Decision / Lifecycle
 
 後続Designで必要最小限に具体化する。
 
-- 隔離Hostの具体的な構成と固定Version
+- 既存Host論理分離の実際の構成、Version 2.3.2バイナリDigest、専用Session/Workdir/Task境界
 - AC-H01〜H03の具体的な入力・観測点・期待結果
 - 証拠の採用基準と機密情報の扱い
 - Opt-inおよび切戻しの具体的操作
@@ -228,7 +231,9 @@ AC-H03の完成対象は採択済み単一プロセス限定Decision / Lifecycle
 - 未採択Scopeをv6.0.0の必須条件に追加しない。
 - S5の完成認定とリリース承認を分離する。
 
-**Final brainstorming disposition: `REQUIREMENTS_READY_FOR_DESIGN / OWNER_DESIGN_AUTHORIZATION_PENDING`**
+**Historical brainstorming disposition (2026-11-17): `REQUIREMENTS_READY_FOR_DESIGN / OWNER_DESIGN_AUTHORIZATION_PENDING`.** The Human Owner subsequently adopted D-S5-08 and its bounded Design Addendum (2026-11-23). No Source implementation, Host GO, Completion or Release approval is implied.
+
+**Current controlling design:** `docs/superpowers/specs/2026-11-23-justice-v6-s5-d08-host-v232-design-addendum.md` (Owner-adopted on 2026-11-23). Older local untracked S5 Design/Host Execution Manifest are not updated by this GitHub-only reconciliation.
 
 ## 13. 参照
 

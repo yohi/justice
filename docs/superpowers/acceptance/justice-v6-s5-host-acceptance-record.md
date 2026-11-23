@@ -5,7 +5,7 @@ runtime approval object, a Gate state, or a product status field. It does not
 choose an acceptance decision on the Owner's behalf.
 
 Current state: **no real-Host acceptance has been run.** Real-Host work
-(AC-H01 to AC-H03) is not authorized, and the S5 Design is not adopted. Every
+(AC-H01 to AC-H03) is not authorized; the D-S5-08 Addendum is adopted as **design only**. Every
 value that has not been measured is recorded as `未固定` (not fixed), and every
 acceptance criterion is `NOT_RUN`. This record is a document-consistency
 artifact, not real-Host acceptance evidence.
@@ -14,9 +14,9 @@ artifact, not real-Host acceptance evidence.
 
 | Item | Value |
 | --- | --- |
-| Host | 未固定 |
-| Version | 未固定 |
-| Justice Commit | 未固定 |
+| Host | Existing Ubuntu `coreultra7-270k` candidate (Owner-observed; AC identity NOT_VERIFIED) |
+| Version | OpenCode V2.3.2 candidate (Owner-observed); binary digest NOT_MEASURED; current S2-b still 2.2.5-only |
+| Justice Commit | Design baseline `d644734090aa4ad8cadbefd2d78908067fe36931`; AC execution commit not fixed |
 | Scope | 未固定 (candidate scope: adopted bounded ranges of S1, S2 and S3 per D-S5-01) |
 | Operation | 未固定 |
 | Source provenance | 未固定 |
@@ -26,7 +26,7 @@ artifact, not real-Host acceptance evidence.
 
 Referenced decisions: D-S5-01 (S1, S2, S3 bounded completion target), D-S5-02
 (minimal real-Host acceptance is required), D-S5-03 (explicit Owner opt-in),
-D-S5-04 (fail-closed with limited blast radius), D-S5-05 (isolated Host),
+D-S5-04 (fail-closed with limited blast radius), historical D-S5-05 (isolated Host) superseded by **D-S5-08 existing Host/logical separation**,
 D-S5-06 (required PASS plus explicit known limitations), D-S5-07 (minimal
 three-artifact approach). Source:
 `docs/superpowers/specs/2026-11-17-justice-v6-s5-operation-completion-brainstorming-requirements.md`.
@@ -57,7 +57,7 @@ Rules:
 ### AC-H01 S1/S2 normal integration
 
 Requirement: a limited real Session Source, taken on a separately approved
-isolated Host, is validated as a stored Source wrapper with explicit
+existing Host's dedicated OpenCode V2.3.2 Session, is validated as a stored Source wrapper with explicit
 Correlation, then converted by the existing S2-b Offline READ_ONLY Adapter into
 the S1 contract and diagnosed. Acquisition, validation and conversion are kept
 distinct.
@@ -105,6 +105,8 @@ on a real Host, and no inconsistent Task / Plan progression is allowed.
 | Limitations | `RUNTIME_NOT_VERIFIED`. A PASS would not prove full Semantic Recovery, rollback of external tool side effects, or multi-process safety. See section 4. |
 | Owner approval ref | None |
 | Missing | Approved isolated Host, restart procedure, Decision and Lifecycle observations before and after restart |
+
+**D-S5-08/Approach A gate:** Exact 2.3.2 Source from the real Host is required. The current S2-b rejects true `hostVersion="2.3.2"`; Source compatibility implementation/tests and Host GO are separate pending authorizations. `isMessage()` does not validate optional `firstToken`. Complete foreign-only bindings can be `PROJECTED` / zero Evidence while **not** proving the selected AC. The `oc225-msg-` origin and `issuerId="opencode-v225-record"` are historical projection identifiers, not Host-version proofs. OS-level separation, network deny, credential noninheritance, dedicated durable Writer/restart injection and cleanup are NOT_VERIFIED; all AC remain `NOT_RUN`.
 
 ## 4. Known limitations (inherited)
 

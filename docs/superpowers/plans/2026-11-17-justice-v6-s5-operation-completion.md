@@ -1,8 +1,8 @@
-# Justice v6 S5 — Operation / Completion Implementation Plan R0.1 (Candidate)
+# Justice v6 S5 — Operation / Completion Implementation Plan R0.1 (D-S5-08-Aligned / Execution HOLD)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` or `superpowers:subagent-driven-development` **only after separately authorized execution**. Steps use checkbox (`- [ ]`) syntax. No automatic implementation, Host probe, review dispatch, commit, or release.
 
-**Goal:** S1〜S3の採択済み範囲について、隔離した実OpenCode V2 HostでAC-H01〜H03を確認し、安全なOpt-in・停止・切戻し手順と証拠を示して、Human Ownerが限定完成と運用開始を別々に判断できるようにする。
+**Goal:** S1〜S3の採択済み範囲について、D-S5-08の既存Ubuntu Host / OpenCode V2.3.2でAC-H01〜H03を確認し、安全なOpt-in・停止・切戻し手順と証拠を示して、Human Ownerが限定完成と運用開始を別々に判断できるようにする。
 
 **Architecture:** 既存のS1診断、保存Source wrapper・明示Correlationを受け取るS2-b Offline Adapter、採択済みS3-b単一プロセスDecision / Lifecycle Consistency Recoveryを再利用する。Host取得、保存入力検証、Offline診断、限定Recovery観測を分離し、追加のRouter・Host Enforcement・Recovery Engineを作らない。成果物はAcceptance Evidence Record、Minimal Operation Runbook、Owner Completion Decisionの3件に限定する。
 
@@ -10,32 +10,32 @@
 
 **Requirements:** `docs/superpowers/specs/2026-11-17-justice-v6-s5-operation-completion-brainstorming-requirements.md`（R0.1、feature HEAD `f19859bcd20bcc85e64acb24a82bee4ae3b9d630`）。
 
-**Design:** S5 Designは現時点で未作成・未採択。よって本計画は**候補**であり、実行可能な正式Implementation Planではない。特にHost/Version/Operation、取得方式、Secrets/Network、S3-b観測手順、Opt-in/切戻しの実操作はS5 Designで確定する。決めていない操作を推測で実行してはならない。
+**Design:** Human Owner adopted the D-S5-08/Approach A [Design Addendum](../specs/2026-11-23-justice-v6-s5-d08-host-v232-design-addendum.md) as bounded **design policy**. This Plan is document-aligned but **does not authorize** Source/Test implementation or Host execution. Host binary SHA, dedicated paths/Scope, GET mechanism, Secrets/Network, S3-b restart/readback, stop/rollback and Opt-in operations still require separate fixing and approval.決めていない操作を推測で実行してはならない。
 
 **Issue:** [#358](https://github.com/yohi/justice/issues/358) / 全体進捗 [#388](https://github.com/yohi/justice/issues/388)。
 
-**Status:** `PLAN_CANDIDATE / DESIGN_NOT_ADOPTED / IMPLEMENTATION_GO_HOLD / HOST_NOT_AUTHORIZED / RELEASE_NOT_AUTHORIZED`。
+**Status:** `DESIGN_ADDENDUM_ADOPTED / PLAN_DOCUMENT_ALIGNED / SOURCE_IMPLEMENTATION_NOT_AUTHORIZED / HOST_GO_HOLD / AC_H01_H03_NOT_RUN / RELEASE_NOT_AUTHORIZED`。
 
 ## Global Constraints
 
-- D-S5-01〜07を変更しない。S1・S2・S3の限定完成のみ対象。S3-c、S4、全Finding解消、複数プロセス保証は対象外。
+- D-S5-01〜04/06〜07を維持し、**D-S5-05独立HostをD-S5-08既存Host・論理分離へ限定置換**する。S1・S2・S3の限定完成のみ対象。S3-c、S4、全Finding解消、複数プロセス保証は対象外。
 - 実HostのAC-H01〜H03をすべてPASSするまで `BOUNDED_COMPLETE` を認定しない。CI・mock-I/O・静的Fixtureのみでは代替不可。
-- AC-H01の境界は (1) 別承認の隔離HostからのSource取得、(2) 保存Source wrapperと明示Correlationの検証、(3) **既存** `runS2bOfflineAdapter` によるオフライン変換、(4) `UNKNOWN` / `NOT_VERIFIED` / `NOT_PROVEN` の非昇格。
+- AC-H01の境界は (1) 別承認の既存Host専用Sessionからの実2.3.2 Source取得、(2) 保存Source wrapperと明示Correlationの検証、(3) **既存** `runS2bOfflineAdapter` によるオフライン変換、(4) `UNKNOWN` / `NOT_VERIFIED` / `NOT_PROVEN` の非昇格。
 - S2-cは `COMPARISON_NOT_ESTABLISHED`。Native-onlyとJusticeの改善・優位・因果効果を新たな受入証拠がないまま主張しない。
 - AC-H03は採択済み**単一プロセスDecision / Lifecycle Consistency Recovery**。全面Semantic Recovery、任意Task/Revision/Finding復元、外部Tool副作用の巻戻し、複数プロセスは保証しない。
 - 権限・Evidence・Lifecycleの不整合は影響対象をFail-Closedとし、独立した正常作業まで自動停止しない。Justice内部の拒否をHost実行前強制として主張しない。
 - Gate/HOLD・v4/v5歴史状態は不変。既存環境にデフォルト導入しない。Hostでの作成・削除・実行、Secrets、Network、GitHub書込みは個別のOwner承認範囲だけで許可。
 - 生Session/Message/Tool、秘密、Host固有の私的パス、Ground TruthをGitHubの公開文書に転記しない。保存したローカル証拠と公開可能な要約・Digestを区別。
-- Source / Test / CI変更を**本計画の既定手段にしない**。既存AdapterやRecoveryに機能不足が判明しても無断のコード追加・仕様変更を始めず、当該ACを不成立または未証明としてOwnerに報告する。
+- `S1aReadOnlySource` / `runS2bOfflineAdapter` の `READ_ONLY` は**入力処理の契約**でありSourceコード変更許可ではない。現行S2-bは `S2B_SUPPORTED_HOST_VERSION="2.2.5"` で、実2.3.2 wrapperを `SOURCE_VERSION_UNSUPPORTED` で拒否する。2.2.5/2.3.2限定AllowlistとValidator/Test変更は別Owner承認まで実装しない。
 - 各Taskの終了時にOwnerの判断Checkpointを設ける。Taskの列挙は一括実行承認を意味しない。追加レビュー・新Finding修正・Handoff作成を自動連鎖させない。
 
 ## File Map / Responsibilities
 
 | File | 目的 | 新規/変更 |
 | --- | --- | --- |
-| `docs/superpowers/acceptance/justice-v6-s5-host-acceptance-record.md` | Host/Version/Scope固定、AC-H01〜H03結果、証拠Digest、保証限界 | 新規候補 |
-| `docs/superpowers/operations/justice-v6-s5-minimal-operation-runbook.md` | Opt-in、正常フロー、停止、保護境界を迂回しない切戻し | 新規候補 |
-| `docs/superpowers/decisions/justice-v6-s5-owner-completion-decision.md` | 限定完成とReleaseの独立Owner Decision | 新規候補 |
+| `docs/superpowers/acceptance/justice-v6-s5-host-acceptance-record.md` | Host/Version/Scope固定、AC-H01〜H03結果、証拠Digest、保証限界 | 既存骨格・AC未実行 |
+| `docs/superpowers/operations/justice-v6-s5-minimal-operation-runbook.md` | Opt-in、正常フロー、停止、保護境界を迂回しない切戻し | 既存骨格・Enable未承認 |
+| `docs/superpowers/decisions/justice-v6-s5-owner-completion-decision.md` | 限定完成とReleaseの独立Owner Decision | 既存骨格・両判断PENDING |
 | `docs/superpowers/specs/2026-11-17-justice-v6-s5-operation-completion-brainstorming-requirements.md` | 要件の固定参照、変更しない | READ_ONLY |
 | `src/runtime/s2b-input.ts`、`src/runtime/s2b-offline-adapter.ts`、`src/runtime/s2b-contract.ts` | Source/Correlation validation、Offline Adapter | READ_ONLY |
 | `src/runtime/s1d-diagnostic.ts`、`src/runtime/s1d-cli.ts` | S1診断の既存経路 | READ_ONLY |
@@ -48,10 +48,10 @@
 
 実Host作業は次の**すべて**が個別に満たされた後に限る。
 
-1. S5 DesignをHuman Ownerが明示採択し、本計画との齟齬を解消する。
-2. 対象Host / OpenCode Version / Justice Commit / Scope / Operation / 許可する副作用 / Network / Secrets / Cleanup / 停止条件を固定する。OpenCode Versionと保存Source wrapperの`hostVersion`は既存S2-b Adapterの対応Versionである`2.2.5`に一致させる。未設定・未知・不一致の場合は`SOURCE_VERSION_UNSUPPORTED`として実Host作業を開始しない。`hostVersion`はSource内の申告値であり、実Host Versionの独立検証とは区別して記録する。
+1. D-S5-08 Design AddendumはOwner採択済みだが、**Host GO/Source実装GOとは別**。実行用Manifestの旧条件と本Planの照合・独立Owner承認が必要。
+2. 既存Ubuntu `coreultra7-270k` / OpenCode V2.3.2はOwner実測（**バイナリSHA未測定**）。Source wrapperは実Versionに忠実な `hostVersion="2.3.2"` を使用し偽装しない。現行S2-b 2.2.5-only gateでは拒否されるため、別承認の互換実装/正負テストが終わるまでAC-H01はHOLD。Host ID/Justice Commit/Scope/Operation/Session/Network/Secrets/Writable/停止/切戻しもGO前に個別固定。未知VersionはFail-Closed。
 3. AC-H01〜H03の具体的な入力と観測方法を定め、正式なHost実行承認を得る。
-4. 通常開発環境・本番・歴史Gate/HOLD・既存Secretsに影響しない独立隔離を証明する。
+4. 専用Workdir/Session/Task/Fixture/Private Evidence/Single Writerの非干渉を確認する。既存HostはOSユーザー権限/Network/継承Secretsを共有し得る。XDG分離/`--standalone`は強制隔離ではない。安全性を証明できない操作だけHOLD。
 5. 信頼できるOwner固定Artifact参照がない場合、承認の真正性を `NOT_PROVEN` として、実証不可能なACはPASSにしない。
 
 **実Host GO不成立時の停止範囲:** 上記Gateは実Hostを利用するTask 3〜5の操作（Source取得、実Host診断、異常系検証、プロセス再起動、Host上のCleanup等）に適用し、未承認なら実行せず停止する。Secrets / Network / 外部書込みを含むHost操作は、文書作業の承認によって許可されない。Task 1・2およびTask 6の**文書準備のみ**は、別途Human Ownerが承認した文書作業の範囲で実施可能とする。Host / Version / Scope / Operation等が未固定の場合は未固定と明記し、実Host受入結果を創作しない。未実行は `NOT_RUN`、証拠欠落は `NOT_VERIFIED`、観測した不一致は `FAIL` と分ける。AC-H01〜H03の実Host PASSとOwnerの明示判断が揃うまで `BOUNDED_COMPLETE` を認定しない。`RELEASE_APPROVED` を推定・自動設定しない。
@@ -85,7 +85,7 @@
 
 **Produces:** 実行条件を満たさない場合に操作を禁止し、OwnerがOpt-in / Stop / Rollbackを区別できる最小手順。
 
-- [ ] **Step 1 — 前提条件:** 独立隔離Host限定、デフォルトOFF、必要なOwner許可、許容するSecrets/Network/副作用、対象Operationを明示する。
+- [ ] **Step 1 — 前提条件:** D-S5-08の既存Host/論理分離限定、デフォルトOFF、必要なOwner許可、許容するSecrets/Network/副作用、対象Operationを明示する。
 - [ ] **Step 2 — 状態別手順:** `PREPARED → ACCEPTANCE_VERIFIED → OPT_IN_APPROVED → ENABLED → STOPPED/ROLLED_BACK` を**運用上の説明用状態**として記述し、Justiceの新しいRuntime状態・永続スキーマとして実装しない。
 - [ ] **Step 3 — 停止表:** Source欠落、Authority不一致、Lifecycle不整合、診断表示失敗、予期しない副作用、切戻し不能について「影響する対象」「停止・保留する操作」「独立正常作業を継続できる条件」を記す。Host実行前強制が未証明なら明確に書く。
 - [ ] **Step 4 — 切戻し検証:** 未承認のGate/HOLD書換え、既存Hostへのインストール、Secrets移送、Live Tool副作用Replayを要求する手順がないことを文書上で確認する。具体的な有効化コマンドや破壊的CleanupはDesignとOwner承認が確定するまで記載・実行しない。
@@ -129,7 +129,7 @@
 - Update evidence only: `docs/superpowers/acceptance/justice-v6-s5-host-acceptance-record.md`
 - Read only: `src/core/acceptance-decision.ts`、`src/core/review-artifact.ts`、`src/core/justice-plugin.ts`、既存S3-b Design R0.1.2
 
-- [ ] **Step 1 — 境界固定:** Ownerが承認した単一プロセス・独立Host・破棄可能な状態のみを対象。再起動と失敗注入の可否・原状復帰策をDesignで固定。複数プロセス・外部Writerは対象外。
+- [ ] **Step 1 — 境界固定:** Ownerが承認した既存Host上の**単一プロセス/単一Writer/専用Durable State**だけを対象。再起動と失敗注入の可否・原状復帰策をDesignで固定。複数プロセス・外部Writerは対象外。
 - [ ] **Step 2 — 安全な局所状態作成:** 既存正当CorrelationとStaged履歴のあるケース、Decision永続化後に対応Lifecycleが欠けるケース、不正な重複Lifecycleのケースを採択Designに沿って準備。外部Tool呼出しや実副作用はReplayしない。
 - [ ] **Step 3 — 既存経路でのRestart観測:** 承認済み手順でプロセスを再起動し、Decisionと対応LifecycleのDurable Readback、Task/Plan Progressの非早期進行、重複遷移Fail-Closedを観測する。mock-I/Oの既存PASSを実Host観測に代入しない。
 - [ ] **Step 4 — 判定:** 整合状態の限定回復と、不整合時の非進行が双方確認できた場合だけAC-H03 PASS。観測できなければNOT_VERIFIED、実際に不正進行ならFAIL。任意状態の全面復元、外部Tool副作用の巻戻しは主張しない。
@@ -152,11 +152,19 @@
 
 **Task exit:** Task 6のOwner Decision文書の準備は、文書作業のOwner承認範囲内なら実Host GO前でも可能。`BOUNDED_COMPLETE`は、AC-H01〜H03の実Host PASS、対象Scope / Versionの特定、証拠と診断結果の帰属確認、既知制限・未実証事項の明示、必要な保護を迂回しないOpt-in・停止・切戻し手順の成立、およびHuman Ownerの明示採択がすべて揃った場合に限る。`RELEASE_APPROVED`は独立したOpt-in許可として別に判断し、推定・自動設定しない。判断が得られなくても `PENDING` で本計画の作成作業は停止可能。
 
+## D-S5-08 implementation/acceptance contract — documentation-only, NOT_RUN
+
+- **Version:** 2.2.5 existing regression preserved; bounded 2.3.2 target **NOT_IMPLEMENTED**; unknown/missing/misdeclared Version rejected. `oc225-msg-` origin and `issuerId="opencode-v225-record"` are historical Evidence labels, not Host attestation.
+- **API/input:** native `session.get` and `session.messages` GET, initial `order=asc`, fixed `limit=1..200`, subsequent `cursor.next`, no `type` filter; raw response bytes in `justice-s2b-source-v1`, independent `justice-s2b-correlation-v1`. The actual `--standalone` read mechanism is NOT_VERIFIED/NOT_AUTHORIZED. S2-b `S2bRequest={loaderInput,sourcePath,correlationPath}` + `S1aReadOnlySource` stays offline READ_ONLY.
+- **Test design:** adopt Addendum §3.3 P-01..P-04, N-01..N-05B, with explicit 2.2.5 regression and unknown Version fail closed. Existing `isMessage()` does **not validate** optional `time.firstToken`; malformed firstToken alone is **not automatically REJECTED**. Complete well-formed foreign-only Correlation may give `FOREIGN_TASK_EXCLUDED`, `PROJECTED`, **zero selected Evidence**; that is not AC-H01 PASS. Malformed/competing/missing bindings retain conditional `REJECTED/LIMITED`; no cross-task Evidence admission. `coverageCompleteness=NOT_ESTABLISHED`. These are unexecuted expectations.
+- **AC-H03:** only existing `JusticePlugin.initialize()` authoritative recovery path, dedicated durable FileReader/FileWriter and single Writer, reversible injection/restart and independent Readback. No Host-safe method verified; if unsafe, HOLD.
+- **Nonfunctional:** preserve existing credentials/Session/Workspace/Gate/HOLD, no shared config edits, uncontrolled Network or external Tool effects, and no destructive cleanup. The untracked local Host Manifest remains unreconciled. **Source implementation NOT_AUTHORIZED / Host GO HOLD / ACs NOT_RUN**.
+
 ## 受入トレーサビリティ
 
 | Requirements | Plan task | 完了の証拠 |
 |---|---|---|
-| D-S5-01、D-S5-02、D-S5-05、D-S5-06 | 1, 3, 4, 5, 6 | 対象固定、AC-H01〜H03の実Host PASS |
+| D-S5-01、D-S5-02、D-S5-05→D-S5-08、D-S5-06 | 1, 3, 4, 5, 6 | 既存Host/論理分離の固定、AC-H01〜H03の実Host PASS |
 | D-S5-03、D-S5-04 | 2, 4, 6 | 安全なOpt-in・停止・切戻し、影響限定Fail-Closed |
 | D-S5-07 | 1, 2, 6 | 3成果物のみ |
 | S2-b Offline/Source分離、S2-c未成立 | 1, 3, 6 | Source provenance、入力検証、限定診断、制限の明記 |
@@ -165,7 +173,7 @@
 
 ## Self-check / Stop
 
-- 計画は **S5 Designを代替しない**。正式Designを採択するまでHostの手順・実際の対象値を固定したものと扱わない。
+- 本Planは採択D-S5-08 Design Addendumを代替しない。旧ローカル未追跡Design/Host Manifest R0.1は改変しておらず、Host GO前に整合または明示的に旧稿を無効化する必要がある。
 - この計画では新規Runtime API、State Schema、Code/Tests/CI改変を要求しない。既存機能で足りない場合は未実証のままOwnerへ報告し、勝手に補完しない。
 - `BOUNDED_COMPLETE`の条件は、実Host AC-H01/H02/H03のPASS、対象Scope / Versionの特定、証拠と診断結果の帰属確認、既知制限・未実証事項の明示、必要な保護を迂回しないOpt-in・停止・切戻し手順の成立、およびHuman Ownerの明示採択。`RELEASE_APPROVED`は独立したOpt-in許可。
 - 次工程を自動実行しない。新規Findingや新Versionだけを理由に独立レビュー/訂正/再レビューを繰り返さない。
