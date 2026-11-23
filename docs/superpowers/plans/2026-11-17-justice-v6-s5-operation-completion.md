@@ -16,7 +16,7 @@
 
 **Historical status after `204567a` (before P-04 Test commit `fa90f9d`):** `DESIGN_ADDENDUM_ADOPTED / PLAN_DOCUMENT_ALIGNED / S2B_V232_CODE_COMMITTED_TESTS_NOT_RUN / FURTHER_SOURCE_TEST_WORK_NOT_AUTHORIZED / HOST_GO_HOLD / AC_H01_H03_NOT_RUN / RELEASE_NOT_AUTHORIZED`。
 
-**Current Test checkpoint (`fa90f9d3477a1cbbc75da03d77608d50a99c5ed2`):** P-04 `v232PositiveTwoPageCursorChainCompletes` **ADDED**; Vitest/typecheck/lint **NOT_RUN**, execution **NOT_VERIFIED**. No duplicate P-04 test Task. Host GO HOLD; AC-H01/H02/H03 NOT_RUN; Completion/Release PENDING.
+**Historical Test checkpoint (`fa90f9d3477a1cbbc75da03d77608d50a99c5ed2`):** P-04 `v232PositiveTwoPageCursorChainCompletes` **ADDED**; Vitest/typecheck/lint **NOT_RUN**, execution **NOT_VERIFIED**. No duplicate P-04 test Task. Host GO HOLD; AC-H01/H02/H03 NOT_RUN; Completion/Release PENDING.
 
 ## Global Constraints
 
@@ -31,6 +31,48 @@
 - `S1aReadOnlySource` / `runS2bOfflineAdapter` の `READ_ONLY` は**入力処理の契約**であり、Source編集権限ではない。別途Owner承認されたSource/Test変更は `204567a` にCommit済みで、`S2B_SUPPORTED_HOST_VERSIONS=["2.2.5","2.3.2"]` の完全一致判定を追加した。**Vitest/typecheck/lint/RED→GREENはNOT_RUN**であり、互換性PASSは未認定。追加Source/Test変更・実行は別承認。
 - 各Taskの終了時にOwnerの判断Checkpointを設ける。Taskの列挙は一括実行承認を意味しない。追加レビュー・新Finding修正・Handoff作成を自動連鎖させない。
 
+## 2026-11-23 Implementation / TDD re-entry gate — R0.1.1 document-alignment proposal
+
+**適用：** 本節は、[H1〜H5 Design R0.1.2の補足](../specs/2026-11-23-justice-v6-s5-h1-h5-readonly-host-boundary-design.md#11-2026-11-23-post-verification-alignment--implementation--tdd-return-gate-r012-proposal)に対応する。既存Task 1〜6、AC-H01〜H03、D-S5-08の採択範囲と安全Gateは不変更。これは新しいSource実装TaskやHost GOの承認ではなく、**採択済み要件→設計→既存Plan Task→テスト・実証→Owner判断**へ戻す整合条件を明示する限定文書訂正である。先行したRead-only確認・Bootstrap・隔離BuildをTDD実装と誤認したり、完了済み工程を再実施したりしない。
+
+### Evidence reuse and current handoff
+
+| 結び付く要件/Plan Task | 実際の証拠と区分 | 次に必要なこと |
+| --- | --- | --- |
+| H1 → S5 Host前提 | Host `coreultra7-270k`、Merge HEAD `bf6bcda41820b1b7550f8215afc4ceec20859409`、実バイナリDigestの`VERIFIED_STATIC`をOwner報告 | Identity取得のやり直しを既定としない。Runtime受入は別 |
+| H2 → Artifact Identity | 隔離Buildは`H2_BUILD_PASS`。新専用Artifact Digest `9b17708f374f01cb7f1cb530438ae9784ccc308e0afc0e965d87abbce92db92a`、Build元Merge HEAD。共有`dist/`旧Artifactは不一致のまま | 新専用Artifactの`H2=VERIFIED_STATIC`採否をOwnerが限定判断。再Build不要なら省略 |
+| H3 → E1の事前構成 | 専用Configの`plugins: []`、Justice Plugin未登録。`PLUGIN_CONTRACT_NOT_VERIFIED`、V2実ローダ契約未立証 | **固定v2.3.2の実装/SDK契約を証拠で確認するだけ**。推測した`id/setup`形式を要求として採択せず、Source改修のTaskを開始しない |
+| H4/H5 → E1安全Gate | 専用Root・非実行Launcher・最小Configの`BOOTSTRAP_STATIC_PASS`、境界方針採択済み。実行時書込み/Process Identity/Stop境界は`NOT_VERIFIED` | 実行GOを認定せず、未証明の対象だけHOLDする |
+| Task 3〜5 → AC-H01〜H03 | T09〜T15の限定Host/Offline Evidenceあり。ただしOwnerによる**正式AC PASSは未採択**。既存受入文書の歴史的`NOT_RUN`は現時点の全観測を表さない | 原証拠・Version/Scope/Authority帰属の不足を明記し、採択済みTaskの範囲内でOwnerが別判断 |
+| Task 6 → Bounded Completion / Release | `BOUNDED_COMPLETE=PENDING`、`RELEASE_APPROVED=PENDING` | S5既定のCompletion/Opt-in条件を変更せずOwner判断を待つ |
+
+**H2の単位の注意：** 新専用Artifactに関する静的Build Identityと、共有`dist/opencode-plugin.js`に残る旧版不一致を区別する。H2の正式Verdict更新はOwner採択まで保留できる。Build成功だけでは`RUNTIME_LOADED`・実行時非干渉・AC PASSにはならない。証拠はHost側の非公開原本を参照し、生SessionやPrivate PathをGitHubへ移さない。
+
+### H3 — required contract diagnosis, not a speculative feature
+
+- **確認する事実：** OpenCode **固定v2.3.2** が実際に受け付けるPluginエントリ、default export、登録キーとPath、必要なHooks/API、現行`@opencode-ai/plugin@1.14.21`との関係。固定Tagの実Source/型/ローダの非機密な既存証拠を優先し、最新版Web docsや別Versionの仕様と区別する。
+- **十分な証拠がない場合：** `PLUGIN_CONTRACT_NOT_VERIFIED`およびH3 HOLDを維持し、不要な再Build・互換化・V2専用エントリの実装を始めない。
+- **関数型Pluginが適合することが立証された場合：** Source修正は不要。Owner別承認のもとで、専用Configの`plugins`に新専用Artifactを登録し、**静的設定アサーション → 限定変更 → Readback**で確認する。これはコード修正TDDではなく設定の検証である。共有Config、Credential、Provider、OpenCode起動は対象外。
+- **固定版との具体的不適合が立証された場合：** まずその不適合がS5の既存ACに必要な機能を阻害するか評価し、既存機能/設定では解決できない理由と、対象Source/Testを限定したDesign/Plan最小差分をOwnerへ提示する。**別途Ownerが設計差分とSource/Test実装を承認するまで変更しない。** `id/setup`への全面移行、別V2 Pluginエントリ、全Hooks移植は採択済みの解ではない。
+
+### Conditional TDD work contract — only if a code gap is proven and authorized
+
+| TDD stage | 先に示す証拠/操作 | 完了条件と停止条件 |
+| --- | --- | --- |
+| **RED** | 具体的な固定v2.3.2契約とS5の対象ACから**1つの最小失敗テスト**を定義。現在の実装で失敗することをOwner承認済みの隔離環境で実測 | 実際のFAIL記録。契約/失敗を再現できなければ`NOT_VERIFIED`で停止。既存テストが同じFAILを表すなら再利用 |
+| **GREEN** | REDで観測した欠落だけを最小限のSource修正で解消 | 同一テストがPASS。未証明のHooks移植や汎用機構は追加しない |
+| **REFACTOR / regression** | 変更境界内の限定整理、V1/S1/S2/S3の必要な回帰テスト、型・Lint・配布/Bundle検証を実行 | PASS/FAIL/NOT_RUNを区別。隔離を保証できないBuild/Test実行はHOLD。全Findingゼロ・独立レビュー無限連鎖を要求しない |
+| **Owner Checkpoint** | 変更Diff、RED→GREENログ、Regression結果、残余リスク、未承認のRuntime検証範囲を報告 | 当該限定Taskを終了。Pluginロード・E1・AC・Releaseへ自動進行しない |
+
+**TDDの適用対象：** 新たにOwnerが承認したSource/Test変更のみ。Read-only Host確認・Bootstrap作成・隔離Build/来歴確認にはTDDのRED→GREENを遡及要求しない。S2-b Source互換性については既存D-S5-08の限定Plan/テストを再利用し、H3 Plugin Loader契約の失敗テストと混同しない。仮にTDDの新規失敗テストが必要でも、要件未確認のままテストから仕様を創作してはならない。
+
+### Explicit stop
+
+- 本節は新たなTask 7や並行した修正・レビューTaskを作らない。固定契約・Owner承認が欠けたときは現状証拠を保持してOwner Checkpointで停止する。
+- Source/Test/CI変更、共有`dist/`変更、Plugin登録、Runtimeロード、Supervisor作成、E1/E2/E3、Host/外部書込み、PR/Mergeは**この文書訂正によって許可されない**。
+- `H1=VERIFIED_STATIC`、H2新専用Build PASS（正式H2裁定保留）、`H3=HOLD`、`H4/H5=NOT_VERIFIED`、`E1/E2/E3=HOLD`、`BOUNDED_COMPLETE=PENDING`、`RELEASE_APPROVED=PENDING`を維持。追加作業が不要ならここで終了する。
+
+
 ## File Map / Responsibilities
 
 | File | 目的 | 新規/変更 |
@@ -41,6 +83,7 @@
 | `docs/superpowers/specs/2026-11-17-justice-v6-s5-operation-completion-brainstorming-requirements.md` | 要件の固定参照、変更しない | READ_ONLY |
 | `src/runtime/s2b-input.ts`、`src/runtime/s2b-offline-adapter.ts`、`src/runtime/s2b-contract.ts` | Source/Correlation validation、Offline Adapter | READ_ONLY |
 | `src/runtime/s1d-diagnostic.ts`、`src/runtime/s1d-cli.ts` | S1診断の既存経路 | READ_ONLY |
+| `src/opencode-plugin.ts`、`src/runtime/opencode-adapter.ts`、`package.json` | H3固定v2.3.2契約確認のSource/SDK参照（互換化を未承認で実装しない） | READ_ONLY |
 | `src/core/acceptance-decision.ts`、`src/core/review-artifact.ts`、`src/core/justice-plugin.ts` | S3-bの既存Decision/Lifecycle整合 | READ_ONLY |
 | `docs/reports/2026-11-14-justice-v6-s2c-limited-comparison.md` | S2-c比較未成立の証拠正本 | READ_ONLY |
 
