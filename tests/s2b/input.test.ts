@@ -100,6 +100,26 @@ describe("S2-b exact pinned host versions (D-S5-08)", () => {
     expectRejected(source(missing), "SOURCE_SCHEMA_INVALID");
   });
 
+  it("v232PositiveTwoPageCursorChainCompletes", () => {
+    // Explicit v2.3.2 positive case: first request is ascending; the next uses only the opaque cursor.
+    const pages = [
+      {
+        request: firstRequest(2),
+        response: pageResponse([userMessage("msg_001"), assistantMessage("msg_002")], "cur-1"),
+      },
+      {
+        request: laterRequest("cur-1", 2),
+        response: pageResponse([idleMessage("msg_003")]),
+      },
+    ];
+    const result = accepted(source(buildSource({ hostVersion: "2.3.2", pages })));
+    expect(result.collectionStatus).toBe("PAGINATION_COMPLETE");
+    expect(result.validatedPageCount).toBe(2);
+    expect(result.lastValidatedPageIndex).toBe(1);
+    expect(result.messages.map((message) => message["id"])).toEqual(["msg_001", "msg_002", "msg_003"]);
+    expect(codes(result)).not.toContain("PAGINATION_INCOMPLETE");
+  });
+
   it("v232FilteredCollectionAndBrokenCursorStayFailClosed", () => {
     expectRejected(source(buildSource({
       hostVersion: "2.3.2",
