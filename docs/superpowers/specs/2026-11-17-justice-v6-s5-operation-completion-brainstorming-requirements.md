@@ -2,7 +2,7 @@
 ## Brainstorming Requirements R0.1
 
 **Historical 2026-11-17 status:** `BRAINSTORMING_REQUIREMENTS_CONFIRMED / DESIGN_NOT_ADOPTED / IMPLEMENTATION_NOT_AUTHORIZED`  
-**Current Owner checkpoint (2026-11-23):** `D-S5-08_DESIGN_ADOPTED / SOURCE_IMPLEMENTATION_NOT_AUTHORIZED / HOST_GO_HOLD / AC_H01_H03_NOT_RUN / RELEASE_NOT_AUTHORIZED`. Historical requirements are interpreted with the adopted D-S5-08 Addendum.
+**Current Owner checkpoint (2026-11-23; Source HEAD `204567a696bc68ce9c906b3a74fec1f84c816496`):** `D-S5-08_DESIGN_ADOPTED / S2B_225_232_CODE_COMMITTED_TESTS_NOT_RUN / FURTHER_SOURCE_TEST_WORK_NOT_AUTHORIZED / HOST_GO_HOLD / AC_H01_H03_NOT_RUN / BOUNDED_COMPLETE=PENDING / RELEASE_NOT_AUTHORIZED`。Ownerが別途承認した限定Source/Test実装とCommit/Pushは実施済みだが、Vitest/Typecheck/LintのPASSは未確認。従来の`SOURCE_IMPLEMENTATION_NOT_AUTHORIZED`は実装承認前の**Historical checkpoint**であり、現行の実装未着手を意味しない。Design採択、限定Source実装承認、Host GO、Completion、Opt-in/Releaseは別判断。
 
 **Date:** 2026-11-17 JST  
 **Repository:** `yohi/justice`  
@@ -80,7 +80,7 @@ S2-cの `COMPARISON_NOT_ESTABLISHED` を保持する。S2親Issueの限定受入
 
 ## 4. 必須の実Host受入
 
-対象はD-S5-08既存Ubuntu HostのOpenCode V2.3.2。実バイナリDigest、Justice Commit、専用Session/Task/Scope/Operation、Secrets/Network、非干渉と停止/切戻しをHost GO前に固定する。現行S2-bは2.2.5専用であり、2.3.2互換実装と検証の別承認がない限りAC-H01をHOLDする。
+対象はD-S5-08既存Ubuntu HostのOpenCode V2.3.2。実バイナリDigest、Justice Commit、専用Session/Task/Scope/Operation、Secrets/Network、非干渉と停止/切戻しをHost GO前に固定する。現行S2-bは`S2B_SUPPORTED_HOST_VERSIONS=["2.2.5","2.3.2"]`の厳密一致Allowlistを実装済み（Source HEAD `204567a696bc68ce9c906b3a74fec1f84c816496`、関連テストコード追加済み）だが、Vitest/Typecheck/Lintは`NOT_RUN`で2.3.2正常複数ページCursorの専用テストも未追加。Source実装済みは互換性テストPASS・Host安全性・実Host受入の証拠ではない。追加テスト作業は別承認、Host GOは`HOLD`、AC-H01/H02/H03は`NOT_RUN`、Releaseは未承認を維持する。
 
 | ID | シナリオ | 必須成立条件 |
 |---|---|---|
