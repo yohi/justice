@@ -511,6 +511,7 @@ export async function arrangeReviewArtifactCompletionFixture(
   let reservationCounter = 1;
   const injectReviewRequiredDirective = vi.fn(async (): Promise<void> => undefined);
   const reviewDispatch = createReviewDispatchState({
+    writerId,
     readDurableRecords: () => logStore.readAll(),
     readDurableAuthorizations: () => seedAuthorizationStore.hydrate(),
     findAuthorizationById,

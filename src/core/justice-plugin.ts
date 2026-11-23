@@ -505,6 +505,7 @@ export class JusticePlugin {
       generateWriterId,
     );
     this.reviewDispatchState = createReviewDispatchState({
+      writerId: this.writerId,
       readDurableRecords: () => this.observationLogStore.readAll(),
       readDurableAuthorizations: () => this.authorizationStore.hydrate(),
       findAuthorizationById: (authorizationId) =>

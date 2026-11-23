@@ -178,6 +178,7 @@ function fixture(
   const delivered: ReviewCorrelation[] = [];
   let id = 100;
   const state = createReviewDispatchState({
+    writerId: "writer-1",
     readDurableRecords: async () => records,
     readDurableAuthorizations: async () => bindings,
     findAuthorizationById: async (candidate) =>

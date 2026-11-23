@@ -688,6 +688,15 @@ describe("ObservationLogStore", () => {
     expect(all.map((r) => r.sequence)).toEqual([1, 2, 3]);
   });
 
+  it("rejects an append whose writerId differs from the store writerId and persists nothing", async () => {
+    const { files, reader, writer } = createMemFs();
+    const store = new ObservationLogStore(writer, reader, "w-2");
+    // Shard and record agree with each other (writer "w-1") but not with the store (writer "w-2").
+    await expect(store.append(shard, msgRecord())).rejects.toThrow(/does not match store writerId/);
+    expect(files.size).toBe(0);
+    await expect(store.readAll()).resolves.toHaveLength(0);
+  });
+
   it("persists to the shard's physical path and exposes its writerId", async () => {
     const { files, reader, writer } = createMemFs();
     const store = new ObservationLogStore(writer, reader, "w-1");
