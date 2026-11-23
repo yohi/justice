@@ -4,7 +4,8 @@
 **Date:** 2026-11-23 (JST)  
 **Status:** R0.1.1 subsequently OWNER_ADOPTED (separate Owner decision) / R0.1.2 ALIGNMENT_DRAFT_OWNER_CHECKPOINT / H1 VERIFIED_STATIC / H2 dedicated Build PASS / H3 HOLD / H4-H5 NOT_VERIFIED / E1-E3 HOLD  
 **Repository:** `yohi/justice`  
-**Reference Commit:** `master@3c2b5a3f38f4440a622b8ee53705f5a6193518f1`  
+**Reference Commit (historical read-only baseline):** `master@3c2b5a3f38f4440a622b8ee53705f5a6193518f1`  
+**Current Host Source HEAD (Owner-reported, 2026-11-23):** `bf6bcda41820b1b7550f8215afc4ceec20859409`  
 **Target Host:** `coreultra7-270k`  
 **Target Runtime:** OpenCode V2.3.2
 
@@ -38,6 +39,8 @@ Justice v6 S5の本来の目的は、採択済みS1/S2/S3の限定範囲につ�
 
 ### 2.1 固定Checkpoint
 
+**Historical checkpoint (H1〜H5の当初Read-only検証前):** 以下は2026-11-23の新しいHost証拠取得前の状態であり、現行Verdictではない。
+
 ```text
 HOST_ACCESS_BLOCKED
 H1_H5_NOT_VERIFIED
@@ -47,7 +50,7 @@ RELEASE_APPROVED=PENDING
 AWAITING_OWNER_AUTHORIZATION
 ```
 
-H1〜H5はHost接続不能によって未検証であり、実装失敗が観測されたわけではない。
+上記Historical時点では、H1〜H5はHost接続不能によって未検証であり、実装失敗が観測されたわけではない。**現行Checkpoint（2026-11-23 Owner報告）:** H1はHost名・固定Source HEAD・Launcher/実バイナリPath・OpenCode 2.3.2実バイナリSHA-256 `e6543f6e5c39c40971ba38afd1819ac852c29ac735b5a89065d3d148d47f27ad` を実測した静的 `VERIFIED_STATIC`。Runtime Identity/ロード・AC-H01〜H03の正式受入は未証明。公開文書にはDigest/非機密Identityのみ記録し、非公開Host Evidence原本・Session/Secretを転記しない。Digestの無条件再測定を既定工程としない（実行直前の対象変更が疑われる場合の確認は別判断）。
 
 ### 2.2 確認済みSource構造
 
@@ -383,7 +386,7 @@ AWAITING_OWNER_AUTHORIZATION
 | Bootstrap | 固定RUN_IDにより専用Root/非実行Launcher/最小Configを作成、静的Preflight `BOOTSTRAP_STATIC_PASS`。既存Stateは未変更と報告 | 専用準備成果物を再利用。Launcher実行・Plugin Load・State非干渉は未実証 |
 | H2（新・専用Artifact） | Merge HEADのgit archiveから隔離Build完了。`SHA-256=9b17708f374f01cb7f1cb530438ae9784ccc308e0afc0e965d87abbce92db92a`、来歴記録あり | `VERIFIED_STATIC`候補（専用Artifactのみ）。Ownerの採否前に正式昇格しない。再Buildを無条件に要求しない |
 | H2（共有Artifact） | 従来の`dist/opencode-plugin.js`は現在Sourceとの具体的不一致あり、共有ファイルは変更していない | `OBSERVED_MISMATCH`を歴史的な共有Artifactの状態として維持し、新専用Artifactと混同しない |
-| H3 | 専用Configの`plugins`は空。Justiceは`@opencode-ai/plugin@1.14.21`の関数型export。固定OpenCode **2.3.2** ローダの要求契約は未立証 | `CONFIGURED`不成立、`RUNTIME_LOADED`未証明。別バージョン/現行Web仕様の`id/setup`主張だけでSource変更しない |
+| H3 | 専用Configは`{"plugins":[]}`で未登録。固定OpenCode **v2.3.2** `packages/core/src/plugin/module.ts` L81–94, L168–186は、`default`が`{ id: string, effect: function }`または`{ id: string, setup: function }`であることを要求。Justice `src/opencode-plugin.ts`は`@opencode-ai/plugin@1.14.21`に基づく**関数型**`OpenCodePlugin`を`default` exportする | **`LOADER_SOURCE_CONTRACT_MISMATCH_OBSERVED`**（具体的な静的契約不一致）。`CONFIGURED`不成立、`RUNTIME_LOADED=NOT_VERIFIED`、実ArtifactのRuntimeロード失敗は**未観測**。`id/setup`への機械的置換やV1 Hook全面移植は未採択 |
 | H4/H5 | 専用State/Stop/CleanupのOwner境界方針は採択済み。実効Runtime書込み先、Supervisor/Process Identityは未証明 | 両方`NOT_VERIFIED`。Bootstrap PASSを静的条件全成立やE1 GOへ読み替えない |
 
 EvidenceはHostの既存非公開記録を正本とし、GitHub文書へSession/Credential/Private Pathを転載しない。Build依存関係のlockとの完全整合・再現性・Runtime互換性は未証明である。既存T09〜T15/AC-H01〜H03の証拠と形式的受入裁定を混同しない。
@@ -392,23 +395,36 @@ EvidenceはHostの既存非公開記録を正本とし、GitHub文書へSession/
 
 - **S5本来の成果：** AC-H01〜H03の限定実Host受入、Acceptance Evidence Record、Minimal Operation Runbook、Owner Completion Decision。新Plugin Frameworkや包括的V2移行は採択された要件ではない。
 - **H1/H2/Bootstrap：** 静的証拠収集・限定隔離Buildは完了した準備作業。新たなSource変更の理由にせず、取得済み証拠を再利用する。
-- **H3の実際の欠落：** 専用ConfigにJustice Pluginの参照がない。まず固定`v2.3.2`の実ローダ/SDK/型または信頼できる同Versionの既存テスト証拠と、現行関数型Artifactを比較する。読み込み可能な公開文書と実際の固定版の契約を混同しない。**未証明なら`PLUGIN_CONTRACT_NOT_VERIFIED`で停止**する。
-- **H3の分岐：** 関数型exportが固定版の契約に適合すると証明できれば、Source変更を起こさず専用Configの限定登録と静的参照検証を、別のOwner承認を得て実施する。具体的不適合が証明された場合だけ、その不適合とS5の必要機能を対応づけて、既存Design/Planの最小差分をOwnerへ提示する。**`id/setup`形式、新V2エントリ、Hooks移植を既定解として採択しない。**
+- **H3で確定したSource契約不一致：** 固定Tag `anomalyco/opencode@v2.3.2` の `packages/core/src/plugin/module.ts` L81–94は、`default` exportについて`{ id: string, effect: function }`または`{ id: string, setup: function }`を要求し、L168–186の`loadServer()`はそのSchemaを検証する。一方、Justice `src/opencode-plugin.ts`の`default`は、`@opencode-ai/plugin@1.14.21`の関数型`OpenCodePlugin`。**このSource間の構造的不一致はOBSERVED_MISMATCH（静的）**。未証明は実Bundleロード結果・Hooks動作・Runtime非干渉であり、`OBSERVED_RUNTIME_FAILURE`ではない。専用Configは`{"plugins":[]}`で未登録のため`CONFIGURED`も不成立。既存固定Tag証拠を再調査することを既定Taskにしない。
+- **H3の対応方式は未決定：** V2の`id/effect`または`id/setup`契約を満たす方式は複数考えられるが、**現時点ではどの方式もOwner採択されていない**。`id/setup`の機械的ラッピング、新規V2専用Pluginエントリ、全V1 Hooks移植を承認済み実装とみなさない。まずS5の必要機能とV2 Domain APIの対応・欠落を限定評価し、既存機能/設定で回避できないこと、実装対象・権限とTDD計画の最小差分をOwnerに提示する。Source修正・登録・Runtimeロードは別承認までHOLD。
 - **H4/H5：** 専用Launcher・State・Stop/cleanupの設計上の固定と実際のRuntime非干渉は区別し、E1起動の前提が満たせない操作はHOLD。H3解消を理由にE1/E2/E3へ自動進行しない。
+
+**S5必要機能に限定したV1 Hook / V2 Domain API差分（方式未採択）**
+
+| S5で必要となる境界 | 既存Justice V1入口（Source上の実装） | OpenCode v2.3.2側の契約とOwner判断事項 |
+| --- | --- | --- |
+| AC-H01: 実Sourceの帰属・観測 | `event`, `chat.message`, `experimental.text.complete`, `tool.execute.after`を含む既存Adapter経路 | V2 `PluginHooks`のDomainは`aisdk/session/permission/shell/tool`（`packages/core/src/plugin/hooks.ts`）。同じイベントやTiming、Session/Message/Tool Evidenceの取得可能性は未実証。既存S2-b Offline入力で足りる範囲とPlugin側で必須な範囲を分離してOwner判断 |
+| AC-H02: 異常時の影響限定Fail-Closed | `tool.execute.before`で限定中止、既存S1/S3のAuthority/Evidence判断 | V2側はDomain別Hook登録であり、`tool.execute.before`の入力・Error channel・拒否の時点が同じとは推定しない。AC-H02が**Host実行前強制の証明を要求していない**ことを保持し、必要な最小機能のみOwner判断 |
+| AC-H03: 単一WriterのDecision/Lifecycle Recovery | `event`等から`OpenCodeAdapter`→`JusticePlugin.initialize()`に接続する既存経路 | V2のPlugin Context/Session Domainへそのまま移せる保証なし。既存の専用Durable State/Offline証拠で足りる部分と、実Pluginに不可欠な機能を分離。複数Writer、全状態復元を新たな要件にしない |
+| S5の必須性を未確認 | `tool`, `config`, `chat.params`, `command.execute.before`, `experimental.session.compacting`など | V2のCommand/Tool/Session等との1:1対応・コールバック互換を推定しない。S5のAC成立に不要なら移植対象から除外し、任意機能の全量実装を求めない |
+
+固定TagのPlugin Domain API差分は機能分類のための入力であり、Hookの互換性や実Runtime結果を証明するものではない。E1でのProvider不要・Provider有りの成立性も未実証。既存S5文書成果物3件の準備はH3 HOLDとは独立して進められる。
 
 ### 11.3 追加Source/Test修正が本当に必要になった場合のTDD契約
 
-**入口条件：** (1) 固定版`v2.3.2`との具体的な契約不一致をEvidenceで特定、(2) その差が採択済みS5の受入要件を妨げることを示す、(3) 既存機能/設定だけでは対処できない理由を示す、(4) Human Ownerが対象Source・Test・実行環境・書込みを限定して別途承認する。どれか欠ければ実装しない。
+**入口条件：** (1) 固定版`v2.3.2`との**静的Loader契約不一致は証明済み**、(2) その不一致がS5採択済みACのどの必要機能を妨げるかを特定、(3) 既存機能・設定/Offline経路だけでは対処できない理由を示す、(4) 対応方式（最小修正か別エントリか、必要なV2 Domainのみか等）をHuman Ownerが選択、(5) 対象Source/Test・実行境界・Git操作を別途承認する。**未選択の方式を実装者が採択してはならない。** (2)〜(5)が揃わなければ実装しない。
 
 1. **RED：** 固定版の契約・受入要件に対応する最小失敗テストを先に作り、現在の実装が失敗することを隔離Test環境で確認・記録する。単なるAPI形式の推測に対するテストは作らない。既存テストに相当する証拠がある場合は重複追加せず再利用する。
 2. **GREEN：** 証明された不一致だけを解消する最小変更を行い、同一テストのPASSを観測する。不要な新Pluginエントリ・新Runtime API・全Hooks移植を追加しない。
 3. **REFACTOR / Regression：** 必要な限定整理と既存V1/採択済みS1/S2/S3の関連回帰テスト、typecheck/lint/配布出力の検証を行い、結果・未実行を区別する。再Buildや共有`dist/`変更は事前の実行境界承認が必要。
 4. **Owner Checkpoint：** RED/GREEN/Regression証拠、変更Diff、残余リスクを報告して停止。Runtime Plugin Load、AC-H01〜H03、Opt-in/Releaseは別判断とする。
 
+**条件付きPlanの確定項目（OwnerによるSource修正方式・範囲の別承認後だけ記載・実行）：** ①対象ファイル（既存候補の`src/opencode-plugin.ts`・`src/runtime/opencode-adapter.ts`等の採否）、②v2.3.2固定TagのLoader型`{id,effect|setup}`と必要Domain Hookの型・Interface及び既存Justice型との差分、③S5 ACに対応する失敗テストファイルとassertion、④隔離環境での実行コマンド（候補は`bun run vitest run <approved-test-file>`、`bun run typecheck`、`bun run lint`、`bun run test`、隔離出力先を確定した`bun run build`。実コマンド・書込み先をOwner確定）、⑤期待REDとGREEN、負例・例外/Error channel・Fail-Closed、⑥影響しないV1経路の回帰確認、⑦Source/Test/Artifact/EvidenceのCommit境界・Push可否、⑧Stop/Owner Checkpointを**実装前に1つの限定Planへ固定**する。これは承認済みファイル変更やテスト実行の指示ではない。
+
 **適用の限界：** Read-only観測、Build来歴確認、Bootstrapの静的PreflightにRED→GREENを遡及要求しない。設定登録だけなら、事前の静的設定アサーション→限定更新→Readbackの検証とし、コード改修のTDD Taskを生やさない。
 
 ### 11.4 完了・停止
 
-この補足の完了は「元のPlanに対する対象/証拠/未承認差分が明示され、必要時のTDD復帰条件を固定したこと」であり、Findingゼロ・全H VERIFIED・追加独立レビューを条件としない。現時点の`E1/E2/E3=HOLD`、`BOUNDED_COMPLETE=PENDING`、`RELEASE_APPROVED=PENDING`を維持する。未証明のV2 Plugin契約を埋めるためのSource変更や追加Taskを自動開始しない。
+この補足の完了は「元のPlanに対する対象/証拠/未承認差分が明示され、必要時のTDD復帰条件を固定したこと」であり、Findingゼロ・全H VERIFIED・追加独立レビューを条件としない。現時点の`E1/E2/E3=HOLD`、`BOUNDED_COMPLETE=PENDING`、`RELEASE_APPROVED=PENDING`を維持する。**既知の静的Loader契約不一致は記録済み**だが、修正方式とRuntime対応範囲はOwner未決定。Source変更・Plugin登録・追加Taskを自動開始しない。H3のみの問題で無関係なS5文書準備は停止しない。
 
 **R0.1.2 documentation-only alignment proposal end.**
