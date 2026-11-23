@@ -3,9 +3,9 @@
 **Version:** R0.1  
 **Date:** 2026-11-23 (JST)  
 **Status:** DESIGN_ACCEPTED_BY_OWNER / EXECUTION_NOT_AUTHORIZED  
-**Repository:** \`yohi/justice\`  
-**Reference Commit:** \`master@3c2b5a3f38f4440a622b8ee53705f5a6193518f1\`  
-**Target Host:** \`coreultra7-270k\`  
+**Repository:** `yohi/justice`  
+**Reference Commit:** `master@3c2b5a3f38f4440a622b8ee53705f5a6193518f1`  
+**Target Host:** `coreultra7-270k`  
 **Target Runtime:** OpenCode V2.3.2
 
 ## 1. Purpose
@@ -20,7 +20,7 @@ Justice v6 S5の本来の目的は、採択済みS1/S2/S3の限定範囲につ�
 
 ### 1.2 今回の成果物
 
-\`H1〜H5 Read-only Identity / Boundary Evidence Record\`
+`H1〜H5 Read-only Identity / Boundary Evidence Record`
 
 確認した事実、未確認事項、取得根拠、E1の実行可否に関する判断材料を記録する。S5の正式Acceptance Evidence RecordやOwner Completion Decisionを置き換えない。
 
@@ -38,14 +38,14 @@ Justice v6 S5の本来の目的は、採択済みS1/S2/S3の限定範囲につ�
 
 ### 2.1 固定Checkpoint
 
-\`\`\`text
+```text
 HOST_ACCESS_BLOCKED
 H1_H5_NOT_VERIFIED
 E1_E2_E3_HOLD
 BOUNDED_COMPLETE=PENDING
 RELEASE_APPROVED=PENDING
 AWAITING_OWNER_AUTHORIZATION
-\`\`\`
+```
 
 H1〜H5はHost接続不能によって未検証であり、実装失敗が観測されたわけではない。
 
@@ -53,12 +53,12 @@ H1〜H5はHost接続不能によって未検証であり、実装失敗が観測
 
 既存のGitHub Source Readbackに基づく。
 
-- Pluginエントリ：\`dist/opencode-plugin.js\`
-- OpenCode Hook実装：\`src/opencode-plugin.ts\`
-- Host Runtimeとの接続：\`src/runtime/opencode-adapter.ts\`
-- Justice初期化とState管理：\`src/core/justice-plugin.ts\`
-- Global Wisdom Store：\`JUSTICE_GLOBAL_WISDOM_PATH\`未指定時、通常\`~/.justice/wisdom.json\`
-- Local State：Workspaceを基準とする\`.justice\`配下
+- Pluginエントリ：`dist/opencode-plugin.js`
+- OpenCode Hook実装：`src/opencode-plugin.ts`
+- Host Runtimeとの接続：`src/runtime/opencode-adapter.ts`
+- Justice初期化とState管理：`src/core/justice-plugin.ts`
+- Global Wisdom Store：`JUSTICE_GLOBAL_WISDOM_PATH`未指定時、通常`~/.justice/wisdom.json`
+- Local State：Workspaceを基準とする`.justice`配下
 
 **Workspaceを分離してもGlobal Storeの分離は自動保証されない。** Plugin登録設定の存在とRuntimeでのPluginロード成功も別の事実として扱う。
 
@@ -133,7 +133,7 @@ VM・Sandboxの追加やOpenCode起動による確認は今回のRead-only目的
 - Repositoryの実Path
 - Host HEADと固定Commitとの一致・不一致
 - Worktreeの変更状態
-- \`~/.local/bin/opencode2\`の参照先
+- `~/.local/bin/opencode2`の参照先
 - OpenCode実バイナリのVersion、SHA-256
 
 **方法：** 既存ファイルのメタデータ、Git参照情報、読み取り可能なバイナリ内容を使用する。バイナリDigestは可能な場合に実体のバイト列から計算する。Launcherのファイル名やGitHubのHEADは実Host Identityの代用にしない。
@@ -148,12 +148,12 @@ VM・Sandboxの追加やOpenCode起動による確認は今回のRead-only目的
 
 **確認対象：**
 - Plugin Artifactの実Path
-- \`dist/opencode-plugin.js\`の存在
+- `dist/opencode-plugin.js`の存在
 - ファイルのSHA-256
 - Build元Commitを示す既存の証拠
 - Source変更後のBuild更新状況
 
-**判定原則：** \`Git HEAD一致\`と\`Plugin Build一致\`は別の確認事項とする。Pluginファイルが存在しても生成元Commitとの対応が示せなければBuild Identityは未確定である。Buildや再Buildは禁止する。
+**判定原則：** `Git HEAD一致`と`Plugin Build一致`は別の確認事項とする。Pluginファイルが存在しても生成元Commitとの対応が示せなければBuild Identityは未確定である。Buildや再Buildは禁止する。
 
 **期待するEvidence：** Plugin実体Digestと確認できたBuild来歴。来歴がなければその不足を明示する。
 
@@ -170,11 +170,11 @@ VM・Sandboxの追加やOpenCode起動による確認は今回のRead-only目的
 - 登録対象とH2 Artifactの整合
 
 **重要な区別：**
-- \`CONFIGURED\`：設定上、Justice Pluginへの参照がある。
-- \`RESOLVABLE\`：参照先Artifactを特定できる。
-- \`RUNTIME_LOADED\`：OpenCode実行時に正常ロードされた。
+- `CONFIGURED`：設定上、Justice Pluginへの参照がある。
+- `RESOLVABLE`：参照先Artifactを特定できる。
+- `RUNTIME_LOADED`：OpenCode実行時に正常ロードされた。
 
-今回確認可能なのは主として前二者であり、\`RUNTIME_LOADED\`はE1以降の確認対象とする。
+今回確認可能なのは主として前二者であり、`RUNTIME_LOADED`はE1以降の確認対象とする。
 
 Credentialを含むおそれのある設定ファイルについては本文全体の閲覧を前提としない。必要項目だけを安全に確認できなければNOT_VERIFIEDに留める。
 
@@ -186,7 +186,7 @@ Credentialを含むおそれのある設定ファイルについては本文全�
 
 **確認対象：**
 - Workspace Root
-- Local \`.justice\` Root
+- Local `.justice` Root
 - Global Wisdom Store
 - OpenCode Config / Data / State領域
 - Session保存領域
@@ -194,7 +194,7 @@ Credentialを含むおそれのある設定ファイルについては本文全�
 - シンボリックリンクや共有Path
 - 初期化時の書込み対象
 
-**必須条件：** 専用Workspaceのみでは分離完了と判断しない。\`JUSTICE_GLOBAL_WISDOM_PATH\`等によるGlobal Storeの明示的な分離可能性を確認する。
+**必須条件：** 専用Workspaceのみでは分離完了と判断しない。`JUSTICE_GLOBAL_WISDOM_PATH`等によるGlobal Storeの明示的な分離可能性を確認する。
 
 Justice Pluginの初期化やRecovery処理にはState書込みが発生し得るため、Pluginロードを「確認のためだけのRead-only操作」と扱わない。今回、専用Directoryの作成・設定変更・既存Stateへの書込みは行わない。
 
@@ -253,7 +253,7 @@ H5で確認するのは停止・撤収方式の安全性と準備状況であり
 
 各H項目について、以下を最小単位で記録する。
 
-\`\`\`text
+```text
 Check ID
 Target Identity
 Evidence Source
@@ -262,7 +262,7 @@ Observed Facts
 Evidence Digest (when available)
 Verification Limitations
 Verdict
-\`\`\`
+```
 
 秘密情報、Session本文、不要なログ全文は記録しない。
 
@@ -275,7 +275,7 @@ Verdict
 | BLOCKED | 接続・権限・安全制約により確認できない |
 | OBSERVED_MISMATCH | 対象と固定条件の具体的な不一致を観測 |
 
-\`NOT_VERIFIED\`と\`OBSERVED_MISMATCH\`を混同しない。
+`NOT_VERIFIED`と`OBSERVED_MISMATCH`を混同しない。
 
 ### 7.3 E1 Decision
 
@@ -329,12 +329,12 @@ E1後に安全なLifecycle失敗注入と専用Restartの可否を個別判断�
 
 S5の正式状態は変更しない。
 
-\`\`\`text
+```text
 H1_H5_NOT_VERIFIED
 E1_E2_E3_HOLD
 BOUNDED_COMPLETE=PENDING
 RELEASE_APPROVED=PENDING
 AWAITING_OWNER_AUTHORIZATION
-\`\`\`
+```
 
 **Design R0.1 End**
