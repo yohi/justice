@@ -6,8 +6,7 @@ an approved value: both Decision fields in section 4 are `PENDING` until the
 Human Owner enters a decision.
 
 Current state: **`BOUNDED_COMPLETE` is not adopted.** AC-H01 to AC-H03 are all
-`NOT_RUN`, no real-Host acceptance has been run, and the S5 Design is not
-adopted. `RELEASE_APPROVED` is a separate opt-in permission and is not
+`NOT_RUN`, no real-Host acceptance has been run, but the **D-S5-08 design Addendum is Owner-adopted as design policy only**; the separately authorized bounded S2-b Source/Test code was committed at `204567a` without executed test evidence, while **further Source/Test operations and Host GO remain on HOLD**. `RELEASE_APPROVED` is a separate opt-in permission and is not
 established either. Even a future `BOUNDED_COMPLETE` would not introduce
 anything: without `RELEASE_APPROVED`, nothing is introduced.
 
@@ -28,10 +27,10 @@ hold.
 | Condition | Status |
 | --- | --- |
 | AC-H01, AC-H02 and AC-H03 each have a real-Host `PASS` | Not met (all `NOT_RUN`) |
-| Target Host / Version / Scope are identified | Not met (`未固定`) |
+| Target Host / Version / Scope / Operation are independently fixed | Not met; observed Host/2.3.2 are candidates, binary digest/Scope/Operation/Host GO remain NOT_FIXED |
 | Evidence and diagnostic results are attributed to the target | Not met (no evidence) |
 | Known limitations and unverified items are stated | Stated in section 2 |
-| Opt-in, stop and rollback procedures exist without bypassing required protections | Documented in `docs/superpowers/operations/justice-v6-s5-minimal-operation-runbook.md`; not exercised on a real Host |
+| Opt-in, stop and rollback procedures exist without bypassing required protections | Runbook documents safety boundaries; exact Host-specific operation/rollback are NOT_FIXED and NOT_RUN |
 | Human Owner explicit decision on bounded completion | Not entered (section 4) |
 
 Because several conditions are unmet, bounded completion is not adopted.
@@ -59,12 +58,14 @@ Other items are disclosed limitations, not blockers by themselves.
 
 Related tracking: Issues #355, #356, #358 and #388.
 
+**Separate design decision (2026-11-23):** Owner adopted D-S5-08/Approach A Addendum and authorized this one-time **document-only** alignment. This is **not** either Owner Completion/Release decision. All three ACs remain `NOT_RUN`. S2-b 2.2.5/2.3.2 Source admission code was separately Owner-authorized and committed at `204567a`, while Vitest/typecheck/lint are NOT_RUN and positive 2.3.2 multi-page test `v232PositiveTwoPageCursorChainCompletes` ADDED at `fa90f9d` (NOT_RUN / NOT_VERIFIED); existing-host isolation is logical-only and inherited Credentials/Network effects remain unverified. `oc225-msg-` / `issuerId="opencode-v225-record"` do not attest Host Version.
+
 ## 3. Target
 
 | Item | Value |
 | --- | --- |
-| Host | 未固定 |
-| Version | 未固定 |
+| Host | Candidate existing Ubuntu `coreultra7-270k` (Owner-observed; AC target NOT_FIXED) |
+| Version | Candidate OpenCode V2.3.2 (Owner-observed); binary SHA NOT_MEASURED, compatibility NOT_VERIFIED |
 | Scope | 未固定 |
 
 These values must be fixed from real-Host evidence before any Owner entry.

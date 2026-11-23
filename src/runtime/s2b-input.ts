@@ -1,4 +1,4 @@
-// S2-b saved OpenCode v2.2.5 input validation (offline, READ_ONLY, no I/O).
+// S2-b saved OpenCode v2.2.5/v2.3.2 input validation (offline, READ_ONLY, no I/O).
 //
 // Parsing order (plan §「実装の内部読み取り契約」):
 //   1. bounded read + strict UTF-8, lexical byte scan that locates raw Response spans [start,end)
@@ -13,7 +13,7 @@ import {
   S2B_CORRELATION_SCHEMA_VERSION,
   S2B_LIMITS,
   S2B_SOURCE_SCHEMA_VERSION,
-  S2B_SUPPORTED_HOST_VERSION,
+  S2B_SUPPORTED_HOST_VERSIONS,
   type CorrelationBinding,
   type CorrelationResult,
   type DiagnosticCode,
@@ -307,7 +307,7 @@ function diffSpan(value: unknown, spans: readonly Span[]): Span | null {
 function validateWrapper(w: unknown, spans: ResponseSpans): WrapperMeta {
   if (!isRecord(w) || w["schemaVersion"] !== S2B_SOURCE_SCHEMA_VERSION) return reject("SOURCE_SCHEMA_INVALID");
   if (!hasOnlyKeys(w, WRAPPER_KEYS) || !hasKeys(w, WRAPPER_REQUIRED)) return reject("SOURCE_SCHEMA_INVALID");
-  if (w["hostVersion"] !== S2B_SUPPORTED_HOST_VERSION) return reject("SOURCE_VERSION_UNSUPPORTED");
+  if (!S2B_SUPPORTED_HOST_VERSIONS.some((version) => version === w["hostVersion"])) return reject("SOURCE_VERSION_UNSUPPORTED");
 
   const rawPages = w["messagePages"];
   if (!Array.isArray(rawPages)) return reject("SOURCE_SCHEMA_INVALID");

@@ -4,7 +4,7 @@ This document defines the safety boundary for a future, Owner-approved Opt-in
 of Justice v6. It is an operation runbook skeleton for the Human Owner. It is
 not a runtime approval object, a Gate state, or a product status field.
 
-Current state: **the S5 Design is not adopted and no Host work is authorized.**
+Current state: **D-S5-08 Design adopted; bounded S2-b Source/Test implementation Owner-authorized and COMMITTED at `204567a`; positive P-04 test `v232PositiveTwoPageCursorChainCompletes` ADDED at `fa90f9d`. Vitest/typecheck/lint NOT_RUN and result NOT_VERIFIED. Further Source/Test/CI changes and test execution require new Owner approval; Host GO HOLD, AC-H01/H02/H03 NOT_RUN, Completion/Release PENDING.**
 No real-Host acceptance has been run (see the sibling acceptance record). This
 runbook therefore contains no enable command and no destructive Cleanup
 command. Every Host or Version value that has not been fixed is recorded as
@@ -18,7 +18,7 @@ Related documents:
 - Requirements:
   `docs/superpowers/specs/2026-11-17-justice-v6-s5-operation-completion-brainstorming-requirements.md`
   (D-S5-03 explicit Owner Opt-in, D-S5-04 fail-closed with limited blast
-  radius, D-S5-05 isolated Host)
+  radius; historical D-S5-05 independent Host was superseded for this acceptance by D-S5-08)
 
 ## 1. Prerequisites (all must hold, otherwise do not operate)
 
@@ -27,14 +27,14 @@ prohibited. Absence of confirmation is never read as satisfaction.
 
 | Item | Required condition | Current value |
 | --- | --- | --- |
-| Host | Independent, isolated Host only; never an existing development environment | 未固定 |
-| Version | A single fixed Host Version that was accepted | 未固定 |
+| Host | D-S5-08 existing Ubuntu `coreultra7-270k`; dedicated Workdir/Session/Fixture/Private Evidence; logical-only, not OS isolation | Owner-observed candidate; exact identity and writable boundaries NOT_FIXED |
+| Version | Real 2.3.2 executable SHA and truthful Source wrapper; S2-b exact 2.2.5/2.3.2 Source code COMMITTED at `204567a`, but Vitest/typecheck/lint NOT_RUN and P-04 positive 2.3.2 test `v232PositiveTwoPageCursorChainCompletes` ADDED in `fa90f9d`, NOT_RUN / NOT_VERIFIED | 2.3.2 Owner-observed; binary hash NOT_MEASURED; Host GO HOLD |
 | Scope | Accepted bounded range only (candidate: S1, S2, S3 per D-S5-01) | 未固定 |
 | Default | OFF; nothing is installed or enabled automatically | OFF |
 | Owner permission | Explicit Human Owner approval of the use scope (D-S5-03), recorded as a reference | None |
 | Acceptance | AC-H01 to AC-H03 recorded as `PASS` with `observed` or `derived` evidence | All `NOT_RUN` |
-| Secrets | No Secrets are transferred to or stored on the Host; no secret or absolute host path is written to logs or records | 未固定 (limit to be fixed by S5 Design) |
-| Network | Allowed Network scope stated explicitly; anything unstated is not allowed | 未固定 |
+| Secrets | No inherited/existing credentials read, transferred, exported or logged; **absence of inherited Host secrets is not proved** | NOT_VERIFIED |
+| Network | Only Owner-fixed endpoints/direction/time and effective controls; XDG/`--standalone` does not enforce network deny | NOT_FIXED / HOLD |
 | Side effects | Allowed side effects stated explicitly; Live Tool side effects are not replayed | 未固定 |
 | Operation | The target Operation is named explicitly | 未固定 |
 | Existing flow | The normal Superpowers / OpenCode V2 flow is not changed unnecessarily | Required |
@@ -107,7 +107,7 @@ any of the following. Each one is outside the approved boundary and must not be
 done without a separate Owner approval and S5 Design:
 
 - Rewriting Gate or HOLD outcomes without approval.
-- Installing onto an existing Host or development environment.
+- Reinstalling/reconfiguring the existing Host or shared OpenCode V2 settings; existing launcher is only a selected target, not Host GO.
 - Transferring Secrets to the Host.
 - Replaying Live Tool side effects.
 - Running destructive Cleanup, or any concrete enable command, before S5 Design
@@ -115,11 +115,16 @@ done without a separate Owner approval and S5 Design:
 
 ## 5. Compatibility and known limitations
 
-Compatibility is limited to the fixed Host and Version (`未固定`). Other
-Versions are unverified. The inherited known limitations are listed in section
+Target Host is Owner-observed OpenCode V2.3.2, not yet accepted. S2-b now includes the exact 2.2.5/2.3.2 guard committed at `204567a`, but executed regression/compatibility verification is NOT_RUN. Unknown Versions are designed to fail closed, not yet validated by test PASS. Additional Test/Host GO remains separately authorized. The inherited known limitations are listed in section
 4 of the acceptance record and are not repeated as guarantees here, including
 `COMPARISON_NOT_ESTABLISHED`, `RUNTIME_NOT_VERIFIED`, unproven multi-process
 Recovery, and the absence of Host enforcement.
+
+## 6. D-S5-08 Host Manifest and rollback HOLD
+
+The older local untracked S5 Design R0.1 and Host Execution Manifest R0.1 remain **unmodified** and still assume an isolated 2.2.5 Host. Do not create tracked files at their paths and risk a checkout conflict. Before Host GO, Owner must reconcile or explicitly supersede these drafts and fix exact measured binary SHA, Justice commit, dedicated Session/Task/Scope/Correlation/Writer paths, native read method, inherited credentials/Network, non-interference, safe reversible restart/injection, independent readback, explicit stop/rollback and cleanup allowlist. A safety boundary that cannot be demonstrated leaves the affected operation HOLD. No enable, cleanup or rollback command is authorized.
+
+Adapter statuses `REJECTED/LIMITED/PROJECTED` are not AC outcomes; a foreign-only `PROJECTED` with zero selected Evidence is not PASS. Optional `time.firstToken` is not validated by current `isMessage()`. `AC-H01/H02/H03=NOT_RUN`; `BOUNDED_COMPLETE=PENDING`, `RELEASE_APPROVED=PENDING`.
 
 ## 6. Completion terms (not established)
 
