@@ -18,7 +18,7 @@ Related documents:
 - Requirements:
   `docs/superpowers/specs/2026-11-17-justice-v6-s5-operation-completion-brainstorming-requirements.md`
   (D-S5-03 explicit Owner Opt-in, D-S5-04 fail-closed with limited blast
-  radius, D-S5-05 isolated Host)
+  radius; historical D-S5-05 independent Host was superseded for this acceptance by D-S5-08)
 
 ## 1. Prerequisites (all must hold, otherwise do not operate)
 

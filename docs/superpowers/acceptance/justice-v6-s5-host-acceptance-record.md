@@ -71,7 +71,7 @@ distinct.
 | Source confidence | 未固定 |
 | Limitations | A PASS would not prove full-history completeness or authenticity of the collected Source. See section 4. |
 | Owner approval ref | None |
-| Missing | Approved isolated Host, fixed Version, Source acquisition, stored Source wrapper, explicit Correlation, Adapter run, diagnostic output |
+| Missing | Owner-approved existing Host dedicated Session, real binary SHA, 2.3.2 compatible Source implementation, Source capture/wrapper, independently verified Correlation, Adapter and S1-d diagnosis |
 
 ### AC-H02 Authority / Evidence anomaly
 
@@ -87,7 +87,7 @@ wrongly accepted, and the guaranteed operations are restricted appropriately.
 | Source confidence | 未固定 |
 | Limitations | Justice-internal rejection does not prove rejection before Host execution. See section 4. |
 | Owner approval ref | None |
-| Missing | Approved isolated Host, anomaly inputs, observation points, expected results, restriction observations |
+| Missing | Owner GO for existing Host dedicated input copies, Authority/Evidence negative cases, observation points, expected results and non-interference proof |
 
 ### AC-H03 S3-b Decision / Lifecycle Consistency Recovery
 
@@ -104,7 +104,7 @@ on a real Host, and no inconsistent Task / Plan progression is allowed.
 | Source confidence | 未固定 |
 | Limitations | `RUNTIME_NOT_VERIFIED`. A PASS would not prove full Semantic Recovery, rollback of external tool side effects, or multi-process safety. See section 4. |
 | Owner approval ref | None |
-| Missing | Approved isolated Host, restart procedure, Decision and Lifecycle observations before and after restart |
+| Missing | Owner GO for dedicated Durable State and single Writer, reversible failure injection, bounded restart, independent Decision/Lifecycle readback |
 
 **D-S5-08/Approach A gate:** Exact 2.3.2 Source from the real Host is required. The current S2-b rejects true `hostVersion="2.3.2"`; Source compatibility implementation/tests and Host GO are separate pending authorizations. `isMessage()` does not validate optional `firstToken`. Complete foreign-only bindings can be `PROJECTED` / zero Evidence while **not** proving the selected AC. The `oc225-msg-` origin and `issuerId="opencode-v225-record"` are historical projection identifiers, not Host-version proofs. OS-level separation, network deny, credential noninheritance, dedicated durable Writer/restart injection and cleanup are NOT_VERIFIED; all AC remain `NOT_RUN`.
 

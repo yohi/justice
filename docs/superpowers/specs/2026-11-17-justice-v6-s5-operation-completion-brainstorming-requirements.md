@@ -164,7 +164,7 @@ AC-H01〜H03の結果、証拠、実行条件、残余リスクを記録する�
 5. 必要な保護を迂回しないOpt-in・停止・切戻し手順が成立している。
 6. Human Ownerが完成を明示的に採択する。
 
-AC-H03の完成対象は採択済み単一プロセス限定Decision / Lifecycle Consistency Recoveryのみとし、任意Task / Revision / Findingの復元や外部Tool副作用の巻戻しを必須PASSまたは達成保証へ拡張しない。AC-H01では隔離HostによるSource取得、保存Source wrapper・明示Correlationの入力検証、既存S2-b Offline Adapterによる変換を区別し、未証明を成功に昇格させない。
+AC-H03の完成対象は採択済み単一プロセス限定Decision / Lifecycle Consistency Recoveryのみとし、任意Task / Revision / Findingの復元や外部Tool副作用の巻戻しを必須PASSまたは達成保証へ拡張しない。AC-H01ではD-S5-08既存Hostの専用SessionによるSource取得、保存Source wrapper・明示Correlationの入力検証、既存S2-b Offline Adapterによる変換を区別し、未証明を成功に昇格させない。
 
 未実行・未証明・観測失敗をPASSへ読み替えない。
 

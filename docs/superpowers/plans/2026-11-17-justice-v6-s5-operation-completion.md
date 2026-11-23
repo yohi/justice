@@ -61,7 +61,7 @@
 ### Task 1: Acceptance Evidence Recordの基準・証拠台帳を作成
 
 **Files:**
-- Create: `docs/superpowers/acceptance/justice-v6-s5-host-acceptance-record.md`
+- Existing; update only after authorized AC execution: `docs/superpowers/acceptance/justice-v6-s5-host-acceptance-record.md`
 - Reference only: Requirements R0.1、Issue #355/#356/#358/#388、S2-c限定レポート
 
 **Inputs:** D-S5-01〜07、AC-H01〜H03、既知制限、実Hostの承認済み対象情報。
@@ -78,7 +78,7 @@
 ### Task 2: Minimal Operation Runbookの安全境界を作成
 
 **Files:**
-- Create: `docs/superpowers/operations/justice-v6-s5-minimal-operation-runbook.md`
+- Existing; update only with Owner-authorized operations: `docs/superpowers/operations/justice-v6-s5-minimal-operation-runbook.md`
 - Read only: 既存OpenCode V2 Nativeフロー、S3-a/bの採択済み仕様と要件R0.1
 
 **Inputs:** 固定するHost/Version/Scope、保護対象、停止・切戻し境界。
@@ -103,7 +103,7 @@
 - `S2bRequest = { loaderInput, sourcePath, correlationPath }`。`S2bReportV1.adapter.status` は `REJECTED | LIMITED | PROJECTED`。`coverageCompleteness` は `NOT_ESTABLISHED`。
 
 - [ ] **Step 1 — Owner Host GO確認:** 対象Version・Operation・取得境界・秘密を固定。許可がなければ `NOT_RUN` と記録して終了。
-- [ ] **Step 2 — Source取得（Design指定のみ）:** 承認された隔離Hostから指定範囲だけ取得し、ローカル保存Source wrapper・明示Correlationを固定。コピーDigestと取得条件を記録。GitHubに生Message/Toolを送らない。Host APIの実操作は採択Designに指定された手順以外では実施しない。
+- [ ] **Step 2 — Source取得（Design指定のみ）:** 別途Ownerが承認した既存Hostの専用Sessionから実2.3.2の指定範囲のみを取得し、ローカル保存Source wrapper・明示Correlationを固定。コピーDigestと取得条件を記録。GitHubに生Message/Toolを送らない。Host APIの実操作は採択Designに指定された手順以外では実施しない。
 - [ ] **Step 3 — Offline検証:** 保存したSource wrapperとCorrelationを既存S2-bのValidation/Adapterに渡す。必要なOwner固定TaskIntent・Artifact Identityは独立の信頼源と照合。Source欠測、未確立Correlation、不正な入力を隠さない。
 - [ ] **Step 4 — 結果分類:** `REJECTED` なら誤受入れなしを確認し、AC-H01自体はPASSにしない。`LIMITED` / `PROJECTED` でもS1-d診断への到達、Task/Revision/Scope/AC帰属、欠測、`NOT_ESTABLISHED` を別々に記録する。単なるReport生成だけでHost完全性を認定しない。
 - [ ] **Step 5 — 証拠確定:** Evidence RecordにHost/Version/Operation、匿名化した入力参照・Digest、結果、Limitationsを記録。予定された必須保証が全部成立した場合のみAC-H01をPASS。
@@ -116,7 +116,7 @@
 - Update evidence only: `docs/superpowers/acceptance/justice-v6-s5-host-acceptance-record.md`
 - Read only: `src/runtime/s2b-input.ts`、`src/core/acceptance-decision.ts`、S1-b/c/d契約
 
-- [ ] **Step 1 — 安全な異常データ選定:** 承認した隔離Hostの**保存入力のコピー**のみを用い、(a) Task/Revision/Scope不一致、(b) Evidence欠測、(c) Authority不一致または未証明の3ケースを作る。Host既存Dataや原本Evidenceを上書きしない。
+- [ ] **Step 1 — 安全な異常データ選定:** 承認した既存Host専用Sessionの**保存入力のコピー**のみを用い、(a) Task/Revision/Scope不一致、(b) Evidence欠測、(c) Authority不一致または未証明の3ケースを作る。Host既存Dataや原本Evidenceを上書きしない。
 - [ ] **Step 2 — 予想境界の記録:** 各ケースの事前期待を「受入拒否/保留」「UNKNOWN・NOT_VERIFIED・NOT_PROVEN維持」「無関係Taskへ波及なし」と記述する。実際にHost実行前拒否を保証していない場合は対象外と明記。
 - [ ] **Step 3 — Owner実行GO後の検証:** 採択Designで許可した診断経路のみで評価し、対象外Sourceを流用してPASSにしない。想定外のAuthority書込みやGate/HOLD変更が生じる兆候があれば当該ケースを即時停止。
 - [ ] **Step 4 — 判定:** 不一致の誤受入れが観測されたらFAIL。証拠不足ならNOT_VERIFIED。安全に対象操作だけ保留できた実観測と、Host強制未証明の境界を両方記録する。
@@ -131,16 +131,16 @@
 
 - [ ] **Step 1 — 境界固定:** Ownerが承認した既存Host上の**単一プロセス/単一Writer/専用Durable State**だけを対象。再起動と失敗注入の可否・原状復帰策をDesignで固定。複数プロセス・外部Writerは対象外。
 - [ ] **Step 2 — 安全な局所状態作成:** 既存正当CorrelationとStaged履歴のあるケース、Decision永続化後に対応Lifecycleが欠けるケース、不正な重複Lifecycleのケースを採択Designに沿って準備。外部Tool呼出しや実副作用はReplayしない。
-- [ ] **Step 3 — 既存経路でのRestart観測:** 承認済み手順でプロセスを再起動し、Decisionと対応LifecycleのDurable Readback、Task/Plan Progressの非早期進行、重複遷移Fail-Closedを観測する。mock-I/Oの既存PASSを実Host観測に代入しない。
+- [ ] **Step 3 — 既存経路でのRestart観測:** `JusticePlugin.initialize()` のauthoritative restore条件と専用FileReader/FileWriter境界をOwner固定し、安全な失敗注入/Restart手順が別途承認された場合だけ専用プロセスを再起動し、Decisionと対応LifecycleのDurable Readback、Task/Plan Progressの非早期進行、重複遷移Fail-Closedを観測する。mock-I/Oの既存PASSを実Host観測に代入しない。
 - [ ] **Step 4 — 判定:** 整合状態の限定回復と、不整合時の非進行が双方確認できた場合だけAC-H03 PASS。観測できなければNOT_VERIFIED、実際に不正進行ならFAIL。任意状態の全面復元、外部Tool副作用の巻戻しは主張しない。
-- [ ] **Step 5 — 後片付け:** 承認済みの独立Hostの対象物のみCleanupし、既存Gate/HOLDや他のTaskを変更しない。証拠とCleanup範囲を台帳に記録する。
+- [ ] **Step 5 — 後片付け:** 承認済み既存Hostの**専用生成物Allowlistだけ**をCleanup対象とし、既存Gate/HOLDや他のTaskを変更しない。証拠とCleanup範囲を台帳に記録する。
 
 **Task exit:** 採択済み単一プロセスRecoveryの限定Host受入可否が記録される。S3-cや複数プロセス保証を追加しない。
 
 ### Task 6: Owner Completion Decision — 限定完成とOpt-in利用開始を分離
 
 **Files:**
-- Create: `docs/superpowers/decisions/justice-v6-s5-owner-completion-decision.md`
+- Existing Human Owner-only decision skeleton: `docs/superpowers/decisions/justice-v6-s5-owner-completion-decision.md`
 - Read only: Acceptance Evidence Record、Minimal Operation Runbook、Issue #355/#356/#358/#388
 
 **Produces:** `BOUNDED_COMPLETE` と `RELEASE_APPROVED` の独立判断、対象Host/Version/Scope、既知制限、署名/参照可能なOwner判断記録。
