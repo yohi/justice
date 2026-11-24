@@ -1,10 +1,10 @@
-# Justice v6 — Daily Development Assurance Integration Design R0.1.1
+# Justice v6 — Daily Development Assurance Integration Design R0.1.2
 
 > Status: `BASIC_DESIGN_OWNER_ADOPTED / LIMITED_DOCUMENT_CORRECTION / IMPLEMENTATION_NOT_AUTHORIZED / LIVE_NOT_AUTHORIZED`
 > Date: 2026-11-24 (JST)
 > Tracker: [#401](https://github.com/yohi/justice/issues/401); Parent: [#388](https://github.com/yohi/justice/issues/388)
-> Reviewed HEAD: `5d62f7cd1a096b292178c1ef19a0dbde4a7d1091`; Base: `0195966130fb06b93c5ad79601d563307fd8df11`; implementation baseline: `896acee25323c0e5b6dc97e0dd936efff1b9e434`.
-> R0.1.1はRG-001〜RG-004の限定文書訂正候補。既存のGoal・Owner採択済み基本方式・AC-D01〜08を維持する。今回の訂正は実装・Live・ReleaseのGOではない。追加の方式選定・独立レビューを自動開始しない。
+> Reviewed HEAD: `ddcf80b0e22d9c45343772390a22c4a911a388df`; Base: `0195966130fb06b93c5ad79601d563307fd8df11`; implementation baseline: `896acee25323c0e5b6dc97e0dd936efff1b9e434`.
+> R0.1.2はR0.1.1に対するRG-001の最終限定文書訂正候補（TERMINAL返却前のBinding再検証とProduction wiringの統一のみ）。RG-002〜004の訂正を保全し、再openしない。既存のGoal・Owner採択済み基本方式・AC-D01〜08を維持する。今回の訂正は実装・Live・ReleaseのGOではない。追加の方式選定・独立レビューを自動開始しない。
 
 ## 1. Purpose / Goal
 
@@ -62,7 +62,7 @@ Superpowers inline executing-plans -> direct begin
 - 固定HostはS5のcoreultra7-270k・OpenCode 2.3.2、binary SHA-256 `e6543f6e5c39c40971ba38afd1819ac852c29ac735b5a89065d3d148d47f27ad`。Task 6でOwnerが実際の実行binary・staged plugin・起動境界を事前固定。PluginはLinux `/proc/self/exe` のSHA-256とOwner packageの期待値を照合する。実行形態によりこの照合が成立しなければOFF、別の信頼経路を自動採用しない。Skill名は `executing-plans`、実Info.id/path/content digestも固定する。
 - Session IDは実行前に実在する専用SessionをOwnerが確保し、IDを固定してから承認する。必要な場合はDaily OFFの専用HostでSessionだけを作成し停止、承認packageをmountして同じ専用Stateで起動する（Task 6の別GO内。Taskを先に実行しない）。専用Sessionは親なし、他Task実行済みでないことをOwnerが確認し、begin時Native Sourceを確認。`context.location.directory` と `realpath`/Git rootは固定worktreeRootと一致、開始HEADはbaseCommit、tracked/index/nonignored untrackedはcleanであること。初回の専用worktreeは独立した専用repository/checkout（共有Git metadataへのリンクなし）に限定し、共有Git metadata・object storeを変更しない。artifactsはworktree外の固定mountからのみ読む。
 - Host側の事前条件: Ownerが管理する専用起動、変更不能なread-only mount、専用loopback API、専用State、共有Credential不可視、agentにmount変更/Host管理権限を付与しない。Runtimeで `/proc/self/mountinfo` の該当mountのroとnested mountなしを確認し、pathを固定しsymlink/非regular file/相対逸脱を拒否。安全なbounded read、file stat前後比較、raw digestを使用。設定・digest・対象不一致、境界が確認できない場合はOFFまたはUNAVAILABLE。環境・同一UID敵対プロセス・OS権限に対する完全な耐改変証明ではない。Ownerがこの信頼境界を用意できない場合は実運用不可。
-- Production wiring: `createJusticeV2Plugin.setup(context)` は既存`justice_review`を先に登録し、固定環境変数/固定mountのみから `loadDailyOwnerConfig` を呼び出す。READYの場合だけ `createProductionDailyPorts(context, config)` を構築する（既存read-only検証、固定loopback Native GET、固定 `/usr/bin/git` read-only port、同じ承認packageの再照合）。`prepareDailyBinding` はこのconfigとportだけを使用する。manifest/intent/artifactsの選択bytesはprivate snapshotへコピーし、既存 `loadS1aArtifacts` + `createCapturedS1aSource` + `extractTaskScopePolicy` で検証。`identityCandidateReady=true`・digest一致・構造化Scope Policy READYを要する。`eligibleBaseline=false` と `NOT_PROVEN` は維持。begin/finish直前・診断公開直前に同一package/digest/Identityを再照合する。変更検出時はBinding invalid、両診断非評価。
+- Production wiring: `createJusticeV2Plugin.setup(context)` は既存`justice_review`を先に登録し、`createProductionDailyPorts(context)` を呼び出す。同関数がPlan T5の既存契約に従って固定環境変数をcaptureし、固定mountの `loadDailyOwnerConfig` による読込み・検証、Runtime検証、Production portの構築を担う。READYの場合だけDaily登録へ進み、OFFの場合は既存登録のみを維持する（既存read-only検証、固定loopback Native GET、固定 `/usr/bin/git` read-only port、同じ承認packageの再照合）。`prepareDailyBinding` はこのconfigとportだけを使用する。manifest/intent/artifactsの選択bytesはprivate snapshotへコピーし、既存 `loadS1aArtifacts` + `createCapturedS1aSource` + `extractTaskScopePolicy` で検証。`identityCandidateReady=true`・digest一致・構造化Scope Policy READYを要する。`eligibleBaseline=false` と `NOT_PROVEN` は維持。begin/finish直前・診断公開直前に同一package/digest/Identityを再照合する。TERMINALでcached Advisoryを返す直前にも、既存 `verifyDailyBinding(binding, ports.preflight, signal)` を使用し、Owner package / 外部固定digest、Runtime identity、Manifest / Intent、Selected Artifact bytes / digest、Scope Policyを同じ固定入力と現在のread-only供給元で再検証する。private snapshotの自己照合だけで済ませない。Binding不一致・検証不能時は `UNAVAILABLE / BINDING_INVALID` とし、両診断非評価の新しい安全な結果を返す。stale Advisoryを有効な結果として返さない。Native Evidence・Git ChangeSetの再収集、S1-d再診断、Task再実行、新規再検証機構、初回clean baseの再要求は行わない。
 - AI向けToolは固定 `justice_task_begin` と `justice_task_finish`、直接公開 `options:{codemode:false}`。begin引数は空objectのみ、finishはbeginが返した `bindingKey` のみ。実Session/Message/Call IDとAbortSignalはSDK ToolContext由来。Task/Scope/AC/承認情報/port/パスをToolから供給・変更できない。`bindingKey` はapproval digestそのもの（秘密/認証tokenではなく、単なる相関キー）とする。固定Session/状態照合を省略しない。
 - Test seamは内部factoryへの型付きport注入だけ。Production default exportは固定constructorを使用する。fixtureの `READY` / mock trust / mock Sourceを実Hostの承認や実証と混同しない。source code、test、artifactの改変やPlugin自体の敵対的置換は別の信頼境界。
 
@@ -105,14 +105,14 @@ Task境界は固定Skillの明示的な直接Tool呼出し（inline executing-pl
 | ACTIVE | finish | 同期的にFINISHINGへseal。unfinished/競合を検出した場合も再試行せずLIMITED/UNAVAILABLE。 |
 | FINISHING | observe / finish | 後述epoch監視。正しい同一要求は既存Promise共有。新Call IDの並行finishは境界不確実、LIMITED。 |
 | FINISHING | settle | TERMINALへ一度だけ。diagnosis結果は候補報告であり正式完了でない。 |
-| TERMINAL | finish | 同一bindingKey/Sessionならキャッシュ結果、後着の観測があればその結果をLIMITEDにdowngradeして返す。再診断なし。新begin不可。 |
+| TERMINAL | finish | 同一bindingKey/Sessionでも§4.1の既存verifyDailyBindingがOKの場合だけ有効なcached Advisoryを返す。後着の観測があれば既存規則でLIMITEDへdowngrade。不一致・検証不能はUNAVAILABLE/BINDING_INVALID（旧結果を返さない）。再収集・再診断なし。新begin不可。 |
 | any | dispose | DISPOSED、abort、追加登録解除。新規処理なし、再起動時に旧bindingを再開しない。 |
 
 - begin/observe/finish/disposeの型とreason codesはPlan Task 5を正本とする。すべてのstate/active map/epoch/cached promise更新は最初のawaitより前の同期区間で行う。foreign SessionのcontrolはUNAVAILABLE、対象Sessionの状態を変更しない。境界controlはbegin/finishのみ。justice_reviewはAC非対象だが通常Toolと同様にin-flight観測する。対象Session外の独立Toolは無関係として非帰属。子Sessionを起動するTaskは非対象で、観測されたchild/delegationは境界不確実。
 - ARMEDからbefore/afterを追跡し、開始前ToolはAC候補にしない。begin時、他のactive Toolがなく、初回Sourceの全pageが連続、現在のbegin part以外にrunning/streamingなし、begin messageが一意で他Toolなし、親/他Task履歴なしを確認。Skill読込等の事前準備はprefixとして除外。beginのafterはcontrolとして識別。STARTING中の新規非control Toolはtaint。開始前完了partとbegin markerを記録し、古いToolの遅延afterを候補にしない。ACTIVEのbefore/afterは同一ID tupleを厳密照合。観測4096件上限（before+after合計、control含む）。cap超過、unknown/contradictory after、alias変更、欠落を境界不確実として記録。
 - finish開始時にactive mapの非controlが空、begin controlがsettled、finish自身以外のcontrolなしが必要。before/after hookに加え、固定loopback `GET /api/shell?location%5Bdirectory%5D=<encoded fixed worktreeRoot>` のrunning shell listをbegin時とfinish前後で確認し空を要求。レスポンスは1MiB上限、5秒、正しいLocation wrapper/data配列のみ。追加のURL/出力取得・shell停止はしない。SDK/Native statusにより不明なら境界不確実。Tool完了がshell終了とは限らない（Native shell timeoutはbackgroundに移行し得る）。
 - finishは観測epochをsealし、Source snapshot A、Git snapshot、Source snapshot Bを一度ずつ固定順に取得。2回のSource snapshotは同じSession、同じ連続Message ID順・raw message page bytes（wrapper時刻を除く）、begin/finish marker、一意のdirect finish part、他のnonterminal Toolなしを要する。finish自身はrunningを許容する唯一のpartでありEvidenceから除外。finish messageに他Toolがある、begin/end markerがない、prefix矛盾、Source未確定、観測中に非controlのbefore/afterが到着、active call残存、shell list不明/非空、child/background/compaction/location changeで境界不明なら `BOUNDARY_UNCERTAIN`。新規polling、sleep、retry、idle-as-finishを設けない。Sourceは各30秒、Gitは30秒、finish全体90秒以内（超過でAbort）。
-- 境界不確実のためにEvidenceを信頼できない場合は、そのEvidenceをUNAVAILABLE扱いにして独立Git Scopeのみ§4.4に従う。Gitも静止/Identityが不明ならUNAVAILABLE。既に妥当に得たGit候補逸脱は欠測により消さない。観測結果が一度返却された後にlate hookを受けた場合、過去の結果は観測点時点の候補報告としてのみ扱い、TERMINALをtaintして後続照会はLIMITED。返却済み情報を撤回できないことを明記する。永続的なTask完了/承認状態を作らず、後から発生する全操作やOSレベルの子processまで保証しない。
+- 境界不確実のためにEvidenceを信頼できない場合は、そのEvidenceをUNAVAILABLE扱いにして独立Git Scopeのみ§4.4に従う。Gitも静止/Identityが不明ならUNAVAILABLE。既に妥当に得たGit候補逸脱は欠測により消さない。観測結果が一度返却された後にlate hookを受けた場合、過去の結果は観測点時点の候補報告としてのみ扱い、TERMINALをtaintして後続照会はBinding再検証OKを前提にLIMITED（既存UNAVAILABLEは維持）。返却済み情報を撤回できないことを明記する。永続的なTask完了/承認状態を作らず、後から発生する全操作やOSレベルの子processまで保証しない。
 - AbortSignalはToolContext.signalとcoordinator lifetimeを結合し、キャンセル対応I/Oへ伝播。既存S1-aの非キャンセル型bounded file readは前後チェックし、中断後の結果を破棄する（既に発行済みOS I/Oの即時停止は保証しない）。中断で診断公開を抑止し、キャッシュをUNAVAILABLE/ABORTEDへ固定。disposeは同期的にDISPOSEDへ移行・abort、new work拒否。setupの追加登録順は before hook → after hook → daily control tool transform → skill transform。解除順は逆（skill → daily tool → after → before）。部分setup失敗も成功済みhandleだけ逆順disposeし、既存justice_reviewを残す。追加登録のcleanup失敗は固定コードで内部状態を記録し、利用可能な既存経路に限って通知する。通知経路のない場合は実Host確認でcleanup未確認として扱い、対象runtimeをOwnerのStop手順で停止する判断材料にする。強制Host停止は実装しない。Plugin全体unload時のみ既存handleを最後に解除。
 
 ### 4.4 Daily partial diagnosis — RG-004: independent Git scope
@@ -168,6 +168,6 @@ T1〜5のOffline TDDとT6の実Host確認を分離し、AC-D01〜08を実証す�
 
 ## 7. Implementation plan
 
-[Implementation Plan R0.1.1](../plans/2026-11-24-justice-v6-daily-assurance.md) に具体的な型・Port・Reason・RED/GREEN・commit境界を定義する。#401の原R0.1とReviewed HEADは履歴のまま保全する。
+[Implementation Plan R0.1.2](../plans/2026-11-24-justice-v6-daily-assurance.md) に具体的な型・Port・Reason・RED/GREEN・commit境界を定義する。#401の原R0.1とReviewed HEADは履歴のまま保全する。
 
 RG-001→§4.1 / T1,T5、RG-002→§4.2 / T2、RG-003→§4.3 / T5、RG-004→§4.4 / T4。設計・Planの訂正後はHuman Owner Checkpointで停止する。独立レビュー・実装・Host実行・Releaseの自動開始なし。
