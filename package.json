@@ -23,8 +23,8 @@
       "types": "./dist/opencode-plugin.d.ts"
     },
     "./server": {
-      "import": "./dist/opencode-v2-plugin.js",
-      "types": "./dist/opencode-v2-plugin.d.ts"
+      "types": "./dist/opencode-v2-server.d.ts",
+      "import": "./dist/opencode-v2-plugin.js"
     },
     "./core": {
       "import": "./dist/index.js",
@@ -76,7 +76,13 @@
   },
   "peerDependencies": {
     "@opencode-ai/plugin": "^1.14.21",
+    "@opencode/plugin": "2.3.2",
     "typescript": "^6.0.2"
+  },
+  "peerDependenciesMeta": {
+    "@opencode/plugin": {
+      "optional": true
+    }
   },
   "dependencies": {
     "effect": "4.1.0",
