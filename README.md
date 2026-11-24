@@ -160,6 +160,25 @@ export default { plugins: [OpenCodePlugin] };
     }
     ```
 
+### OpenCode V2 プラグイン (`@yohi/justice/server`)
+
+OpenCode V2 SDK (`@opencode/plugin@2.3.2`) 向けのエントリは `@yohi/justice/server` です。
+
+- `@opencode/plugin` は optional peerDependency のため自動インストールされません。V2 利用者は `@opencode/plugin@2.3.2` を明示的にインストールしてください。
+- NodeNext で型チェック (`skipLibCheck: false`) する場合は `@types/json-schema@7.0.15` も追加してください。SDK の依存 `@ai-sdk/provider@3.0.8` がこの型依存を宣言していないためです (TS7016)。
+- V1 利用者 (`@yohi/justice` / `@yohi/justice/opencode`) には影響しません。
+- 既知の制限:
+  - V2 エントリが公開する機能は `justice_review` ツールのみです。本 README 中の V1 の機能説明 (`/justice-start`、`/justice-implement`、各種フック、Gate 評価の自動発火など) は V2 には当てはまりません。
+  - V2 の Context には承認チャネルがないため、`justice_review` の `resolve` による解決要求は常に拒否されます (fail-closed)。利用できるのはレビュー要約の閲覧のみです。
+  - `/justice-*` コマンドと、`task()` 実行前の制御 (implementation arm など) は利用できません。実行前強制は提供していません。
+  - 実際の OpenCode ホスト (v2.3.2) でのプラグインロードは未検証です。ロード可否や実行時の互換性は保証されません。
+  - `./server` の型は default export のみを公開します (`createJusticeV2Plugin` は型付けされていません)。
+
+```bash
+npm install @yohi/justice @opencode/plugin@2.3.2
+npm install --save-dev @types/json-schema@7.0.15
+```
+
 ### ライブラリとして利用する場合（v3.0.0 以降）
 
 `@yohi/justice` の root specifier は v3.0.0 で **OpenCode プラグイン専用エントリ** に変更されました。ライブラリとして named export を利用する場合は `@yohi/justice/core` から import してください。
