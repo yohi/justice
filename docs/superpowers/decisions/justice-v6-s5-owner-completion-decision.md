@@ -1,14 +1,14 @@
 # Justice v6 S5 Owner Completion Decision
 
 This document is a decision record for the Human Owner. It is not a runtime
-approval object, a Gate state, or a product status field. The AI never fills
-an approved value: both Decision fields in section 4 stay `PENDING` until the
-Human Owner enters a decision.
+approval object, a Gate state, or a product status field. The AI does not make Owner decisions. Section 4 records only the explicit
+Human Owner decisions received; the Owner-only entry area remains reserved
+for the Human Owner.
 
 Current state (2026-11-24): the required acceptance criteria AC-H01, AC-H02
 and AC-H03 are **`PASS`, formally adopted by the Human Owner**, and the H3
-limited V2 plugin runtime check is `PASS`. **`BOUNDED_COMPLETE` is not
-adopted** (`PENDING`) and **`RELEASE_APPROVED` is not established**
+limited V2 plugin runtime check is `PASS`. **`BOUNDED_COMPLETE=APPROVED`** for the adopted bounded S1/S2/S3 scope
+and demonstrated dedicated operation and **`RELEASE_APPROVED` is not established**
 (`PENDING`). Without `RELEASE_APPROVED`, nothing is introduced. E1/E2/E3
 remain `HOLD`. No Source change was made for this record.
 
@@ -37,11 +37,12 @@ by contract and are not AC outcomes.
 | Evidence and diagnostic results attributed to the target | **Met** | AC-H01 attribution via the pre-execution Owner-fixed TaskIntent (task/ac R2) and the pre-fixed Correlation rule. Evidence reuse and provenance in acceptance record section 3. |
 | Known limitations and unverified items stated | **Met** | Section 2 below; acceptance record section 5; runbook section 8 |
 | Opt-in, stop and rollback procedures exist without bypassing required protections | **Met for the demonstrated dedicated environment** | Runbook sections 4–7. The H3RT demonstration covered dedicated config registration, plugin load, process-identity stop by PID-namespace teardown, config rollback by digest, and non-interference. Real-provider, networked or credentialed environments were not demonstrated (residual risk; mainly relevant to the Opt-in decision). |
-| Human Owner explicit decision on bounded completion | **Not entered** | Section 4 |
+| Human Owner explicit decision on bounded completion | **Met** | Explicit approval on 2026-11-24, recorded in section 4 |
 
-No technical condition is unmet. The remaining condition is the Human Owner's
-explicit bounded-completion decision. Opt-in (`RELEASE_APPROVED`) is
-independent of it.
+The Human Owner adopted bounded completion on 2026-11-24 within the
+demonstrated scope above. Opt-in (`RELEASE_APPROVED`) remains independently
+`PENDING`. This is not a declaration of full V2 workflow parity, daily
+operation readiness, or publication of v6.0.0.
 
 ## 2. Residual risks and known limitations
 
@@ -84,8 +85,30 @@ Allowed values: `APPROVED`, `NOT_APPROVED`, `PENDING`.
 
 | Decision | Value |
 | --- | --- |
-| Bounded completion | `PENDING` |
+| Bounded completion | `APPROVED` |
 | Opt-in release | `PENDING` |
+
+### Recorded explicit Owner decision (2026-11-24 JST)
+
+Record reference: `JV6-S5-OWNER-COMPLETION-20261124` (a record identifier,
+not a cryptographic attestation). Following confirmation that PR #400 was
+merged at `bf7a91cacb91ad16a2da5be5a0d523004edcd695`, the Human Owner
+explicitly replied `承認します` to the proposed decision set:
+
+- S2: bounded acceptance APPROVED; #355 closed as completed, retaining
+  `COMPARISON_NOT_ESTABLISHED` and all known limitations.
+- S4: deferred outside this bounded completion; #357 remains OPEN as a future
+  scope candidate. No design or implementation authorization is granted.
+- S5: `BOUNDED_COMPLETE=APPROVED`, restricted to the fixed target and
+  demonstrated dedicated operation in sections 1–3; #358 closed as completed.
+- `RELEASE_APPROVED=PENDING`; E1/E2/E3 remain HOLD. No Opt-in, deployment,
+  package publication, release or new execution is approved.
+- #388 remains OPEN to track the remaining overall v6.0.0 decisions.
+
+This subsection transcribes the externally supplied explicit Owner decision;
+it does not invent a signature or fill the Owner-only entry area below.
+The acceptance record and runbook merged in PR #400 preserve their
+publication-time state; this section records the subsequent decision.
 
 ### Owner entry area (Human Owner only)
 
