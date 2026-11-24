@@ -1,4 +1,5 @@
 import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Plugin } from "@opencode/plugin";
 import type { ToolContext, ToolEditor } from "@opencode/plugin/promise/tool";
@@ -9,8 +10,8 @@ import { ObservationLogStore } from "../../src/runtime/observation-log-store";
 import { OpenCodeAdapter, type OpenCodePluginInit } from "../../src/runtime/opencode-adapter";
 import { createMemFs } from "../helpers/mock-file-system";
 
-// Temp dirs are confined to the isolated H3 scratch root; no real host is involved.
-const SCRATCH_TMP = "/tmp/justice-h3-tdd-672f7c35/tmp";
+// Temp dirs live under the OS temp dir; no real host is involved.
+const SCRATCH_TMP = tmpdir();
 
 type AddedTool = Parameters<ToolEditor["add"]>[0];
 
