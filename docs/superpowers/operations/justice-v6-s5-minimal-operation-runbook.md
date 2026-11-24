@@ -1,134 +1,174 @@
 # Justice v6 S5 Minimal Operation Runbook
 
-This document defines the safety boundary for a future, Owner-approved Opt-in
-of Justice v6. It is an operation runbook skeleton for the Human Owner. It is
-not a runtime approval object, a Gate state, or a product status field.
+This runbook defines the bounded operation of Justice v6 that has actually
+been accepted and demonstrated in S5. It is guidance for the Human Owner, not
+a runtime approval object, a Gate state, or a product status field.
 
-Current state: **D-S5-08 Design adopted; bounded S2-b Source/Test implementation Owner-authorized and COMMITTED at `204567a`; positive P-04 test `v232PositiveTwoPageCursorChainCompletes` ADDED at `fa90f9d`. Vitest/typecheck/lint NOT_RUN and result NOT_VERIFIED. Further Source/Test/CI changes and test execution require new Owner approval; Host GO HOLD, AC-H01/H02/H03 NOT_RUN, Completion/Release PENDING.**
-No real-Host acceptance has been run (see the sibling acceptance record). This
-runbook therefore contains no enable command and no destructive Cleanup
-command. Every Host or Version value that has not been fixed is recorded as
-`未固定` (not fixed; to be fixed by S5 Design). Actual Opt-in start requires a
-separate Owner approval.
+Current state (2026-11-24): AC-H01, AC-H02 and AC-H03 are `PASS` (Human Owner
+adopted). The H3 limited V2 plugin runtime check is `PASS`. **Opt-in has not
+been approved** (`RELEASE_APPROVED=PENDING`), so nothing is enabled by this
+runbook. Default is OFF.
+
+Only operations that S5 evidence actually demonstrated are described as
+available. Anything else is listed as unsupported or unverified. This runbook
+does not establish any new execution method.
 
 Related documents:
 
-- Acceptance record:
-  `docs/superpowers/acceptance/justice-v6-s5-host-acceptance-record.md`
-- Requirements:
-  `docs/superpowers/specs/2026-11-17-justice-v6-s5-operation-completion-brainstorming-requirements.md`
-  (D-S5-03 explicit Owner Opt-in, D-S5-04 fail-closed with limited blast
-  radius; historical D-S5-05 independent Host was superseded for this acceptance by D-S5-08)
+- Acceptance record: `docs/superpowers/acceptance/justice-v6-s5-host-acceptance-record.md`
+- Owner decision: `docs/superpowers/decisions/justice-v6-s5-owner-completion-decision.md`
+- Requirements: `docs/superpowers/specs/2026-11-17-justice-v6-s5-operation-completion-brainstorming-requirements.md`
+  (D-S5-03 explicit Owner Opt-in, D-S5-04 fail-closed with limited blast radius, D-S5-08 existing Host)
 
-## 1. Prerequisites (all must hold, otherwise do not operate)
+## 1. Target of the bounded operation
 
-If any item is not satisfied, or cannot be confirmed, the operation is
-prohibited. Absence of confirmation is never read as satisfaction.
+| Item | Value |
+| --- | --- |
+| Host | Existing Ubuntu `coreultra7-270k` (D-S5-08 logical separation) |
+| OpenCode | V2.3.2, real binary SHA-256 `e6543f6e5c39c40971ba38afd1819ac852c29ac735b5a89065d3d148d47f27ad` |
+| Justice | master `896acee25323c0e5b6dc97e0dd936efff1b9e434` |
+| V2 plugin Artifact | Package directory containing the `896acee2` `package.json` and the isolated build's `dist/`. `exports["./server"]` points to `dist/opencode-v2-plugin.js`, SHA-256 `b2130a6d27e04a460ef3c7340994b703121b5cd001a2cbb78ad0b9165da0b855`. |
+| Scope | Adopted bounded S1, S2, S3 (D-S5-01) |
+| Demonstrated functions | (a) `justice_review` through OpenCode V2 Native **Code Mode**: view the review summary; resolve is denied fail-closed. (b) Existing S2-b Offline READ_ONLY Adapter → S1-d diagnostic over a saved Source wrapper and explicit Correlation, run outside OpenCode. (c) S3-b single-writer Decision/Lifecycle consistency recovery of the Justice core (`JusticePlugin.initialize()`), demonstrated with the T14/T16 harness. |
 
-| Item | Required condition | Current value |
+Important scoping of (c): the V2 entry registers only `justice_review`. It
+does not port the V1 hooks that produce task lifecycle and review events. In
+an OpenCode V2 session, S3-b recovery is therefore a bounded guarantee of the
+Justice core when it initializes over existing durable state. It is not an
+active V2 workflow.
+
+## 2. Prerequisites for Opt-in (all must hold; otherwise do not operate)
+
+Absence of confirmation is never read as satisfaction.
+
+| Item | Required condition | Status |
 | --- | --- | --- |
-| Host | D-S5-08 existing Ubuntu `coreultra7-270k`; dedicated Workdir/Session/Fixture/Private Evidence; logical-only, not OS isolation | Owner-observed candidate; exact identity and writable boundaries NOT_FIXED |
-| Version | Real 2.3.2 executable SHA and truthful Source wrapper; S2-b exact 2.2.5/2.3.2 Source code COMMITTED at `204567a`, but Vitest/typecheck/lint NOT_RUN and P-04 positive 2.3.2 test `v232PositiveTwoPageCursorChainCompletes` ADDED in `fa90f9d`, NOT_RUN / NOT_VERIFIED | 2.3.2 Owner-observed; binary hash NOT_MEASURED; Host GO HOLD |
-| Scope | Accepted bounded range only (candidate: S1, S2, S3 per D-S5-01) | 未固定 |
-| Default | OFF; nothing is installed or enabled automatically | OFF |
-| Owner permission | Explicit Human Owner approval of the use scope (D-S5-03), recorded as a reference | None |
-| Acceptance | AC-H01 to AC-H03 recorded as `PASS` with `observed` or `derived` evidence | All `NOT_RUN` |
-| Secrets | No inherited/existing credentials read, transferred, exported or logged; **absence of inherited Host secrets is not proved** | NOT_VERIFIED |
-| Network | Only Owner-fixed endpoints/direction/time and effective controls; XDG/`--standalone` does not enforce network deny | NOT_FIXED / HOLD |
-| Side effects | Allowed side effects stated explicitly; Live Tool side effects are not replayed | 未固定 |
-| Operation | The target Operation is named explicitly | 未固定 |
-| Existing flow | The normal Superpowers / OpenCode V2 flow is not changed unnecessarily | Required |
+| Acceptance | AC-H01..H03 `PASS` with `observed`/`derived` evidence | Met (Owner adopted 2026-11-24) |
+| Owner Opt-in | Explicit Human Owner approval naming Host, Version, Scope and Operation (D-S5-03) | **Not given** (`RELEASE_APPROVED=PENDING`) |
+| Host / Version | Host above. The OpenCode binary SHA-256 must match before every start. | Fixed |
+| Artifact identity | `dist/opencode-v2-plugin.js` SHA-256 `b2130a6d…` verified before start; staged directory read-only during use | Fixed |
+| Dedicated config/state | Dedicated `XDG_CONFIG_HOME`/`XDG_DATA_HOME`/`XDG_STATE_HOME`/`XDG_CACHE_HOME` and `TMPDIR`; `JUSTICE_GLOBAL_WISDOM_PATH` inside the dedicated root; dedicated workspace for the local `.justice`; never the shared OpenCode config/state or `~/.justice` | Pattern demonstrated (H3RT) |
+| Network / credentials | The demonstrated boundary has no external network, no credentials, and a loopback mock/scripted provider only. Any real LLM provider requires network egress and credentials, which S5 did not demonstrate. | Demonstrated only without network/credentials |
+| Default | OFF; nothing is installed into the shared OpenCode setup | OFF |
 
-## 2. Explanatory states
+## 3. Explanatory states
 
-The sequence below is an **operational explanation only**. It is not a new
-Justice Runtime state, not a persisted schema, and must not be implemented as
-one. It helps the Owner tell Opt-in, Stop and Rollback apart.
+Operational explanation only; not a Justice runtime state or schema.
 
 ```text
 PREPARED -> ACCEPTANCE_VERIFIED -> OPT_IN_APPROVED -> ENABLED -> STOPPED / ROLLED_BACK
 ```
 
-| Explanatory state | Meaning | Owner decision needed to leave it |
+| State | Current | Leaving it requires |
 | --- | --- | --- |
-| PREPARED | Section 1 prerequisites are being collected; nothing is enabled | Prerequisites complete |
-| ACCEPTANCE_VERIFIED | AC-H01 to AC-H03 `PASS` is confirmed against the fixed Host, Version and Scope | Owner reviews evidence and known limitations |
-| OPT_IN_APPROVED | The Owner explicitly approved use for the stated Host, Version, Scope and Operation. This is a separate decision from `BOUNDED_COMPLETE` | Start of use is a further explicit step |
-| ENABLED | Use is active inside the approved boundary only | Stop or Rollback trigger |
-| STOPPED | Use is paused; protection boundaries are kept; state is retained | Owner decision to resume or roll back |
-| ROLLED_BACK | The approved boundary has been returned to the pre-Opt-in condition | Owner decision on any re-Opt-in |
+| PREPARED | done | — |
+| ACCEPTANCE_VERIFIED | **current** (AC-H01..H03 `PASS`) | Owner Opt-in decision |
+| OPT_IN_APPROVED | not reached | Owner records Host / Version / Scope / Operation and the environment boundary |
+| ENABLED | not reached | Start by the procedure in section 4 only |
+| STOPPED / ROLLED_BACK | — | Owner decision to resume or re-Opt-in |
 
-Procedure per state (no concrete commands are given until S5 Design and Owner
-approval are fixed):
+## 4. Enable procedure (demonstrated pattern; only after Owner Opt-in)
 
-1. PREPARED: fill the Target identity of the acceptance record. Leave any
-   unmeasured value as `未固定`.
-2. ACCEPTANCE_VERIFIED: confirm each required AC is `PASS`, that no `declared`
-   evidence supports a PASS, and that the known limitations are disclosed. If
-   any AC is `NOT_RUN`, `FAIL` or `NOT_VERIFIED`, do not proceed.
-3. OPT_IN_APPROVED: the Owner records an approval reference naming Host,
-   Version, Scope and Operation. Approval of one Host or Version does not
-   extend to another.
-4. ENABLED: the enable procedure is **not defined here**. It is to be fixed by
-   S5 Design and a separate Owner approval. Until then, do not enable.
-5. STOPPED: stop use and hold the affected operations per section 3. Do not
-   bypass protection boundaries to stop faster.
-6. ROLLED_BACK: the rollback procedure is **not defined here**. It is to be
-   fixed by S5 Design and a separate Owner approval. Until then, do not run any
-   destructive Cleanup. If rollback is not possible, hold the affected targets
-   and request an Owner decision (see section 3).
+This is the pattern demonstrated in H3RT. Do not substitute other mechanisms
+as if they were verified.
 
-## 3. Stop table (fail-closed with limited blast radius)
+1. Verify the OpenCode binary SHA-256 and the V2 Artifact SHA-256.
+2. Use a dedicated root that holds the config, data, state, cache, tmp,
+   workspace and global-wisdom paths. Check that it is owner-only (`0700`), has
+   no symlinks and does not overlap shared state.
+3. Save the dedicated `opencode.json` byte-exact and record its SHA-256 as the
+   rollback point.
+4. Register the plugin with the **absolute path of the staged package
+   directory**: `"plugins": ["<absolute staged dir>"]`. OpenCode v2.3.2 accepts
+   only directories here; a file path is rejected. The loader resolves
+   `@yohi/justice/server` first; a fallback to the V1 root entry is not
+   acceptable.
+5. Start OpenCode with the dedicated environment only (`env -i` style
+   allowlist). Do not attach to or reuse the shared OpenCode V2 service.
+6. Confirm `GET /api/plugin` reports `id=justice`, `source.type=local`, the
+   staged path, and `status=active`. `active` alone does not prove the tool was
+   registered (setup is fail-open). Confirm `justice_review` appears in the
+   Code Mode catalog.
 
-Host pre-execution enforcement is **not proven**. Justice has not been shown to
-be able to force-stop Host execution before it happens, so no safety guarantee
-that depends on such enforcement is claimed. The holds below are Justice-side
-non-acceptance and non-progression, not proof that Host execution was
-prevented.
+The bwrap user/net/pid/ipc isolation used in H3RT is the **verification
+isolation**. Running with network egress, credentials or a real provider is
+an environment change that S5 has not demonstrated. It requires the Owner's
+explicit Opt-in decision covering that boundary.
+
+## 5. Usage (demonstrated paths only)
+
+| Function | How | Notes |
+| --- | --- | --- |
+| Review summary | Inside OpenCode Code Mode `execute`: `return await tools.justice_review({})` (optionally `{ scope: "<scope>" }`) | Read-only view of the local Observation Log projection. On first use Justice initializes lazily and writes the dedicated workspace `.justice/state.json`. |
+| Review resolve | `tools.justice_review({ scope, resolve: { itemKeys, artifactRef } })` | **Always denied** in V2 (`Review resolution was not approved.`), because the V2 ToolContext has no approval channel. Findings stay open. |
+| S2-b / S1-d diagnostic | Existing `runS2bOfflineAdapter` over a saved `justice-s2b-source-v1` wrapper, an explicit `justice-s2b-correlation-v1` Correlation, and an Owner-fixed Manifest/TaskIntent (as in T12/T16) | Offline READ_ONLY. Fix the TaskIntent and Correlation rule **before** acquiring a Source; post-execution mapping does not establish attribution. |
+
+Not available in V2 (do not describe as usable): `/justice-*` commands,
+`justice_start` / implementation arm, V1 hooks (`event`, `chat.*`,
+`tool.execute.before/after`, `command.execute.before`), Host pre-execution
+enforcement, and resolve approval.
+
+## 6. Stop and rollback (demonstrated in H3RT)
+
+1. **Identify only the dedicated unit.** Record the supervisor/bwrap PID, its
+   start time and executable, and the PID-namespace inode of the dedicated
+   unit. Never select targets by process name, binary path or arguments
+   alone. Shared OpenCode V2 processes use the same binary path.
+2. **Stop.** Terminate the dedicated server and helpers inside the unit, then
+   let the PID namespace tear down. Afterwards, verify that no process remains
+   in the recorded namespace and that none has its cwd under the dedicated
+   root. If the identity cannot be confirmed, send no signal and hold
+   (fail-closed).
+3. **Roll back the config.** Restore the saved `opencode.json` bytes
+   atomically and verify the SHA-256 against the rollback point.
+4. **Preserve state.** Keep the dedicated state and evidence. Delete nothing
+   without a separate Owner decision.
+5. **Non-interference.** Confirm that shared OpenCode processes (PID and start
+   time) and `~/.justice/wisdom.json` are unchanged. Changes in shared OpenCode
+   data directories may come from concurrently running shared instances. Do not
+   attribute them to Justice without evidence.
+
+## 7. Stop table (fail-closed with limited blast radius)
+
+Host pre-execution enforcement is **not proven**. The holds below are
+Justice-side non-acceptance and non-progression, not proof that Host execution
+was prevented.
 
 | Condition | Affected target | Operations stopped or held | Independent normal work may continue when |
 | --- | --- | --- | --- |
-| Source missing | The Task / Plan whose Evidence depends on that Source | Success認定 (success is not asserted); Evidence stays `UNKNOWN`; Gate PASS for that target is not issued | The work does not depend on the missing Source and its safety is independent |
-| Authority mismatch | The approval or state change that lacked matching Authority | That approval or state change is rejected or held; no substitute self-declared approval is accepted | The work needs no approval or state change from the mismatched Authority |
-| Lifecycle inconsistency (Decision vs Lifecycle, Recovery mismatch) | The affected Task / Plan | Progression of that Task / Plan is held | Other Tasks / Plans do not share the inconsistent Decision / Lifecycle |
-| Diagnostic display failure | Diagnostic output only | Reliance on the failed diagnostic output; any conclusion that needs it | Work is safety-independent of the diagnostic output (display errors do not by themselves stop it) |
-| Unexpected side effect | The Operation and any target it touched | The Operation is stopped; no Live Tool side-effect Replay is attempted; Owner is informed | The work is isolated from the touched target and the Owner confirms the boundary |
-| Rollback impossible | Everything affected by the failed rollback | Affected targets are held; no further destructive action is taken | Only targets proven unaffected; the Owner decision is required for the rest |
-| Justice stopped | Justice-provided quality review | Justice stops without bypassing protection boundaries | Work that never depended on Justice; no safety guarantee is claimed on its behalf |
+| Binary or Artifact digest mismatch | The whole Justice operation | Do not start; if running, stop per section 6 | Work that does not use Justice |
+| Plugin not `active` / tool not in the Code Mode catalog | Justice review | Treat Justice as inactive; do not claim review coverage | Normal OpenCode work |
+| Source missing / Correlation not established | Task whose Evidence depends on it | No success assertion; Evidence stays `UNKNOWN` | Work not depending on that Source |
+| Authority mismatch or unverified | The approval or state change | Rejected or held (resolve is always denied in V2) | Work needing no such approval |
+| Lifecycle inconsistency | The affected Task / Plan | Progression held | Tasks not sharing the inconsistent records |
+| Unexpected side effect or write outside the dedicated root | The Operation | Stop per section 6; inform the Owner; no Live Tool replay | Work isolated from the touched target |
+| Stop identity not confirmable / rollback impossible | Everything affected | Hold; no further destructive action | Only targets proven unaffected |
 
-"Independent normal work" means work whose safety does not depend on the
-affected Source, Authority, Lifecycle or diagnostic. If independence cannot be
-shown, treat the work as affected.
+## 8. Known limitations
 
-## 4. Rollback boundary check
+- V2 resolve is denied (no approval channel). V1-equivalent commands, hooks
+  and the implementation arm are not ported.
+- `justice_review` is reachable via Code Mode. OpenCode's Code-Mode-disabled
+  direct-exposure fallback is unverified for Justice.
+- Host pre-execution enforcement is unproven.
+- S2-c is `COMPARISON_NOT_ESTABLISHED`.
+- Multi-writer / multi-process recovery is out of scope.
+- S3-a M-2 and the Legacy Staging recovery limits apply.
+- The Global Wisdom write path was not exercised at runtime. The host-provided
+  `effect` version is unverified.
+- Real LLM providers and credentialed / networked environments were not
+  demonstrated.
+- See section 5 of the acceptance record for the full list.
 
-This section confirms, as a document review, that the runbook does not require
-any of the following. Each one is outside the approved boundary and must not be
-done without a separate Owner approval and S5 Design:
+## 9. Historical material
 
-- Rewriting Gate or HOLD outcomes without approval.
-- Reinstalling/reconfiguring the existing Host or shared OpenCode V2 settings; existing launcher is only a selected target, not Host GO.
-- Transferring Secrets to the Host.
-- Replaying Live Tool side effects.
-- Running destructive Cleanup, or any concrete enable command, before S5 Design
-  and Owner approval are fixed.
+The older local, untracked S5 Design R0.1 and Host Execution Manifest R0.1
+assumed an isolated OpenCode 2.2.5 Host. They are **historical only** and are
+not used for this fixed 2.3.2 bounded operation. Do not create tracked files at
+their paths; they are left unmodified.
 
-## 5. Compatibility and known limitations
-
-Target Host is Owner-observed OpenCode V2.3.2, not yet accepted. S2-b now includes the exact 2.2.5/2.3.2 guard committed at `204567a`, but executed regression/compatibility verification is NOT_RUN. Unknown Versions are designed to fail closed, not yet validated by test PASS. Additional Test/Host GO remains separately authorized. The inherited known limitations are listed in section
-4 of the acceptance record and are not repeated as guarantees here, including
-`COMPARISON_NOT_ESTABLISHED`, `RUNTIME_NOT_VERIFIED`, unproven multi-process
-Recovery, and the absence of Host enforcement.
-
-## 6. D-S5-08 Host Manifest and rollback HOLD
-
-The older local untracked S5 Design R0.1 and Host Execution Manifest R0.1 remain **unmodified** and still assume an isolated 2.2.5 Host. Do not create tracked files at their paths and risk a checkout conflict. Before Host GO, Owner must reconcile or explicitly supersede these drafts and fix exact measured binary SHA, Justice commit, dedicated Session/Task/Scope/Correlation/Writer paths, native read method, inherited credentials/Network, non-interference, safe reversible restart/injection, independent readback, explicit stop/rollback and cleanup allowlist. A safety boundary that cannot be demonstrated leaves the affected operation HOLD. No enable, cleanup or rollback command is authorized.
-
-Adapter statuses `REJECTED/LIMITED/PROJECTED` are not AC outcomes; a foreign-only `PROJECTED` with zero selected Evidence is not PASS. Optional `time.firstToken` is not validated by current `isMessage()`. `AC-H01/H02/H03=NOT_RUN`; `BOUNDED_COMPLETE=PENDING`, `RELEASE_APPROVED=PENDING`.
-
-## 6. Completion terms (not established)
+## 10. Completion terms
 
 This runbook does not establish `BOUNDED_COMPLETE` or `RELEASE_APPROVED`.
-`BOUNDED_COMPLETE` does not imply `RELEASE_APPROVED`; the latter is an
-independent Owner Opt-in decision for a designated environment. Neither is
-approved here.
+`BOUNDED_COMPLETE` does not imply `RELEASE_APPROVED`, which is an independent
+Owner Opt-in decision for a designated environment. Both are `PENDING`.
