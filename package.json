@@ -22,6 +22,10 @@
       "import": "./dist/opencode-plugin.js",
       "types": "./dist/opencode-plugin.d.ts"
     },
+    "./server": {
+      "import": "./dist/opencode-v2-plugin.js",
+      "types": "./dist/opencode-v2-plugin.d.ts"
+    },
     "./core": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
@@ -42,7 +46,7 @@
     "justice-s1d": "./dist/runtime/s1d-cli.js"
   },
   "scripts": {
-    "build": "tsc && bun build src/opencode-plugin.ts --outfile dist/opencode-plugin.js --target node --format esm && chmod +x dist/runtime/doctor-cli.js dist/runtime/s1a-cli.js dist/runtime/s1d-cli.js",
+    "build": "tsc && bun build src/opencode-plugin.ts --outfile dist/opencode-plugin.js --target node --format esm && bun build src/opencode-v2-plugin.ts --outfile dist/opencode-v2-plugin.js --target node --format esm --external effect --external 'effect/*' --external '@opencode/*' && chmod +x dist/runtime/doctor-cli.js dist/runtime/s1a-cli.js dist/runtime/s1d-cli.js",
     "build:native:review-artifact": "bunx --no-install napi build --manifest-path native/review-artifact-linux/Cargo.toml --target x86_64-unknown-linux-gnu --output-dir dist/native --platform --release --no-js",
     "test": "bun run vitest run",
     "test:dist": "bun run build && bun run vitest run --config vitest.dist.config.ts",
@@ -58,6 +62,7 @@
     "@eslint/js": "^10.0.1",
     "@napi-rs/cli": "3.2.0",
     "@opencode-ai/plugin": "^1.14.21",
+    "@opencode/plugin": "2.3.2",
     "@types/bun": "latest",
     "@types/node": "^26.1.1",
     "@vitest/coverage-v8": "4.1.10",
@@ -74,11 +79,11 @@
     "typescript": "^6.0.2"
   },
   "dependencies": {
-    "effect": "4.0.0-beta.101",
+    "effect": "4.1.0",
     "yaml": "^2.9.0",
     "zod": "^4.4.3"
   },
   "overrides": {
-    "effect": "4.0.0-beta.101"
+    "effect": "4.1.0"
   }
 }
