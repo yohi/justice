@@ -292,6 +292,21 @@ describe('collectDailyChangeSet (spy port fixtures)',()=>{
     expect(await collectDailyChangeSet(f.binding,git,sig())).toEqual({state:'UNAVAILABLE',reason:'GIT_LIMIT'});
   });
 
+  it.each([
+    ['rename', 'R  renamed.ts\0old.ts\0'],
+    ['copy', ' C copied.ts\0source.ts\0'],
+  ])('accepts a paired %s status record',async(_kind,status)=>{
+    const f=await makeGitFixture();
+    const git=wrapPort(f.git,async(args,real)=>args[0]==='status'?okOut(status):real());
+    expect(await collectDailyChangeSet(f.binding,git,sig())).toMatchObject({state:'VALID'});
+  });
+
+  it('rejects a rename status record without its second path',async()=>{
+    const f=await makeGitFixture();
+    const git=wrapPort(f.git,async(args,real)=>args[0]==='status'?okOut('R  renamed.ts\0'):real());
+    expect(await collectDailyChangeSet(f.binding,git,sig())).toEqual({state:'UNAVAILABLE',reason:'GIT_UNSUPPORTED'});
+  });
+
   it('maps port failures and contract violations to fixed reasons, never an empty PRESENT',async()=>{
     const f=await makeGitFixture();
     const cases:[(a:readonly string[])=>boolean,()=>Promise<GitReadResult>,string][]=[
@@ -389,12 +404,27 @@ describe('checkCleanBase',()=>{
 
   it('accepts allowlisted remote and branch tracking config',async()=>{
     const f=await makeGitFixture();
+    f.runFixtureGit(['config','--local','core.ignorecase','false']);
     f.runFixtureGit(['config','--local','remote.origin.url','https://example.invalid/repo.git']);
     f.runFixtureGit(['config','--local','remote.origin.fetch','+refs/heads/*:refs/remotes/origin/*']);
     f.runFixtureGit(['config','--local','branch.main.remote','origin']);
     f.runFixtureGit(['config','--local','branch.main.merge','refs/heads/main']);
     f.runFixtureGit(['config','--local','branch.dev.remote','origin']);
     expect(await checkCleanBase(f.config,f.git,sig())).toEqual({state:'OK'});
+  });
+
+  it('rejects core.ignorecase=true',async()=>{
+    const f=await makeGitFixture();
+    f.runFixtureGit(['config','--local','core.ignorecase','true']);
+    expect(await checkCleanBase(f.config,f.git,sig())).toEqual({state:'UNAVAILABLE',reason:'GIT_UNSUPPORTED'});
+  });
+
+  it('maps inaccessible git metadata to GIT_UNAVAILABLE',async()=>{
+    const f=await makeGitFixture();
+    const info=join(f.root,'.git/objects/info');
+    rmSync(info,{recursive:true});
+    writeFileSync(info,'not a directory');
+    expect(await checkCleanBase(f.config,f.git,sig())).toEqual({state:'UNAVAILABLE',reason:'GIT_UNAVAILABLE'});
   });
 
   it('rejects a linked worktree and a root that differs from the Owner root',async()=>{
