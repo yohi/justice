@@ -60,7 +60,7 @@ const CONTROL_FINISH = 'justice_task_finish';
 /** Message types that never make the boundary uncertain on their own. */
 const BOUNDED_MESSAGE_TYPES = new Set(['user', 'synthetic', 'system', 'skill', 'assistant', 'agent-switched', 'model-switched', 'idle']);
 /** Tool names that indicate child delegation or an earlier/nested control boundary. */
-const BOUNDARY_TOOL_NAMES = new Set(['task', CONTROL_BEGIN, CONTROL_FINISH]);
+const BOUNDARY_TOOL_NAMES = new Set(['task', 'subagent', CONTROL_BEGIN, CONTROL_FINISH]);
 
 type Rec = Readonly<Record<string, unknown>>;
 const isRecord = (v: unknown): v is Rec => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -137,13 +137,7 @@ const NO_PROXY_ENV_KEYS = ['NO_PROXY', 'no_proxy'] as const;
  */
 function loopbackMayBeProxied(): boolean {
   const env = typeof process === 'undefined' ? {} : process.env;
-  const proxied = PROXY_ENV_KEYS.some(k => (env[k] ?? '').trim() !== '');
-  if (!proxied) return false;
-  const bypass = NO_PROXY_ENV_KEYS.some(k => (env[k] ?? '').split(/[\s,]+/).some(entry => {
-    const e = entry.trim().toLowerCase();
-    return e === '*' || e === '127.0.0.1';
-  }));
-  return !bypass;
+  return [...PROXY_ENV_KEYS, ...NO_PROXY_ENV_KEYS].some(k => (env[k] ?? '').trim() !== '');
 }
 
 export function createNativeReadPort(config:DailyOwnerConfig):NativeReadPort {
@@ -197,7 +191,11 @@ export function createNativeReadPort(config:DailyOwnerConfig):NativeReadPort {
         q = `order=asc&limit=${PAGE_LIMIT}`;
       } else {
         if (typeof query.cursor !== 'string' || query.cursor.length === 0 || query.limit !== PAGE_LIMIT) return unavailable('SOURCE_UNAVAILABLE');
-        q = `cursor=${encodeURIComponent(query.cursor)}&limit=${PAGE_LIMIT}`;
+        try {q = `cursor=${encodeURIComponent(query.cursor)}&limit=${PAGE_LIMIT}`;}
+        catch (error) {
+          if (error instanceof URIError) return unavailable('SOURCE_UNAVAILABLE');
+          throw error;
+        }
       }
       return get(`${sessionPath}/message?${q}`, PAGE_CAP, signal);
     },
@@ -281,8 +279,11 @@ export async function readNativeSnapshot(
   if (!/^[0-9a-f]{64}$/.test(binding.key) || !isSafeIdentifier(collectionId)
     || !['begin', 'end-a', 'end-b'].some(s => collectionId === prefix + s)) return unavailable('BINDING_INVALID');
   const {sessionId, worktreeRoot} = binding.config.approval;
+  const startedAt = performance.now();
   const d = deadline(signal, COLLECTION_TIMEOUT_MS);
-  const stopped = (): Unavailable => unavailable(signal.aborted ? 'ABORTED' : d.timedOut() ? 'TIMEOUT' : 'ABORTED');
+  const timedOut = (): boolean => !signal.aborted
+    && (d.timedOut() || performance.now() - startedAt >= COLLECTION_TIMEOUT_MS);
+  const stopped = (): Unavailable => unavailable(signal.aborted ? 'ABORTED' : timedOut() ? 'TIMEOUT' : 'ABORTED');
   const now = (): string => new Date().toISOString();
   try {
     const readSession = async (): Promise<CollectedPage | NativeSnapshotResult> => {
@@ -334,6 +335,7 @@ export async function readNativeSnapshot(
 
     const raw = assembleWrapper(collectionId, sessionId, start, after, pages);
     if (raw.byteLength > S2B_LIMITS.sourceWrapperBytes) return rejected(['SOURCE_REJECTED'], [{code: 'INPUT_LIMIT_EXCEEDED', count: 1}]);
+    if (timedOut()) return unavailable('TIMEOUT');
     const source = validateS2bSource(raw);
     if (source.state !== 'ACCEPTED') return rejected(['SOURCE_REJECTED'], source.diagnostics);
     if (source.value.sessionId !== sessionId || source.value.collectionId !== collectionId) return unavailable('SESSION_MISMATCH');
@@ -341,9 +343,10 @@ export async function readNativeSnapshot(
     const snapshot: NativeSnapshot = Object.freeze({
       rawWrapper: raw, validated: source.value, pageDigest: framedDigest(validatedPages), sessionId, worktreeRoot,
     });
+    if (timedOut()) return unavailable('TIMEOUT');
     return Object.freeze({state: 'READY' as const, snapshot});
   } catch {
-    return signal.aborted ? unavailable('ABORTED') : d.timedOut() ? unavailable('TIMEOUT') : unavailable('SOURCE_UNAVAILABLE');
+    return signal.aborted ? unavailable('ABORTED') : timedOut() ? unavailable('TIMEOUT') : unavailable('SOURCE_UNAVAILABLE');
   } finally {
     d.dispose();
   }
@@ -380,7 +383,9 @@ const toolParts = (m: Rec): readonly Rec[] =>
   m.type === 'assistant' && Array.isArray(m.content) ? (m.content as unknown[]).filter((p): p is Rec => isRecord(p) && p.type === 'tool') : [];
 const partStatus = (p: Rec): unknown => (isRecord(p.state) ? p.state.status : undefined);
 const isTerminal = (p: Rec): boolean => partStatus(p) === 'completed' || partStatus(p) === 'error';
-const isBackground = (p: Rec): boolean => isRecord(p.state) && isRecord(p.state.input) && p.state.input.background === true;
+const isBackground = (p: Rec): boolean => isRecord(p.state)
+  && ((isRecord(p.state.input) && p.state.input.background === true)
+    || (isRecord(p.state.metadata) && p.state.metadata.status === 'running'));
 
 /** Message types and Tool part identities are unambiguous across the whole snapshot. */
 function structurallyBounded(messages: Msgs): boolean {
@@ -498,6 +503,7 @@ function evaluate(e: Identity, ctx: Readonly<{
   if (part.name !== 'shell') return fail('IDENTITY_UNMATCHED');
   const status = partStatus(part);
   if (status !== 'completed') return fail(status === 'running' || status === 'streaming' || status === 'error' ? 'TOOL_NOT_COMPLETED' : 'IDENTITY_UNMATCHED');
+  if (isRecord(part.state) && isRecord(part.state.metadata) && part.state.metadata.status === 'running') return fail('TOOL_NOT_COMPLETED');
   // Provider-executed (true) or unknown (absent) parts are not local direct-shell executions.
   if (part.executed !== false) return fail('IDENTITY_UNMATCHED');
   const input = isRecord(part.state) ? part.state.input : undefined;

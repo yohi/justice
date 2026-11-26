@@ -39,7 +39,7 @@ export type Variant=
   |'background-true'|'extra-input-key'|'wrong-session'|'wrong-message'|'wrong-id'|'duplicate-identical-hook'
   |'distinct-duplicate-candidate'|'before-after-mismatch'|'after-tool-mismatch'|'source-name-mismatch'
   |'outer-execute'|'executed-true'|'executed-missing'|'saved-running'|'saved-error'|'missing-after'
-  |'pre-begin-message'|'multi-page'|'unhooked-matching-part';
+  |'pre-begin-message'|'multi-page'|'unhooked-matching-part'|'metadata-running';
 
 function spec(f:DailyFixture,variant:Variant):CaseSpec{
   const m1=assistantMessage('msg_001',[beginPart()]);
@@ -77,6 +77,11 @@ function spec(f:DailyFixture,variant:Variant):CaseSpec{
   case 'executed-true':return base([shell(f,'tool_001','r1','completed',true)],pair('msg_002','tool_001','r1'));
   case 'executed-missing':return base([shell(f,'tool_001','r1','completed',null)],pair('msg_002','tool_001','r1'));
   case 'saved-running':return base([shell(f,'tool_001','r1','running')],pair('msg_002','tool_001','r1'));
+  case 'metadata-running':{
+    const saved=shell(f,'tool_001');
+    (saved.state as Rec).metadata={status:'running'};
+    return base([saved],pair('msg_002','tool_001','r1'));
+  }
   case 'saved-error':
     return base([shell(f,'tool_001','r1','error')],[obs('msg_002','tool_001','BEFORE','r1'),obs('msg_002','tool_001','AFTER','r1',{status:'ERROR'})]);
   case 'missing-after':return base([shell(f,'tool_001')],[obs('msg_002','tool_001','BEFORE','r1')]);
@@ -198,6 +203,7 @@ describe('daily native evidence: correlation',()=>{
     ['executed-true',['IDENTITY_UNMATCHED','RULE_UNMATCHED']],
     ['executed-missing',['IDENTITY_UNMATCHED','RULE_UNMATCHED']],
     ['saved-running',['TOOL_NOT_COMPLETED','RULE_UNMATCHED']],
+    ['metadata-running',['TOOL_NOT_COMPLETED','RULE_UNMATCHED']],
     ['saved-error',['TOOL_NOT_COMPLETED','RULE_UNMATCHED']],
     ['missing-after',['TOOL_NOT_COMPLETED','RULE_UNMATCHED']],
     ['pre-begin-message',['IDENTITY_UNMATCHED','RULE_UNMATCHED']],
@@ -411,6 +417,23 @@ describe('daily native evidence: snapshot acquisition',()=>{
     expect(result.state).toBe('READY');
     if(result.state==='READY')expect(result.snapshot.validated.collectionStatus).toBe('PAGINATION_INCOMPLETE');
   });
+  it('keeps a valid page prefix when encoding a later cursor throws URIError',async()=>{
+    const f=await makeDailyFixture();const b=await readyBinding(f);
+    const messages=spec(f,'happy').messages;
+    const pages=pagesFor(messages,1);
+    const {port,calls}=fakePort({pages});
+    const nativePort=createNativeReadPort(f.config);
+    const unavailableOnCursor:NativeReadPort={...port,getMessages:async(sessionId,query,signal)=>{
+      if('cursor' in query)return nativePort.getMessages(sessionId,{cursor:'\uD800',limit:100},signal);
+      return port.getMessages(sessionId,query,signal);
+    }};
+    const result=await readNativeSnapshot(b,unavailableOnCursor,cid(b,'end-a'),sig());
+    expect(result.state).toBe('READY');
+    if(result.state==='READY')expect(result.snapshot.validated.collectionStatus).toBe('PAGINATION_INCOMPLETE');
+    expect(calls.filter(c=>c.op==='messages')).toHaveLength(1);
+    expect(await nativePort.getMessages(SID,{cursor:'\uD800',limit:100},sig()))
+      .toEqual({state:'UNAVAILABLE',reason:'SOURCE_UNAVAILABLE'});
+  });
   it('maps session read failures, exceptions, and in-flight aborts to fixed results',async()=>{
     const f=await makeDailyFixture();const b=await readyBinding(f);
     const noSession:NativeReadPort={...fakePort({}).port,
@@ -489,6 +512,15 @@ describe('daily native evidence: snapshot acquisition',()=>{
       expect(await p).toEqual({state:'UNAVAILABLE',reason:'TIMEOUT'});
     }finally{vi.useRealTimers();}
   });
+  it('checks the monotonic collection deadline before synchronous source validation',async()=>{
+    const f=await makeDailyFixture();const b=await readyBinding(f);
+    const {port}=fakePort({pages:pagesFor(spec(f,'happy').messages)});
+    const now=vi.spyOn(performance,'now').mockReturnValueOnce(0).mockReturnValue(30_001);
+    try{
+      expect(await readNativeSnapshot(b,port,cid(b,'end-a'),sig()))
+        .toEqual({state:'UNAVAILABLE',reason:'TIMEOUT'});
+    }finally{now.mockRestore();}
+  });
 });
 
 describe('daily native evidence: boundary',()=>{
@@ -521,6 +553,23 @@ describe('daily native evidence: boundary',()=>{
     const r=await readNativeSnapshot(b,port,cid(b,'begin'),sig());
     if(r.state!=='READY')throw Error('expected READY');
     expect(checkBeginPrefix(r.snapshot,beginEpochIdentity)).toEqual({state:'UNAVAILABLE',reason:'BOUNDARY_UNCERTAIN'});
+  });
+  it('refuses a running metadata status even when the shell input says background false',async()=>{
+    const f=await makeDailyFixture();
+    const c=await nativeCase(f,'happy');
+    const saved=shell(f,'tool_001');
+    (saved.state as Rec).metadata={status:'running'};
+    const running=assistantMessage('msg_002',[saved]);
+    const a=await snapshotOf(c.binding,[c.spec.messages[0],running,c.spec.messages[2]],100,'end-a');
+    const b=await snapshotOf(c.binding,[c.spec.messages[0],running,c.spec.messages[2]],100,'end-b');
+    expect(checkFinishBoundary(a,b,c.epoch)).toEqual({state:'UNAVAILABLE',reason:'BOUNDARY_UNCERTAIN'});
+  });
+  it('treats a saved subagent part in the epoch as an uncertain finish boundary',async()=>{
+    const f=await makeDailyFixture();const c=await nativeCase(f,'happy');
+    const messages=[c.spec.messages[0],assistantMessage('msg_002',[part('tool_subagent','subagent',{description:'delegation'})]),c.spec.messages[2]];
+    const a=await snapshotOf(c.binding,messages,100,'end-a');
+    const b=await snapshotOf(c.binding,messages,100,'end-b');
+    expect(checkFinishBoundary(a,b,c.epoch)).toEqual({state:'UNAVAILABLE',reason:'BOUNDARY_UNCERTAIN'});
   });
   it('accepts identical A/B snapshots with preserved prefix and a single running finish',async()=>{
     const c=await nativeCase(await makeDailyFixture(),'happy');
@@ -687,15 +736,25 @@ describe('daily native evidence: fixed Native HTTP port',()=>{
     expect(seen).toHaveLength(0);
   });
   it.each([
-    ['NO_PROXY','127.0.0.1'],['NO_PROXY','*'],['NO_PROXY','localhost, 127.0.0.1,::1'],['no_proxy','example.com,127.0.0.1'],
-  ])('proceeds through a proxied env only when %s=%s covers loopback',async(key,value)=>{
+    ['NO_PROXY','127.0.0.1'],['NO_PROXY','*'],['no_proxy','example.com,127.0.0.1'],
+  ])('refuses reads with proxy configured even when %s=%s excludes loopback',async(key,value)=>{
     const f=await makeDailyFixture();
     const seen=stub(()=>json('{"ok":true}'));
     vi.stubEnv('HTTP_PROXY','http://127.0.0.1:9');vi.stubEnv('ALL_PROXY','socks5://127.0.0.1:9');
     vi.stubEnv(key,value);
     const r=await createNativeReadPort(f.config).getSession(SID,sig());
-    expect(r.state).toBe('OK');
-    expect(seen.map(s=>s.url)).toEqual(['http://127.0.0.1:49187/api/session/ses_fixture001']);
+    expect(r).toEqual({state:'UNAVAILABLE',reason:'SOURCE_UNAVAILABLE'});
+    expect(seen).toHaveLength(0);
+  });
+  it('fails closed for any non-empty proxy-related environment variable',async()=>{
+    const f=await makeDailyFixture();const seen=stub(()=>json('{}'));
+    for(const key of PROXY_KEYS){
+      vi.stubEnv(key,'configured');
+      expect(await createNativeReadPort(f.config).getSession(SID,sig()))
+        .toEqual({state:'UNAVAILABLE',reason:'SOURCE_UNAVAILABLE'});
+      vi.stubEnv(key,'');
+    }
+    expect(seen).toHaveLength(0);
   });
   it('proceeds when no proxy variable is set and reads env at call time without mutating it',async()=>{
     const f=await makeDailyFixture();
