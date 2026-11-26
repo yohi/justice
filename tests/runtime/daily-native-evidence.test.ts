@@ -235,6 +235,38 @@ describe('daily native evidence: correlation',()=>{
     const bad={...c.snapshot,rawWrapper:enc(buildSource({hostVersion:'9.9.9'}))};
     expect(collectDailyNativeEvidence(c.binding,bad,c.epoch)).toEqual({state:'REJECTED',reasons:['SOURCE_REJECTED'],diagnostics:[{code:'SOURCE_VERSION_UNSUPPORTED',count:1}]});
   });
+  it('rejects invalid binding and mismatched session identity before correlating',async()=>{
+    const c=await nativeCase(await makeDailyFixture(),'happy');
+    expect(collectDailyNativeEvidence(
+      {...c.binding,config:{...c.binding.config,approvalSha256:'0'.repeat(64)}},
+      c.snapshot,c.epoch,
+    )).toEqual({state:'UNAVAILABLE',reason:'BINDING_INVALID'});
+    expect(collectDailyNativeEvidence(c.binding,{...c.snapshot,worktreeRoot:'/tmp/other'},c.epoch))
+      .toEqual({state:'UNAVAILABLE',reason:'SESSION_MISMATCH'});
+  });
+  it.each([
+    ['empty prefix',[]],
+    ['prefix longer than source',['msg_001','msg_002','msg_003','msg_004']],
+    ['prefix drift',['msg_000']],
+  ])('refuses collection with %s',async(_name,prefixMessageIds)=>{
+    const c=await nativeCase(await makeDailyFixture(),'happy');
+    expect(collectDailyNativeEvidence(c.binding,c.snapshot,{...c.epoch,prefixMessageIds}))
+      .toEqual({state:'UNAVAILABLE',reason:'BOUNDARY_UNCERTAIN'});
+  });
+  it('refuses a prefix whose final message is not the begin control message',async()=>{
+    const c=await nativeCase(await makeDailyFixture(),'happy');
+    expect(collectDailyNativeEvidence(c.binding,c.snapshot,{
+      ...c.epoch,prefixMessageIds:['msg_001','msg_002'],
+    })).toEqual({state:'UNAVAILABLE',reason:'BOUNDARY_UNCERTAIN'});
+  });
+  it('records unknown hook rule IDs without attributing evidence',async()=>{
+    const c=await nativeCase(await makeDailyFixture(),'happy');
+    const unknown=pair('msg_002','tool_001','unknown-rule');
+    const r=collectDailyNativeEvidence(c.binding,c.snapshot,{...c.epoch,observations:[...unknown,finishObs()]});
+    if(r.state!=='VALID')throw Error(`expected VALID, got ${JSON.stringify(r)}`);
+    expect(r.reasons).toEqual(['IDENTITY_UNMATCHED','RULE_UNMATCHED']);
+    expect(bindingsOf(r)).toEqual([]);
+  });
   it('returns limited VALID for an incomplete accepted Source',async()=>{
     const f=await makeDailyFixture();const b=await readyBinding(f);
     const s=spec(f,'happy');
