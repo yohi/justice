@@ -29,6 +29,12 @@ const portWith=(bytes:Uint8Array,mount:Awaited<ReturnType<OwnerConfigReadPort['v
 const load=(f:DailyFixture,bytes:Uint8Array,expected=sha256(bytes))=>loadDailyOwnerConfig(expected,portWith(bytes),sig());
 const patched=(f:DailyFixture,patch:Record<string,unknown>)=>jsonBytes({...f.approval,...patch});
 const removeKey=(f:DailyFixture,key:string)=>{const o:Record<string,unknown>={...f.approval};delete o[key];return jsonBytes(o);};
+function reverseObjectKeys(value:unknown):unknown {
+  if(Array.isArray(value))return value.map(reverseObjectKeys);
+  if(value!==null&&typeof value==='object'&&Object.getPrototypeOf(value)===Object.prototype)
+    return Object.fromEntries(Object.entries(value).reverse().map(([key,child])=>[key,reverseObjectKeys(child)]));
+  return value;
+}
 
 describe('daily owner config',()=>{
   it('does not accept a replaced approval or self-supplied digest',async()=>{
@@ -149,12 +155,19 @@ describe('daily owner config',()=>{
       patched(f,{skill:{...f.approval.skill,extra:1}}),patched(f,{skill:{...f.approval.skill,path:'rel/SKILL.md'}}),
       patched(f,{skill:{...f.approval.skill,contentSha256:'z'}}),
       patched(f,{intent:{...f.approval.intent,extra:1}}),
-      Buffer.from('{not json'),Buffer.from('{"a":1,"a":2}'),new Uint8Array(70_000),
+      Buffer.from('{not json'),new Uint8Array(70_000),
     ];
     for(const bytes of cases){
       const r=await load(f,bytes);
       expect(r).toEqual({state:'OFF',reason:'APPROVAL_INVALID'});
     }
+  });
+  it('rejects duplicate approval keys in an otherwise valid approval',async()=>{
+    const f=await makeDailyFixture();
+    expect((await load(f,f.approvalBytes)).state).toBe('READY');
+    const validJson=Buffer.from(f.approvalBytes).toString('utf8');
+    const duplicate=Buffer.from(validJson.replace('"enabled":true','"enabled":true,"enabled":true'));
+    expect(await load(f,duplicate)).toEqual({state:'OFF',reason:'APPROVAL_INVALID'});
   });
   it('maps host mismatch and unsupported skill',async()=>{
     const f=await makeDailyFixture();
@@ -219,6 +232,76 @@ describe('daily binding',()=>{
     expect(start.binding.scopePolicy.allowedPaths).toEqual(['src/a.ts','tests/**']);
     expect(await verifyDailyBinding(start.binding,f.ports,sig())).toEqual({state:'OK'});
     expect(Object.isFrozen(start.binding)).toBe(true);
+  });
+  it('rejects a binding whose intent alone has changed',async()=>{
+    const f=await makeDailyFixture();
+    const start=await prepareDailyBinding(f.config,f.ports,sig());
+    if(start.state!=='READY')throw Error('expected binding');
+    const altered={...start.binding,intent:{...start.binding.intent,scopeKey:'changed-scope'}};
+    expect(await verifyDailyBinding(altered,f.ports,sig())).toEqual({state:'UNAVAILABLE',reason:'BINDING_INVALID'});
+  });
+  it('uses the reloaded immutable config after validating the caller config',async()=>{
+    const f=await makeDailyFixture();
+    const originalNativePort=f.config.approval.nativePort;
+    const ports:DailyPreflightPorts={
+      ...f.ports,
+      async verifyRuntime(){
+        (f.config.approval as {nativePort:number}).nativePort=1;
+        return {state:'OK'};
+      },
+    };
+    const start=await prepareDailyBinding(f.config,ports,sig());
+    expect(start.state).toBe('READY');
+    if(start.state==='READY')expect(start.binding.config.approval.nativePort).toBe(originalNativePort);
+  });
+  it('rechecks the clean base after snapshot capture',async()=>{
+    const f=await makeDailyFixture();
+    const runLoader=vi.mocked(loadS1aArtifacts).getMockImplementation();
+    if(runLoader===undefined)throw Error('expected real S1-a loader');
+    let captureFinished=false;
+    vi.mocked(loadS1aArtifacts).mockImplementationOnce(async(input,source)=>{
+      const result=await runLoader(input,source);
+      f.setArtifactBytes('plan-1.md',new TextEncoder().encode('changed during capture'));
+      captureFinished=true;
+      return result;
+    });
+    let cleanChecks=0;
+    const ports:DailyPreflightPorts={
+      ...f.ports,
+      async checkCleanBase(){
+        cleanChecks++;
+        return captureFinished?{state:'UNAVAILABLE',reason:'DIRTY_BASE'}:{state:'OK'};
+      },
+    };
+    expect(await prepareDailyBinding(f.config,ports,sig())).toEqual({state:'UNAVAILABLE',reason:'DIRTY_BASE'});
+    expect(cleanChecks).toBe(2);
+  });
+  it('compares config and snapshot objects without depending on key order',async()=>{
+    const f=await makeDailyFixture();
+    const reorderedConfig=reverseObjectKeys(f.config) as typeof f.config;
+    const start=await prepareDailyBinding(reorderedConfig,f.ports,sig());
+    if(start.state!=='READY')throw Error('expected binding');
+
+    const runLoader=vi.mocked(loadS1aArtifacts).getMockImplementation();
+    if(runLoader===undefined)throw Error('expected real S1-a loader');
+    vi.mocked(loadS1aArtifacts).mockImplementationOnce(async(input,source)=>{
+      const result=await runLoader(input,source);
+      return reverseObjectKeys(result) as typeof result;
+    });
+    const reorderedBinding={
+      ...start.binding,
+      baseline:reverseObjectKeys(start.binding.baseline) as typeof start.binding.baseline,
+      scopePolicy:reverseObjectKeys(start.binding.scopePolicy) as typeof start.binding.scopePolicy,
+    };
+    expect(await verifyDailyBinding(reorderedBinding,f.ports,sig())).toEqual({state:'OK'});
+    const reorderedRulesBinding={
+      ...start.binding,
+      config:{
+        ...start.binding.config,
+        approval:{...start.binding.config.approval,rules:[...start.binding.config.approval.rules].reverse()},
+      },
+    };
+    expect(await verifyDailyBinding(reorderedRulesBinding,f.ports,sig())).toEqual({state:'UNAVAILABLE',reason:'BINDING_INVALID'});
   });
   it('private source returns fresh copies, only selected paths',async()=>{
     const f=await makeDailyFixture();

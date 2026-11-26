@@ -90,6 +90,24 @@ const deepFreeze = <T>(value: T): T => {
   return value;
 };
 const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
+function structurallyEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    const bValues = b.values();
+    for (const aValue of a.values()) {
+      const bValue = bValues.next();
+      if (bValue.done || !structurallyEqual(aValue, bValue.value)) return false;
+    }
+    return true;
+  }
+  if (!isRecord(a) || !isRecord(b)) return false;
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  return aKeys.length === bKeys.length
+    && aKeys.every(key => Object.hasOwn(b, key)
+      && structurallyEqual(Object.getOwnPropertyDescriptor(a, key)?.value, Object.getOwnPropertyDescriptor(b, key)?.value));
+}
 
 function isAbsoluteNormalizedPath(v: unknown): v is string {
   if (typeof v !== 'string' || v.length < 2 || v.length > S1A_LIMITS.relativePathLength || v[0] !== '/') return false;
@@ -272,18 +290,22 @@ export async function prepareDailyBinding(
     if (signal.aborted) return unavailable('ABORTED');
     if (reloaded.state !== 'READY') return unavailable(reloaded.reason);
     if (reloaded.config.approvalSha256 !== config.approvalSha256) return unavailable('APPROVAL_DIGEST_MISMATCH');
-    if (JSON.stringify(reloaded.config) !== JSON.stringify(config)) return unavailable('BINDING_INVALID');
-    const runtime = await ports.verifyRuntime(config, signal);
+    if (!structurallyEqual(reloaded.config, config)) return unavailable('BINDING_INVALID');
+    const verifiedConfig = reloaded.config;
+    const runtime = await ports.verifyRuntime(verifiedConfig, signal);
     if (signal.aborted) return unavailable('ABORTED');
     if (runtime.state !== 'OK') return unavailable(runtime.reason);
-    const clean = await ports.checkCleanBase(config, signal);
+    const clean = await ports.checkCleanBase(verifiedConfig, signal);
     if (signal.aborted) return unavailable('ABORTED');
     if (clean.state !== 'OK') return unavailable(clean.reason);
-    const snapshot = await capture(config, ports.source, signal);
+    const snapshot = await capture(verifiedConfig, ports.source, signal);
     if ('state' in snapshot) return snapshot;
     if (signal.aborted) return unavailable('ABORTED');
+    const cleanAfter = await ports.checkCleanBase(verifiedConfig, signal);
+    if (signal.aborted) return unavailable('ABORTED');
+    if (cleanAfter.state !== 'OK') return unavailable(cleanAfter.reason);
     const binding: DailyBinding = deepFreeze({
-      key: config.approvalSha256, config, intent: snapshot.intent, baseline: snapshot.baseline,
+      key: verifiedConfig.approvalSha256, config: verifiedConfig, intent: snapshot.intent, baseline: snapshot.baseline,
       scopePolicy: snapshot.scopePolicy, ownerAuthorityStatus: 'NOT_PROVEN' as const, source: privateSource(snapshot),
     });
     return {state: 'READY', binding};
@@ -302,21 +324,23 @@ export async function verifyDailyBinding(
     const reloaded = await ports.reloadOwnerConfig(signal);
     if (signal.aborted) return unavailable('ABORTED');
     if (reloaded.state !== 'READY' || reloaded.config.approvalSha256 !== binding.key
-      || JSON.stringify(reloaded.config) !== JSON.stringify(binding.config)) return invalid;
-    const runtime = await ports.verifyRuntime(binding.config, signal);
+      || !structurallyEqual(reloaded.config, binding.config)) return invalid;
+    const verifiedConfig = reloaded.config;
+    const runtime = await ports.verifyRuntime(verifiedConfig, signal);
     if (signal.aborted) return unavailable('ABORTED');
     if (runtime.state !== 'OK') return invalid;
-    const current = await capture(binding.config, ports.source, signal);
+    const current = await capture(verifiedConfig, ports.source, signal);
     if (signal.aborted) return unavailable('ABORTED');
     if ('state' in current) return invalid;
-    const held = await capture(binding.config, binding.source, signal);
+    const held = await capture(verifiedConfig, binding.source, signal);
     if (signal.aborted) return unavailable('ABORTED');
     if ('state' in held) return invalid;
     const same = (a: Snapshot, b: Snapshot): boolean =>
-      JSON.stringify(a.baseline) === JSON.stringify(b.baseline) && JSON.stringify(a.scopePolicy) === JSON.stringify(b.scopePolicy)
-      && JSON.stringify(a.intent) === JSON.stringify(b.intent);
-    if (!same(current, held) || JSON.stringify(current.baseline) !== JSON.stringify(binding.baseline)
-      || JSON.stringify(current.scopePolicy) !== JSON.stringify(binding.scopePolicy)) return invalid;
+      structurallyEqual(a.baseline, b.baseline) && structurallyEqual(a.scopePolicy, b.scopePolicy)
+      && structurallyEqual(a.intent, b.intent);
+    if (!same(current, held) || !structurallyEqual(current.baseline, binding.baseline)
+      || !structurallyEqual(current.scopePolicy, binding.scopePolicy)
+      || !structurallyEqual(current.intent, binding.intent)) return invalid;
     return ok;
   } catch {
     return signal.aborted ? unavailable('ABORTED') : invalid;
