@@ -234,6 +234,9 @@ describe('daily native evidence: correlation',()=>{
     const c=await nativeCase(await makeDailyFixture(),'happy');
     const bad={...c.snapshot,rawWrapper:enc(buildSource({hostVersion:'9.9.9'}))};
     expect(collectDailyNativeEvidence(c.binding,bad,c.epoch)).toEqual({state:'REJECTED',reasons:['SOURCE_REJECTED'],diagnostics:[{code:'SOURCE_VERSION_UNSUPPORTED',count:1}]});
+    const throwing={...c.snapshot,get rawWrapper():Uint8Array{throw new Error('private fixture detail');}};
+    expect(collectDailyNativeEvidence(c.binding,throwing,c.epoch))
+      .toEqual({state:'UNAVAILABLE',reason:'SOURCE_UNAVAILABLE'});
   });
   it('rejects invalid binding and mismatched session identity before correlating',async()=>{
     const c=await nativeCase(await makeDailyFixture(),'happy');
@@ -241,8 +244,16 @@ describe('daily native evidence: correlation',()=>{
       {...c.binding,config:{...c.binding.config,approvalSha256:'0'.repeat(64)}},
       c.snapshot,c.epoch,
     )).toEqual({state:'UNAVAILABLE',reason:'BINDING_INVALID'});
-    expect(collectDailyNativeEvidence(c.binding,{...c.snapshot,worktreeRoot:'/tmp/other'},c.epoch))
-      .toEqual({state:'UNAVAILABLE',reason:'SESSION_MISMATCH'});
+    const mismatches=[
+      [{...c.snapshot,sessionId:'ses_other001'},c.epoch],
+      [{...c.snapshot,worktreeRoot:'/tmp/other'},c.epoch],
+      [c.snapshot,{...c.epoch,begin:{...c.epoch.begin,sessionId:'ses_other001'}}],
+      [c.snapshot,{...c.epoch,finish:{...c.epoch.finish,sessionId:'ses_other001'}}],
+    ] as const;
+    for(const [snapshot,epoch] of mismatches){
+      expect(collectDailyNativeEvidence(c.binding,snapshot,epoch))
+        .toEqual({state:'UNAVAILABLE',reason:'SESSION_MISMATCH'});
+    }
   });
   it.each([
     ['empty prefix',[]],
@@ -258,6 +269,25 @@ describe('daily native evidence: correlation',()=>{
     expect(collectDailyNativeEvidence(c.binding,c.snapshot,{
       ...c.epoch,prefixMessageIds:['msg_001','msg_002'],
     })).toEqual({state:'UNAVAILABLE',reason:'BOUNDARY_UNCERTAIN'});
+  });
+  it.each([
+    ['finish is absent from a complete source',async(f:DailyFixture)=>{
+      const binding=await readyBinding(f);
+      const snapshot=await snapshotOf(binding,[assistantMessage('msg_001',[beginPart()]),assistantMessage('msg_002',[])]);
+      return {binding,snapshot,finishMessageId:'msg_003'};
+    }],
+    ['finish is at the begin boundary',async(f:DailyFixture)=>{
+      const binding=await readyBinding(f);
+      const snapshot=await snapshotOf(binding,[assistantMessage('msg_001',[beginPart()])]);
+      return {binding,snapshot,finishMessageId:'msg_001'};
+    }],
+  ])('refuses when %s',async(_name,build)=>{
+    const f=await makeDailyFixture();
+    const {binding,snapshot,finishMessageId}=await build(f);
+    const c=await nativeCase(f,'happy');
+    const epoch={...c.epoch,finish:{...c.epoch.finish,messageId:finishMessageId}};
+    expect(collectDailyNativeEvidence(binding,snapshot,epoch))
+      .toEqual({state:'UNAVAILABLE',reason:'BOUNDARY_UNCERTAIN'});
   });
   it('records unknown hook rule IDs without attributing evidence',async()=>{
     const c=await nativeCase(await makeDailyFixture(),'happy');
@@ -365,6 +395,52 @@ describe('daily native evidence: snapshot acquisition',()=>{
     expect(r.snapshot.validated.collectionStatus).toBe('PAGINATION_INCOMPLETE');
     expect(r.snapshot.validated.validatedPageCount).toBe(1);
     expect(later.calls.filter(c=>c.op==='messages')).toHaveLength(2);
+  });
+  it('keeps a valid page prefix when a later page exceeds the collection cap',async()=>{
+    const f=await makeDailyFixture();const b=await readyBinding(f);
+    const messages=spec(f,'happy').messages;
+    const pages=pagesFor(messages,1);
+    const {port}=fakePort({pages});
+    const oversized:NativeReadPort={...port,getMessages:async(sessionId,query,signal)=>{
+      if('cursor' in query&&query.cursor==='cur-2'){
+        return {state:'OK',bytes:new Uint8Array(4_194_305)};
+      }
+      return port.getMessages(sessionId,query,signal);
+    }};
+    const result=await readNativeSnapshot(b,oversized,cid(b,'end-a'),sig());
+    expect(result.state).toBe('READY');
+    if(result.state==='READY')expect(result.snapshot.validated.collectionStatus).toBe('PAGINATION_INCOMPLETE');
+  });
+  it('maps session read failures, exceptions, and in-flight aborts to fixed results',async()=>{
+    const f=await makeDailyFixture();const b=await readyBinding(f);
+    const noSession:NativeReadPort={...fakePort({}).port,
+      async getSession(){return {state:'UNAVAILABLE',reason:'TIMEOUT'};}};
+    expect(await readNativeSnapshot(b,noSession,cid(b,'end-a'),sig()))
+      .toEqual({state:'UNAVAILABLE',reason:'TIMEOUT'});
+
+    const throwing:NativeReadPort={...fakePort({}).port,
+      async getSession(){throw new Error('private fixture detail');}};
+    expect(await readNativeSnapshot(b,throwing,cid(b,'end-a'),sig()))
+      .toEqual({state:'UNAVAILABLE',reason:'SOURCE_UNAVAILABLE'});
+
+    const ctl=new AbortController();
+    const aborting:NativeReadPort={...fakePort({}).port,
+      async getSession(){ctl.abort();return {state:'UNAVAILABLE',reason:'ABORTED'};}};
+    expect(await readNativeSnapshot(b,aborting,cid(b,'end-a'),ctl.signal))
+      .toEqual({state:'UNAVAILABLE',reason:'ABORTED'});
+  });
+  it('rejects oversized or malformed session responses before reading messages',async()=>{
+    const f=await makeDailyFixture();const b=await readyBinding(f);
+    const pages=pagesFor(spec(f,'happy').messages);
+    const oversized=fakePort({sessions:[JSON.stringify({data:{id:SID,location:{directory:ROOT}}})],pages});
+    const oversizedPort:NativeReadPort={...oversized.port,
+      async getSession(){return {state:'OK',bytes:new Uint8Array(1_048_577)};}};
+    expect(await readNativeSnapshot(b,oversizedPort,cid(b,'end-a'),sig()))
+      .toEqual({state:'UNAVAILABLE',reason:'OBSERVATION_LIMIT'});
+
+    const malformed=fakePort({sessions:['{"data":[]}'],pages});
+    expect(await readNativeSnapshot(b,malformed.port,cid(b,'end-a'),sig()))
+      .toEqual({state:'REJECTED',reasons:['SOURCE_REJECTED'],diagnostics:[{code:'SOURCE_SCHEMA_INVALID',count:1}]});
   });
   it('rejects a raw wrapper the existing validator does not accept',async()=>{
     const f=await makeDailyFixture();const b=await readyBinding(f);
@@ -477,6 +553,14 @@ describe('daily native evidence: boundary',()=>{
     expect(checkFinishBoundary(c.snapshot,{...c.snapshot,pageDigest:'0'.repeat(64)},c.epoch)).toEqual(U);
     expect(checkFinishBoundary(c.snapshot,c.snapshot,{...c.epoch,observations:[...c.epoch.observations,...pair('msg_002','tool_z',null,{sessionId:'ses_other001'})]})).toEqual(U);
     expect(checkFinishBoundary(c.snapshot,c.snapshot,{...c.epoch,finish:{...c.epoch.finish,callId:'tool_other'}})).toEqual(U);
+    expect(checkFinishBoundary(c.snapshot,c.snapshot,{
+      ...c.epoch,finish:{...c.epoch.finish,sessionId:'ses_other001'},
+    })).toEqual(U);
+    const differentIds={...c.snapshot,validated:{
+      ...c.snapshot.validated,
+      messages:[assistantMessage('msg_010',[beginPart()]),...c.snapshot.validated.messages.slice(1)],
+    }};
+    expect(checkFinishBoundary(c.snapshot,differentIds,c.epoch)).toEqual(U);
   });
   it('requires an empty running-shell list for the fixed root',async()=>{
     const f=await makeDailyFixture();const b=await readyBinding(f);
@@ -493,6 +577,8 @@ describe('daily native evidence: boundary',()=>{
     for(const [shells,reason] of cases)expect(await checkNoRunningShells(b,fakePort({shells}).port,sig())).toEqual({state:'UNAVAILABLE',reason});
     const down:NativeReadPort={...okPort.port,async getRunningShells(){return {state:'UNAVAILABLE',reason:'TIMEOUT'};}};
     expect(await checkNoRunningShells(b,down,sig())).toEqual({state:'UNAVAILABLE',reason:'BOUNDARY_UNCERTAIN'});
+    const throws:NativeReadPort={...okPort.port,async getRunningShells(){throw new Error('private fixture detail');}};
+    expect(await checkNoRunningShells(b,throws,sig())).toEqual({state:'UNAVAILABLE',reason:'BOUNDARY_UNCERTAIN'});
     const ctl=new AbortController();ctl.abort();
     expect(await checkNoRunningShells(b,okPort.port,ctl.signal)).toEqual({state:'UNAVAILABLE',reason:'ABORTED'});
   });
@@ -544,6 +630,19 @@ describe('daily native evidence: fixed Native HTTP port',()=>{
     expect(await port.getMessages(SID,{cursor:'',limit:100},sig())).toEqual({state:'UNAVAILABLE',reason:'SOURCE_UNAVAILABLE'});
     expect(await port.getRunningShells('/tmp/other',sig())).toEqual({state:'UNAVAILABLE',reason:'WORKSPACE_MISMATCH'});
     expect(seen).toEqual([]);
+  });
+  it('rejects malformed queries and handles empty response bodies and an aborted caller',async()=>{
+    const f=await makeDailyFixture();
+    const seen=stub(()=>json(null));
+    const port=createNativeReadPort(f.config);
+    expect(await port.getSession(SID,sig())).toEqual({state:'OK',bytes:new Uint8Array()});
+    expect(await port.getMessages(SID,{order:'desc',limit:100} as unknown as NativePageQuery,sig()))
+      .toEqual({state:'UNAVAILABLE',reason:'SOURCE_UNAVAILABLE'});
+    expect(seen).toHaveLength(1);
+
+    const ctl=new AbortController();ctl.abort();
+    expect(await port.getSession(SID,ctl.signal)).toEqual({state:'UNAVAILABLE',reason:'ABORTED'});
+    expect(seen).toHaveLength(1);
   });
   it.each([
     ['non-200',()=>json('{}',500),'SOURCE_UNAVAILABLE'],
