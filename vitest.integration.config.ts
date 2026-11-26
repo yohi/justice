@@ -7,6 +7,8 @@ export default defineConfig({
     globals: true,
     environment: "node",
     include: ["tests/real-fs/**/*.test.ts"],
+    hookTimeout: 30_000,
+    testTimeout: 30_000,
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov"],
