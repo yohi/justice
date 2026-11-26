@@ -1,10 +1,26 @@
 import {describe,expect,it,vi} from 'vitest';
+import {extractTaskScopePolicy} from '../../src/core/s1c/policy.js';
+import {loadS1aArtifacts} from '../../src/core/s1a/loader.js';
 import {
   DAILY_HOST_SHA256,loadDailyOwnerConfig,matchRuleInput,prepareDailyBinding,verifyDailyBinding,
   type DailyPreflightPorts,type OwnerConfigReadPort,
 } from '../../src/runtime/daily-intent.js';
+import {createCapturedS1aSource} from '../../src/runtime/s1d-read-only-input.js';
 import {makeDailyFixture,defaultPlanText,type DailyFixture} from '../helpers/daily-fixtures.js';
 import {jsonBytes,s1aFixture,sha256} from '../helpers/s1a-fixtures.js';
+
+vi.mock('../../src/core/s1c/policy.js',async importOriginal=>{
+  const actual=await importOriginal<typeof import('../../src/core/s1c/policy.js')>();
+  return {...actual,extractTaskScopePolicy:vi.fn(actual.extractTaskScopePolicy)};
+});
+vi.mock('../../src/core/s1a/loader.js',async importOriginal=>{
+  const actual=await importOriginal<typeof import('../../src/core/s1a/loader.js')>();
+  return {...actual,loadS1aArtifacts:vi.fn(actual.loadS1aArtifacts)};
+});
+vi.mock('../../src/runtime/s1d-read-only-input.js',async importOriginal=>{
+  const actual=await importOriginal<typeof import('../../src/runtime/s1d-read-only-input.js')>();
+  return {...actual,createCapturedS1aSource:vi.fn(actual.createCapturedS1aSource)};
+});
 
 const sig=()=>new AbortController().signal;
 const portWith=(bytes:Uint8Array,mount:Awaited<ReturnType<OwnerConfigReadPort['verifyReadOnlyMount']>>={state:'OK'}):OwnerConfigReadPort=>({
@@ -32,12 +48,92 @@ describe('daily owner config',()=>{
     for(const bad of ['','ABC','A'.repeat(64),'a'.repeat(63),'g'.repeat(64)])
       expect(await loadDailyOwnerConfig(bad,f.configPort,sig())).toEqual({state:'OFF',reason:'APPROVAL_INVALID'});
   });
+  it('maps unexpected loader failures to unavailable source',async()=>{
+    const f=await makeDailyFixture();
+    vi.mocked(loadS1aArtifacts).mockRejectedValueOnce(Error('unexpected loader failure'));
+    expect(await prepareDailyBinding(f.config,f.ports,sig())).toEqual({state:'UNAVAILABLE',reason:'SOURCE_UNAVAILABLE'});
+  });
+  it('rejects S1-a loader reads outside the fixed input and artifact roots',async()=>{
+    const inputFixture=await makeDailyFixture();
+    vi.mocked(loadS1aArtifacts).mockImplementationOnce(async(_input,source)=>{
+      await source.readInputFile('/outside/manifest.json',1);
+      throw Error('outside input read was accepted');
+    });
+    expect(await prepareDailyBinding(inputFixture.config,inputFixture.ports,sig())).toEqual({state:'UNAVAILABLE',reason:'SOURCE_REJECTED'});
+
+    const artifactFixture=await makeDailyFixture();
+    vi.mocked(loadS1aArtifacts).mockImplementationOnce(async(_input,source)=>{
+      await source.readArtifact('/outside/artifacts','unapproved.md',1);
+      throw Error('outside artifact read was accepted');
+    });
+    expect(await prepareDailyBinding(artifactFixture.config,artifactFixture.ports,sig())).toEqual({state:'UNAVAILABLE',reason:'SOURCE_REJECTED'});
+  });
+  it('rejects a successful loader result that omits the selected plan',async()=>{
+    const f=await makeDailyFixture();
+    const runLoader=vi.mocked(loadS1aArtifacts).getMockImplementation();
+    if(runLoader===undefined)throw Error('expected real S1-a loader');
+    vi.mocked(loadS1aArtifacts).mockImplementationOnce(async(input,source)=>{
+      const result=await runLoader(input,source);
+      return {...result,selectedRefs:result.selectedRefs.filter(ref=>ref.kind!=='plan')};
+    });
+    expect(await prepareDailyBinding(f.config,f.ports,sig())).toEqual({state:'UNAVAILABLE',reason:'ARTIFACT_MISMATCH'});
+  });
+  it('rejects when the captured plan snapshot is unavailable',async()=>{
+    const f=await makeDailyFixture();
+    const capture=vi.mocked(createCapturedS1aSource).getMockImplementation();
+    if(capture===undefined)throw Error('expected real S1-d snapshot capture');
+    vi.mocked(createCapturedS1aSource).mockImplementationOnce((source,input)=>{
+      const captured=capture(source,input);
+      return {...captured,getPlanSnapshot:()=>null};
+    });
+    expect(await prepareDailyBinding(f.config,f.ports,sig())).toEqual({state:'UNAVAILABLE',reason:'SCOPE_POLICY_INVALID'});
+  });
+  it('rejects a scope policy that does not bind the selected task',async()=>{
+    const f=await makeDailyFixture();
+    const extract=vi.mocked(extractTaskScopePolicy).getMockImplementation();
+    if(extract===undefined)throw Error('expected real scope policy extractor');
+    vi.mocked(extractTaskScopePolicy).mockImplementationOnce((planBytes,refs)=>{
+      const result=extract(planBytes,refs);
+      if(result.state!=='READY')return result;
+      return {...result,policy:{...result.policy,taskRef:{artifactId:'other-task',revision:'R1'}}};
+    });
+    expect(await prepareDailyBinding(f.config,f.ports,sig())).toEqual({state:'UNAVAILABLE',reason:'SCOPE_POLICY_INVALID'});
+  });
   it('reports unverified read-only mount',async()=>{
     const f=await makeDailyFixture();
     const mount={state:'UNAVAILABLE' as const,reason:'SETUP_FAILED' as const};
     expect(await loadDailyOwnerConfig(f.expectedSha256,portWith(f.approvalBytes,mount),sig())).toEqual({state:'OFF',reason:'OWNER_BOUNDARY_UNVERIFIED'});
     const throwing:OwnerConfigReadPort={async verifyReadOnlyMount(){throw Error('x');},async readApproval(){return f.approvalBytes;}};
     expect(await loadDailyOwnerConfig(f.expectedSha256,throwing,sig())).toEqual({state:'OFF',reason:'OWNER_BOUNDARY_UNVERIFIED'});
+  });
+  it('maps mount and approval read failures to the correct abort state',async()=>{
+    const f=await makeDailyFixture();
+    const mountAbort=new AbortController();
+    const abortingMount:OwnerConfigReadPort={
+      async verifyReadOnlyMount(){mountAbort.abort();return {state:'OK'};},
+      async readApproval(){return f.approvalBytes;},
+    };
+    expect(await loadDailyOwnerConfig(f.expectedSha256,abortingMount,mountAbort.signal)).toEqual({state:'OFF',reason:'ABORTED'});
+
+    const thrownMountAbort=new AbortController();
+    const throwingMount:OwnerConfigReadPort={
+      async verifyReadOnlyMount(){thrownMountAbort.abort();throw Error('mount read failed');},
+      async readApproval(){return f.approvalBytes;},
+    };
+    expect(await loadDailyOwnerConfig(f.expectedSha256,throwingMount,thrownMountAbort.signal)).toEqual({state:'OFF',reason:'ABORTED'});
+
+    const readFailure:OwnerConfigReadPort={
+      async verifyReadOnlyMount(){return {state:'OK'};},
+      async readApproval(){throw Error('approval read failed');},
+    };
+    expect(await loadDailyOwnerConfig(f.expectedSha256,readFailure,sig())).toEqual({state:'OFF',reason:'OWNER_BOUNDARY_UNVERIFIED'});
+
+    const thrownReadAbort=new AbortController();
+    const throwingRead:OwnerConfigReadPort={
+      async verifyReadOnlyMount(){return {state:'OK'};},
+      async readApproval(){thrownReadAbort.abort();throw Error('approval read failed');},
+    };
+    expect(await loadDailyOwnerConfig(f.expectedSha256,throwingRead,thrownReadAbort.signal)).toEqual({state:'OFF',reason:'ABORTED'});
   });
   it('rejects schema violations: missing, unknown, wrong values',async()=>{
     const f=await makeDailyFixture();
@@ -49,6 +145,7 @@ describe('daily owner config',()=>{
       patched(f,{nativePort:0}),patched(f,{nativePort:65536}),patched(f,{nativePort:1.5}),
       patched(f,{manifestSha256:'X'.repeat(64)}),patched(f,{intentSha256:'abc'}),
       patched(f,{worktreeRoot:'relative/path'}),patched(f,{worktreeRoot:'/tmp/../etc'}),patched(f,{worktreeRoot:'/tmp//x'}),patched(f,{worktreeRoot:'/tmp/x/'}),
+      patched(f,{worktreeRoot:'/tmp\\x'}),patched(f,{worktreeRoot:'/tmp/\0x'}),
       patched(f,{skill:{...f.approval.skill,extra:1}}),patched(f,{skill:{...f.approval.skill,path:'rel/SKILL.md'}}),
       patched(f,{skill:{...f.approval.skill,contentSha256:'z'}}),
       patched(f,{intent:{...f.approval.intent,extra:1}}),
@@ -77,6 +174,7 @@ describe('daily owner config',()=>{
       [{...r1,input:{...r1.input,background:true}}],
       [{...r1,input:{...r1.input,command:''}}],[{...r1,input:{...r1.input,command:'a'.repeat(4097)}}],
       [{...r1,input:{...r1.input,command:'a\nb'}}],[{...r1,input:{...r1.input,command:'a\rb'}}],[{...r1,input:{...r1.input,command:'a\0b'}}],
+      [{...r1,extra:1}],
       [{...r1,ruleId:'bad id'}],[{...r1,acRef:{artifactId:'ac-9',revision:'R1'}}],[{...r1,acRef:{artifactId:'ac-1',revision:'R2'}}],
       [{...r1,tool:'execute'}],[{...r1,purpose:'OTHER'}],
     ];
@@ -131,8 +229,10 @@ describe('daily binding',()=>{
     a.fill(0);
     const b=await start.binding.source.readArtifact(li.artifactsRoot,'plan-1.md',1_000_000);
     expect(b[0]).not.toBe(0);
+    await expect(start.binding.source.readArtifact(li.artifactsRoot,'plan-1.md',0)).rejects.toThrow('over_limit');
     const m=await start.binding.source.readInputFile(li.manifestPath,1_048_576);m.fill(0);
     expect((await start.binding.source.readInputFile(li.manifestPath,1_048_576))[0]).not.toBe(0);
+    await expect(start.binding.source.readInputFile(li.manifestPath,0)).rejects.toThrow('over_limit');
     await expect(start.binding.source.readInputFile('/etc/passwd',1000)).rejects.toThrow();
     await expect(start.binding.source.readArtifact(li.artifactsRoot,'other.md',1000)).rejects.toThrow();
     await expect(start.binding.source.readArtifact('/elsewhere','plan-1.md',1000)).rejects.toThrow();
@@ -160,6 +260,102 @@ describe('daily binding',()=>{
       const f=await makeDailyFixture();f.setCleanCheck({state:'UNAVAILABLE',reason});
       expect(await prepareDailyBinding(f.config,f.ports,sig())).toEqual({state:'UNAVAILABLE',reason});
     }
+  });
+  it('stops when reload or runtime verification aborts and maps unexpected setup errors',async()=>{
+    const f=await makeDailyFixture();
+    const reloadAbort=new AbortController();
+    const abortingReload:DailyPreflightPorts={
+      ...f.ports,
+      async reloadOwnerConfig(){reloadAbort.abort();return {state:'READY',config:f.config};},
+    };
+    expect(await prepareDailyBinding(f.config,abortingReload,reloadAbort.signal)).toEqual({state:'UNAVAILABLE',reason:'ABORTED'});
+
+    const runtimeAbort=new AbortController();
+    const abortingRuntime:DailyPreflightPorts={
+      ...f.ports,
+      async verifyRuntime(){runtimeAbort.abort();return {state:'OK'};},
+    };
+    expect(await prepareDailyBinding(f.config,abortingRuntime,runtimeAbort.signal)).toEqual({state:'UNAVAILABLE',reason:'ABORTED'});
+
+    const throwingReload:DailyPreflightPorts={
+      ...f.ports,
+      async reloadOwnerConfig(){throw Error('owner config unavailable');},
+    };
+    expect(await prepareDailyBinding(f.config,throwingReload,sig())).toEqual({state:'UNAVAILABLE',reason:'SETUP_FAILED'});
+
+    const setupAbort=new AbortController();
+    const abortingThrow:DailyPreflightPorts={
+      ...f.ports,
+      async reloadOwnerConfig(){setupAbort.abort();throw Error('owner config read aborted');},
+    };
+    expect(await prepareDailyBinding(f.config,abortingThrow,setupAbort.signal)).toEqual({state:'UNAVAILABLE',reason:'ABORTED'});
+  });
+  it('distinguishes unreadable or mismatched owner inputs from incomplete artifacts',async()=>{
+    const f=await makeDailyFixture();
+    const manifestPath=f.config.loaderInput.manifestPath;
+    const intentPath=f.config.loaderInput.intentPath;
+
+    const unreadableManifest:DailyPreflightPorts={
+      ...f.ports,
+      source:{
+        async readInputFile(path,maxBytes){
+          if(path===manifestPath)throw Error('manifest unavailable');
+          return f.source.readInputFile(path,maxBytes);
+        },
+        readArtifact:(root,path,maxBytes)=>f.source.readArtifact(root,path,maxBytes),
+      },
+    };
+    expect(await prepareDailyBinding(f.config,unreadableManifest,sig())).toEqual({state:'UNAVAILABLE',reason:'SOURCE_UNAVAILABLE'});
+
+    const changedManifest:DailyPreflightPorts={
+      ...f.ports,
+      source:{
+        async readInputFile(path,maxBytes){
+          if(path===manifestPath)return new TextEncoder().encode('changed manifest');
+          return f.source.readInputFile(path,maxBytes);
+        },
+        readArtifact:(root,path,maxBytes)=>f.source.readArtifact(root,path,maxBytes),
+      },
+    };
+    expect(await prepareDailyBinding(f.config,changedManifest,sig())).toEqual({state:'UNAVAILABLE',reason:'ARTIFACT_MISMATCH'});
+
+    const unreadableIntent:DailyPreflightPorts={
+      ...f.ports,
+      source:{
+        async readInputFile(path,maxBytes){
+          if(path===intentPath)throw Error('intent unavailable');
+          return f.source.readInputFile(path,maxBytes);
+        },
+        readArtifact:(root,path,maxBytes)=>f.source.readArtifact(root,path,maxBytes),
+      },
+    };
+    expect(await prepareDailyBinding(f.config,unreadableIntent,sig())).toEqual({state:'UNAVAILABLE',reason:'SOURCE_UNAVAILABLE'});
+
+    const unreadableArtifact:DailyPreflightPorts={
+      ...f.ports,
+      source:{
+        readInputFile:(path,maxBytes)=>f.source.readInputFile(path,maxBytes),
+        async readArtifact(root,path,maxBytes){
+          if(path==='plan-1.md')throw Error('artifact unavailable');
+          return f.source.readArtifact(root,path,maxBytes);
+        },
+      },
+    };
+    expect(await prepareDailyBinding(f.config,unreadableArtifact,sig())).toEqual({state:'UNAVAILABLE',reason:'SOURCE_INCOMPLETE'});
+
+    const artifactAbort=new AbortController();
+    const abortDuringArtifactRead:DailyPreflightPorts={
+      ...f.ports,
+      source:{
+        readInputFile:(path,maxBytes)=>f.source.readInputFile(path,maxBytes),
+        async readArtifact(root,path,maxBytes){
+          const bytes=await f.source.readArtifact(root,path,maxBytes);
+          artifactAbort.abort();
+          return bytes;
+        },
+      },
+    };
+    expect(await prepareDailyBinding(f.config,abortDuringArtifactRead,artifactAbort.signal)).toEqual({state:'UNAVAILABLE',reason:'ABORTED'});
   });
   it('does not repeat the clean check on verify',async()=>{
     const f=await makeDailyFixture();
@@ -197,6 +393,75 @@ describe('daily binding',()=>{
     if(start.state!=='READY')throw Error('expected binding');
     const dead:DailyPreflightPorts={...f.ports,source:{async readInputFile(){throw Error('gone');},async readArtifact(){throw Error('gone');}}};
     expect(await verifyDailyBinding(start.binding,dead,sig())).toEqual({state:'UNAVAILABLE',reason:'BINDING_INVALID'});
+  });
+  it('rejects altered binding keys, snapshots, and scope policies',async()=>{
+    const f=await makeDailyFixture();
+    const start=await prepareDailyBinding(f.config,f.ports,sig());
+    if(start.state!=='READY')throw Error('expected binding');
+
+    expect(await verifyDailyBinding({...start.binding,key:'different'},f.ports,sig())).toEqual({state:'UNAVAILABLE',reason:'BINDING_INVALID'});
+    expect(await verifyDailyBinding({
+      ...start.binding,
+      baseline:{...start.binding.baseline,manifestId:'different'},
+    },f.ports,sig())).toEqual({state:'UNAVAILABLE',reason:'BINDING_INVALID'});
+    expect(await verifyDailyBinding({
+      ...start.binding,
+      scopePolicy:{...start.binding.scopePolicy,scopeKey:'different'},
+    },f.ports,sig())).toEqual({state:'UNAVAILABLE',reason:'BINDING_INVALID'});
+  });
+  it('maps aborts and errors while revalidating a binding',async()=>{
+    const f=await makeDailyFixture();
+    const start=await prepareDailyBinding(f.config,f.ports,sig());
+    if(start.state!=='READY')throw Error('expected binding');
+
+    const reloadAbort=new AbortController();
+    const abortingReload:DailyPreflightPorts={
+      ...f.ports,
+      async reloadOwnerConfig(){reloadAbort.abort();return {state:'READY',config:f.config};},
+    };
+    expect(await verifyDailyBinding(start.binding,abortingReload,reloadAbort.signal)).toEqual({state:'UNAVAILABLE',reason:'ABORTED'});
+
+    const runtimeAbort=new AbortController();
+    const abortingRuntime:DailyPreflightPorts={
+      ...f.ports,
+      async verifyRuntime(){runtimeAbort.abort();return {state:'OK'};},
+    };
+    expect(await verifyDailyBinding(start.binding,abortingRuntime,runtimeAbort.signal)).toEqual({state:'UNAVAILABLE',reason:'ABORTED'});
+
+    const throwingRuntime:DailyPreflightPorts={
+      ...f.ports,
+      async verifyRuntime(){throw Error('runtime check failed');},
+    };
+    expect(await verifyDailyBinding(start.binding,throwingRuntime,sig())).toEqual({state:'UNAVAILABLE',reason:'BINDING_INVALID'});
+
+    const verifyAbort=new AbortController();
+    const abortingThrow:DailyPreflightPorts={
+      ...f.ports,
+      async verifyRuntime(){verifyAbort.abort();throw Error('runtime check aborted');},
+    };
+    expect(await verifyDailyBinding(start.binding,abortingThrow,verifyAbort.signal)).toEqual({state:'UNAVAILABLE',reason:'ABORTED'});
+  });
+  it('invalidates a failed held-snapshot read and observes cancellation during that read',async()=>{
+    const f=await makeDailyFixture();
+    const start=await prepareDailyBinding(f.config,f.ports,sig());
+    if(start.state!=='READY')throw Error('expected binding');
+
+    const unreadableHeldSource={
+      async readInputFile(){throw Error('held input unavailable');},
+      async readArtifact(){throw Error('held artifact unavailable');},
+    };
+    expect(await verifyDailyBinding({...start.binding,source:unreadableHeldSource},f.ports,sig())).toEqual({state:'UNAVAILABLE',reason:'BINDING_INVALID'});
+
+    const controller=new AbortController();
+    const abortingHeldSource={
+      async readInputFile(path:string,maxBytes:number){
+        const bytes=await start.binding.source.readInputFile(path,maxBytes);
+        controller.abort();
+        return bytes;
+      },
+      readArtifact:(root:string,path:string,maxBytes:number)=>start.binding.source.readArtifact(root,path,maxBytes),
+    };
+    expect(await verifyDailyBinding({...start.binding,source:abortingHeldSource},f.ports,controller.signal)).toEqual({state:'UNAVAILABLE',reason:'ABORTED'});
   });
   it('maps intent digest mismatch',async()=>{
     const f=await makeDailyFixture({approvalPatch:{intentSha256:'d'.repeat(64)}});
