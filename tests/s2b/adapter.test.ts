@@ -770,3 +770,37 @@ describe("S2-b adapter: Fixed-Fixture MVP acceptance (Task 6)", () => {
     expect((await run()).report.adapter.status).toBe("PROJECTED");
   });
 });
+
+describe("S2-b adapter: legacy rejected semantics unchanged by the Daily advisory route", () => {
+  it("legacyRejectedNativeSourceStillSkipsS1dWithByteIdenticalOutput", async () => {
+    const { runner, report } = await run({ sourceText: buildSource({ hostVersion: "9.9.9" }) });
+    expect(report.adapter.status).toBe("REJECTED");
+    expect(runner).toHaveBeenCalledTimes(0);
+    expect(Object.hasOwn(report, "s1d")).toBe(false);
+    expect(formatS2bJson(report)).toBe(
+      '{"schemaVersion":"justice-s2b-report-v1","adapter":{"status":"REJECTED","collectionStatus":"NOT_EVALUATED",'
+      + '"selectedTaskRef":{"artifactId":"task-1","revision":"R1"},"projectionScope":{"sessionId":"","collectionId":"",'
+      + '"taskRef":{"artifactId":"task-1","revision":"R1"},"scopeKey":"scope-1","firstPageIndex":null,"lastValidatedPageIndex":null,'
+      + '"validatedPageCount":0,"selectedMessageCount":0,"projectedEvidenceCount":0},"coverageCompleteness":"NOT_ESTABLISHED",'
+      + '"counts":{"bindings":0,"conflictedBindings":0,"conflictedSelectedMessages":0,"explicitSelectedCandidates":0,"foreignBindings":0,'
+      + '"rejectedCandidates":0,"selectedBindings":0,"unconfirmedCandidates":0,"unmappedTools":0,"validCandidates":0},'
+      + '"diagnostics":[{"code":"SOURCE_VERSION_UNSUPPORTED","count":1}],"diffProjection":"UNAVAILABLE"}}\n',
+    );
+    expect(formatS2bText(report)).toBe([
+      "Justice S2-b — offline READ_ONLY adapter",
+      "Adapter status: REJECTED",
+      "Collection status: NOT_EVALUATED (saved page sequence only; not Session-wide completeness)",
+      "Selected task: task-1@R1",
+      "Projection scope: session=not evaluated collection=not evaluated task=task-1@R1 scope=scope-1",
+      "  validated pages: none (count 0); selected messages: 0; projected evidence: 0",
+      "Coverage completeness: NOT_ESTABLISHED",
+      "Diff projection: UNAVAILABLE (ChangeSet availability UNAVAILABLE)",
+      "Authority: owner approval UNVERIFIED; host execution UNVERIFIED; evidence provenance UNVERIFIED_EXTERNAL",
+      "Counts: bindings=0, conflictedBindings=0, conflictedSelectedMessages=0, explicitSelectedCandidates=0, foreignBindings=0, rejectedCandidates=0, selectedBindings=0, unconfirmedCandidates=0, unmappedTools=0, validCandidates=0",
+      "Adapter diagnostic: SOURCE_VERSION_UNSUPPORTED x1",
+      "S1-d: NOT_INVOKED",
+      "This adapter output is not an acceptance or a Gate decision.",
+      "",
+    ].join("\n"));
+  });
+});
