@@ -1701,6 +1701,8 @@ type EvidenceRef = FullEvidenceRef | SelfEvidenceRef;
 
 OpenCode に公開される **唯一のカスタムツール**です（`OpenCodeAdapter.getTools()` は `{ justice_review }` のみを返す）。内部 dry-run helper（`justice_status`/`justice_gate` 相当）は実装として存在するが、canonical な Observation Log・DecisionRecord・replay・KPI を変えないためツールとして登録されない（D50）。
 
+> **例外（Daily Assurance, opt-in）**: `JUSTICE_DAILY_APPROVAL_SHA256` により Daily モードを明示的に有効化した場合に限り、V2 plugin が `justice_task_begin` / `justice_task_finish` を追加登録する（既定 OFF。`OpenCodeAdapter.getTools()` は不変）。
+
 - **表示（view）**: `{ scope? }`。`scope` 未指定時は全体のレビュー要約（`critical`/`major`/`minor`/`open`/`resolved` + `byScope`）に加えて **`health` セクション**（Observation Log の健全性指標）を返す。`scope` 指定時は当該 scope の `ScopeReviewSummary` のみを返し、`health` は含まない。
   - `health` セクション内容: `recordCount`（レコード総数）、`shardCount`（shard 数）、`lastSuccessfulWriteAt`（直近の成功書込み時刻 ISO8601）、`rotationHealth`（`consecutiveFailures`/`degraded`）、`readIntegrity`（`hasIntegrityViolation`）。
   - `health` 収集は fail-open: 取得失敗時は `health` フィールドを省略して view 本体を返す。

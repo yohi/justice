@@ -6,6 +6,11 @@ import {
   type JusticeReviewToolArgs,
   type JusticeReviewToolResult,
 } from "./runtime/justice-tools";
+import {
+  createProductionDailyPorts,
+  registerDailyAssurance,
+  type DailyRuntimeResult,
+} from "./runtime/daily-superpowers";
 import { OpenCodeAdapter, type OpenCodePluginInit } from "./runtime/opencode-adapter";
 
 /**
@@ -25,6 +30,12 @@ import { OpenCodeAdapter, type OpenCodePluginInit } from "./runtime/opencode-ada
  *   there is no pre-execution hook for host commands.
  * - V1 `chat.*`, `experimental.*` -> V2 `session.hook`: different semantics.
  *
+ * Daily Assurance (opt-in, advisory only): after `justice_review` is registered, setup asks the
+ * fixed production supply (`createProductionDailyPorts`: fixed env digest + read-only Owner mount)
+ * for a runtime. Only a READY runtime adds the Native `execute.before/after` observers, the two
+ * direct boundary tools and the fixed Skill transform. OFF or any Daily failure keeps the
+ * `justice_review` registration only. Cleanup disposes Daily first, then the review handle.
+ *
  * Importing this module has no side effects; `setup` is only invoked by a host.
  * This entry makes no Host-enforcement claim.
  */
@@ -34,6 +45,8 @@ export type JusticeV2AdapterPort = Pick<OpenCodeAdapter, "ensureInitialized" | "
 
 export interface JusticeV2PluginDeps {
   readonly createAdapter?: (init: OpenCodePluginInit) => JusticeV2AdapterPort;
+  /** Internal test seam only; production always binds `createProductionDailyPorts`. */
+  readonly createDailyRuntime?: (context: Plugin.Context) => Promise<DailyRuntimeResult>;
 }
 
 const PLUGIN_ID = "justice";
@@ -156,6 +169,7 @@ function defaultCreateAdapter(init: OpenCodePluginInit): JusticeV2AdapterPort {
 
 export function createJusticeV2Plugin(deps: JusticeV2PluginDeps = {}): Plugin.Plugin {
   const createAdapter = deps.createAdapter ?? defaultCreateAdapter;
+  const createDailyRuntime = deps.createDailyRuntime ?? createProductionDailyPorts;
   return {
     id: PLUGIN_ID,
     setup: async (context): Promise<Plugin.Cleanup | void> => {
@@ -165,7 +179,22 @@ export function createJusticeV2Plugin(deps: JusticeV2PluginDeps = {}): Plugin.Pl
         const registration = await context.tool.transform((editor: ToolEditor): void => {
           editor.add(tool);
         });
+        let daily: { readonly dispose: () => Promise<void> } | undefined;
+        try {
+          const runtime = await createDailyRuntime(context);
+          if (runtime.state === "READY") {
+            const registered = await registerDailyAssurance(context, runtime);
+            if (registered.state === "REGISTERED") daily = registered;
+          }
+        } catch {
+          // fail-open: Daily stays OFF; the existing justice_review registration is kept.
+        }
         return async (): Promise<void> => {
+          try {
+            await daily?.dispose();
+          } catch {
+            /* fail-open: Daily cleanup failure must not block the review handle */
+          }
           try {
             await registration.dispose();
           } catch {

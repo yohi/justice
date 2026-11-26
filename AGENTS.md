@@ -37,7 +37,7 @@ Core invariants that must never be broken:
 2. **Fail-open**: Hook/adapter I/O and notifier boundaries catch errors and degrade to `PROCEED` or safe fallback. Plugin failure never crashes a session.
 3. **Immutable public state**: Use `readonly`, `ReadonlyArray`, and `ReadonlyMap`. Mutate only private internal state; return resolved immutable snapshots.
 4. **JSON-only persistence**: Atomic temp-file-plus-rename writes. No external databases or binary storage.
-5. **One public tool**: `OpenCodeAdapter.getTools()` exposes only `justice_review`. Internal tools stay behind the trust boundary.
+5. **One public tool**: `OpenCodeAdapter.getTools()` exposes only `justice_review`. Internal tools stay behind the trust boundary. Exception: the opt-in Daily Assurance tools `justice_task_begin`/`justice_task_finish` are registered by the V2 plugin only when daily mode is explicitly enabled (`JUSTICE_DAILY_APPROVAL_SHA256`); default OFF.
 6. **Evidence trust**: `declared` provenance (agent self-claims) never satisfies a Gate PASS; only `observed` and `derived` evidence can (FF-008).
 7. **Advisory bootstrap**: `/justice-start` and `/justice-implement` guidance never invokes a skill or `task()`.
 8. **Implementation arm**: `handlePreToolUse` enriches `task()` only when explicitly armed via `/justice-implement` or trusted trigger; otherwise emits `implementation_unauthorized`.
