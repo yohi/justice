@@ -830,11 +830,12 @@ function makeSdk(o:SdkOptions={}){
   const skillTransform=vi.fn(async(cb:(e:unknown)=>void)=>{packageSkillTransforms.push(cb);return reg('skill-transform');});
   const skillList=vi.fn(async()=>({location:{},data:finalSkills()}));
   /** Runs the built-in `skill` tool result through every execute.after hook in order, like upstream tool.ts. */
-  const invokeSkillTool=async(f:CoordinatorFixture,id:string,messageID='msg_skill',callID='tool_skill'):Promise<Rec>=>{
+  const invokeSkillTool=async(f:CoordinatorFixture,id:string,messageID='msg_skill',callID='tool_skill',sessionID:unknown=f.SID,omitSession=false):Promise<Rec>=>{
     const sk=finalSkills().find(x=>x.id===id);
     const content=sk===undefined?'':['<skill_content name="'+sk.name+'">','# Skill: '+sk.name,'',sk.content.trim(),'','Base directory for this skill: /tmp','</skill_content>'].join('\n');
-    const event:Rec={tool:'skill',sessionID:f.SID,agent:'build',messageID,id:callID,input:{id},status:'completed',
+    const event:Rec={tool:'skill',sessionID,agent:'build',messageID,id:callID,input:{id},status:'completed',
       result:{output:{directory:'/tmp',content},content,metadata:{}}};
+    if(omitSession)delete event.sessionID;
     for(const cb of afterHooks)await cb(event);
     return event;
   };
@@ -1123,6 +1124,46 @@ describe('V2 wiring: fixed Skill delivery (upstream transform order)',()=>{
     await skillHook(forged);
     expect((forged.result as {content:string}).content).not.toContain(DAILY_SKILL_APPEND);
     expect(runtime.ready()).toBe(false);
+  });
+
+  describe('Session attribution',()=>{
+    const OTHER='ses_other_session';
+    it('an approved-Session delivery establishes readiness',async()=>{
+      const f=await makeCoordinatorFixture();
+      const sdk=makeSdk({skills:[{...APPROVED}]});
+      const runtime=runtimeOf(f);
+      await registerDailyAssurance(sdk.context as unknown as DailyPluginContext,runtime);
+      await sdk.invokeSkillTool(f,'skill-fixture');
+      expect(runtime.ready()).toBe(true);
+    });
+
+    it.each([['other Session',OTHER],['missing',Symbol.for('omit')],['non-string',42],['empty',''],['object',{}]] as const)(
+      'a %s sessionID neither changes the delivered result, calls skill.list nor sets readiness',async(_n,sid)=>{
+        const f=await makeCoordinatorFixture();
+        const sdk=makeSdk({skills:[{...APPROVED}]});
+        const runtime=runtimeOf(f);
+        await registerDailyAssurance(sdk.context as unknown as DailyPluginContext,runtime);
+        const ev=await sdk.invokeSkillTool(f,'skill-fixture','msg_x','tool_x',sid,sid===Symbol.for('omit'));
+        expect((ev.result as {content:string}).content).not.toContain(DAILY_SKILL_APPEND);
+        expect(sdk.skillList).not.toHaveBeenCalled();
+        expect(runtime.ready()).toBe(false);
+      });
+
+    it('another Session failing, mismatching or erroring never revokes the approved Session readiness',async()=>{
+      const f=await makeCoordinatorFixture();
+      const sdk=makeSdk({skills:[{...APPROVED}]});
+      const runtime=runtimeOf(f);
+      await registerDailyAssurance(sdk.context as unknown as DailyPluginContext,runtime);
+      await sdk.invokeSkillTool(f,'skill-fixture');
+      expect(runtime.ready()).toBe(true);
+      sdk.skillList.mockClear();
+      sdk.skills[0]!.content='edited-skill'; // identity mismatch seen by another Session
+      await sdk.invokeSkillTool(f,'skill-fixture','msg_y','tool_y',OTHER);
+      const failed:Rec={tool:'skill',sessionID:OTHER,input:{id:'skill-fixture'},status:'error',error:new Error('x')};
+      for(const c of sdk.toolHook.mock.calls.filter(c=>c[0]==='execute.after'))await (c[1] as (i:unknown)=>unknown)(failed);
+      expect(sdk.skillList).not.toHaveBeenCalled();
+      expect(runtime.ready()).toBe(true);
+    });
   });
 
   it('a later load that no longer matches the approved identity revokes readiness (Skill changed / reload)',async()=>{

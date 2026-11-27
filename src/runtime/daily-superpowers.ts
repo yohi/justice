@@ -896,6 +896,9 @@ async function applySkillDelivery(
   const mark = (ready: boolean): void => {if (!isClosed()) {try {markSkillReady(ready);} catch {/* readiness stays as-is */}}};
   try {
     if (field(input, 'tool') !== SKILL_TOOL) return;
+    // Session attribution: only the Owner-approved Session may deliver, list, or change readiness.
+    const sessionId = field(input, 'sessionID');
+    if (typeof sessionId !== 'string' || sessionId === '' || sessionId !== config.approval.sessionId) return;
     const want = config.approval.skill;
     if (field(field(input, 'input'), 'id') !== want.id) return; // unapproved Skills are never touched
     if (field(input, 'status') !== 'completed') {mark(false); return;}
