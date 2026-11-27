@@ -140,6 +140,21 @@ function loopbackMayBeProxied(): boolean {
   return [...PROXY_ENV_KEYS, ...NO_PROXY_ENV_KEYS].some(k => (env[k] ?? '').trim() !== '');
 }
 
+const NATIVE_AUTH_USERNAME = 'opencode';
+
+/**
+ * OpenCode 2.3.2 `serve` requires HTTP Basic (user `opencode`) and adopts `OPENCODE_PASSWORD`, then the legacy
+ * `OPENCODE_SERVER_PASSWORD`, when set; otherwise it generates an unreadable random password. Only the
+ * explicitly configured dedicated-runtime value is used: read at call time, never stored, never searched for.
+ * Returns null (fail closed, no unauthenticated fallback) when absent or empty.
+ */
+function nativeAuthorization(): string | null {
+  const env = typeof process === 'undefined' ? {} : process.env;
+  const password = env.OPENCODE_PASSWORD || env.OPENCODE_SERVER_PASSWORD;
+  if (typeof password !== 'string' || password === '') return null;
+  return `Basic ${Buffer.from(`${NATIVE_AUTH_USERNAME}:${password}`, 'utf8').toString('base64')}`;
+}
+
 export function createNativeReadPort(config:DailyOwnerConfig):NativeReadPort {
   // Trusted fetch captured once at construction; requests only ever target the fixed loopback origin.
   const trustedFetch = globalThis.fetch;
@@ -150,12 +165,14 @@ export function createNativeReadPort(config:DailyOwnerConfig):NativeReadPort {
   async function get(pathAndQuery: string, cap: number, signal: AbortSignal): Promise<NativeBytes> {
     if (signal.aborted) return unavailable('ABORTED');
     if (loopbackMayBeProxied()) return unavailable('SOURCE_UNAVAILABLE');
+    const authorization = nativeAuthorization();
+    if (authorization === null) return unavailable('SOURCE_UNAVAILABLE');
     const d = deadline(signal, GET_TIMEOUT_MS);
     const failure = (): Unavailable => unavailable(signal.aborted ? 'ABORTED' : d.timedOut() ? 'TIMEOUT' : 'SOURCE_UNAVAILABLE');
     try {
       const response = await trustedFetch(origin + pathAndQuery, {
         method: 'GET', redirect: 'error', credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer',
-        headers: {accept: 'application/json'}, signal: d.signal,
+        headers: {accept: 'application/json', authorization}, signal: d.signal,
       });
       if (d.signal.aborted) return failure();
       if (response.status !== 200 || response.redirected || !isJsonContentType(response.headers.get('content-type'))) {

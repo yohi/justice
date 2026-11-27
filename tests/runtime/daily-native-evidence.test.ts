@@ -635,7 +635,9 @@ describe('daily native evidence: boundary',()=>{
 
 describe('daily native evidence: fixed Native HTTP port',()=>{
   const PROXY_KEYS=['HTTP_PROXY','http_proxy','HTTPS_PROXY','https_proxy','ALL_PROXY','all_proxy','NO_PROXY','no_proxy'];
-  beforeEach(()=>{for(const k of PROXY_KEYS)vi.stubEnv(k,'');});
+  const DUMMY_PW='dummy-pw:with:colons';
+  const basic=(pw:string)=>`Basic ${Buffer.from(`opencode:${pw}`,'utf8').toString('base64')}`;
+  beforeEach(()=>{for(const k of PROXY_KEYS)vi.stubEnv(k,'');vi.stubEnv('OPENCODE_PASSWORD',DUMMY_PW);vi.stubEnv('OPENCODE_SERVER_PASSWORD','');});
   afterEach(()=>{vi.unstubAllGlobals();vi.unstubAllEnvs();vi.useRealTimers();});
   type Seen={url:string;init:RequestInit};
   function stub(respond:(url:string,init:RequestInit)=>Promise<Response>|Response){
@@ -644,7 +646,7 @@ describe('daily native evidence: fixed Native HTTP port',()=>{
     return seen;
   }
   const json=(body:BodyInit|null,status=200,type='application/json; charset=utf-8')=>new Response(body,{status,headers:{'content-type':type}});
-  it('uses only the fixed loopback origin, paths and queries without credentials or redirects',async()=>{
+  it('uses only the fixed loopback origin, paths and queries with Basic auth, no cookies or redirects',async()=>{
     const f=await makeDailyFixture();
     const seen=stub(()=>json('{"ok":true}'));
     const port=createNativeReadPort(f.config);
@@ -666,7 +668,7 @@ describe('daily native evidence: fixed Native HTTP port',()=>{
       expect(init.credentials).toBe('omit');
       expect(init.body).toBeUndefined();
       const h=new Headers(init.headers);
-      expect(h.has('authorization')).toBe(false);expect(h.has('cookie')).toBe(false);
+      expect(h.get('authorization')).toBe(basic(DUMMY_PW));expect(h.has('cookie')).toBe(false);
       expect(init.signal).toBeInstanceOf(AbortSignal);
     }
   });
@@ -779,5 +781,120 @@ describe('daily native evidence: fixed Native HTTP port',()=>{
     const q=port.getSession(SID,ctl.signal);
     ctl.abort();
     expect(await q).toEqual({state:'UNAVAILABLE',reason:'ABORTED'});
+  });
+});
+
+describe('daily native evidence: Native API Basic authentication (OpenCode 2.3.2 contract)',()=>{
+  const PROXY_KEYS=['HTTP_PROXY','http_proxy','HTTPS_PROXY','https_proxy','ALL_PROXY','all_proxy','NO_PROXY','no_proxy'];
+  const PW='dummy-pw-1';
+  const basic=(pw:string)=>`Basic ${Buffer.from(`opencode:${pw}`,'utf8').toString('base64')}`;
+  beforeEach(()=>{for(const k of PROXY_KEYS)vi.stubEnv(k,'');vi.stubEnv('OPENCODE_PASSWORD','');vi.stubEnv('OPENCODE_SERVER_PASSWORD','');});
+  afterEach(()=>{vi.unstubAllGlobals();vi.unstubAllEnvs();});
+  type Seen={url:string;init:RequestInit};
+  function stub(respond:(url:string,init:RequestInit)=>Promise<Response>|Response=()=>json('{}')){
+    const seen:Seen[]=[];
+    vi.stubGlobal('fetch',vi.fn(async(url:string,init:RequestInit)=>{seen.push({url,init});return respond(url,init);}));
+    return seen;
+  }
+  const json=(body:BodyInit|null,status=200)=>new Response(body,{status,headers:{'content-type':'application/json'}});
+  const U={state:'UNAVAILABLE',reason:'SOURCE_UNAVAILABLE'};
+  const readAll=async(port:NativeReadPort)=>[
+    await port.getSession(SID,sig()),
+    await port.getMessages(SID,{order:'asc',limit:100},sig()),
+    await port.getRunningShells(ROOT,sig()),
+  ];
+
+  it('sends opencode:<OPENCODE_PASSWORD> Basic credentials on all three endpoints, only to the fixed origin',async()=>{
+    vi.stubEnv('OPENCODE_PASSWORD',PW);
+    const f=await makeDailyFixture();const seen=stub();
+    const results=await readAll(createNativeReadPort(f.config));
+    expect(results.map(r=>r.state)).toEqual(['OK','OK','OK']);
+    expect(seen).toHaveLength(3);
+    for(const {url,init} of seen){
+      expect(url.startsWith('http://127.0.0.1:49187/')).toBe(true);
+      expect(new Headers(init.headers).get('authorization')).toBe(basic(PW));
+      expect(init.redirect).toBe('error');expect(init.credentials).toBe('omit');
+    }
+  });
+  it('falls back to OPENCODE_SERVER_PASSWORD and prefers OPENCODE_PASSWORD (host precedence)',async()=>{
+    const f=await makeDailyFixture();const seen=stub();
+    vi.stubEnv('OPENCODE_SERVER_PASSWORD','legacy-pw');
+    await createNativeReadPort(f.config).getSession(SID,sig());
+    vi.stubEnv('OPENCODE_PASSWORD',PW);
+    await createNativeReadPort(f.config).getSession(SID,sig());
+    expect(seen.map(s=>new Headers(s.init.headers).get('authorization'))).toEqual([basic('legacy-pw'),basic(PW)]);
+  });
+  it('encodes non-ASCII passwords as UTF-8',async()=>{
+    vi.stubEnv('OPENCODE_PASSWORD','pässwörd');
+    const f=await makeDailyFixture();const seen=stub();
+    await createNativeReadPort(f.config).getSession(SID,sig());
+    expect(new Headers(seen[0]!.init.headers).get('authorization')).toBe(basic('pässwörd'));
+  });
+  it('fails closed without any request when no credential is available (no unauthenticated fallback)',async()=>{
+    const f=await makeDailyFixture();const seen=stub();
+    expect(await readAll(createNativeReadPort(f.config))).toEqual([U,U,U]);
+    expect(seen).toHaveLength(0);
+  });
+  it('reads the credential at call time and does not retain it at construction',async()=>{
+    const f=await makeDailyFixture();const seen=stub();
+    const port=createNativeReadPort(f.config);
+    expect(seen).toHaveLength(0);
+    expect(await port.getSession(SID,sig())).toEqual(U);
+    vi.stubEnv('OPENCODE_PASSWORD',PW);
+    expect((await port.getSession(SID,sig())).state).toBe('OK');
+    vi.stubEnv('OPENCODE_PASSWORD','');
+    expect(await port.getSession(SID,sig())).toEqual(U);
+    expect(seen).toHaveLength(1);
+  });
+  it.each([401,403])('treats HTTP %i as fail-closed with a single attempt and no credential switch',async status=>{
+    vi.stubEnv('OPENCODE_PASSWORD',PW);vi.stubEnv('OPENCODE_SERVER_PASSWORD','other-pw');
+    const f=await makeDailyFixture();const seen=stub(()=>json('{"_tag":"UnauthorizedError"}',status));
+    expect(await createNativeReadPort(f.config).getSession(SID,sig())).toEqual(U);
+    expect(seen).toHaveLength(1);
+  });
+  it('does not forward credentials across a redirect (redirect:error) and fails closed',async()=>{
+    vi.stubEnv('OPENCODE_PASSWORD',PW);
+    const f=await makeDailyFixture();
+    const seen=stub(()=>Promise.reject(new TypeError('redirect')));
+    expect(await createNativeReadPort(f.config).getSession(SID,sig())).toEqual(U);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.init.redirect).toBe('error');
+  });
+  it('refuses to send the credential when a proxy is configured',async()=>{
+    vi.stubEnv('OPENCODE_PASSWORD',PW);vi.stubEnv('HTTP_PROXY','http://127.0.0.1:9');
+    const f=await makeDailyFixture();const seen=stub();
+    expect(await readAll(createNativeReadPort(f.config))).toEqual([U,U,U]);
+    expect(seen).toHaveLength(0);
+  });
+  it('keeps session/workspace pinning: mismatches send nothing',async()=>{
+    vi.stubEnv('OPENCODE_PASSWORD',PW);
+    const f=await makeDailyFixture();const seen=stub();
+    const port=createNativeReadPort(f.config);
+    await port.getSession('ses_other001',sig());await port.getRunningShells('/tmp/other',sig());
+    expect(seen).toHaveLength(0);
+  });
+  it('never leaks the credential (raw or Base64) into results, even when the host response echoes it',async()=>{
+    vi.stubEnv('OPENCODE_PASSWORD',PW);
+    const f=await makeDailyFixture();
+    stub((_u,init)=>json(`{"echo":"${new Headers(init.headers).get('authorization')}"}`,401));
+    const results=await readAll(createNativeReadPort(f.config));
+    const text=JSON.stringify(results);
+    expect(text).not.toContain(PW);expect(text).not.toContain(Buffer.from(`opencode:${PW}`).toString('base64'));
+    stub(()=>Promise.reject(new Error(`boom ${PW}`)));
+    const failed=JSON.stringify(await readAll(createNativeReadPort(f.config)));
+    expect(failed).not.toContain(PW);
+  });
+  it('does not mutate or export the password environment variables',async()=>{
+    vi.stubEnv('OPENCODE_PASSWORD',PW);
+    const f=await makeDailyFixture();stub();
+    await createNativeReadPort(f.config).getSession(SID,sig());
+    expect(process.env.OPENCODE_PASSWORD).toBe(PW);
+  });
+  it('keeps abort behaviour: an aborted caller sends no request even with a credential',async()=>{
+    vi.stubEnv('OPENCODE_PASSWORD',PW);
+    const f=await makeDailyFixture();const seen=stub();
+    const ctl=new AbortController();ctl.abort();
+    expect(await createNativeReadPort(f.config).getSession(SID,ctl.signal)).toEqual({state:'UNAVAILABLE',reason:'ABORTED'});
+    expect(seen).toHaveLength(0);
   });
 });
