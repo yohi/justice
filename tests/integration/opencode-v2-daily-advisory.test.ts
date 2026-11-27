@@ -129,7 +129,8 @@ async function makeCoordinatorFixture(options:CoordinatorFixtureOptions={}){
   const holds:{skip:number;deferred:Deferred}[]=[];
   const nativeCalls:string[]=[];
   const sessionLocations:string[]=[];
-  let messageMode:'ok'|'rejected'|'incomplete'='ok';
+  const sessionIds:string[]=[];
+  let messageMode:'ok'|'rejected'|'incomplete'|'unavailable'='ok';
   let shellsBody=JSON.stringify({location:{directory:root},data:[]});
   const ok=(t:string):NativeBytes=>({state:'OK',bytes:enc(t)});
   const wait=async():Promise<void>=>{
@@ -143,10 +144,11 @@ async function makeCoordinatorFixture(options:CoordinatorFixtureOptions={}){
     if(gateArmed&&timeline.finish)await gate.promise;
   };
   const native:NativeReadPort={
-    async getSession(){nativeCalls.push('session');await wait();return ok(sessionResponse({location:{directory:sessionLocations.shift()??root}}));},
+    async getSession(){nativeCalls.push('session');await wait();return ok(sessionResponse({id:sessionIds.shift()??SID,location:{directory:sessionLocations.shift()??root}}));},
     async getMessages(_s,query){
       nativeCalls.push('messages');
       if(timeline.finish&&messageMode==='rejected')return ok('{"data":[],"cursor":{},"extra":1}');
+      if(timeline.finish&&messageMode==='unavailable')return {state:'UNAVAILABLE',reason:'SOURCE_UNAVAILABLE'};
       if(timeline.finish&&messageMode==='incomplete')return 'order' in query?ok(pageResponse(messages(),'cur-1')):{state:'UNAVAILABLE',reason:'SOURCE_UNAVAILABLE'};
       return ok(pageResponse(messages()));
     },
@@ -198,8 +200,9 @@ async function makeCoordinatorFixture(options:CoordinatorFixtureOptions={}){
     },
      holdNextNative(skip=0):Deferred{const d=deferred();holds.push({skip,deferred:d});return d;},
      setSessionLocations(...locations:string[]):void{sessionLocations.push(...locations);},
+     setSessionIds(...ids:string[]):void{sessionIds.push(...ids);},
      disarmGate():void{gateArmed=false;},
-    setMessageMode(m:'ok'|'rejected'|'incomplete'):void{messageMode=m;},
+     setMessageMode(m:'ok'|'rejected'|'incomplete'|'unavailable'):void{messageMode=m;},
     setShells(body:string):void{shellsBody=body;},
     setSkillReady(r:boolean):void{skillReady=r;},
     get nativeReads():number{return nativeCalls.length;},
@@ -487,6 +490,19 @@ describe('daily coordinator: bounded single Task',()=>{
     expect(r.evidence).toEqual({state:'UNAVAILABLE',diagnostics:[],reasons:['BOUNDARY_UNCERTAIN']});
   });
 
+  it('a native source acquisition failure preserves independently collected Git scope',async()=>{
+    const f=await makeCoordinatorFixture();
+    const key=await begun(f);
+    f.observePair();
+    f.setMessageMode('unavailable');
+    const r=await f.coordinator.finish(key,f.finishCall);
+    expect(r.state).toBe('LIMITED');
+    expect(r.evidence).toEqual({state:'UNAVAILABLE',diagnostics:[],reasons:['SOURCE_UNAVAILABLE']});
+    expect(r.scope).toMatchObject({state:'EVALUATED',origin:'S1D_SCOPE_FALLBACK'});
+    expect(r.changeSetOrigin).toBe('GIT_READ_ONLY');
+    expect(f.gitReads).toBeGreaterThan(0);
+  });
+
   it('caps storage at 4,096 observations and marks OBSERVATION_LIMIT',async()=>{
     const f=await makeCoordinatorFixture();
     const key=await begun(f);
@@ -552,6 +568,30 @@ describe('daily coordinator: bounded single Task',()=>{
     expect(r.state).toBe('UNAVAILABLE');
     expect(r.evidence).toEqual({state:'UNAVAILABLE',diagnostics:[],reasons:['WORKSPACE_MISMATCH']});
     expect(r.scope).toEqual({state:'NOT_EVALUATED',comparison:'UNKNOWN',reason:'WORKSPACE_MISMATCH'});
+    expect(f.gitReads).toBeGreaterThan(0);
+  });
+
+  it('a session mismatch in end snapshot A skips and invalidates Git scope',async()=>{
+    const f=await makeCoordinatorFixture();
+    const key=await begun(f);
+    f.observePair();
+    f.setSessionIds('ses_other001');
+    const r=await f.coordinator.finish(key,f.finishCall);
+    expect(r.state).toBe('UNAVAILABLE');
+    expect(r.evidence).toEqual({state:'UNAVAILABLE',diagnostics:[],reasons:['SESSION_MISMATCH']});
+    expect(r.scope).toEqual({state:'NOT_EVALUATED',comparison:'UNKNOWN',reason:'SESSION_MISMATCH'});
+    expect(f.gitReads).toBe(0);
+  });
+
+  it('a session mismatch in end snapshot B invalidates the collected Git scope',async()=>{
+    const f=await makeCoordinatorFixture();
+    const key=await begun(f);
+    f.observePair();
+    f.setSessionIds(f.SID,f.SID,'ses_other001');
+    const r=await f.coordinator.finish(key,f.finishCall);
+    expect(r.state).toBe('UNAVAILABLE');
+    expect(r.evidence).toEqual({state:'UNAVAILABLE',diagnostics:[],reasons:['SESSION_MISMATCH']});
+    expect(r.scope).toEqual({state:'NOT_EVALUATED',comparison:'UNKNOWN',reason:'SESSION_MISMATCH'});
     expect(f.gitReads).toBeGreaterThan(0);
   });
 

@@ -438,16 +438,18 @@ export function createDailyCoordinator(ports:DailyCoordinatorPorts):DailyCoordin
       const snapA = await step(readNativeSnapshot(b, ports.native, `daily-${b.key.slice(0, 16)}-end-a`, op.signal));
       const blocked: DailyReason | null = sealed.inFlight ? 'TOOL_IN_FLIGHT' : overLimit ? 'OBSERVATION_LIMIT'
         : shellsA.state !== 'OK' ? shellsA.reason : counter !== sealed.sealCounter ? 'LATE_OBSERVATION' : null;
-      const wrongWorkspaceA = snapA.state === 'UNAVAILABLE' && snapA.reason === 'WORKSPACE_MISMATCH';
-      let changes: DailyChangeSetResult = wrongWorkspaceA ? unavailable('WORKSPACE_MISMATCH')
+      const sourceMismatchA = snapA.state === 'UNAVAILABLE'
+        && (snapA.reason === 'WORKSPACE_MISMATCH' || snapA.reason === 'SESSION_MISMATCH') ? snapA.reason : null;
+      let changes: DailyChangeSetResult = sourceMismatchA !== null ? unavailable(sourceMismatchA)
         : blocked !== null ? unavailable(blocked) : await step(collectDailyChangeSet(b, ports.git, op.signal));
       const snapB = await step(readNativeSnapshot(b, ports.native, `daily-${b.key.slice(0, 16)}-end-b`, op.signal));
       const shellsB = await step(checkNoRunningShells(b, ports.native, op.signal));
       const quietCounter = counter;
       const late = quietCounter !== sealed.sealCounter;
-      const wrongWorkspaceB = snapB.state === 'UNAVAILABLE' && snapB.reason === 'WORKSPACE_MISMATCH';
-      if (changes.state === 'VALID' && wrongWorkspaceB) {
-        changes = unavailable('WORKSPACE_MISMATCH');
+      const sourceMismatchB = snapB.state === 'UNAVAILABLE'
+        && (snapB.reason === 'WORKSPACE_MISMATCH' || snapB.reason === 'SESSION_MISMATCH') ? snapB.reason : null;
+      if (changes.state === 'VALID' && sourceMismatchB !== null) {
+        changes = unavailable(sourceMismatchB);
       } else if (changes.state === 'VALID' && (late || shellsB.state !== 'OK' || overLimit)) {
         changes = unavailable(late ? 'LATE_OBSERVATION' : shellsB.state !== 'OK' ? shellsB.reason : 'OBSERVATION_LIMIT');
       }
