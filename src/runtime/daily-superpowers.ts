@@ -278,11 +278,14 @@ export function createDailyCoordinator(ports:DailyCoordinatorPorts):DailyCoordin
   function observe(event: NativeObservation): void {
     try {
       if (lifecycle === 'DISPOSED') return;
+      const observedSessionId = field(event, 'sessionId');
+      if (typeof observedSessionId === 'string' && ID_PATTERN.test(observedSessionId) && observedSessionId !== sessionId) return;
       if (!isObservation(event)) {disturb('BOUNDARY_UNCERTAIN'); return;}
-      if (event.sessionId !== sessionId) return; // only the exact fixed Session is tracked
+      if (observedSessionId !== sessionId) {disturb('BOUNDARY_UNCERTAIN'); return;}
       const control = isControl(event.tool);
-      // ruleId is only derived while ACTIVE, and only for the exact direct shell name.
-      const ruleId = lifecycle === 'ACTIVE' && event.tool === 'shell' ? event.ruleId : null;
+      // FINISHING retains rule identity only to deduplicate an ACTIVE event replay;
+      // FINISHING observations are never added to the sealed evidence epoch.
+      const ruleId = (lifecycle === 'ACTIVE' || lifecycle === 'FINISHING') && event.tool === 'shell' ? event.ruleId : null;
       const obs: NativeObservation = Object.freeze({
         sessionId: event.sessionId, messageId: event.messageId, callId: event.callId,
         tool: event.tool, phase: event.phase, status: event.status, ruleId,
@@ -365,6 +368,7 @@ export function createDailyCoordinator(ports:DailyCoordinatorPorts):DailyCoordin
       if (pre.state !== 'READY') return failStart(pre.reason);
       const s = stop();
       if (s !== null) return failStart(s);
+      if (!skillReady()) return failStart('SKILL_UNSUPPORTED');
       binding = b;
       prefix = pre.prefixMessageIds;
       epochObservations = [];
@@ -434,17 +438,24 @@ export function createDailyCoordinator(ports:DailyCoordinatorPorts):DailyCoordin
       const snapA = await step(readNativeSnapshot(b, ports.native, `daily-${b.key.slice(0, 16)}-end-a`, op.signal));
       const blocked: DailyReason | null = sealed.inFlight ? 'TOOL_IN_FLIGHT' : overLimit ? 'OBSERVATION_LIMIT'
         : shellsA.state !== 'OK' ? shellsA.reason : counter !== sealed.sealCounter ? 'LATE_OBSERVATION' : null;
-      let changes: DailyChangeSetResult = blocked !== null ? unavailable(blocked) : await step(collectDailyChangeSet(b, ports.git, op.signal));
+      const wrongWorkspaceA = snapA.state === 'UNAVAILABLE' && snapA.reason === 'WORKSPACE_MISMATCH';
+      let changes: DailyChangeSetResult = wrongWorkspaceA ? unavailable('WORKSPACE_MISMATCH')
+        : blocked !== null ? unavailable(blocked) : await step(collectDailyChangeSet(b, ports.git, op.signal));
       const snapB = await step(readNativeSnapshot(b, ports.native, `daily-${b.key.slice(0, 16)}-end-b`, op.signal));
       const shellsB = await step(checkNoRunningShells(b, ports.native, op.signal));
       const quietCounter = counter;
       const late = quietCounter !== sealed.sealCounter;
-      if (changes.state === 'VALID' && (late || shellsB.state !== 'OK' || overLimit)) {
+      const wrongWorkspaceB = snapB.state === 'UNAVAILABLE' && snapB.reason === 'WORKSPACE_MISMATCH';
+      if (changes.state === 'VALID' && wrongWorkspaceB) {
+        changes = unavailable('WORKSPACE_MISMATCH');
+      } else if (changes.state === 'VALID' && (late || shellsB.state !== 'OK' || overLimit)) {
         changes = unavailable(late ? 'LATE_OBSERVATION' : shellsB.state !== 'OK' ? shellsB.reason : 'OBSERVATION_LIMIT');
       }
 
       const concurrentAtEvaluation = concurrentFinish;
       const uncertain: DailyReason[] = [...sealed.preReasons];
+      if (shellsA.state !== 'OK') uncertain.push(shellsA.reason);
+      if (shellsB.state !== 'OK') uncertain.push(shellsB.reason);
       if (concurrentAtEvaluation) uncertain.push('BOUNDARY_UNCERTAIN');
       if (late) uncertain.push('LATE_OBSERVATION');
       if (overLimit) uncertain.push('OBSERVATION_LIMIT');
@@ -466,6 +477,7 @@ export function createDailyCoordinator(ports:DailyCoordinatorPorts):DailyCoordin
       // Late work after the quiet proof: Native evidence is withdrawn; Git validity was established earlier.
       if (counter !== quietCounter) report = markDailyBoundaryUncertain(report, 'LATE_OBSERVATION');
       if (concurrentFinish && !concurrentAtEvaluation) report = markDailyBoundaryUncertain(report, 'BOUNDARY_UNCERTAIN');
+      if (!skillReady()) report = markDailyBoundaryUncertain(report, 'SKILL_UNSUPPORTED');
       const s = stop();
       if (s !== null) throw new Halt(s);
       return publish(report);
@@ -707,63 +719,76 @@ export async function createProductionDailyPorts(context:DailyPluginContext):Pro
   }
   const setup = new AbortController();
   let expired = false;
-  const timer = setTimeout(() => {expired = true; setup.abort();}, SETUP_DEADLINE_MS);
-  try {
-    const ownerPort = createOwnerConfigReadPort();
-    const loaded = await loadDailyOwnerConfig(captured, ownerPort, setup.signal);
-    if (loaded.state !== 'READY') return off(expired ? 'TIMEOUT' : loaded.reason);
-    const setupConfig = loaded.config;
-    const git = createDailyGitReadPort(setupConfig);
-    const native = createNativeReadPort(setupConfig);
-    const sameConfig = (c: DailyOwnerConfig): boolean => c === setupConfig || JSON.stringify(c) === JSON.stringify(setupConfig);
+  let resolveTimeout: (result: DailyRuntimeResult) => void = () => undefined;
+  const timeout = new Promise<DailyRuntimeResult>(resolve => {resolveTimeout = resolve;});
+  const timer = setTimeout(() => {
+    expired = true;
+    setup.abort();
+    resolveTimeout(off('TIMEOUT'));
+  }, SETUP_DEADLINE_MS);
+  const setupWork = async (): Promise<DailyRuntimeResult> => {
+    try {
+      const ownerPort = createOwnerConfigReadPort();
+      const loaded = await loadDailyOwnerConfig(captured, ownerPort, setup.signal);
+      if (setup.signal.aborted) return off(expired ? 'TIMEOUT' : 'ABORTED');
+      if (loaded.state !== 'READY') return off(loaded.reason);
+      const setupConfig = loaded.config;
+      const git = createDailyGitReadPort(setupConfig);
+      const native = createNativeReadPort(setupConfig);
+      const sameConfig = (c: DailyOwnerConfig): boolean => c === setupConfig || JSON.stringify(c) === JSON.stringify(setupConfig);
 
-    const preflight: DailyPreflightPorts = Object.freeze({
-      async reloadOwnerConfig(signal: AbortSignal): Promise<DailyConfigResult> {
-        if (readApprovalEnv() !== captured) return Object.freeze({state: 'OFF' as const, reason: 'APPROVAL_DIGEST_MISMATCH' as const});
-        return loadDailyOwnerConfig(captured, ownerPort, signal);
-      },
-      source: createOwnerSource(),
-      async verifyRuntime(config: DailyOwnerConfig, signal: AbortSignal): Promise<CheckResult> {
-        try {
-          if (signal.aborted) return unavailable('ABORTED');
-          if (readApprovalEnv() !== captured || config.approvalSha256 !== captured) return unavailable('APPROVAL_DIGEST_MISMATCH');
-          if (!sameConfig(config)) return unavailable('BINDING_INVALID');
-          if ((await verifyOwnerMount(signal)).state !== 'OK') return unavailable(signal.aborted ? 'ABORTED' : 'OWNER_BOUNDARY_UNVERIFIED');
-          if (config.approval.hostBinarySha256 !== DAILY_HOST_SHA256 || typeof process === 'undefined' || process.platform !== 'linux') {
-            return unavailable('HOST_MISMATCH');
+      const preflight: DailyPreflightPorts = Object.freeze({
+        async reloadOwnerConfig(signal: AbortSignal): Promise<DailyConfigResult> {
+          if (readApprovalEnv() !== captured) return Object.freeze({state: 'OFF' as const, reason: 'APPROVAL_DIGEST_MISMATCH' as const});
+          return loadDailyOwnerConfig(captured, ownerPort, signal);
+        },
+        source: createOwnerSource(),
+        async verifyRuntime(config: DailyOwnerConfig, signal: AbortSignal): Promise<CheckResult> {
+          try {
+            if (signal.aborted) return unavailable('ABORTED');
+            if (readApprovalEnv() !== captured || config.approvalSha256 !== captured) return unavailable('APPROVAL_DIGEST_MISMATCH');
+            if (!sameConfig(config)) return unavailable('BINDING_INVALID');
+            if ((await verifyOwnerMount(signal)).state !== 'OK') return unavailable(signal.aborted ? 'ABORTED' : 'OWNER_BOUNDARY_UNVERIFIED');
+            if (config.approval.hostBinarySha256 !== DAILY_HOST_SHA256 || typeof process === 'undefined' || process.platform !== 'linux') {
+              return unavailable('HOST_MISMATCH');
+            }
+            const root = config.approval.worktreeRoot;
+            if (insideOwnerRoot(root)) return unavailable('OWNER_BOUNDARY_UNVERIFIED');
+            if (directory === null) return unavailable('WORKSPACE_MISMATCH');
+            let resolved: string;
+            try {resolved = await realpath(directory);} catch {return unavailable(signal.aborted ? 'ABORTED' : 'WORKSPACE_MISMATCH');}
+            if (signal.aborted) return unavailable('ABORTED');
+            if (resolved !== root) return unavailable('WORKSPACE_MISMATCH');
+            const exe = await hashExecutable(signal);
+            if (signal.aborted) return unavailable('ABORTED');
+            if (exe === null || exe !== DAILY_HOST_SHA256 || exe !== config.approval.hostBinarySha256) return unavailable('HOST_MISMATCH');
+            return OK;
+          } catch {
+            return unavailable(signal.aborted ? 'ABORTED' : 'HOST_MISMATCH');
           }
-          const root = config.approval.worktreeRoot;
-          if (insideOwnerRoot(root)) return unavailable('OWNER_BOUNDARY_UNVERIFIED');
-          if (directory === null) return unavailable('WORKSPACE_MISMATCH');
-          let resolved: string;
-          try {resolved = await realpath(directory);} catch {return unavailable(signal.aborted ? 'ABORTED' : 'WORKSPACE_MISMATCH');}
-          if (signal.aborted) return unavailable('ABORTED');
-          if (resolved !== root) return unavailable('WORKSPACE_MISMATCH');
-          const exe = await hashExecutable(signal);
-          if (signal.aborted) return unavailable('ABORTED');
-          if (exe === null || exe !== DAILY_HOST_SHA256 || exe !== config.approval.hostBinarySha256) return unavailable('HOST_MISMATCH');
-          return OK;
-        } catch {
-          return unavailable(signal.aborted ? 'ABORTED' : 'HOST_MISMATCH');
-        }
-      },
-      async checkCleanBase(config: DailyOwnerConfig, signal: AbortSignal): Promise<CheckResult> {
-        if (!sameConfig(config)) return unavailable('BINDING_INVALID');
-        return checkCleanBase(config, git, signal);
-      },
-    });
+        },
+        async checkCleanBase(config: DailyOwnerConfig, signal: AbortSignal): Promise<CheckResult> {
+          if (!sameConfig(config)) return unavailable('BINDING_INVALID');
+          return checkCleanBase(config, git, signal);
+        },
+      });
 
-    const runtime = await preflight.verifyRuntime(setupConfig, setup.signal);
-    if (runtime.state !== 'OK') return off(expired ? 'TIMEOUT' : runtime.reason);
-    let ready = false;
-    const ports: DailyCoordinatorPorts = Object.freeze({
-      config: setupConfig, preflight, native, git,
-      isSkillReady: (): boolean => ready,
-      diagnose: runDailyAdvisory,
-    });
-    return Object.freeze({state: 'READY' as const, ports, markSkillReady: (value: boolean): void => {ready = value === true;}});
-  } catch {
-    return off(expired ? 'TIMEOUT' : 'SETUP_FAILED');
+      const runtime = await preflight.verifyRuntime(setupConfig, setup.signal);
+      if (setup.signal.aborted) return off(expired ? 'TIMEOUT' : 'ABORTED');
+      if (runtime.state !== 'OK') return off(runtime.reason);
+      let ready = false;
+      const ports: DailyCoordinatorPorts = Object.freeze({
+        config: setupConfig, preflight, native, git,
+        isSkillReady: (): boolean => ready,
+        diagnose: runDailyAdvisory,
+      });
+      return Object.freeze({state: 'READY' as const, ports, markSkillReady: (value: boolean): void => {ready = value === true;}});
+    } catch {
+      return off(expired ? 'TIMEOUT' : 'SETUP_FAILED');
+    }
+  };
+  try {
+    return await Promise.race([setupWork(), timeout]);
   } finally {
     clearTimeout(timer);
   }
@@ -846,7 +871,9 @@ function observeHook(coordinator: DailyCoordinator, config: DailyOwnerConfig, in
       const raw = field(input, 'status');
       status = raw === 'completed' ? 'COMPLETED' : raw === 'error' ? 'ERROR' : 'INVALID';
     }
-    const ruleId = tool === 'shell' && coordinator.isActive(sessionId) ? matchRuleInput(config.approval.rules, 'shell', field(input, 'input')) : null;
+    const state = coordinator.getState();
+    const ruleId = tool === 'shell' && (state === 'ACTIVE' || state === 'FINISHING')
+      ? matchRuleInput(config.approval.rules, 'shell', field(input, 'input')) : null;
     coordinator.observe({sessionId, messageId, callId, tool, phase, status, ruleId} as NativeObservation);
   } catch {
     try {coordinator.observe(INVALID_OBSERVATION);} catch {/* never throw to cancel Host execution */}

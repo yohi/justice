@@ -28,6 +28,7 @@ import {assistantMessage,pageResponse,sessionResponse} from '../s2b/fixtures.js'
 const vfs=vi.hoisted(()=>({
   nodes:new Map<string,{type:'dir'}|{type:'file';bytes:Uint8Array}>(),
   realpaths:new Map<string,string>(),
+  approvalReadGate:null as Promise<void>|null,
   accessed:[] as string[],
   writes:[] as string[],
 }));
@@ -59,6 +60,7 @@ vi.mock('node:fs/promises',async(importOriginal)=>{
         return {
           async stat(){return statOf(n);},
           async read(buf:Uint8Array,off:number,len:number){
+            if(p==='/run/justice-daily/owner/approval.json'&&vfs.approvalReadGate!==null)await vfs.approvalReadGate;
             const chunk=n.bytes.subarray(offset,offset+len);buf.set(chunk,off);offset+=chunk.byteLength;
             return {bytesRead:chunk.byteLength,buffer:buf};
           },
@@ -76,7 +78,7 @@ vi.mock('node:fs/promises',async(importOriginal)=>{
 const created:string[]=[];
 afterEach(()=>{
   vi.unstubAllEnvs();
-  vfs.nodes.clear();vfs.realpaths.clear();vfs.accessed.length=0;vfs.writes.length=0;
+  vfs.nodes.clear();vfs.realpaths.clear();vfs.approvalReadGate=null;vfs.accessed.length=0;vfs.writes.length=0;
   for(const dir of created.splice(0))rmSync(dir,{recursive:true,force:true});
 });
 
@@ -126,6 +128,7 @@ async function makeCoordinatorFixture(options:CoordinatorFixtureOptions={}){
   let gateArmed=options.gated===true;
   const holds:{skip:number;deferred:Deferred}[]=[];
   const nativeCalls:string[]=[];
+  const sessionLocations:string[]=[];
   let messageMode:'ok'|'rejected'|'incomplete'='ok';
   let shellsBody=JSON.stringify({location:{directory:root},data:[]});
   const ok=(t:string):NativeBytes=>({state:'OK',bytes:enc(t)});
@@ -140,7 +143,7 @@ async function makeCoordinatorFixture(options:CoordinatorFixtureOptions={}){
     if(gateArmed&&timeline.finish)await gate.promise;
   };
   const native:NativeReadPort={
-    async getSession(){nativeCalls.push('session');await wait();return ok(sessionResponse({location:{directory:root}}));},
+    async getSession(){nativeCalls.push('session');await wait();return ok(sessionResponse({location:{directory:sessionLocations.shift()??root}}));},
     async getMessages(_s,query){
       nativeCalls.push('messages');
       if(timeline.finish&&messageMode==='rejected')return ok('{"data":[],"cursor":{},"extra":1}');
@@ -194,7 +197,8 @@ async function makeCoordinatorFixture(options:CoordinatorFixtureOptions={}){
       emitFinishBefore();
     },
      holdNextNative(skip=0):Deferred{const d=deferred();holds.push({skip,deferred:d});return d;},
-    disarmGate():void{gateArmed=false;},
+     setSessionLocations(...locations:string[]):void{sessionLocations.push(...locations);},
+     disarmGate():void{gateArmed=false;},
     setMessageMode(m:'ok'|'rejected'|'incomplete'):void{messageMode=m;},
     setShells(body:string):void{shellsBody=body;},
     setSkillReady(r:boolean):void{skillReady=r;},
@@ -385,6 +389,32 @@ describe('daily coordinator: bounded single Task',()=>{
     expect(r.evidence.state).toBe('UNAVAILABLE');
   });
 
+  it('downgrades the report when Skill readiness is lost during diagnosis',async()=>{
+    const f=await makeCoordinatorFixture();
+    const key=await begun(f);
+    f.observePair();
+    f.diagnose.mockImplementationOnce(async(...args)=>{
+      const report=await runDailyAdvisory(...args);
+      f.setSkillReady(false);
+      return report;
+    });
+    const r=await f.coordinator.finish(key,f.finishCall);
+    expect(r.state).toBe('LIMITED');
+    expect(r.boundary).toBe('UNCERTAIN');
+    expect(r.reasons).toContain('SKILL_UNSUPPORTED');
+  });
+
+  it('does not activate a Task if Skill readiness is lost during begin collection',async()=>{
+    const f=await makeCoordinatorFixture();
+    const hold=f.holdNextNative();
+    const starting=f.coordinator.begin(f.beginCall);
+    await flush();
+    f.setSkillReady(false);
+    hold.resolve();
+    expect(await starting).toEqual({state:'UNAVAILABLE',reason:'SKILL_UNSUPPORTED'});
+    expect(f.coordinator.getState()).toBe('TERMINAL');
+  });
+
   it('excludes pre-begin tools from AC evidence',async()=>{
     const f=await makeCoordinatorFixture();
     // r1 runs and completes before begin: tracked for quietness only, never an AC candidate.
@@ -423,6 +453,15 @@ describe('daily coordinator: bounded single Task',()=>{
     f.observePair();
     f.shellPair('r1','tool_001');
     f.emit('msg_002','tool_x','shell','BEFORE','r1',{sessionId:'ses_other001'});
+    const r=await f.coordinator.finish(key,f.finishCall);
+    expect(r.state).toBe('DIAGNOSED');
+  });
+
+  it('ignores malformed observations from a foreign Session before validating IDs',async()=>{
+    const f=await makeCoordinatorFixture();
+    const key=await begun(f);
+    f.observePair();
+    f.emit('msg_002','foreign call id','shell','BEFORE',null,{sessionId:'ses_other001'});
     const r=await f.coordinator.finish(key,f.finishCall);
     expect(r.state).toBe('DIAGNOSED');
   });
@@ -470,8 +509,50 @@ describe('daily coordinator: bounded single Task',()=>{
     const r=await f.coordinator.finish(key,f.finishCall);
     expect(r.scope).toEqual({state:'NOT_EVALUATED',comparison:'UNKNOWN',reason:'TOOL_IN_FLIGHT'});
     expect(r.changeSetOrigin).toBe('UNAVAILABLE');
-    expect(r.state).toBe('LIMITED');
+    expect(r.state).toBe('UNAVAILABLE');
+    expect(r.boundary).toBe('UNCERTAIN');
+    expect(r.evidence).toEqual({state:'UNAVAILABLE',diagnostics:[],reasons:['TOOL_IN_FLIGHT']});
     expect(f.gitReads).toBe(0);
+  });
+
+  it('a shell appearing after snapshot A also invalidates the Native boundary',async()=>{
+    const f=await makeCoordinatorFixture();
+    const key=await begun(f);
+    f.observePair();
+    const hold=f.holdNextNative();
+    const finishing=f.coordinator.finish(key,f.finishCall);
+    await flush();
+    f.setShells(JSON.stringify({location:{directory:f.root},data:[{id:'shl_1'}]}));
+    hold.resolve();
+    const r=await finishing;
+    expect(r.state).toBe('UNAVAILABLE');
+    expect(r.boundary).toBe('UNCERTAIN');
+    expect(r.evidence).toEqual({state:'UNAVAILABLE',diagnostics:[],reasons:['TOOL_IN_FLIGHT']});
+    expect(r.scope).toEqual({state:'NOT_EVALUATED',comparison:'UNKNOWN',reason:'TOOL_IN_FLIGHT'});
+  });
+
+  it('a workspace mismatch in end snapshot A skips and invalidates Git scope',async()=>{
+    const f=await makeCoordinatorFixture();
+    const key=await begun(f);
+    f.observePair();
+    f.setSessionLocations('/tmp/other-worktree');
+    const r=await f.coordinator.finish(key,f.finishCall);
+    expect(r.state).toBe('UNAVAILABLE');
+    expect(r.evidence).toEqual({state:'UNAVAILABLE',diagnostics:[],reasons:['WORKSPACE_MISMATCH']});
+    expect(r.scope).toEqual({state:'NOT_EVALUATED',comparison:'UNKNOWN',reason:'WORKSPACE_MISMATCH'});
+    expect(f.gitReads).toBe(0);
+  });
+
+  it('a workspace mismatch in end snapshot B invalidates the collected Git scope',async()=>{
+    const f=await makeCoordinatorFixture();
+    const key=await begun(f);
+    f.observePair();
+    f.setSessionLocations(f.root,f.root,'/tmp/other-worktree');
+    const r=await f.coordinator.finish(key,f.finishCall);
+    expect(r.state).toBe('UNAVAILABLE');
+    expect(r.evidence).toEqual({state:'UNAVAILABLE',diagnostics:[],reasons:['WORKSPACE_MISMATCH']});
+    expect(r.scope).toEqual({state:'NOT_EVALUATED',comparison:'UNKNOWN',reason:'WORKSPACE_MISMATCH'});
+    expect(f.gitReads).toBeGreaterThan(0);
   });
 
   it('an unfinished tool at finish blocks both Git and Native evidence',async()=>{
@@ -547,8 +628,9 @@ describe('daily coordinator: bounded single Task',()=>{
     const r=await f.coordinator.finish(key,f.finishCall);
     expect(r.state).toBe('UNAVAILABLE');
     expect(r.boundary).toBe('UNCERTAIN');
-    expect(r.evidence).toEqual({state:'UNAVAILABLE',diagnostics:[],reasons:['LATE_OBSERVATION']});
+    expect(r.evidence).toEqual({state:'UNAVAILABLE',diagnostics:[],reasons:['TOOL_IN_FLIGHT']});
     expect(r.scope).toEqual({state:'NOT_EVALUATED',comparison:'UNKNOWN',reason:'TOOL_IN_FLIGHT'});
+    expect(r.reasons).toContain('LATE_OBSERVATION');
     expect(f.gitReads).toBe(0);
     expect(f.diagnose).toHaveBeenCalledTimes(1);
   });
@@ -745,6 +827,7 @@ describe('V2 wiring: opt-in Daily registration',()=>{
   });
 
   it('the default production path registers no Daily surface without the opt-in env',async()=>{
+    vi.stubEnv(DAILY_APPROVAL_ENV,undefined);
     expect(process.env[DAILY_APPROVAL_ENV]).toBeUndefined();
     const sdk=makeSdk();
     await createJusticeV2Plugin({createAdapter:fakeAdapter}).setup(sdk.context as never);
@@ -811,7 +894,7 @@ describe('V2 wiring: opt-in Daily registration',()=>{
     expect(runtime.ready()).toBe(false);
   });
 
-  it('hook callbacks never throw to cancel Host execution and derive ruleId only while ACTIVE',async()=>{
+  it('hook callbacks never throw to cancel Host execution and derive ruleId only while ACTIVE or FINISHING',async()=>{
     const f=await makeCoordinatorFixture();
     const sdk=makeSdk();
     await createJusticeV2Plugin({createAdapter:fakeAdapter,createDailyRuntime:async()=>runtimeOf(f)}).setup(sdk.context as never);
@@ -822,6 +905,36 @@ describe('V2 wiring: opt-in Daily registration',()=>{
     const frozen=JSON.stringify(payload);
     await hook(sdk,'execute.before',payload);
     expect(JSON.stringify(payload)).toBe(frozen);
+  });
+
+  it('deduplicates an identical shell hook replayed while FINISHING',async()=>{
+    const f=await makeCoordinatorFixture();
+    const sdk=makeSdk();
+    await createJusticeV2Plugin({createAdapter:fakeAdapter,createDailyRuntime:async()=>runtimeOf(f)}).setup(sdk.context as never);
+    const begin=daily(sdk,'justice_task_begin'),finish=daily(sdk,'justice_task_finish');
+    await hook(sdk,'execute.before',sdkEvent(f,'msg_001','tool_begin','justice_task_begin',{}));
+    const started=parse(await begin.execute({},toolCtx(f,'msg_001','tool_begin')));
+    expect(started.state).toBe('READY');
+    await hook(sdk,'execute.after',sdkEvent(f,'msg_001','tool_begin','justice_task_begin',{},'completed'));
+    f.timeline.beginSettled=true;
+    for(const [rule,id] of [['r1','tool_001'],['r2','tool_002']] as const){
+      const input={...f.daily.approval.rules.find(r=>r.ruleId===rule)!.input};
+      await hook(sdk,'execute.before',sdkEvent(f,'msg_002',id,'shell',input));
+      await hook(sdk,'execute.after',sdkEvent(f,'msg_002',id,'shell',input,'completed'));
+    }
+    f.timeline.shells=['r1','r2'];
+    await hook(sdk,'execute.before',sdkEvent(f,'msg_003','tool_finish','justice_task_finish',{bindingKey:started.bindingKey}));
+    f.timeline.finish=true;
+
+    const hold=f.holdNextNative();
+    const finishing=finish.execute({bindingKey:started.bindingKey},toolCtx(f,'msg_003','tool_finish'));
+    await flush();
+    const replayInput={...f.daily.approval.rules[0]!.input};
+    await hook(sdk,'execute.after',sdkEvent(f,'msg_002','tool_001','shell',replayInput,'completed'));
+    hold.resolve();
+
+    const report=parse(await finishing) as unknown as DailyAdvisoryReport;
+    expect(report.state).toBe('DIAGNOSED');
   });
 
   it('hostile hook payloads while ACTIVE fail closed: the Task is never DIAGNOSED',async()=>{
@@ -966,9 +1079,42 @@ function ownerMount(opts='ro,nosuid,nodev',extra:string[]=[]):void{
 
 describe('production daily supply',()=>{
   it('is OFF without the opt-in env and ignores arbitrary context options',async()=>{
+    vi.stubEnv(DAILY_APPROVAL_ENV,undefined);
     const r=await createProductionDailyPorts(prodContext('/tmp/x'));
     expect(r).toEqual({state:'OFF',reason:'NOT_OPTED_IN'});
     expect(vfs.accessed).toEqual([]);
+  });
+
+  it('returns OFF/TIMEOUT when approval reading stalls and never registers Daily after late completion',async()=>{
+    const d=await makeDailyFixture();
+    vi.stubEnv(DAILY_APPROVAL_ENV,d.expectedSha256);
+    ownerMount();
+    const approvalPath=`${DAILY_OWNER_ROOT}/approval.json`;
+    vfs.nodes.set(approvalPath,{type:'file',bytes:d.approvalBytes});
+    const readGate=deferred();
+    vfs.approvalReadGate=readGate.promise;
+    vi.useFakeTimers();
+    const sdk=makeSdk();
+    let settled=false;
+    const setup=createJusticeV2Plugin({createAdapter:fakeAdapter}).setup(sdk.context as never).finally(()=>{settled=true;});
+    try{
+      await flush();
+      expect(vfs.accessed).toContain(`open:${approvalPath}`);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await flush();
+      expect(settled).toBe(true);
+      expect(sdk.added.map(t=>t.name)).toEqual(['justice_review']);
+      expect(sdk.toolHook).not.toHaveBeenCalled();
+      expect(sdk.skillTransform).not.toHaveBeenCalled();
+
+      readGate.resolve();
+      await flush();
+      expect(sdk.added.map(t=>t.name)).toEqual(['justice_review']);
+    }finally{
+      readGate.resolve();
+      await setup.then(cleanup=>typeof cleanup==='function'?cleanup():undefined).catch(()=>undefined);
+      vi.useRealTimers();
+    }
   });
 
   it('reads the env at call time and rejects a malformed digest before any filesystem access',async()=>{

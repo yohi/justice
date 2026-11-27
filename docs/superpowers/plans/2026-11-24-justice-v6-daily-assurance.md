@@ -416,7 +416,9 @@ export type DailyProjection = Readonly<{
 export type DailyDiagnosticPort = typeof runS1dDiagnostic;
 export function projectDailyEvidence(binding:DailyBinding,evidence:DailyEvidenceResult):DailyProjection;
 export function makeDailyUnavailable(reason:DailyReason):DailyAdvisoryReport;
-export function markDailyBoundaryUncertain(report:DailyAdvisoryReport,reason:DailyReason):DailyAdvisoryReport;
+export function markDailyBoundaryUncertain(
+  report:DailyAdvisoryReport,reason:DailyReason,options?:Readonly<{afterReturn?:boolean}>
+):DailyAdvisoryReport;
 export function runDailyAdvisory(
   binding:DailyBinding, evidence:DailyEvidenceResult, changes:DailyChangeSetResult,
   boundary:DailyBoundary, preflight:DailyPreflightPorts, signal:AbortSignal,
