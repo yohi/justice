@@ -10,6 +10,7 @@ import type {DailyChangeSetResult} from '../../src/runtime/daily-changeset.js';
 import {prepareDailyBinding,type DailyBinding,type DailyPreflightPorts,type DailyReason} from '../../src/runtime/daily-intent.js';
 import type {DailyEvidenceResult} from '../../src/runtime/daily-native-evidence.js';
 import {runS1dDiagnostic} from '../../src/runtime/s1d-diagnostic.js';
+import {S2B_LIMITS} from '../../src/runtime/s2b-contract.js';
 import {validateS2bCorrelation,validateS2bSource} from '../../src/runtime/s2b-input.js';
 import {projectS2bEvidence} from '../../src/runtime/s2b-projector.js';
 import {makeDailyFixture} from '../helpers/daily-fixtures.js';
@@ -476,5 +477,170 @@ describe('daily advisory: boundary handling',()=>{
       coverageCompleteness:'NOT_ESTABLISHED',reasons:['TIMEOUT'],s1cCodes:[],limitations:[],
     });
     expectSafe(makeDailyUnavailable('TIMEOUT'));
+  });
+});
+
+describe('daily advisory: uncovered safety boundaries',()=>{
+  it('uses a fixed fallback reason for rejected evidence without reasons',async()=>{
+    const f=await makeAdvisoryFixture();
+    const projection=projectDailyEvidence(f.binding,{state:'REJECTED',reasons:[],diagnostics:[]});
+    expect(projection).toEqual({state:'REJECTED',diagnostics:[],reasons:['SOURCE_REJECTED']});
+  });
+
+  it('rejects non-byte and oversized evidence before parsing or hashing',async()=>{
+    const f=await makeAdvisoryFixture();
+    const notBytes={...f.validEvidence,rawWrapper:'not bytes' as unknown as Uint8Array};
+    expect(projectDailyEvidence(f.binding,notBytes)).toMatchObject({
+      state:'REJECTED',reasons:['SOURCE_REJECTED'],
+    });
+
+    const oversizedWrapper=new Proxy(new Uint8Array(),{
+      get(target,property){return property==='byteLength'?S2B_LIMITS.sourceWrapperBytes+1:Reflect.get(target,property,target);},
+    }) as Uint8Array;
+    expect(projectDailyEvidence(f.binding,{...f.validEvidence,rawWrapper:oversizedWrapper})).toMatchObject({
+      state:'REJECTED',diagnostics:[{code:'INPUT_LIMIT_EXCEEDED',count:1}],
+    });
+
+    const oversizedCorrelation=new Uint8Array(S2B_LIMITS.correlationBytes+1);
+    expect(projectDailyEvidence(f.binding,{...f.validEvidence,correlationBytes:oversizedCorrelation})).toMatchObject({
+      state:'REJECTED',diagnostics:[{code:'INPUT_LIMIT_EXCEEDED',count:1}],
+    });
+  });
+
+  it('rejects malformed correlation bytes and degrades safely if byte metadata throws',async()=>{
+    const f=await makeAdvisoryFixture();
+    const malformed=enc('{}');
+    expect(projectDailyEvidence(f.binding,{
+      ...f.validEvidence,correlationBytes:malformed,correlationSha256:sha(malformed),
+    })).toMatchObject({
+      state:'REJECTED',diagnostics:[
+        {code:'DIFF_UNAVAILABLE',count:1},
+        {code:'SOURCE_SCHEMA_INVALID',count:1},
+      ],
+    });
+
+    const throwingWrapper=new Proxy(new Uint8Array(),{
+      get(target,property){
+        if(property==='byteLength')throw new Error(`secret ${SECRET}`);
+        return Reflect.get(target,property,target);
+      },
+    }) as Uint8Array;
+    expect(projectDailyEvidence(f.binding,{...f.validEvidence,rawWrapper:throwingWrapper})).toEqual({
+      state:'UNAVAILABLE',reason:'SOURCE_UNAVAILABLE',
+    });
+  });
+
+  it('uses the serialized ChangeSet as the source of truth and enforces its byte cap',async()=>{
+    const f=await makeAdvisoryFixture();
+    let reads=0;
+    const driftingChangeSet={
+      availability:'PRESENT',
+      get changes(){
+        reads+=1;
+        return reads===1?[{kind:'ADD',path:'src/a.ts'}]:null;
+      },
+    };
+    const drifted=await runDailyAdvisory(
+      f.binding,f.validEvidence,{...f.validGit,changeSet:driftingChangeSet} as DailyChangeSetResult,
+      'BOUNDED',f.preflight,sig(),vi.fn(runS1dDiagnostic),
+    );
+    expect(drifted.changeSetOrigin).toBe('UNAVAILABLE');
+    expect(drifted.scope).toEqual(unknownScope('GIT_UNAVAILABLE'));
+
+    const oldPath='a'.repeat(1_024);
+    const newPath='b'.repeat(1_024);
+    const oversizedChanges=Array.from({length:128},()=>({kind:'RENAME',oldPath,newPath}));
+    const overLimit=await runDailyAdvisory(
+      f.binding,f.validEvidence,
+      {...f.validGit,changeSet:{availability:'PRESENT',changes:oversizedChanges}} as DailyChangeSetResult,
+      'BOUNDED',f.preflight,sig(),vi.fn(runS1dDiagnostic),
+    );
+    expect(overLimit.changeSetOrigin).toBe('UNAVAILABLE');
+    expect(overLimit.reasons).toContain('GIT_LIMIT');
+    expectSafe(drifted);
+    expectSafe(overLimit);
+  });
+
+  it('contains an exception while inspecting the ChangeSet without leaking its message',async()=>{
+    const f=await makeAdvisoryFixture();
+    let reads=0;
+    const changeSet={
+      get availability(){
+        reads+=1;
+        if(reads>3)throw new Error(`secret ${SECRET}`);
+        return 'PRESENT';
+      },
+      changes:[{kind:'ADD',path:'src/a.ts'}],
+    };
+    const run=vi.fn(runS1dDiagnostic);
+    const report=await runDailyAdvisory(
+      f.binding,f.validEvidence,{...f.validGit,changeSet} as DailyChangeSetResult,
+      'BOUNDED',f.preflight,sig(),run,
+    );
+    expect(run).not.toHaveBeenCalled();
+    expect(report).toEqual(makeDailyUnavailable('DIAGNOSTIC_UNAVAILABLE'));
+    expectSafe(report);
+  });
+
+  it('keeps a scope UNKNOWN when the S1-c comparison or its fallback is absent',async()=>{
+    const f=await makeAdvisoryFixture();
+    const unknownComparison=vi.fn<DailyDiagnosticPort>(async(req,src)=>{
+      const report=await runS1dDiagnostic(req,src);
+      const stage=report.stages.s1c;
+      if(stage.state!=='EVALUATED')throw new Error('fixture expects evaluated S1-c');
+      return {...report,stages:{...report.stages,s1c:{
+        state:'EVALUATED',result:{...stage.result,candidateScopeComparison:'UNKNOWN'},
+      }}} as S1dReportV1;
+    });
+    const first=await runDailyAdvisory(
+      f.binding,f.fullEvidence,f.validGit,'BOUNDED',f.preflight,sig(),unknownComparison,
+    );
+    expect(first.scope).toEqual(unknownScope('DIAGNOSTIC_UNAVAILABLE'));
+
+    const noFallback=vi.fn<DailyDiagnosticPort>(async(req,src)=>{
+      const report=await runS1dDiagnostic(req,src);
+      return {...report,stages:{...report.stages,s1c:{state:'NOT_EVALUATED',reason:'SCOPE_POLICY_UNDEFINED'}},
+        scopeFallback:undefined} as S1dReportV1;
+    });
+    const second=await runDailyAdvisory(
+      f.binding,f.fullEvidence,f.validGit,'BOUNDED',f.preflight,sig(),noFallback,
+    );
+    expect(second.scope).toEqual(unknownScope('DIAGNOSTIC_UNAVAILABLE'));
+    expectSafe(first);
+    expectSafe(second);
+  });
+
+  it('enforces the fresh-source read limit and handles abort during projection',async()=>{
+    const f=await makeAdvisoryFixture();
+    const tooSmallRead=vi.fn<DailyDiagnosticPort>(async(_req,src)=>{
+      await src.readInputFile('daily://changeset',1);
+      throw new Error('the over-limit read should reject');
+    });
+    const limited=await runDailyAdvisory(
+      f.binding,f.validEvidence,f.validGit,'BOUNDED',f.preflight,sig(),tooSmallRead,
+    );
+    expect(limited).toEqual(makeDailyUnavailable('DIAGNOSTIC_UNAVAILABLE'));
+
+    const controller=new AbortController();
+    const abortDuringProjection=new Proxy(f.validEvidence,{
+      get(target,property,receiver){
+        if(property==='rawWrapper')controller.abort();
+        return Reflect.get(target,property,receiver);
+      },
+    });
+    const run=vi.fn(runS1dDiagnostic);
+    const aborted=await runDailyAdvisory(
+      f.binding,abortDuringProjection,f.validGit,'BOUNDED',f.preflight,controller.signal,run,
+    );
+    expect(run).not.toHaveBeenCalled();
+    expect(aborted).toEqual(makeDailyUnavailable('ABORTED'));
+  });
+
+  it('uses the production S1-d diagnostic when no test port is supplied',async()=>{
+    const f=await makeAdvisoryFixture();
+    const report=await runDailyAdvisory(f.binding,f.fullEvidence,f.validGit,'BOUNDED',f.preflight,sig());
+    expect(report.state).toBe('DIAGNOSED');
+    expect(report.scope).toEqual(s1cOutside);
+    expectSafe(report);
   });
 });
