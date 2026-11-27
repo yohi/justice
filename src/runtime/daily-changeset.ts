@@ -31,6 +31,7 @@ const SNAPSHOT_DEADLINE_MS = 30_000;
 const MAX_ENTRIES = 128;
 const MAX_JSON_BYTES = 262_144;
 const SHA1_HEX = /^[0-9a-f]{40}$/;
+const GIT_READ_FAILURE_WARNING = /(?:^|\n)warning:\s+(?:could not|cannot|unable to|failed to)\s+(?:read|open|access|stat)\b/i;
 const SUPPORTED_MODES = new Set(['100644', '100755']);
 const PORT_REASONS = new Set<DailyReason>(['GIT_UNAVAILABLE', 'GIT_UNSTABLE', 'GIT_UNSUPPORTED', 'GIT_LIMIT', 'ABORTED', 'TIMEOUT']);
 
@@ -40,7 +41,7 @@ const CMD = Object.freeze({
   format: ['rev-parse', '--show-object-format'],
   config: ['config', '--local', '--no-includes', '--null', '--list'],
   head: ['rev-parse', '--verify', 'HEAD'],
-  status: ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none'],
+  status: ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none', '--no-renames'],
   stage: ['ls-files', '--stage', '-z'],
   flags: ['ls-files', '-v', '-z'],
   untracked: ['ls-files', '--others', '--exclude-standard', '-z'],
@@ -109,6 +110,7 @@ export function createDailyGitReadPortWithSpawner(config: DailyOwnerConfig, spaw
         }
         let done = false;
         const chunks: Buffer[] = [];
+        const stderrChunks: Buffer[] = [];
         let outBytes = 0, errBytes = 0;
         const finish = (result: GitReadResult, kill: boolean): void => {
           if (done) return;
@@ -133,12 +135,19 @@ export function createDailyGitReadPortWithSpawner(config: DailyOwnerConfig, spaw
         child.stderr.on('data', (chunk: unknown) => {
           // Drained and discarded; bounded.
           if (done) return;
-          errBytes += Buffer.isBuffer(chunk) ? chunk.byteLength : 0;
+          if (!Buffer.isBuffer(chunk)) {finish(unavailable('GIT_UNAVAILABLE'), true); return;}
+          errBytes += chunk.byteLength;
           if (errBytes > MAX_STDERR_BYTES) finish(unavailable('GIT_LIMIT'), true);
+          else stderrChunks.push(chunk);
         });
+        child.stdout.on('error', () => finish(unavailable('GIT_UNAVAILABLE'), true));
+        child.stderr.on('error', () => finish(unavailable('GIT_UNAVAILABLE'), true));
         child.on('error', () => finish(unavailable('GIT_UNAVAILABLE'), true));
         child.on('close', (code: unknown) => {
           if (typeof code !== 'number' || !Number.isInteger(code)) {finish(unavailable('GIT_UNAVAILABLE'), false); return;}
+          if (GIT_READ_FAILURE_WARNING.test(Buffer.concat(stderrChunks).toString('utf8'))) {
+            finish(unavailable('GIT_UNAVAILABLE'), false); return;
+          }
           finish(Object.freeze({state: 'OK' as const, exitCode: code, stdout: new Uint8Array(Buffer.concat(chunks))}), false);
         });
       });
@@ -161,16 +170,27 @@ async function withDeadline<T>(git: DailyGitReadPort, parent: AbortSignal, fn: (
   const onAbort = (): void => ctl.abort();
   parent.addEventListener('abort', onAbort, {once: true});
   const abortReason = (): DailyReason => parent.aborted ? 'ABORTED' : expired ? 'TIMEOUT' : 'ABORTED';
+  let removeSignalAbort = (): void => {};
+  const aborted = new Promise<Readonly<{kind: 'ABORTED'}>>(resolve => {
+    const onSignalAbort = (): void => resolve({kind: 'ABORTED'});
+    ctl.signal.addEventListener('abort', onSignalAbort, {once: true});
+    removeSignalAbort = () => ctl.signal.removeEventListener('abort', onSignalAbort);
+    if (ctl.signal.aborted) onSignalAbort();
+  });
   try {
-    const value = await fn({git, signal: ctl.signal, abortReason});
+    const pending = Promise.resolve().then(() => fn({git, signal: ctl.signal, abortReason}))
+      .then(value => ({kind: 'VALUE' as const, value}));
+    const result = await Promise.race([pending, aborted]);
+    if (result.kind === 'ABORTED') return unavailable(abortReason());
     if (ctl.signal.aborted) return unavailable(abortReason());
-    return value;
+    return result.value;
   } catch (e) {
     if (ctl.signal.aborted) return unavailable(abortReason());
     return unavailable(e instanceof Stop ? e.reason : 'GIT_UNAVAILABLE');
   } finally {
     clearTimeout(timer);
     parent.removeEventListener('abort', onAbort);
+    removeSignalAbort();
   }
 }
 
@@ -313,30 +333,51 @@ function statusWorktreePaths(bytes: Uint8Array): ReadonlySet<string> {
   return out;
 }
 
-async function absent(path: string): Promise<boolean> {
+function checkNotAborted(signal: AbortSignal): void {
+  if (signal.aborted) stop('ABORTED');
+}
+async function absent(path: string, signal: AbortSignal): Promise<boolean> {
+  checkNotAborted(signal);
   try {
     await lstat(path);
+    checkNotAborted(signal);
     return false;
   } catch (e) {
+    if (e instanceof Stop) throw e;
     if ((e as {code?: unknown}).code === 'ENOENT') return true;
     return stop('GIT_UNAVAILABLE');
   }
 }
 /** Dedicated standalone checkout: real root, real `.git` directory, no shared gitdir, alternates or grafts. */
-async function checkRootStructure(root: string): Promise<void> {
+async function checkRootStructure(root: string, signal: AbortSignal): Promise<void> {
+  checkNotAborted(signal);
   try {
-    if (await realpath(root) !== root) stop('GIT_UNSUPPORTED');
+    const actualRoot = await realpath(root);
+    checkNotAborted(signal);
+    if (actualRoot !== root) stop('GIT_UNSUPPORTED');
     for (const rel of [['.git'], ['.git', 'objects']]) {
+      checkNotAborted(signal);
       const st = await lstat(join(root, ...rel));
+      checkNotAborted(signal);
       if (st.isSymbolicLink() || !st.isDirectory()) stop('GIT_UNSUPPORTED');
     }
   } catch (e) {
     if (e instanceof Stop) throw e;
     stop((e as {code?: unknown}).code === 'ENOENT' ? 'GIT_UNSUPPORTED' : 'GIT_UNAVAILABLE');
   }
+  checkNotAborted(signal);
+  try {
+    const index = await lstat(join(root, '.git', 'index'));
+    checkNotAborted(signal);
+    if (index.isSymbolicLink() || !index.isFile()) stop('GIT_UNSUPPORTED');
+  } catch (e) {
+    if (e instanceof Stop) throw e;
+    if ((e as {code?: unknown}).code !== 'ENOENT') stop('GIT_UNAVAILABLE');
+  }
   for (const rel of [['.git', 'commondir'], ['.git', 'objects', 'info', 'alternates'], ['.git', 'objects', 'info', 'http-alternates'],
     ['.git', 'info', 'grafts']]) {
-    if (!await absent(join(root, ...rel))) stop('GIT_UNSUPPORTED');
+    checkNotAborted(signal);
+    if (!await absent(join(root, ...rel), signal)) stop('GIT_UNSUPPORTED');
   }
 }
 
@@ -373,7 +414,7 @@ export async function checkCleanBase(config: DailyOwnerConfig, git: DailyGitRead
   const root = config.approval.worktreeRoot, base = config.approval.baseCommit;
   return withDeadline(git, signal, async (ctx) => {
     if (!isSha1(base)) stop('GIT_UNSUPPORTED');
-    await checkRootStructure(root);
+    await checkRootStructure(root, ctx.signal);
     const head = validateIdentity(await readIdentity(ctx), root);
     if (head !== base) stop('BASE_MISMATCH');
     const state = await readIndexState(ctx, base, head);
@@ -388,7 +429,7 @@ export async function collectDailyChangeSet(binding: DailyBinding, git: DailyGit
   const root = binding.config.approval.worktreeRoot, base = binding.config.approval.baseCommit;
   return withDeadline(git, signal, async (ctx): Promise<DailyChangeSetResult> => {
     if (!isSha1(base)) stop('GIT_UNSUPPORTED');
-    await checkRootStructure(root);
+    await checkRootStructure(root, ctx.signal);
     const id1 = await readIdentity(ctx);
     const head = validateIdentity(id1, root);
     const ancestry = await call(ctx, ancestryArgs(base, head));
@@ -409,7 +450,11 @@ export async function collectDailyChangeSet(binding: DailyBinding, git: DailyGit
     // Keep only entries that status corroborates as a real worktree-side change; status is
     // byte-identical before/after, so a concurrent real change surfaces as GIT_UNSTABLE.
     const worktreeChanged = statusWorktreePaths(s1.status);
-    const unstagedChanges = parseDiff(unstaged).filter(c => worktreeChanged.has(c.path));
+    const unstagedDiff = parseDiff(unstaged);
+    for (const change of unstagedDiff) {
+      if (inspectChangeSet({availability: 'PRESENT', changes: [change]}).state !== 'PRESENT') stop('GIT_UNSUPPORTED');
+    }
+    const unstagedChanges = unstagedDiff.filter(c => worktreeChanged.has(c.path));
     const all: PathChange[] = [...parseDiff(committed), ...parseDiff(staged), ...unstagedChanges,
       ...nulFields(untracked).map((path): PathChange => ({kind: 'ADD', path}))];
     // Exact kind/path duplicates collapse; distinct kinds for one path are retained.

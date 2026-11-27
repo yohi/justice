@@ -3,10 +3,30 @@
 import {execFileSync} from 'node:child_process';
 import type {ChildProcess} from 'node:child_process';
 import {EventEmitter} from 'node:events';
-import {mkdirSync,mkdtempSync,readFileSync,readdirSync,realpathSync,rmSync,statSync,symlinkSync,unlinkSync,utimesSync,writeFileSync} from 'node:fs';
+import {mkdirSync,mkdtempSync,readFileSync,readdirSync,realpathSync,renameSync,rmSync,statSync,symlinkSync,unlinkSync,utimesSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {dirname,join} from 'node:path';
 import {afterEach,describe,expect,it,vi} from 'vitest';
+
+const fsPromiseHooks = vi.hoisted(() => ({
+  realpath: null as null | ((path: string) => Promise<string>),
+  lstatCalls: 0,
+}));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    realpath: ((path: Parameters<typeof actual.realpath>[0]) => {
+      const override = fsPromiseHooks.realpath;
+      return override === null ? actual.realpath(path) : override(String(path));
+    }) as typeof actual.realpath,
+    lstat: ((...args: Parameters<typeof actual.lstat>) => {
+      fsPromiseHooks.lstatCalls += 1;
+      return actual.lstat(...args);
+    }) as typeof actual.lstat,
+  };
+});
+
 import {
   checkCleanBase,collectDailyChangeSet,createDailyGitReadPort,createDailyGitReadPortWithSpawner,
   type DailyGitReadPort,type GitReadResult,type GitSpawner,
@@ -17,6 +37,8 @@ import {makeDailyFixture} from '../helpers/daily-fixtures.js';
 const created:string[]=[];
 afterEach(()=>{
   vi.useRealTimers();
+  fsPromiseHooks.realpath=null;
+  fsPromiseHooks.lstatCalls=0;
   for(const dir of created.splice(0))rmSync(dir,{recursive:true,force:true});
 });
 const sig=():AbortSignal=>new AbortController().signal;
@@ -140,6 +162,33 @@ describe('collectDailyChangeSet (real disposable git)',()=>{
     f.runFixtureGit(['mv','src/old.ts','outside.txt']);f.runFixtureGit(['commit','-q','-m','mv']);
     const result=await collectUnchanged(f);
     expect(result.state==='VALID'&&result.changeSet.changes).toEqual([{kind:'ADD',path:'outside.txt'},{kind:'DELETE',path:'src/old.ts'}]);
+  });
+
+  it('reports both sides of an unstaged rename with intent-to-add',async()=>{
+    const f=await makeGitFixture();
+    renameSync(join(f.root,'src/old.ts'),join(f.root,'outside.txt'));
+    f.runFixtureGit(['add','-N','outside.txt']);
+    const result=await collectUnchanged(f);
+    expect(result.state==='VALID'&&result.changeSet.changes).toEqual([
+      {kind:'ADD',path:'outside.txt'},{kind:'DELETE',path:'src/old.ts'}]);
+  });
+
+  it('reports a staged rename as DELETE old + ADD new',async()=>{
+    const f=await makeGitFixture();
+    f.runFixtureGit(['mv','src/old.ts','outside.txt']);
+    const result=await collectUnchanged(f);
+    expect(result).toEqual({state:'VALID',baseCommit:f.base,headCommit:f.base,
+      changeSet:{availability:'PRESENT',changes:[
+        {kind:'ADD',path:'outside.txt'},{kind:'DELETE',path:'src/old.ts'}]}});
+  });
+
+  it('reports a staged copy as ADD at the copied path',async()=>{
+    const f=await makeGitFixture();
+    f.write('src/copied.ts','export const old = 1;\n');
+    f.runFixtureGit(['add','src/copied.ts']);
+    const result=await collectUnchanged(f);
+    expect(result).toEqual({state:'VALID',baseCommit:f.base,headCommit:f.base,
+      changeSet:{availability:'PRESENT',changes:[{kind:'ADD',path:'src/copied.ts'}]}});
   });
 
   it('collapses staged+unstaged same-kind duplicates and keeps distinct kinds for one path',async()=>{
@@ -277,6 +326,16 @@ describe('collectDailyChangeSet (spy port fixtures)',()=>{
     expect(await collectDailyChangeSet(f.binding,git,sig())).toEqual({state:'UNAVAILABLE',reason:'GIT_UNSUPPORTED'});
   });
 
+  it('rejects unsafe unstaged paths before status-based filtering',async()=>{
+    const f=await makeGitFixture();
+    const git=wrapPort(f.git,async(args,real)=>{
+      if(args[0]==='status')return okOut('');
+      if(isUnstaged(args))return okOut('M\0../escape.ts\0');
+      return real();
+    });
+    expect(await collectDailyChangeSet(f.binding,git,sig())).toEqual({state:'UNAVAILABLE',reason:'GIT_UNSUPPORTED'});
+  });
+
   it.each([['T\0src/a.ts\0'],['R100\0src/a.ts\0b.ts\0'],['U\0src/a.ts\0'],['M\0'],['X\0src/a.ts\0']])(
     'rejects diff status output %j as GIT_UNSUPPORTED',async(stdout)=>{
       const f=await makeGitFixture();
@@ -298,7 +357,9 @@ describe('collectDailyChangeSet (spy port fixtures)',()=>{
   ])('accepts a paired %s status record',async(_kind,status)=>{
     const f=await makeGitFixture();
     const git=wrapPort(f.git,async(args,real)=>args[0]==='status'?okOut(status):real());
-    expect(await collectDailyChangeSet(f.binding,git,sig())).toMatchObject({state:'VALID'});
+    expect(await collectDailyChangeSet(f.binding,git,sig())).toEqual({
+      state:'VALID',baseCommit:f.base,headCommit:f.base,
+      changeSet:{availability:'PRESENT',changes:[]}});
   });
 
   it('rejects a rename status record without its second path',async()=>{
@@ -334,6 +395,58 @@ describe('collectDailyChangeSet (spy port fixtures)',()=>{
     const ctl=new AbortController();
     const hang:DailyGitReadPort={run:()=>{ctl.abort();return new Promise<GitReadResult>(()=>{});}};
     expect(await collectDailyChangeSet(f.binding,hang,ctl.signal)).toEqual({state:'UNAVAILABLE',reason:'ABORTED'});
+  });
+
+  it('returns ABORTED while root inspection is still pending and does not continue filesystem checks',async()=>{
+    const f=await makeGitFixture();
+    const ctl=new AbortController();
+    let entered!:()=>void;
+    const enteredPromise=new Promise<void>(resolve=>{entered=resolve;});
+    let release!: (path:string)=>void;
+    const pendingRoot=new Promise<string>(resolve=>{release=resolve;});
+    fsPromiseHooks.lstatCalls=0;
+    fsPromiseHooks.realpath=()=>{entered();return pendingRoot;};
+    const pending=collectDailyChangeSet(f.binding,f.git,ctl.signal);
+    await enteredPromise;
+    let settled=false;
+    void pending.then(()=>{settled=true;});
+    ctl.abort();
+    try{
+      await vi.waitFor(()=>expect(settled).toBe(true),{timeout:1_000,interval:10});
+    }finally{
+      release(f.root);
+      fsPromiseHooks.realpath=null;
+    }
+    expect(await pending).toEqual({state:'UNAVAILABLE',reason:'ABORTED'});
+    await Promise.resolve();
+    expect(fsPromiseHooks.lstatCalls).toBe(0);
+  });
+
+  it('enforces the snapshot deadline while root inspection is still pending',async()=>{
+    const f=await makeGitFixture();
+    vi.useFakeTimers({toFake:['setTimeout','clearTimeout']});
+    let entered!:()=>void;
+    const enteredPromise=new Promise<void>(resolve=>{entered=resolve;});
+    let release!: (path:string)=>void;
+    const pendingRoot=new Promise<string>(resolve=>{release=resolve;});
+    fsPromiseHooks.lstatCalls=0;
+    fsPromiseHooks.realpath=()=>{entered();return pendingRoot;};
+    const pending=collectDailyChangeSet(f.binding,f.git,sig());
+    await enteredPromise;
+    await vi.advanceTimersByTimeAsync(30_000);
+    let settled=false;
+    void pending.then(()=>{settled=true;});
+    await Promise.resolve();
+    await Promise.resolve();
+    try{
+      expect(settled).toBe(true);
+    }finally{
+      release(f.root);
+      fsPromiseHooks.realpath=null;
+    }
+    expect(await pending).toEqual({state:'UNAVAILABLE',reason:'TIMEOUT'});
+    await Promise.resolve();
+    expect(fsPromiseHooks.lstatCalls).toBe(0);
   });
 
   it('enforces the 30 second aggregate snapshot deadline as TIMEOUT',async()=>{
@@ -377,6 +490,21 @@ describe('checkCleanBase',()=>{
     ['grafts',(f:GitFixture)=>{mkdirSync(join(f.root,'.git/info'),{recursive:true});writeFileSync(join(f.root,'.git/info/grafts'),`${'a'.repeat(40)}\n`);}],
     ['symlinked .git',(f:GitFixture)=>{rmSync(join(f.root,'.git'),{recursive:true});symlinkSync(join(dirname(f.root),'home'),join(f.root,'.git'));}],
   ])('rejects shared/linked git metadata: %s',async(_n,mutate)=>{
+    const f=await makeGitFixture();
+    mutate(f);
+    expect(await checkCleanBase(f.config,f.git,sig())).toEqual({state:'UNAVAILABLE',reason:'GIT_UNSUPPORTED'});
+    expect(await collectDailyChangeSet(f.binding,f.git,sig())).toEqual({state:'UNAVAILABLE',reason:'GIT_UNSUPPORTED'});
+  });
+
+  it.each([
+    ['symlink',(f:GitFixture)=>{
+      const index=join(f.root,'.git','index'),external=join(dirname(f.root),'external-index');
+      writeFileSync(external,readFileSync(index));unlinkSync(index);symlinkSync(external,index);
+    }],
+    ['directory',(f:GitFixture)=>{
+      const index=join(f.root,'.git','index');unlinkSync(index);mkdirSync(index);
+    }],
+  ])('rejects a non-regular .git/index (%s)',async(_kind,mutate)=>{
     const f=await makeGitFixture();
     mutate(f);
     expect(await checkCleanBase(f.config,f.git,sig())).toEqual({state:'UNAVAILABLE',reason:'GIT_UNSUPPORTED'});
@@ -478,6 +606,57 @@ describe('createDailyGitReadPort',()=>{
       args:['-C','/tmp/justice-daily-port-fixture','-c','core.fsmonitor=false','-c','core.hooksPath=/dev/null','-c','diff.autoRefreshIndex=false','rev-parse','--show-toplevel'],
       options:{env:{PATH:'/usr/bin:/bin',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_OPTIONAL_LOCKS:'0',GIT_TERMINAL_PROMPT:'0',GIT_NO_REPLACE_OBJECTS:'1',LC_ALL:'C'},
         shell:false,stdio:['ignore','pipe','pipe'],windowsHide:true}}]);
+  });
+
+  it('rejects a Git read-failure warning on stderr without exposing its text',async()=>{
+    const {spawner,children}=fakeSpawner();
+    const port=createDailyGitReadPortWithSpawner(await fakeConfig(),spawner);
+    const pending=port.run(['rev-parse','--show-toplevel'],MiB,sig());
+    children[0]!.stderr.emit('data',Buffer.from("warning: could not open directory 'private/secret': Permission denied\n"));
+    children[0]!.emit('close',0,null);
+    expect(await pending).toEqual({state:'UNAVAILABLE',reason:'GIT_UNAVAILABLE'});
+  });
+
+  it('rejects a Git read-failure warning with a nonzero exit code',async()=>{
+    const {spawner,children}=fakeSpawner();
+    const port=createDailyGitReadPortWithSpawner(await fakeConfig(),spawner);
+    const pending=port.run(['merge-base','--is-ancestor','b'.repeat(40),'c'.repeat(40)],MiB,sig());
+    children[0]!.stderr.emit('data',Buffer.from("warning: could not open directory 'private/secret': Permission denied\n"));
+    children[0]!.emit('close',1,null);
+    expect(await pending).toEqual({state:'UNAVAILABLE',reason:'GIT_UNAVAILABLE'});
+  });
+
+  it('rejects a stderr stream read error without exposing its text',async()=>{
+    const {spawner,children}=fakeSpawner();
+    const port=createDailyGitReadPortWithSpawner(await fakeConfig(),spawner);
+    const pending=port.run(['rev-parse','--show-toplevel'],MiB,sig());
+    children[0]!.stderr.emit('error',Error('read failed /private/secret'));
+    expect(await pending).toEqual({state:'UNAVAILABLE',reason:'GIT_UNAVAILABLE'});
+  });
+
+  it('rejects a stdout stream read error and terminates the child',async()=>{
+    const {spawner,children}=fakeSpawner();
+    const port=createDailyGitReadPortWithSpawner(await fakeConfig(),spawner);
+    const pending=port.run(['rev-parse','--show-toplevel'],MiB,sig());
+    const child=children[0]!;
+    let thrown:unknown;
+    try{
+      child.stdout.emit('error',Error('read failed /private/secret'));
+    }catch(error){
+      thrown=error;
+      child.emit('close',null);
+    }
+    expect(thrown).toBeUndefined();
+    expect(await pending).toEqual({state:'UNAVAILABLE',reason:'GIT_UNAVAILABLE'});
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+  });
+
+  it('accepts warning-free empty output on a successful Git command',async()=>{
+    const {spawner,children}=fakeSpawner();
+    const port=createDailyGitReadPortWithSpawner(await fakeConfig(),spawner);
+    const pending=port.run(['rev-parse','--show-toplevel'],MiB,sig());
+    children[0]!.emit('close',0,null);
+    expect(await pending).toEqual({state:'OK',exitCode:0,stdout:new Uint8Array()});
   });
 
   it('returns nonzero exit codes as data on normal termination',async()=>{
