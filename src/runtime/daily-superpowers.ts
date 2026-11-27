@@ -11,7 +11,7 @@
 // does NOT import them. It declares narrow local structural interfaces (`DailyPluginContext` etc.) that
 // mirror the fixed v2.3.2 shapes referenced by the design (§2 fixed references: promise/tool.ts
 // `ToolDomain.hook/transform`, `ToolHooks["execute.before"|"execute.after"]`, `Tool.Options.codemode`,
-// promise/skill.ts `SkillEditor.list/update`, `SkillDomain.transform`, registration.ts `Registration`).
+// promise/skill.ts `SkillDomain.list`, registration.ts `Registration`).
 import {createHash} from 'node:crypto';
 import {lstat,open,realpath} from 'node:fs/promises';
 import {isLowercaseSha256Hex,isSafeIdentifier,type S1aReadOnlySource} from '../core/s1a/contract.js';
@@ -74,11 +74,6 @@ export interface DailyToolInfo {
   readonly execute: (input: unknown, context: DailyToolContextLike) => Promise<{readonly content: string}>;
 }
 export interface DailyToolEditorLike {add(tool: DailyToolInfo): void}
-export interface DailySkillDraftLike {content: string}
-export interface DailySkillEditorLike {
-  list(): readonly unknown[];
-  update(id: string, update: (skill: DailySkillDraftLike) => void): void;
-}
 export interface DailyPluginContext {
   readonly location?: Readonly<{directory?: unknown}>;
   readonly tool: {
@@ -86,7 +81,8 @@ export interface DailyPluginContext {
     transform(callback: (editor: DailyToolEditorLike) => void): Promise<DailyRegistration>;
   };
   readonly skill: {
-    transform(callback: (editor: DailySkillEditorLike) => void): Promise<DailyRegistration>;
+    /** promise/skill.ts `SkillDomain extends SkillApi`: final Skill list after every transform (`{data: Skill.Info[]}`). */
+    list(): Promise<unknown>;
   };
 }
 
@@ -882,35 +878,70 @@ function observeHook(coordinator: DailyCoordinator, config: DailyOwnerConfig, in
   }
 }
 
-/** Exactly one approved Skill (id + name + path + content digest); fixed append only, never duplicated. */
-function applySkillTransform(editor: DailySkillEditorLike, config: DailyOwnerConfig, markSkillReady: (ready: boolean) => void): void {
-  const mark = (ready: boolean): void => {try {markSkillReady(ready);} catch {/* readiness stays as-is */}};
+/**
+ * Skill delivery boundary (issue #401). OpenCode v2.3.2 rebuilds Skill State by replaying transforms in registration
+ * order, and package plugins register BEFORE the internal `ConfigSkillPlugin` that adds config Skills, so a
+ * `skill.transform` edit never sees the approved Skill. Instead the fixed append is applied to the result the built-in
+ * `skill` tool hands to the model (`tool.hook("execute.after")`, `result` is mutable), after re-verifying the Skill
+ * identity (id + name + path + content digest) from the Host's final Skill list. Readiness is set only when the
+ * append was applied to the delivered text. Anything unverifiable keeps (or sets) readiness false.
+ */
+const SKILL_TOOL = 'skill';
+const SKILL_CLOSE = '\n</skill_content>';
+
+async function applySkillDelivery(
+  input: unknown, config: DailyOwnerConfig, listSkills: () => Promise<unknown>,
+  markSkillReady: (ready: boolean) => void, isClosed: () => boolean,
+): Promise<void> {
+  const mark = (ready: boolean): void => {if (!isClosed()) {try {markSkillReady(ready);} catch {/* readiness stays as-is */}}};
   try {
+    if (field(input, 'tool') !== SKILL_TOOL) return;
+    // Session attribution: only the Owner-approved Session may deliver, list, or change readiness.
+    const sessionId = field(input, 'sessionID');
+    if (typeof sessionId !== 'string' || sessionId === '' || sessionId !== config.approval.sessionId) return;
     const want = config.approval.skill;
-    const list = editor.list();
-    if (!Array.isArray(list)) {mark(false); return;}
-    const matches = list.filter(s => field(s, 'id') === want.id);
+    if (field(field(input, 'input'), 'id') !== want.id) return; // unapproved Skills are never touched
+    if (field(input, 'status') !== 'completed') {mark(false); return;}
+    const listed = await listSkills();
+    const data = Array.isArray(listed) ? listed : field(listed, 'data');
+    if (!Array.isArray(data)) {mark(false); return;}
+    const matches = data.filter(s => field(s, 'id') === want.id);
     if (matches.length !== 1) {mark(false); return;}
-    const skill = matches[0];
-    const content = field(skill, 'content');
-    if (field(skill, 'name') !== want.name || field(skill, 'path') !== want.path || typeof content !== 'string') {mark(false); return;}
-    if (sha(content) === want.contentSha256) {
-      const expected = content + SKILL_SUFFIX;
-      let applied = false;
-      editor.update(want.id, (draft: DailySkillDraftLike): void => {
-        if (draft.content !== content) return;
-        draft.content = expected;
-        applied = draft.content === expected;
-      });
-      mark(applied);
-      return;
-    }
-    // Repeated transform over its own already transformed text: do not duplicate.
-    if (content.endsWith(SKILL_SUFFIX) && sha(content.slice(0, -SKILL_SUFFIX.length)) === want.contentSha256) {mark(true); return;}
-    mark(false);
+    const skill = matches[0], skillContent = field(skill, 'content');
+    if (field(skill, 'name') !== want.name || field(skill, 'path') !== want.path || typeof skillContent !== 'string'
+      || sha(skillContent) !== want.contentSha256) {mark(false); return;}
+    // v2.3.2 runtime.ts normalizeContent runs before execute.after: content is Tool.Content[] (one text element for
+    // the built-in skill tool) and output.content carries the same text. A raw string or anything ambiguous is untrusted.
+    const result = field(input, 'result');
+    const parts = field(result, 'content');
+    const output = field(result, 'output');
+    if (!Array.isArray(parts) || parts.length !== 1 || typeof output !== 'object' || output === null) {mark(false); return;}
+    const part = parts[0];
+    const delivered = field(part, 'text');
+    if (field(part, 'type') !== 'text' || typeof delivered !== 'string' || field(output, 'content') !== delivered
+      || !delivered.startsWith(`<skill_content name="${want.name}">`) || !delivered.endsWith(SKILL_CLOSE)
+      || !delivered.includes(skillContent.trim())) {mark(false); return;}
+    if (isClosed()) return;
+    if (delivered.includes(DAILY_SKILL_APPEND)) {mark(countOf(delivered, DAILY_SKILL_APPEND) === 1); return;}
+    const next = delivered.slice(0, -SKILL_CLOSE.length) + SKILL_SUFFIX + SKILL_CLOSE;
+    (input as {result: unknown}).result = {
+      ...result as Record<string, unknown>,
+      content: [{...part as Record<string, unknown>, text: next}],
+      output: {...output as Record<string, unknown>, content: next},
+    };
+    const back = field(input, 'result');
+    const backParts = field(back, 'content');
+    mark(Array.isArray(backParts) && backParts.length === 1 && field(backParts[0], 'text') === next
+      && field(field(back, 'output'), 'content') === next);
   } catch {
     mark(false);
   }
+}
+
+function countOf(text: string, part: string): number {
+  let n = 0;
+  for (let i = text.indexOf(part); i !== -1; i = text.indexOf(part, i + part.length)) n++;
+  return n;
 }
 
 type HandleName = 'before' | 'after' | 'tool' | 'skill';
@@ -928,8 +959,10 @@ export async function registerDailyAssurance(
   const config = runtime.ports.config;
   const handles: Partial<Record<HandleName, DailyRegistration>> = {};
   /** Coordinator DISPOSED first, then each acquired handle exactly once in inverse order; best effort. */
+  let closed = false;
   const disposeAll = async (): Promise<boolean> => {
     let clean = true;
+    closed = true;
     try {coordinator.dispose();} catch {clean = false;}
     try {runtime.markSkillReady(false);} catch {clean = false;}
     for (const name of DISPOSE_ORDER) {
@@ -947,8 +980,8 @@ export async function registerDailyAssurance(
     handles.tool = await context.tool.transform((editor: DailyToolEditorLike): void => {
       for (const tool of tools) editor.add(tool);
     });
-    handles.skill = await context.skill.transform((editor: DailySkillEditorLike): void =>
-      applySkillTransform(editor, config, runtime.markSkillReady));
+    handles.skill = await context.tool.hook('execute.after', (input: unknown): Promise<void> =>
+      applySkillDelivery(input, config, () => context.skill.list(), runtime.markSkillReady, () => closed));
   } catch {
     const clean = await disposeAll();
     return Object.freeze({state: 'OFF' as const, reason: clean ? 'SETUP_FAILED' as const : 'CLEANUP_FAILED' as const});
