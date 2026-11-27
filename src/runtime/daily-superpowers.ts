@@ -910,18 +910,29 @@ async function applySkillDelivery(
     const skill = matches[0], skillContent = field(skill, 'content');
     if (field(skill, 'name') !== want.name || field(skill, 'path') !== want.path || typeof skillContent !== 'string'
       || sha(skillContent) !== want.contentSha256) {mark(false); return;}
+    // v2.3.2 runtime.ts normalizeContent runs before execute.after: content is Tool.Content[] (one text element for
+    // the built-in skill tool) and output.content carries the same text. A raw string or anything ambiguous is untrusted.
     const result = field(input, 'result');
-    const delivered = field(result, 'content');
-    if (typeof delivered !== 'string' || !delivered.startsWith(`<skill_content name="${want.name}">`)
-      || !delivered.endsWith(SKILL_CLOSE) || !delivered.includes(skillContent.trim())) {mark(false); return;}
+    const parts = field(result, 'content');
+    const output = field(result, 'output');
+    if (!Array.isArray(parts) || parts.length !== 1 || typeof output !== 'object' || output === null) {mark(false); return;}
+    const part = parts[0];
+    const delivered = field(part, 'text');
+    if (field(part, 'type') !== 'text' || typeof delivered !== 'string' || field(output, 'content') !== delivered
+      || !delivered.startsWith(`<skill_content name="${want.name}">`) || !delivered.endsWith(SKILL_CLOSE)
+      || !delivered.includes(skillContent.trim())) {mark(false); return;}
     if (isClosed()) return;
     if (delivered.includes(DAILY_SKILL_APPEND)) {mark(countOf(delivered, DAILY_SKILL_APPEND) === 1); return;}
     const next = delivered.slice(0, -SKILL_CLOSE.length) + SKILL_SUFFIX + SKILL_CLOSE;
-    const output = field(result, 'output');
-    const nextOutput = typeof output === 'object' && output !== null && field(output, 'content') === delivered
-      ? {...output as Record<string, unknown>, content: next} : output;
-    (input as {result: unknown}).result = {...result as Record<string, unknown>, content: next, ...(output === undefined ? {} : {output: nextOutput})};
-    mark(field(field(input, 'result'), 'content') === next);
+    (input as {result: unknown}).result = {
+      ...result as Record<string, unknown>,
+      content: [{...part as Record<string, unknown>, text: next}],
+      output: {...output as Record<string, unknown>, content: next},
+    };
+    const back = field(input, 'result');
+    const backParts = field(back, 'content');
+    mark(Array.isArray(backParts) && backParts.length === 1 && field(backParts[0], 'text') === next
+      && field(field(back, 'output'), 'content') === next);
   } catch {
     mark(false);
   }

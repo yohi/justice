@@ -834,7 +834,7 @@ function makeSdk(o:SdkOptions={}){
     const sk=finalSkills().find(x=>x.id===id);
     const content=sk===undefined?'':['<skill_content name="'+sk.name+'">','# Skill: '+sk.name,'',sk.content.trim(),'','Base directory for this skill: /tmp','</skill_content>'].join('\n');
     const event:Rec={tool:'skill',sessionID,agent:'build',messageID,id:callID,input:{id},status:'completed',
-      result:{output:{directory:'/tmp',content},content,metadata:{}}};
+      result:{output:{directory:'/tmp',content},content:[{type:'text',text:content}],metadata:{}}};
     if(omitSession)delete event.sessionID;
     for(const cb of afterHooks)await cb(event);
     return event;
@@ -862,6 +862,8 @@ function runtimeOf(f:CoordinatorFixture):Extract<DailyRuntimeResult,{state:'READ
 }
 const toolCtx=(f:CoordinatorFixture,messageID:string,id:string,o:Rec={})=>({sessionID:f.SID,messageID,id,agent:'build',signal:new AbortController().signal,
   progress:async()=>undefined,...o});
+/** Delivered text of a normalized Tool.Content[] result (single text element). */
+const textOf=(ev:Rec):string=>{const c=(ev.result as {content:{type:string;text:string}[]}).content;return c.map(x=>x.text).join('');};
 const parse=(r:{content?:unknown}):Rec=>JSON.parse(String(r.content)) as Rec;
 const daily=(sdk:Sdk,name:string):AddedTool=>{const t=sdk.added.find(x=>x.name===name);if(!t)throw Error(`${name} not registered`);return t;};
 async function hook(sdk:Sdk,name:'execute.before'|'execute.after',input:Rec):Promise<void>{
@@ -1050,14 +1052,14 @@ describe('V2 wiring: fixed Skill delivery (upstream transform order)',()=>{
     await registerDailyAssurance(sdk.context as unknown as DailyPluginContext,runtime);
     expect(runtime.ready()).toBe(false);
     const ev=await sdk.invokeSkillTool(f,'skill-fixture');
-    const result=ev.result as {content:string;output:{content:string}};
+    const result={content:textOf(ev),output:(ev.result as {output:{content:string}}).output};
     expect(runtime.ready()).toBe(true);
     expect(result.content.split(DAILY_SKILL_APPEND)).toHaveLength(2);
     expect(result.content.startsWith('<skill_content name="executing-plans">\n# Skill: executing-plans\n\nfixture-skill\n')).toBe(true);
     expect(result.content.endsWith(`\n${DAILY_SKILL_APPEND}\n</skill_content>`)).toBe(true);
     expect(result.output.content).toBe(result.content);
     const other=await sdk.invokeSkillTool(f,'other');
-    expect((other.result as {content:string}).content).not.toContain(DAILY_SKILL_APPEND);
+    expect(textOf(other)).not.toContain(DAILY_SKILL_APPEND);
     expect(runtime.ready()).toBe(true); // unapproved Skill loads leave readiness untouched
     expect(sdk.finalSkills().map(x=>x.content)).toEqual(['fixture-skill','other-skill']);
     expect(DAILY_SKILL_APPEND.startsWith('## Justice Daily Assurance (Owner opt-in; advisory only)\nBefore the approved inline Task')).toBe(true);
@@ -1073,7 +1075,7 @@ describe('V2 wiring: fixed Skill delivery (upstream transform order)',()=>{
     const ev=await sdk.invokeSkillTool(f,'skill-fixture');
     const skillHook=sdk.toolHook.mock.calls[2]![1] as (i:unknown)=>Promise<void>;
     await skillHook(ev);
-    expect((ev.result as {content:string}).content.split(DAILY_SKILL_APPEND)).toHaveLength(2);
+    expect(textOf(ev).split(DAILY_SKILL_APPEND)).toHaveLength(2);
     expect(runtime.ready()).toBe(true);
   });
 
@@ -1087,7 +1089,7 @@ describe('V2 wiring: fixed Skill delivery (upstream transform order)',()=>{
     const runtime=runtimeOf(f);
     expect((await registerDailyAssurance(sdk.context as unknown as DailyPluginContext,runtime)).state).toBe('REGISTERED');
     const ev=await sdk.invokeSkillTool(f,'skill-fixture');
-    expect((ev.result as {content:string}).content).not.toContain(DAILY_SKILL_APPEND);
+    expect(textOf(ev)).not.toContain(DAILY_SKILL_APPEND);
     expect(runtime.ready()).toBe(false);
     await beginUnavailable(f,sdk);
   });
@@ -1107,7 +1109,7 @@ describe('V2 wiring: fixed Skill delivery (upstream transform order)',()=>{
           delete (failed as Rec).result;
           for(const cb of sdk.toolHook.mock.calls.filter(c=>c[0]==='execute.after').map(c=>c[1] as (i:unknown)=>unknown))await cb(failed);
         }
-        if(mode==='absent')expect((ev.result as {content:string}).content).toBe('');
+        if(mode==='absent')expect(textOf(ev)).toBe('');
       }
       expect(runtime.ready()).toBe(false);
       await beginUnavailable(f,sdk);
@@ -1120,9 +1122,9 @@ describe('V2 wiring: fixed Skill delivery (upstream transform order)',()=>{
     const runtime=runtimeOf(f);
     await registerDailyAssurance(sdk.context as unknown as DailyPluginContext,runtime);
     const skillHook=sdk.toolHook.mock.calls[2]![1] as (i:unknown)=>Promise<void>;
-    const forged:Rec={tool:'skill',sessionID:f.SID,input:{id:'skill-fixture'},status:'completed',result:{content:'<skill_content name="executing-plans">\nsomething else\n</skill_content>'}};
+    const forged:Rec={tool:'skill',sessionID:f.SID,input:{id:'skill-fixture'},status:'completed',result:{content:[{type:'text',text:'<skill_content name="executing-plans">\nsomething else\n</skill_content>'}]}};
     await skillHook(forged);
-    expect((forged.result as {content:string}).content).not.toContain(DAILY_SKILL_APPEND);
+    expect(textOf(forged)).not.toContain(DAILY_SKILL_APPEND);
     expect(runtime.ready()).toBe(false);
   });
 
@@ -1144,7 +1146,7 @@ describe('V2 wiring: fixed Skill delivery (upstream transform order)',()=>{
         const runtime=runtimeOf(f);
         await registerDailyAssurance(sdk.context as unknown as DailyPluginContext,runtime);
         const ev=await sdk.invokeSkillTool(f,'skill-fixture','msg_x','tool_x',sid,sid===Symbol.for('omit'));
-        expect((ev.result as {content:string}).content).not.toContain(DAILY_SKILL_APPEND);
+        expect(textOf(ev)).not.toContain(DAILY_SKILL_APPEND);
         expect(sdk.skillList).not.toHaveBeenCalled();
         expect(runtime.ready()).toBe(false);
       });
@@ -1163,6 +1165,51 @@ describe('V2 wiring: fixed Skill delivery (upstream transform order)',()=>{
       for(const c of sdk.toolHook.mock.calls.filter(c=>c[0]==='execute.after'))await (c[1] as (i:unknown)=>unknown)(failed);
       expect(sdk.skillList).not.toHaveBeenCalled();
       expect(runtime.ready()).toBe(true);
+    });
+  });
+
+  it('keeps directory, metadata, unrelated fields and the normalized array shape when appending',async()=>{
+    const f=await makeCoordinatorFixture();
+    const sdk=makeSdk({skills:[{...APPROVED}]});
+    const runtime=runtimeOf(f);
+    await registerDailyAssurance(sdk.context as unknown as DailyPluginContext,runtime);
+    const skillHook=sdk.toolHook.mock.calls[2]![1] as (i:unknown)=>Promise<void>;
+    const text=['<skill_content name="executing-plans">','# Skill: executing-plans','','fixture-skill','','Base directory for this skill: /tmp','</skill_content>'].join('\n');
+    const ev:Rec={tool:'skill',sessionID:f.SID,input:{id:'skill-fixture'},status:'completed',
+      result:{output:{directory:'/tmp',content:text,extra:1},content:[{type:'text',text}],metadata:{name:'executing-plans'},unrelated:'keep'}};
+    await skillHook(ev);
+    const r=ev.result as {output:{directory:string;content:string;extra:number};content:{type:string;text:string}[];metadata:unknown;unrelated:string};
+    expect(runtime.ready()).toBe(true);
+    expect(r.content).toHaveLength(1);
+    expect(r.content[0]!.type).toBe('text');
+    expect(r.content[0]!.text).toBe(r.output.content);
+    expect(r.content[0]!.text).toContain(DAILY_SKILL_APPEND);
+    expect([r.output.directory,r.output.extra,r.metadata,r.unrelated]).toEqual(['/tmp',1,{name:'executing-plans'},'keep']);
+  });
+
+  describe('malformed or ambiguous normalized results are never trusted',()=>{
+    const text=['<skill_content name="executing-plans">','# Skill: executing-plans','','fixture-skill','','Base directory for this skill: /tmp','</skill_content>'].join('\n');
+    const mk=(result:unknown):Rec=>({tool:'skill',sessionID:'',input:{id:'skill-fixture'},status:'completed',result});
+    it.each([
+      ['raw string content',(t:string)=>({output:{directory:'/tmp',content:t},content:t})],
+      ['content array of two text elements',(t:string)=>({output:{directory:'/tmp',content:t},content:[{type:'text',text:t},{type:'text',text:'x'}]})],
+      ['empty content array',(t:string)=>({output:{directory:'/tmp',content:t},content:[]})],
+      ['file element',(t:string)=>({output:{directory:'/tmp',content:t},content:[{type:'file',uri:'u',mime:'m'}]})],
+      ['content/output mismatch',(t:string)=>({output:{directory:'/tmp',content:t+'!'},content:[{type:'text',text:t}]})],
+      ['output missing',(t:string)=>({content:[{type:'text',text:t}]})],
+      ['output wrong type',(t:string)=>({output:'str',content:[{type:'text',text:t}]})],
+      ['output.content wrong type',(t:string)=>({output:{directory:'/tmp',content:1},content:[{type:'text',text:t}]})],
+    ] as const)('%s',async(_n,build)=>{
+      const f=await makeCoordinatorFixture();
+      const sdk=makeSdk({skills:[{...APPROVED}]});
+      const runtime=runtimeOf(f);
+      await registerDailyAssurance(sdk.context as unknown as DailyPluginContext,runtime);
+      const skillHook=sdk.toolHook.mock.calls[2]![1] as (i:unknown)=>Promise<void>;
+      const ev=mk(build(text));ev.sessionID=f.SID;
+      const before=JSON.stringify(ev.result);
+      await skillHook(ev);
+      expect(JSON.stringify(ev.result)).toBe(before);
+      expect(runtime.ready()).toBe(false);
     });
   });
 
@@ -1192,7 +1239,7 @@ describe('V2 wiring: fixed Skill delivery (upstream transform order)',()=>{
     release();
     const ev=await pending;
     expect(runtime.ready()).toBe(false);
-    expect((ev.result as {content:string}).content).not.toContain(DAILY_SKILL_APPEND);
+    expect(textOf(ev)).not.toContain(DAILY_SKILL_APPEND);
   });
 });
 
