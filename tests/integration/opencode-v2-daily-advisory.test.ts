@@ -124,14 +124,19 @@ async function makeCoordinatorFixture(options:CoordinatorFixtureOptions={}){
 
   const gate=deferred();
   let gateArmed=options.gated===true;
-  const holds:Deferred[]=[];
+  const holds:{skip:number;deferred:Deferred}[]=[];
   const nativeCalls:string[]=[];
   let messageMode:'ok'|'rejected'|'incomplete'='ok';
   let shellsBody=JSON.stringify({location:{directory:root},data:[]});
   const ok=(t:string):NativeBytes=>({state:'OK',bytes:enc(t)});
   const wait=async():Promise<void>=>{
-    const hold=holds.shift();
-    if(hold)await hold.promise;
+    const pending=holds[0];
+    if(pending?.skip){
+      pending.skip-=1;
+    }else if(pending){
+      holds.shift();
+      await pending.deferred.promise;
+    }
     if(gateArmed&&timeline.finish)await gate.promise;
   };
   const native:NativeReadPort={
@@ -188,7 +193,7 @@ async function makeCoordinatorFixture(options:CoordinatorFixtureOptions={}){
       timeline.shells=['r1','r2'];
       emitFinishBefore();
     },
-    holdNextNative():Deferred{const d=deferred();holds.push(d);return d;},
+     holdNextNative(skip=0):Deferred{const d=deferred();holds.push({skip,deferred:d});return d;},
     disarmGate():void{gateArmed=false;},
     setMessageMode(m:'ok'|'rejected'|'incomplete'):void{messageMode=m;},
     setShells(body:string):void{shellsBody=body;},
@@ -1028,6 +1033,350 @@ describe('production daily supply',()=>{
     const pending=createProductionDailyPorts(prodContext('/tmp/host-dir'));
     vi.stubEnv(DAILY_APPROVAL_ENV,'c'.repeat(64));
     expect(await pending).toEqual({state:'OFF',reason:'APPROVAL_DIGEST_MISMATCH'});
+    expect(vfs.accessed).not.toContain('open:/proc/self/exe');
+  });
+});
+
+describe('Daily Assurance defensive boundaries',()=>{
+  it('converts malformed calls and observations to fixed outcomes without throwing',async()=>{
+    const f=await makeCoordinatorFixture();
+    expect(await f.coordinator.begin(null as unknown as BoundaryCall)).toEqual({state:'UNAVAILABLE',reason:'IDENTITY_UNMATCHED'});
+
+    const hostileCall=Object.defineProperty({},'sessionId',{get(){throw Error('hostile call');}}) as BoundaryCall;
+    expect(await f.coordinator.begin(hostileCall)).toEqual({state:'UNAVAILABLE',reason:'SETUP_FAILED'});
+    expect((await f.coordinator.finish(f.daily.expectedSha256,hostileCall)).reasons).toEqual(['DIAGNOSTIC_UNAVAILABLE']);
+
+    expect(()=>f.coordinator.observe(null as unknown as NativeObservation)).not.toThrow();
+    expect(()=>f.coordinator.observe({} as NativeObservation)).not.toThrow();
+    expect(()=>f.coordinator.observe({
+      sessionId:f.SID,messageId:'msg_invalid',callId:'tool_invalid',tool:'read',
+      phase:'MIDDLE' as NativeObservation['phase'],status:'STARTED',ruleId:null,
+    })).not.toThrow();
+    expect(()=>f.coordinator.observe({
+      sessionId:f.SID,messageId:'msg_error',callId:'tool_error',tool:'read',
+      phase:'AFTER',status:'ERROR',ruleId:null,
+    })).not.toThrow();
+    expect(f.coordinator.getState()).toBe('ARMED');
+  });
+
+  it('returns ABORTED for an already-aborted begin and BUSY while the one begin is still collecting',async()=>{
+    const f=await makeCoordinatorFixture();
+    const aborted=new AbortController();
+    aborted.abort();
+    expect(await f.coordinator.begin({...f.beginCall,signal:aborted.signal})).toEqual({state:'UNAVAILABLE',reason:'ABORTED'});
+
+    const hold=f.holdNextNative();
+    const pending=f.coordinator.begin(f.beginCall);
+    await expect.poll(()=>f.nativeCalls).toContain('session');
+    expect(await f.coordinator.begin(f.call('msg_009','tool_begin2'))).toEqual({state:'UNAVAILABLE',reason:'BUSY'});
+    expect((await f.coordinator.finish(f.daily.expectedSha256,f.finishCall)).reasons).toEqual(['BUSY']);
+    hold.resolve();
+    expect((await pending).state).toBe('READY');
+  });
+
+  it('cancels a begin already collecting Native evidence when its caller aborts',async()=>{
+    const f=await makeCoordinatorFixture();
+    const controller=new AbortController();
+    const hold=f.holdNextNative();
+    const pending=f.coordinator.begin({...f.beginCall,signal:controller.signal});
+    await expect.poll(()=>f.nativeCalls).toContain('session');
+    controller.abort();
+    hold.resolve();
+    expect(await pending).toEqual({state:'UNAVAILABLE',reason:'ABORTED'});
+    expect(f.coordinator.getState()).toBe('TERMINAL');
+  });
+
+  it('fails a STARTING Task closed when the Native hook payload is hostile',async()=>{
+    const f=await makeCoordinatorFixture();
+    const hold=f.holdNextNative();
+    const pending=f.coordinator.begin(f.beginCall);
+    await expect.poll(()=>f.nativeCalls).toContain('session');
+    const hostile=new Proxy({}, {get(){throw Error('hostile hook');}});
+    expect(()=>f.coordinator.observe(hostile as NativeObservation)).not.toThrow();
+    hold.resolve();
+    expect(await pending).toEqual({state:'UNAVAILABLE',reason:'BOUNDARY_UNCERTAIN'});
+    expect(f.coordinator.getState()).toBe('TERMINAL');
+  });
+
+  it('fails a STARTING Task closed when another valid tool starts during collection',async()=>{
+    const f=await makeCoordinatorFixture();
+    const hold=f.holdNextNative();
+    const pending=f.coordinator.begin(f.beginCall);
+    await expect.poll(()=>f.nativeCalls).toContain('session');
+    f.emit('msg_004','tool_unexpected','read','BEFORE');
+    hold.resolve();
+    expect(await pending).toEqual({state:'UNAVAILABLE',reason:'BOUNDARY_UNCERTAIN'});
+    expect(f.coordinator.getState()).toBe('TERMINAL');
+  });
+
+  it('returns DISPOSED when the coordinator is disposed during begin collection',async()=>{
+    const f=await makeCoordinatorFixture();
+    const hold=f.holdNextNative();
+    const pending=f.coordinator.begin(f.beginCall);
+    await expect.poll(()=>f.nativeCalls).toContain('session');
+    f.coordinator.dispose();
+    expect(()=>f.coordinator.observe({
+      sessionId:f.SID,messageId:'msg_disposed',callId:'tool_disposed',tool:'read',
+      phase:'BEFORE',status:'STARTED',ruleId:null,
+    })).not.toThrow();
+    hold.resolve();
+    expect(await pending).toEqual({state:'UNAVAILABLE',reason:'DISPOSED'});
+    expect(f.coordinator.getState()).toBe('DISPOSED');
+  });
+
+  it('treats a Native tool-name change within one call as an uncertain boundary',async()=>{
+    const f=await makeCoordinatorFixture();
+    const key=await begun(f);
+    f.observePair();
+    f.emit('msg_004','tool_alias','shell','BEFORE','r1');
+    f.emit('msg_004','tool_alias','read','AFTER');
+    const report=await f.coordinator.finish(key,f.finishCall);
+    expect(report.state).not.toBe('DIAGNOSED');
+    expect(report.boundary).toBe('UNCERTAIN');
+    expect(report.reasons).toContain('BOUNDARY_UNCERTAIN');
+  });
+
+  it('withdraws FINISHING evidence when the Native hook payload is hostile',async()=>{
+    const f=await makeCoordinatorFixture();
+    const key=await begun(f);
+    f.observePair();
+    const before=f.nativeReads;
+    const hold=f.holdNextNative();
+    const pending=f.coordinator.finish(key,f.finishCall);
+    await expect.poll(()=>f.nativeCalls.slice(before)).toContain('session');
+    const hostile=new Proxy({}, {get(){throw Error('hostile hook');}});
+    expect(()=>f.coordinator.observe(hostile as NativeObservation)).not.toThrow();
+    hold.resolve();
+    const report=await pending;
+    expect(report.state).not.toBe('DIAGNOSED');
+    expect(report.evidence.state).toBe('UNAVAILABLE');
+    expect(report.reasons).toContain('LATE_OBSERVATION');
+  });
+
+  it('counts a conflicting control-hook identity observed while FINISHING as late work',async()=>{
+    const f=await makeCoordinatorFixture();
+    const key=await begun(f);
+    f.observePair();
+    const hold=f.holdNextNative();
+    const pending=f.coordinator.finish(key,f.finishCall);
+    await expect.poll(()=>f.nativeCalls.slice(f.nativeReads-1)).toContain('session');
+    f.emit('msg_003','tool_finish','justice_task_begin','BEFORE');
+    hold.resolve();
+    const report=await pending;
+    expect(report.state).not.toBe('DIAGNOSED');
+    expect(report.evidence.state).toBe('UNAVAILABLE');
+    expect(report.reasons).toContain('LATE_OBSERVATION');
+  });
+
+  it('marks a malformed Native observation after TERMINAL as a late boundary change',async()=>{
+    const f=await makeCoordinatorFixture();
+    const key=await begun(f);
+    f.observePair();
+    expect((await f.coordinator.finish(key,f.finishCall)).state).toBe('DIAGNOSED');
+    const hostile=new Proxy({}, {get(){throw Error('hostile hook');}});
+    expect(()=>f.coordinator.observe(hostile as NativeObservation)).not.toThrow();
+    const report=await f.coordinator.finish(key,f.finishCall);
+    expect(report.state).toBe('LIMITED');
+    expect(report.reasons).toContain('LATE_OBSERVATION');
+    expect(f.diagnose).toHaveBeenCalledTimes(1);
+  });
+
+  it('invalidates a collected Git scope if Native work starts before the end snapshot settles',async()=>{
+    const f=await makeCoordinatorFixture();
+    const key=await begun(f);
+    f.observePair();
+    const before=f.nativeReads;
+    const endSnapshot=f.holdNextNative(2);
+    const pending=f.coordinator.finish(key,f.finishCall);
+    await expect.poll(()=>f.nativeCalls.slice(before).filter(c=>c==='session')).toHaveLength(3);
+    expect(f.gitReads).toBeGreaterThan(0);
+    f.emit('msg_004','tool_late','read','BEFORE');
+    endSnapshot.resolve();
+
+    const report=await pending;
+    expect(report.state).not.toBe('DIAGNOSED');
+    expect(report.evidence.state).toBe('UNAVAILABLE');
+    expect(report.changeSetOrigin).toBe('UNAVAILABLE');
+    expect(report.reasons).toContain('LATE_OBSERVATION');
+  });
+
+  it('returns ABORTED for a terminal revalidation requested by an already-aborted caller',async()=>{
+    const f=await makeCoordinatorFixture();
+    const key=await begun(f);
+    f.observePair();
+    expect((await f.coordinator.finish(key,f.finishCall)).state).toBe('DIAGNOSED');
+    const controller=new AbortController();
+    controller.abort();
+    const report=await f.coordinator.finish(key,{...f.finishCall,signal:controller.signal});
+    expect(report.reasons).toEqual(['ABORTED']);
+    expect(f.diagnose).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels a finish in Native collection when its caller aborts',async()=>{
+    const f=await makeCoordinatorFixture();
+    const key=await begun(f);
+    f.observePair();
+    const before=f.nativeReads;
+    const controller=new AbortController();
+    const hold=f.holdNextNative();
+    const pending=f.coordinator.finish(key,{...f.finishCall,signal:controller.signal});
+    await expect.poll(()=>f.nativeCalls.slice(before)).toContain('session');
+    controller.abort();
+    hold.resolve();
+    const report=await pending;
+    expect(report.reasons).toEqual(['ABORTED']);
+    expect(report.evidence.state).toBe('NOT_EVALUATED');
+    expect(f.diagnose).not.toHaveBeenCalled();
+  });
+
+  it('keeps an invalidated terminal result unavailable after a late malformed observation',async()=>{
+    const f=await makeCoordinatorFixture();
+    const key=await begun(f);
+    f.observePair();
+    expect((await f.coordinator.finish(key,f.finishCall)).state).toBe('DIAGNOSED');
+    f.setArtifactBytes('plan-1.md',enc('changed'));
+    expect((await f.coordinator.finish(key,f.call('msg_005','tool_finish5'))).reasons).toEqual(['BINDING_INVALID']);
+    f.coordinator.observe(null as unknown as NativeObservation);
+    expect((await f.coordinator.finish(key,f.call('msg_006','tool_finish6'))).reasons).toEqual(['BINDING_INVALID']);
+    expect(f.diagnose).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a terminal lookup with a different well-formed binding key without rereading evidence',async()=>{
+    const f=await makeCoordinatorFixture();
+    const key=await begun(f);
+    f.observePair();
+    expect((await f.coordinator.finish(key,f.finishCall)).state).toBe('DIAGNOSED');
+    const reads={native:f.nativeReads,git:f.gitReads};
+    expect((await f.coordinator.finish('0'.repeat(64),f.call('msg_005','tool_finish5'))).reasons)
+      .toEqual(['BINDING_KEY_MISMATCH']);
+    expect({native:f.nativeReads,git:f.gitReads}).toEqual(reads);
+    expect(f.diagnose).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps an unexpected terminal revalidation exception to BINDING_INVALID',async()=>{
+    const f=await makeCoordinatorFixture();
+    const key=await begun(f);
+    f.observePair();
+    expect((await f.coordinator.finish(key,f.finishCall)).state).toBe('DIAGNOSED');
+    Object.defineProperty(f.ports,'preflight',{configurable:true,get(){throw Error('preflight unavailable');}});
+    const report=await f.coordinator.finish(key,f.finishCall);
+    expect(report.reasons).toEqual(['BINDING_INVALID']);
+    expect(f.diagnose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Daily Assurance SDK boundary failures',()=>{
+  it('returns fixed results for hostile direct-tool inputs, contexts and hook payloads',async()=>{
+    const f=await makeCoordinatorFixture();
+    const sdk=makeSdk();
+    const runtime=runtimeOf(f);
+    const cleanup=await createJusticeV2Plugin({createAdapter:fakeAdapter,createDailyRuntime:async()=>runtime}).setup(sdk.context as never);
+    const begin=daily(sdk,'justice_task_begin');
+    const finish=daily(sdk,'justice_task_finish');
+    const hostileInput=new Proxy({}, {getPrototypeOf(){throw Error('hostile input');}});
+    expect(parse(await begin.execute(hostileInput,toolCtx(f,'msg_001','tool_begin')))).toEqual({state:'UNAVAILABLE',reason:'SETUP_FAILED'});
+    expect(parse(await finish.execute(hostileInput,toolCtx(f,'msg_003','tool_finish'))).reasons).toEqual(['DIAGNOSTIC_UNAVAILABLE']);
+
+    const context= new Proxy(toolCtx(f,'msg_001','tool_begin'),{
+      get(target,property,receiver){if(property==='signal')throw Error('hostile signal');return Reflect.get(target,property,receiver);},
+    });
+    expect(parse(await begin.execute({},context))).toEqual({state:'UNAVAILABLE',reason:'IDENTITY_UNMATCHED'});
+
+    const hostileHook=new Proxy({}, {getOwnPropertyDescriptor(){throw Error('hostile hook');}});
+    await expect(hook(sdk,'execute.before',hostileHook as Rec)).resolves.toBeUndefined();
+    if(typeof cleanup!=='function')throw Error('cleanup missing');
+    await cleanup();
+  });
+
+  it('keeps the registered Skill unavailable when the Host editor throws',async()=>{
+    const f=await makeCoordinatorFixture();
+    const sdk=makeSdk();
+    sdk.skillEditor.list=()=>{throw Error('Host Skill editor failed');};
+    const runtime=runtimeOf(f);
+    expect((await registerDailyAssurance(sdk.context as unknown as DailyPluginContext,runtime)).state).toBe('REGISTERED');
+    expect(runtime.ready()).toBe(false);
+    await hook(sdk,'execute.before',sdkEvent(f,'msg_001','tool_begin','justice_task_begin',{}));
+    expect(parse(await daily(sdk,'justice_task_begin').execute({},toolCtx(f,'msg_001','tool_begin'))))
+      .toEqual({state:'UNAVAILABLE',reason:'SKILL_UNSUPPORTED'});
+    expect(f.nativeReads).toBe(0);
+  });
+
+  it('keeps justice_review available when malformed Daily ports fail coordinator setup',async()=>{
+    const sdk=makeSdk();
+    const runtime={
+      state:'READY',
+      ports:new Proxy({}, {get(){throw Error('malformed Daily ports');}}),
+      markSkillReady:()=>undefined,
+    } as unknown as DailyRuntimeResult;
+    const cleanup=await createJusticeV2Plugin({createAdapter:fakeAdapter,createDailyRuntime:async()=>runtime}).setup(sdk.context as never);
+    expect(sdk.added.map(t=>t.name)).toEqual(['justice_review']);
+    expect(sdk.log).toEqual(['register:review']);
+    if(typeof cleanup!=='function')throw Error('cleanup missing');
+    await cleanup();
+  });
+});
+
+describe('additional production-supply failure boundaries',()=>{
+  it('fails closed when /proc/self/mountinfo cannot be read',async()=>{
+    const d=await makeDailyFixture();
+    vi.stubEnv(DAILY_APPROVAL_ENV,d.expectedSha256);
+    expect(await createProductionDailyPorts(prodContext('/tmp/x'))).toEqual({state:'OFF',reason:'OWNER_BOUNDARY_UNVERIFIED'});
+    expect(vfs.accessed).toContain('open:/proc/self/mountinfo');
+    expect(vfs.accessed.filter(path=>path.includes('approval.json'))).toEqual([]);
+  });
+
+  it('rejects malformed mountinfo records before loading Owner approval',async()=>{
+    const d=await makeDailyFixture();
+    vi.stubEnv(DAILY_APPROVAL_ENV,d.expectedSha256);
+    vfs.nodes.set('/proc/self/mountinfo',{type:'file',bytes:enc('malformed\n')});
+    expect(await createProductionDailyPorts(prodContext('/tmp/x'))).toEqual({state:'OFF',reason:'OWNER_BOUNDARY_UNVERIFIED'});
+    expect(vfs.accessed).toContain('open:/proc/self/mountinfo');
+    expect(vfs.accessed.filter(path=>path.includes('approval.json'))).toEqual([]);
+  });
+
+  it('fails closed when the fixed executable cannot be read',async()=>{
+    const d=await makeDailyFixture();
+    vi.stubEnv(DAILY_APPROVAL_ENV,d.expectedSha256);
+    ownerMount();
+    vfs.nodes.set(`${DAILY_OWNER_ROOT}/approval.json`,{type:'file',bytes:d.approvalBytes});
+    vfs.realpaths.set('/tmp/host-dir',d.approval.worktreeRoot);
+    expect(await createProductionDailyPorts(prodContext('/tmp/host-dir'))).toEqual({state:'OFF',reason:'HOST_MISMATCH'});
+    expect(vfs.accessed).toContain('open:/proc/self/exe');
+    expect(vfs.writes).toEqual([]);
+  });
+
+  it('rejects worktrees below the Owner-only root before resolving them',async()=>{
+    const base=await makeDailyFixture();
+    const root=`${DAILY_OWNER_ROOT}/workspace`;
+    const d=await makeDailyFixture({approvalPatch:{
+      worktreeRoot:root,
+      rules:base.approval.rules.map(rule=>({...rule,input:{...rule.input,workdir:root}})),
+    }});
+    vi.stubEnv(DAILY_APPROVAL_ENV,d.expectedSha256);
+    ownerMount();
+    vfs.nodes.set(`${DAILY_OWNER_ROOT}/approval.json`,{type:'file',bytes:d.approvalBytes});
+    expect(await createProductionDailyPorts(prodContext('/tmp/host-dir'))).toEqual({state:'OFF',reason:'OWNER_BOUNDARY_UNVERIFIED'});
+    expect(vfs.accessed).not.toContain('open:/proc/self/exe');
+  });
+
+  it('fails closed when Host context cannot provide a trusted workspace directory',async()=>{
+    const d=await makeDailyFixture();
+    vi.stubEnv(DAILY_APPROVAL_ENV,d.expectedSha256);
+    ownerMount();
+    vfs.nodes.set(`${DAILY_OWNER_ROOT}/approval.json`,{type:'file',bytes:d.approvalBytes});
+    const context=new Proxy(prodContext('/tmp/host-dir'),{
+      getOwnPropertyDescriptor(target,property){if(property==='location')throw Error('hostile context');return Reflect.getOwnPropertyDescriptor(target,property);},
+    });
+    expect(await createProductionDailyPorts(context)).toEqual({state:'OFF',reason:'WORKSPACE_MISMATCH'});
+    expect(vfs.accessed).not.toContain('open:/proc/self/exe');
+  });
+
+  it('fails closed when the approved workspace cannot be resolved',async()=>{
+    const d=await makeDailyFixture();
+    vi.stubEnv(DAILY_APPROVAL_ENV,d.expectedSha256);
+    ownerMount();
+    vfs.nodes.set(`${DAILY_OWNER_ROOT}/approval.json`,{type:'file',bytes:d.approvalBytes});
+    expect(await createProductionDailyPorts(prodContext('/tmp/missing-host-dir'))).toEqual({state:'OFF',reason:'WORKSPACE_MISMATCH'});
     expect(vfs.accessed).not.toContain('open:/proc/self/exe');
   });
 });
