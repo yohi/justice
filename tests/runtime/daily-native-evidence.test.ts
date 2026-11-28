@@ -832,6 +832,19 @@ describe('daily native evidence: fixed Native HTTP port',()=>{
       expect(seen).toHaveLength(0);
       expect(snapshotEnv()).toEqual(before);
     });
+    it('treats variables that are truly unset (undefined, not empty) the same as empty',async()=>{
+      const f=await makeDailyFixture();
+      const seen=stub(()=>json('{}'));
+      for(const k of PROXY_KEYS)vi.stubEnv(k,undefined);
+      for(const k of PROXY_KEYS)expect(Object.hasOwn(process.env,k)).toBe(false);
+      const port=createNativeReadPort(f.config);
+      expect((await port.getSession(SID,sig())).state).toBe('OK');
+      vi.stubEnv('NO_PROXY','localhost');
+      expect(await port.getSession(SID,sig())).toEqual(U);
+      vi.stubEnv('NO_PROXY',undefined);vi.stubEnv('http_proxy','http://127.0.0.1:9');
+      expect(await port.getSession(SID,sig())).toEqual(U);
+      expect(seen).toHaveLength(1);
+    });
     it('re-evaluates the environment at every call',async()=>{
       const f=await makeDailyFixture();
       const seen=stub(()=>json('{}'));
