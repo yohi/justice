@@ -1,54 +1,85 @@
-# Release Candidate Runbook
+# Release Management Runbook (label-driven)
 
-Scope: how `v6.0.0-rc.1` is produced by the existing release-please automation.
-Nothing here has been executed; no tag, release or package exists for v6.
+Release versions are selected by the Human Owner with labels on the release-please Release PR.
+Nothing here has been executed against the real repository: no label, tag, release or package for v6 exists.
 
 ## Mechanism
 
-- `.release-please-config.json` sets, for package `.`: `release-as: "6.0.0-rc.1"`,
-  `prerelease: true`, `versioning: "prerelease"`, `prerelease-type: "rc"`.
-  `release-as` forces the first RC version; `prerelease` marks the GitHub Release as Prerelease.
-- `.release-please-manifest.json` stays at `4.0.0` (the last version recorded on `master`).
-  An unreleased version must never be written there by hand; release-please updates it in the Release PR.
-- `scripts/release-version-guard.mjs` enforces SemVer precedence (not `git --sort=version:refname`):
-  strictly newer than the highest release tag, no existing tag, `package.json` equals manifest.
-  The `release-version-guard` workflow runs it on `release-please--*` PRs.
-- `release.yml` (after release-please creates the Release): build, resolve channel
-  (`channel` mode fails closed on tag / `package.json` / manifest mismatch), `npm pack` once,
-  verify contents (`scripts/verify-package-contents.mjs`), `npm publish <tarball> --tag <dist-tag>`,
-  upload the same tarball as Release asset.
+- `release-please-action` v5 (pinned SHA) still creates Tags / GitHub Releases / CHANGELOG on master pushes
+  (`skip-github-pull-request: true` in the `release-please` job).
+- The `release-pr` job creates/updates the Release PR with the official CLI
+  `release-please@17.6.0 release-pr --release-as <version>` (the action ignores `release-as` in manifest mode).
+  It runs on master pushes and on `labeled` / `unlabeled` events of release PRs (`pull_request_target`,
+  trusted master code only; the PR head is never checked out). It never creates tags, releases or packages.
+- `.release-please-config.json` keeps `prerelease: true` and no `release-as`. Stable versions >= 1.0.0 are
+  still normal releases; prerelease versions are GitHub Prereleases.
+- `scripts/release-label-resolver.mjs` maps labels + existing tags to a version (SemVer, tag-derived RC numbers).
+  Manifest / `package.json` / CHANGELOG are only ever written by release-please.
+- `scripts/release-version-guard.mjs` and the `release-version-guard` workflow reject downgrades, duplicates,
+  tag collisions, package/manifest mismatch, and a candidate that differs from the label selection.
+- Publishing (`release.yml`): build, channel resolution (`next` for prereleases, `latest` for stable), one
+  `npm pack`, content verification, `npm publish <tarball> --tag <dist-tag>`, same tarball as Release asset.
 
-| Version | GitHub Release | npm dist-tag |
+## Labels
+
+Required Repository labels (create once; not created by this change):
+
+| Label | Meaning |
+|---|---|
+| `release: major` / `release: minor` / `release: patch` | bump from the latest **stable** version |
+| `release: version=X.Y.Z` | explicit stable core version (exclusive with major/minor/patch) |
+| `release: alpha` / `release: beta` / `release: rc` | prerelease channel, number auto-assigned from tags |
+| `release: stable` | stable release |
+
+Rules:
+
+- A channel label is always required, plus either one bump label, one `version=` label, or an active prerelease series.
+- Channel only (no bump/version) continues or promotes the single active prerelease series
+  (`6.0.0-rc.1` + `rc` = `6.0.0-rc.2`; `6.0.0-rc.2` + `stable` = `6.0.0`).
+- Conflicts fail closed (the Release PR is left unchanged): several bump / channel / version labels,
+  version + bump, malformed or unknown `release:` labels, channel-only without an active series,
+  several active prerelease series (use `version=`), downgrade, existing tag.
+- RC numbers come from published tags only, so label toggling, master pushes and workflow re-runs never
+  advance an unpublished RC.
+- Labels count only if the actor who applied them has write permission (checked at event time and again by the guard).
+
+| Current | Labels | Result |
 |---|---|---|
-| `X.Y.Z-pre.N` | Prerelease | `next` |
-| `X.Y.Z` | Release | `latest` |
+| 4.3.1 | `version=6.0.0` + `rc` | 6.0.0-rc.1 |
+| 4.3.1 | `major` + `rc` | 5.0.0-rc.1 |
+| 6.0.0-rc.1 | `rc` | 6.0.0-rc.2 |
+| 6.0.0-rc.2 | `stable` | 6.0.0 |
+| 6.0.0 | `patch` + `stable` / `minor` + `stable` | 6.0.1 / 6.1.0 |
+| 6.0.0 | `minor` + `rc` / `major` + `rc` | 6.1.0-rc.1 / 7.0.0-rc.1 |
 
-## Owner steps (not performed by the readiness task)
+## Owner steps
 
-1. Review and merge the readiness PR (human only).
-2. PR #360 (`chore(master): release 4.1.0`) is stale: v4.1.0 already exists and is older than v4.3.1.
-   Do not merge it. After the readiness PR lands, the next release-please run regenerates the Release PR
-   from the new config; confirm it proposes `6.0.0-rc.1`, then close #360 as superseded
-   (or let release-please replace it). The guard rejects a 4.1.0 candidate regardless.
-3. Review the regenerated Release PR (version, `CHANGELOG.md`, manifest = `package.json`) and merge it.
-   Release PR workflows may need approval (`ACTION_REQUIRED`) when created with `GITHUB_TOKEN`; approve normally, never bypass.
-4. After the RC release succeeds, remove `release-as` from the config (it is not ignored after release;
-   leaving it pins every later Release PR to `6.0.0-rc.1`). `rc.2` then comes from the prerelease strategy.
-5. For stable `6.0.0` (separate Owner approval): set `release-as: "6.0.0"` and `prerelease: false`,
-   remove `release-as` again after the release. Stable then publishes to `latest`.
+1. Register the labels above (Owner approval; not done here). Merge the readiness PR (human only).
+2. First v6 RC: on the Release PR apply `release: version=6.0.0` and `release: rc`. The `release-pr` job updates the PR to
+   `6.0.0-rc.1`. Label events do not start the guard (GITHUB_TOKEN pushes do not trigger workflows):
+   after the job finishes, re-run `release-version-guard`. Actions on the PR may need approval (`ACTION_REQUIRED`); never bypass it.
+3. Review version, `CHANGELOG.md`, manifest = `package.json`, then merge the Release PR (human only).
+4. Next RC: with `release: rc` still applied, the next master push regenerates the PR as `rc.2`. Replace labels for a
+   different selection. Stable: swap `release: rc` for `release: stable`.
+5. PR #360 (`chore(master): release 4.1.0`) is stale and must not be merged. The `release-pr` job reuses the existing
+   release-please PR/branch, so after the readiness PR lands it is updated in place to the labeled version; the guard
+   rejects any candidate that is not newer than all tags. Close or keep #360 per Owner decision after checking the updated version.
+6. Unlabeled Release PRs (initial conventional proposal) are not publishable: the guard fails until labels are applied.
+   Keep the guard (and, if desired, the label check) as a required status check in repository settings; this change
+   cannot enforce that and required-check settings were not verified.
 
 ## Partial failure recovery
 
-The GitHub Release and tag are created by release-please before build/publish, so a later failure leaves
-a Release without a package. Do not delete or move the tag. Use "Re-run failed jobs" on the same
-workflow run; `npm publish` refuses an existing version, so a repeated run cannot overwrite a package.
-If the version was already published but the asset upload failed, upload the tarball manually
-(`gh release upload`) from a fresh `npm pack` of the tag.
+The tag and GitHub Release are created by release-please before build/publish. If a later step fails, do not delete or
+move the tag. Inspect the real state first (tag, Release assets, `npm view @yohi/justice versions dist-tags`), then the Owner decides:
+re-running failed jobs is possible but not guaranteed to be sufficient; `npm publish` refuses an existing version, so a
+published version can never be overwritten. A missing asset can be uploaded manually from a fresh `npm pack` of the tag.
 
-## Verification limits
+## Verification limits (NOT_VERIFIED)
 
-- Real release-please Release PR generation, the `prerelease` flag on the GitHub Release, and
-  GitHub Packages dist-tag handling were not exercised (offline/static only: config keys follow the
-  release-please manifest docs; guard, channel and package checks are unit-tested).
-- GitHub Packages npm registry dist-tag support is not independently confirmed; verify with
-  `npm view @yohi/justice dist-tags` after the first publish.
+- No real label application, Release PR update by the new workflow, or Publish was performed.
+- The official CLI dry-run confirmed `--release-as 6.0.0-rc.1` is applied (4.0.0 -> 6.0.0-rc.1) in manifest mode;
+  the GitHub Release prerelease flag and GitHub Packages dist-tag behavior were not exercised.
+- `collaborators/{user}/permission` access with `GITHUB_TOKEN`, and whether label events can update the PR when
+  Actions approval or required checks apply, are unverified; the workflow fails closed.
+- `npx release-please@17.6.0` is pinned by version only (no lockfile integrity).

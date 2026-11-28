@@ -4,15 +4,26 @@ on:
   push:
     branches:
       - master
+  # Trusted master code only: this workflow never checks out or executes the PR head.
+  pull_request_target:
+    branches:
+      - master
+    types:
+      - labeled
+      - unlabeled
 
 permissions:
-  contents: write
-  pull-requests: write
-  packages: write
+  contents: read
 
 jobs:
   release-please:
+    # Tag / GitHub Release creation and publishing: master pushes only, never label events.
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-slim
+    permissions:
+      contents: write
+      pull-requests: write
+      packages: write
     steps:
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5
         id: release
@@ -20,6 +31,8 @@ jobs:
           target-branch: master
           config-file: .release-please-config.json
           manifest-file: .release-please-manifest.json
+          # Release PR creation/update is owned by the release-pr job (label-aware, official CLI).
+          skip-github-pull-request: true
 
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         if: ${{ steps.release.outputs.release_created }}
@@ -94,3 +107,94 @@ jobs:
           RELEASE_TAG: ${{ steps.release.outputs.tag_name }}
           TARBALL: ${{ steps.pack.outputs.file }}
         if: ${{ steps.release.outputs.release_created }}
+
+  release-pr:
+    # Creates/updates the Release PR only. Never creates tags, releases or packages.
+    needs: release-please
+    if: >-
+      ${{ !cancelled() &&
+      (needs.release-please.result == 'success' || needs.release-please.result == 'skipped') &&
+      (github.event_name == 'push' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'release-please--') &&
+      startsWith(github.event.label.name, 'release: '))) }}
+    runs-on: ubuntu-slim
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: release-pr-${{ github.repository }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Require write permission for label events
+        id: sender
+        if: ${{ github.event_name == 'pull_request_target' }}
+        env:
+          SENDER: ${{ github.event.sender.login }}
+        shell: bash
+        run: |
+          permission="$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${SENDER}/permission" --jq '.permission' 2>/dev/null || echo none)"
+          case "$permission" in
+            admin|write|maintain) echo "authorized=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::warning::Ignoring release label event from an actor without write permission"
+               echo "authorized=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        if: ${{ steps.sender.outputs.authorized != 'false' }}
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: ${{ steps.sender.outputs.authorized != 'false' }}
+        with:
+          node-version: '22'
+      - name: Resolve release version from labels
+        id: resolve
+        if: ${{ steps.sender.outputs.authorized != 'false' }}
+        env:
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          # Current state is read from the API at run time, never from the (possibly stale) event payload.
+          prs="$(gh pr list --base master --state open --json number,headRefName \
+            --jq '[.[] | select(.headRefName | startswith("release-please--branches--master"))]')"
+          count="$(jq 'length' <<<"$prs")"
+          if [[ "$count" -gt 1 ]]; then
+            echo "More than one open release PR; refusing to guess" >&2
+            exit 1
+          fi
+          if [[ "$count" -eq 0 ]]; then
+            echo "release_as=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          pr_number="$(jq -r '.[0].number' <<<"$prs")"
+          if [[ -n "$EVENT_PR_NUMBER" && "$EVENT_PR_NUMBER" != "$pr_number" ]]; then
+            echo "Label event PR is not the current release PR; ignoring" >&2
+            echo "release_as=" >> "$GITHUB_OUTPUT"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          bash scripts/release-pr-context.sh "$pr_number" "$RUNNER_TEMP/release-context"
+          node scripts/release-label-resolver.mjs resolve \
+            --tags-file "$RUNNER_TEMP/release-context/tags.txt" \
+            --labels-file "$RUNNER_TEMP/release-context/labels.json" \
+            --events-file "$RUNNER_TEMP/release-context/events.json" \
+            --permissions-file "$RUNNER_TEMP/release-context/permissions.json" >> "$GITHUB_OUTPUT"
+      - name: Create or update Release PR (official release-please CLI)
+        if: ${{ steps.sender.outputs.authorized != 'false' && steps.resolve.outputs.skip != 'true' }}
+        env:
+          RELEASE_AS: ${{ steps.resolve.outputs.release_as }}
+        shell: bash
+        run: |
+          args=(release-pr
+            --token "$GH_TOKEN"
+            --repo-url "$GITHUB_REPOSITORY"
+            --target-branch master
+            --config-file .release-please-config.json
+            --manifest-file .release-please-manifest.json)
+          if [[ -n "$RELEASE_AS" ]]; then
+            args+=(--release-as "$RELEASE_AS")
+          fi
+          npx --yes release-please@17.6.0 "${args[@]}"

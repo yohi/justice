@@ -10,7 +10,7 @@ const VERSION_PATTERN = new RegExp(
 );
 const NUMERIC_ID = /^(0|[1-9][0-9]*)$/;
 
-function parseVersion(version) {
+export function parseSemVer(version) {
   const match = typeof version === "string" ? VERSION_PATTERN.exec(version) : null;
   if (match === null) {
     throw new RangeError(`Invalid semantic version: ${version}`);
@@ -52,8 +52,8 @@ function comparePrerelease(left, right) {
 }
 
 export function compareVersions(left, right) {
-  const a = parseVersion(left);
-  const b = parseVersion(right);
+  const a = parseSemVer(left);
+  const b = parseSemVer(right);
   for (let index = 0; index < 3; index += 1) {
     if (a.core[index] < b.core[index]) return -1;
     if (a.core[index] > b.core[index]) return 1;
@@ -86,7 +86,7 @@ export function selectLatestVersion(tags) {
 }
 
 export function assertNoTagCollision(candidate, tags) {
-  parseVersion(candidate);
+  parseSemVer(candidate);
   if (tags.includes(`v${candidate}`)) {
     throw new RangeError(`Release tag v${candidate} already exists`);
   }
@@ -103,7 +103,7 @@ export function assertPackageManifestMatch(packageVersion, manifest) {
 
 /** Maps a version to its npm dist-tag / GitHub prerelease flag; fails closed on tag mismatch. */
 export function resolveReleaseChannel(version, tag) {
-  const { pre } = parseVersion(version);
+  const { pre } = parseSemVer(version);
   if (tag !== `v${version}`) {
     throw new RangeError(`Tag ${String(tag)} does not match package version v${version}`);
   }
@@ -143,7 +143,7 @@ function run(args) {
   if (mode === "check") {
     const flags = parseFlags(rest, ["--package", "--manifest", "--tags-file"]);
     const candidate = readJson(flags["--package"]).version;
-    parseVersion(candidate);
+    parseSemVer(candidate);
     assertPackageManifestMatch(candidate, readJson(flags["--manifest"]));
     const tags = readTags(flags["--tags-file"]);
     assertNoTagCollision(candidate, tags);

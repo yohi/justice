@@ -4,16 +4,23 @@ on:
   pull_request:
     branches:
       - master
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+      - unlabeled
     paths:
       - package.json
       - .release-please-manifest.json
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   guard:
-    if: ${{ startsWith(github.head_ref, 'release-please--') }}
+    if: ${{ startsWith(github.head_ref, 'release-please--') && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -28,3 +35,26 @@ jobs:
             --package package.json \
             --manifest .release-please-manifest.json \
             --tags-file "$RUNNER_TEMP/release-tags.txt"
+      - name: Verify release labels match the candidate version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          # Unselected, conflicting, unauthorized or stale selections are not publishable.
+          bash scripts/release-pr-context.sh "$PR_NUMBER" "$RUNNER_TEMP/release-context"
+          resolved="$(node scripts/release-label-resolver.mjs resolve \
+            --tags-file "$RUNNER_TEMP/release-context/tags.txt" \
+            --labels-file "$RUNNER_TEMP/release-context/labels.json" \
+            --events-file "$RUNNER_TEMP/release-context/events.json" \
+            --permissions-file "$RUNNER_TEMP/release-context/permissions.json")"
+          expected="${resolved#release_as=}"
+          candidate="$(node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version')"
+          if [[ -z "$expected" ]]; then
+            echo "No release labels selected: not publishable. Apply a bump/version label and a channel label." >&2
+            exit 1
+          fi
+          if [[ "$candidate" != "$expected" ]]; then
+            echo "Release PR version ($candidate) does not match label selection ($expected). Wait for the release-pr job to finish and re-run this check." >&2
+            exit 1
+          fi

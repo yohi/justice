@@ -154,7 +154,7 @@ RC の既知の制約（正式保証ではありません）:
 - S4 Capability-Aware AI Orchestration は延期。
 - `formal_verdict: UNKNOWN` / `owner_authority_status: NOT_PROVEN` / `coverage_completeness: NOT_ESTABLISHED`
 
-リリース手順・PR #360 の扱い・部分失敗時の再開方法は [docs/release/rc-runbook.md](./docs/release/rc-runbook.md) を参照してください。
+バージョンは Release PR へのラベル（`release: major|minor|patch|version=X.Y.Z` と `release: alpha|beta|rc|stable`）で選択します。ラベル一覧・手順・PR #360 の扱い・部分失敗時の復旧方法は [docs/release/rc-runbook.md](./docs/release/rc-runbook.md) を参照してください。
 
 ### パターン 2: TypeScript 設定経由
 
