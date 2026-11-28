@@ -40,3 +40,19 @@ test("rejects a package.json that drops a required export", () => {
   const problems = findPackageProblems(complete, { exports: rest });
   assert.match(problems.join("\n"), /Missing export: \.\/server/);
 });
+
+test("checks nested conditional export targets and array targets", () => {
+  const nested = {
+    exports: {
+      ".": { import: { types: "./dist/missing-nested.d.ts", default: "./dist/opencode-plugin.js" } },
+      "./opencode": [{ import: "./dist/missing-array.js" }],
+      "./server": "./dist/opencode-v2-plugin.js",
+      "./core": "./dist/index.js",
+      "./runtime": "./dist/runtime/node-file-system.js",
+    },
+  };
+  const problems = findPackageProblems(complete, nested).join("\n");
+  assert.match(problems, /missing-nested\.d\.ts/);
+  assert.match(problems, /missing-array\.js/);
+  assert.doesNotMatch(problems, /opencode-plugin\.js/);
+});

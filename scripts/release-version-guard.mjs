@@ -71,7 +71,12 @@ function versionsFromTags(tags) {
   for (const tag of tags) {
     if (!tag.startsWith("v")) continue;
     const version = tag.slice(1);
-    if (VERSION_PATTERN.test(version)) versions.push(version);
+    try {
+      parseSemVer(version);
+    } catch {
+      continue;
+    }
+    versions.push(version);
   }
   return versions;
 }

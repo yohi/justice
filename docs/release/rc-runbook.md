@@ -59,8 +59,9 @@ Rules:
    to `6.0.0-rc.1`.
 3. Confirm the Guard for the **latest** PR head (see "Guard and PR head" below), review version, `CHANGELOG.md`,
    manifest = `package.json`, then merge the Release PR (human only).
-4. Labels belong to a single Release PR. They are **not** inherited by the next Release PR (the `release-pr` job only
-   handles the open Release PR). For every new Release PR the Owner sets the labels again:
+4. Labels belong to a single Release PR. They are **not** inherited by the next Release PR. On a master push with no
+   open Release PR, the `release-pr` job creates a new Release PR without any labels (conventional-commit proposal,
+   not publishable). For every new Release PR the Owner sets the labels again:
 
 | Current release | Labels on the new Release PR | Expected version |
 |---|---|---|
@@ -103,7 +104,11 @@ expect to need a human-triggered run or Owner action. This is NOT_VERIFIED.
 The tag and GitHub Release are created by release-please before build/publish. If a later step fails, do not delete or
 move the tag. Inspect the real state first (tag, Release assets, `npm view @yohi/justice versions dist-tags`), then the Owner decides:
 re-running failed jobs is possible but not guaranteed to be sufficient; `npm publish` refuses an existing version, so a
-published version can never be overwritten. A missing asset can be uploaded manually from a fresh `npm pack` of the tag.
+published version can never be overwritten. If only the Release asset upload failed, do not upload a freshly built tarball unchecked: a rebuilt tarball is not
+guaranteed to be byte-identical to the published one, and the workflow's `${TARBALL}` is only available inside the
+same run (it is not stored as an artifact). Upload is allowed only after the tarball's integrity matches the published
+package: compare `npm view @yohi/justice@<version> dist.integrity` with the local tarball
+(`openssl dgst -sha512 -binary <tarball> | base64`, prefixed `sha512-`). On mismatch, stop and the Owner decides.
 
 ## Verification limits (NOT_VERIFIED)
 

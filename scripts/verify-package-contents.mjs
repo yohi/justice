@@ -12,7 +12,9 @@ export const REQUIRED_PACKAGE_FILES = Object.freeze([
 export const REQUIRED_EXPORTS = Object.freeze([".", "./opencode", "./server", "./core", "./runtime"]);
 
 function exportTargets(entry) {
-  return Object.values(entry).filter((target) => typeof target === "string");
+  if (typeof entry === "string") return [entry];
+  if (entry === null || typeof entry !== "object") return [];
+  return Object.values(entry).flatMap(exportTargets);
 }
 
 /** Returns a list of problems; empty when the packed file list satisfies the release contract. */

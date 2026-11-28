@@ -55,6 +55,11 @@ test("selectLatestVersion uses SemVer precedence, not lexical tag order", () => 
   assert.equal(selectLatestVersion(tags), "6.0.0-rc.10");
 });
 
+test("selectLatestVersion ignores tags that parseSemVer rejects", () => {
+  const tags = ["v4.3.1", "v99999999999999999999.0.0", "v1.0.0-1" + "9".repeat(20)];
+  assert.equal(selectLatestVersion(tags), "4.3.1");
+});
+
 test("selectLatestVersion fails closed with no release tags", () => {
   assert.throws(() => selectLatestVersion(["foo"]), /No release tag/);
 });
