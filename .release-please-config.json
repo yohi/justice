@@ -2,7 +2,8 @@
   "include-component-in-tag": false,
   "packages": {
     ".": {
-      "release-type": "node"
+      "release-type": "node",
+      "prerelease": true
     }
   }
 }
