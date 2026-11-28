@@ -130,6 +130,32 @@ bun run test
     > [!IMPORTANT]
     > `opencode.jsonc` へ手動で追記するだけでは、パッケージの実体がインストールされない場合があります。必ず上記のコマンドを使用してインストールをトリガーしてください。
 
+### Release Candidate (v6.0.0-rc.x)
+
+RC は GitHub Release 上で Prerelease として公開され、npm dist-tag は `next` になります。`latest` は更新されません。
+
+```bash
+# 既存正式版 (latest)
+npm install @yohi/justice@latest
+# Release Candidate
+npm install @yohi/justice@next
+# 再現性を重視した固定版
+npm install @yohi/justice@6.0.0-rc.1
+```
+
+切戻し: `npm install @yohi/justice@latest`（RC 公開中も `latest` は既存正式版のまま）。固定版を使っている場合は正式版のバージョンを明示してください。
+
+RC の既知の制約（正式保証ではありません）:
+
+- Justice v6 の採択済み開発スコープは BOUNDED_COMPLETE。正式 Release の Owner 承認は PENDING、Production Opt-in は HOLD。
+- OpenCode V2 の対応バージョンは `@opencode/plugin@2.3.2` に固定。V1 の全機能を V2 へ移植したわけではありません。
+- Daily Assurance は Default OFF / Advisory Only。Mock Provider による正常系・異常系の限定実証のみ（AC-D01〜D08: 3 PASS / 4 BOUNDED PASS / 1 NOT_VERIFIED）。
+- 実 LLM の自律的指示遵守、日常開発への影響、完全な Credential 保護は未検証。
+- S4 Capability-Aware AI Orchestration は延期。
+- `formal_verdict: UNKNOWN` / `owner_authority_status: NOT_PROVEN` / `coverage_completeness: NOT_ESTABLISHED`
+
+リリース手順・PR #360 の扱い・部分失敗時の再開方法は [docs/release/rc-runbook.md](./docs/release/rc-runbook.md) を参照してください。
+
 ### パターン 2: TypeScript 設定経由
 
 `opencode.config.ts` を使用している場合は、プラグインオブジェクトを直接渡します。

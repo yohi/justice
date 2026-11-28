@@ -54,20 +54,43 @@ jobs:
           name: justice-dist
           path: dist/
         if: ${{ steps.release.outputs.release_created }}
-      - name: Verify published package includes native review artifact provider
+      - name: Resolve release channel
+        id: channel
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag_name }}
         run: |
-          npm pack --dry-run --json --ignore-scripts |
-            node -e 'const chunks = []; process.stdin.on("data", (chunk) => chunks.push(chunk)); process.stdin.on("end", () => { const packages = JSON.parse(Buffer.concat(chunks).toString("utf8")); if (!packages[0]?.files?.some((file) => file.path === "dist/native/index.linux-x64-gnu.node")) { console.error("Native review artifact provider is missing from the npm package"); process.exitCode = 1; } });'
+          # Fails closed on tag/package.json/manifest mismatch or invalid version (no publish).
+          version="$(node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version')"
+          manifest_version="$(node -p 'JSON.parse(require("node:fs").readFileSync(".release-please-manifest.json", "utf8"))["."]')"
+          if [[ "$version" != "$manifest_version" ]]; then
+            echo "package.json ($version) and manifest ($manifest_version) differ" >&2
+            exit 1
+          fi
+          node scripts/release-version-guard.mjs channel --version "$version" --tag "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+        if: ${{ steps.release.outputs.release_created }}
+      - name: Pack release tarball
+        id: pack
+        shell: bash
+        run: |
+          npm pack --json --ignore-scripts > "$RUNNER_TEMP/pack.json"
+          node -p 'JSON.parse(require("node:fs").readFileSync(process.env.RUNNER_TEMP + "/pack.json", "utf8"))[0].filename' > "$RUNNER_TEMP/tarball-name.txt"
+          printf 'file=%s\n' "$(cat "$RUNNER_TEMP/tarball-name.txt")" >> "$GITHUB_OUTPUT"
+        if: ${{ steps.release.outputs.release_created }}
+      - name: Verify package includes native addon, V1/V2 artifacts and export targets
+        run: node scripts/verify-package-contents.mjs "$RUNNER_TEMP/pack.json" package.json
         if: ${{ steps.release.outputs.release_created }}
       - name: Publish to GitHub Packages
-        run: npm publish --ignore-scripts
+        run: npm publish "./${TARBALL}" --tag "${DIST_TAG}" --ignore-scripts
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARBALL: ${{ steps.pack.outputs.file }}
+          DIST_TAG: ${{ steps.channel.outputs.dist_tag }}
         if: ${{ steps.release.outputs.release_created }}
-      - name: Pack and Upload Release Asset
-        run: |
-          PACKAGE_FILE=$(npm pack)
-          gh release upload ${{ steps.release.outputs.tag_name }} "$PACKAGE_FILE"
+      - name: Upload Release Asset
+        run: gh release upload "${RELEASE_TAG}" "./${TARBALL}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag_name }}
+          TARBALL: ${{ steps.pack.outputs.file }}
         if: ${{ steps.release.outputs.release_created }}

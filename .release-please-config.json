@@ -2,7 +2,11 @@
   "include-component-in-tag": false,
   "packages": {
     ".": {
-      "release-type": "node"
+      "release-type": "node",
+      "release-as": "6.0.0-rc.1",
+      "prerelease": true,
+      "versioning": "prerelease",
+      "prerelease-type": "rc"
     }
   }
 }
