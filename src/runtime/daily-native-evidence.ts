@@ -131,13 +131,25 @@ async function readCapped(response: Response, cap: number, signal: AbortSignal):
 const PROXY_ENV_KEYS = ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy'] as const;
 const NO_PROXY_ENV_KEYS = ['NO_PROXY', 'no_proxy'] as const;
 
+/** The only NO_PROXY token that excludes the fixed Native origin (exact match; no wildcard, CIDR, suffix or hostname). */
+const LOOPBACK_NO_PROXY_TOKEN = '127.0.0.1';
+
+const noProxyExcludesLoopback = (value: string): boolean => value.split(',').some(token => token.trim() === LOOPBACK_NO_PROXY_TOKEN);
+
 /**
  * Runtime fetch (e.g. Bun) may route loopback through an env proxy, which would forward raw Native payloads.
- * Read-only env inspection at call time: refuse unless no proxy is configured or NO_PROXY covers 127.0.0.1 / `*`.
+ * Read-only env inspection at call time (never mutated):
+ * - any non-empty proxy variable (HTTP/HTTPS/ALL, either case) refuses; NO_PROXY never overrides it;
+ * - NO_PROXY / no_proxy are evaluated independently: empty is accepted, a non-empty value must contain the exact
+ *   token `127.0.0.1` (OpenCode 2.3.2 sets both to `<user>,127.0.0.1,localhost,::1`), otherwise refuse.
  */
 function loopbackMayBeProxied(): boolean {
   const env = typeof process === 'undefined' ? {} : process.env;
-  return [...PROXY_ENV_KEYS, ...NO_PROXY_ENV_KEYS].some(k => (env[k] ?? '').trim() !== '');
+  if (PROXY_ENV_KEYS.some(k => (env[k] ?? '').trim() !== '')) return true;
+  return NO_PROXY_ENV_KEYS.some(k => {
+    const value = (env[k] ?? '').trim();
+    return value !== '' && !noProxyExcludesLoopback(value);
+  });
 }
 
 const NATIVE_AUTH_USERNAME = 'opencode';

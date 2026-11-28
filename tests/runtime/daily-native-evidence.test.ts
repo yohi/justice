@@ -769,6 +769,82 @@ describe('daily native evidence: fixed Native HTTP port',()=>{
     expect(process.env.NO_PROXY).toBe('');
     expect(seen).toHaveLength(1);
   });
+  describe('loopback no-proxy compatibility (OpenCode 2.3.2 sets NO_PROXY/no_proxy to include 127.0.0.1,localhost,::1)',()=>{
+    const OPENCODE_DEFAULT='127.0.0.1,localhost,::1';
+    const U={state:'UNAVAILABLE',reason:'SOURCE_UNAVAILABLE'};
+    const env=(o:Record<string,string>)=>{for(const [k,v] of Object.entries(o))vi.stubEnv(k,v);};
+    const snapshotEnv=()=>Object.fromEntries(PROXY_KEYS.map(k=>[k,process.env[k]]));
+    it.each([
+      ['no proxy-related variable set',{}],
+      ['NO_PROXY=127.0.0.1 only',{NO_PROXY:'127.0.0.1'}],
+      ['no_proxy=127.0.0.1 only',{no_proxy:'127.0.0.1'}],
+      ['both set to the OpenCode default',{NO_PROXY:OPENCODE_DEFAULT,no_proxy:OPENCODE_DEFAULT}],
+      ['comma list with an exact 127.0.0.1 token',{NO_PROXY:'example.com,127.0.0.1,10.0.0.1'}],
+      ['whitespace around tokens',{NO_PROXY:' localhost , 127.0.0.1 ',no_proxy:'\t127.0.0.1\t,::1'}],
+    ] as [string,Record<string,string>][])('allows fixed-loopback reads with %s',async(_n,vars)=>{
+      const f=await makeDailyFixture();
+      const seen=stub(()=>json('{"ok":true}'));
+      env(vars);
+      const before=snapshotEnv();
+      const port=createNativeReadPort(f.config);
+      expect((await port.getSession(SID,sig())).state).toBe('OK');
+      expect((await port.getMessages(SID,{order:'asc',limit:100},sig())).state).toBe('OK');
+      expect((await port.getRunningShells(ROOT,sig())).state).toBe('OK');
+      expect(seen).toHaveLength(3);
+      for(const s of seen)expect(s.url.startsWith('http://127.0.0.1:49187/api/')).toBe(true);
+      expect(snapshotEnv()).toEqual(before);
+    });
+    it.each(PROXY_KEYS.slice(0,6).map(k=>[k]))('refuses without any request when %s is set even if both NO_PROXY variables cover loopback',async key=>{
+      const f=await makeDailyFixture();
+      const seen=stub(()=>json('{}'));
+      env({NO_PROXY:OPENCODE_DEFAULT,no_proxy:OPENCODE_DEFAULT});
+      vi.stubEnv(key,'http://127.0.0.1:9');
+      const port=createNativeReadPort(f.config);
+      expect(await port.getSession(SID,sig())).toEqual(U);
+      expect(await port.getMessages(SID,{order:'asc',limit:100},sig())).toEqual(U);
+      expect(await port.getRunningShells(ROOT,sig())).toEqual(U);
+      expect(seen).toHaveLength(0);
+    });
+    it.each([
+      ['NO_PROXY without 127.0.0.1',{NO_PROXY:'localhost,::1'}],
+      ['no_proxy without 127.0.0.1',{no_proxy:'localhost,::1'}],
+      ['only NO_PROXY satisfies the condition',{NO_PROXY:'127.0.0.1',no_proxy:'localhost'}],
+      ['only no_proxy satisfies the condition',{NO_PROXY:'localhost',no_proxy:'127.0.0.1'}],
+      ['127.0.0.10',{NO_PROXY:'127.0.0.10'}],
+      ['1127.0.0.1',{no_proxy:'1127.0.0.1'}],
+      ['127.0.0.1.example.com',{NO_PROXY:'127.0.0.1.example.com'}],
+      ['127.0.0.1 with a port',{NO_PROXY:'127.0.0.1:49187'}],
+      ['wildcard only',{NO_PROXY:'*'}],
+      ['wildcard host only',{no_proxy:'*.example.com'}],
+      ['CIDR only',{NO_PROXY:'127.0.0.0/8'}],
+      ['dot-prefixed suffix',{NO_PROXY:'.0.0.1'}],
+      ['empty tokens only',{NO_PROXY:' , ,'}],
+      ['arbitrary non-empty value',{no_proxy:'configured'}],
+    ] as [string,Record<string,string>][])('refuses without any request when %s',async(_n,vars)=>{
+      const f=await makeDailyFixture();
+      const seen=stub(()=>json('{}'));
+      env(vars);
+      const before=snapshotEnv();
+      const port=createNativeReadPort(f.config);
+      expect(await port.getSession(SID,sig())).toEqual(U);
+      expect(await port.getMessages(SID,{order:'asc',limit:100},sig())).toEqual(U);
+      expect(await port.getRunningShells(ROOT,sig())).toEqual(U);
+      expect(seen).toHaveLength(0);
+      expect(snapshotEnv()).toEqual(before);
+    });
+    it('re-evaluates the environment at every call',async()=>{
+      const f=await makeDailyFixture();
+      const seen=stub(()=>json('{}'));
+      env({NO_PROXY:OPENCODE_DEFAULT,no_proxy:OPENCODE_DEFAULT});
+      const port=createNativeReadPort(f.config);
+      expect((await port.getSession(SID,sig())).state).toBe('OK');
+      vi.stubEnv('no_proxy','localhost');
+      expect(await port.getSession(SID,sig())).toEqual(U);
+      vi.stubEnv('no_proxy',OPENCODE_DEFAULT);
+      expect((await port.getSession(SID,sig())).state).toBe('OK');
+      expect(seen).toHaveLength(2);
+    });
+  });
   it('times out each GET at 5s and maps caller abort to ABORTED',async()=>{
     const f=await makeDailyFixture();
     vi.useFakeTimers({toFake:['setTimeout','clearTimeout']});
