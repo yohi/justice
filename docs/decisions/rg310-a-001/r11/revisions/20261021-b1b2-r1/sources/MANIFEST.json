@@ -1,0 +1,59 @@
+{
+  "approved_RDP_pin": "8a2e4f1536e9cad499ee7e9d996ff163df132fd4",
+  "artifact": "Justice_RG310_B1B2_Reference_Architecture_Remediation_R1",
+  "counterexample_count": 37,
+  "date_jst": "2026-10-21",
+  "document_status": "UNAPPROVED_ARCHITECTURAL_REDESIGN_REQUIRED",
+  "files": [
+    {
+      "bytes": 26056,
+      "path": "01_REVISED_B1B2_REFERENCE_ARCHITECTURE_R1.md",
+      "sha256": "c7fafeed282aa43813c0de31b010a9f0ad6293748bcdfa21b58788b4d881323b"
+    },
+    {
+      "bytes": 21387,
+      "path": "02_FINDING_DISPOSITION.csv",
+      "sha256": "69c5e41f8e1df8ebc28cdda3a0d60a6261ac96804b57dc1f9573a1879f99a951"
+    },
+    {
+      "bytes": 11852,
+      "path": "03_CONSUMER_EFFECT_TRUST_CENSUS.csv",
+      "sha256": "af1b25dbff24c5872b39e4348d270d7fca9062ea09c5818c0d0e9d73a92f1763"
+    },
+    {
+      "bytes": 35186,
+      "path": "04_COMMIT_REVOKE_TIME_AND_CRASH_TRACES.csv",
+      "sha256": "bbc5030b062721e1afae0273b7c89cc67b3971a802a1b62fa28a4aa728a83952"
+    },
+    {
+      "bytes": 29267,
+      "path": "05_R11_38X7_COMPATIBILITY_AND_RDP_DELTA.md",
+      "sha256": "1c2b28d66c475883268cad7aa196f48d9915cd42259db4d283c0d8fd3a210001"
+    },
+    {
+      "bytes": 7606,
+      "path": "06_OWNER_DECISION_OPTIONS_UNSIGNED.md",
+      "sha256": "d788e04668373c9d0e0f43e67e5ffaa8becf5309894303a8bdfa8f931c9ea226"
+    },
+    {
+      "bytes": 7226,
+      "path": "07_FRESH_INDEPENDENT_REVIEW_HANDOFF.md",
+      "sha256": "eb429ec32ed9c27e4fefece4d209663b141362df2e8702343513571415b9247d"
+    },
+    {
+      "bytes": 3302,
+      "path": "README.md",
+      "sha256": "2644f8a0c02a37c3a9a3a827b584d20abac68897374d7f91dd54aa6d0af8dae3"
+    }
+  ],
+  "finding_count": 22,
+  "formal_authority": "NONE",
+  "historical_parent_verification": "NOT_VERIFIED_NOT_ATTACHED",
+  "matrix_original_sha256": "10b24dd4175ee2d5aae7929f8057355ce27e4db129480830549d756802010923",
+  "matrix_rows": 38,
+  "runtime_test_status": "NOT_EXECUTED_DESIGN_ONLY",
+  "schema_version": 1,
+  "sha256sums_sha256": "69ea69049c36939bc83682adcc0959c410cf1ebc2c136efd767a48a40b157cf0",
+  "source_outer_sha256": "16b1e4eb370aed9e282d2f9891c22cfd2d2ffae61a7dddc2c964d6a1454d8c81",
+  "source_read_frozen_pin": "c428041dfb5779b6b6dc8db7bf14928225a00373"
+}
