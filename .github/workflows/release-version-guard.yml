@@ -55,6 +55,6 @@ jobs:
             exit 1
           fi
           if [[ "$candidate" != "$expected" ]]; then
-            echo "Release PR version ($candidate) does not match label selection ($expected). Wait for the release-pr job to finish and re-run this check." >&2
+            echo "Release PR version ($candidate) does not match label selection ($expected). The check validates the PR head at event time; after the release-pr job updates the PR, a new Guard run for the new head SHA is required. Do not merge until one exists and passes." >&2
             exit 1
           fi

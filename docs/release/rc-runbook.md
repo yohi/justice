@@ -55,18 +55,48 @@ Rules:
 ## Owner steps
 
 1. Register the labels above (Owner approval; not done here). Merge the readiness PR (human only).
-2. First v6 RC: on the Release PR apply `release: version=6.0.0` and `release: rc`. The `release-pr` job updates the PR to
-   `6.0.0-rc.1`. Label events do not start the guard (GITHUB_TOKEN pushes do not trigger workflows):
-   after the job finishes, re-run `release-version-guard`. Actions on the PR may need approval (`ACTION_REQUIRED`); never bypass it.
-3. Review version, `CHANGELOG.md`, manifest = `package.json`, then merge the Release PR (human only).
-4. Next RC: with `release: rc` still applied, the next master push regenerates the PR as `rc.2`. Replace labels for a
-   different selection. Stable: swap `release: rc` for `release: stable`.
+2. First v6 RC: on the Release PR apply `release: version=6.0.0` and `release: rc`. The `release-pr` job then updates the PR
+   to `6.0.0-rc.1`.
+3. Confirm the Guard for the **latest** PR head (see "Guard and PR head" below), review version, `CHANGELOG.md`,
+   manifest = `package.json`, then merge the Release PR (human only).
+4. Labels belong to a single Release PR. They are **not** inherited by the next Release PR (the `release-pr` job only
+   handles the open Release PR). For every new Release PR the Owner sets the labels again:
+
+| Current release | Labels on the new Release PR | Expected version |
+|---|---|---|
+| 4.3.1 | `version=6.0.0` + `rc` | 6.0.0-rc.1 |
+| 6.0.0-rc.1 | `rc` | 6.0.0-rc.2 |
+| 6.0.0-rc.2 | `rc` | 6.0.0-rc.3 |
+| 6.0.0-rc.3 | `stable` | 6.0.0 |
+| 6.0.0 | `patch` + `stable` | 6.0.1 |
+| 6.0.0 | `minor` + `rc` | 6.1.0-rc.1 |
+| 6.0.0 | `major` + `rc` | 7.0.0-rc.1 |
+
+   Expected versions follow the resolver rules and tests; they do not imply a successful publish.
+   A Release PR without labels is not publishable.
 5. PR #360 (`chore(master): release 4.1.0`) is stale and must not be merged. The `release-pr` job reuses the existing
    release-please PR/branch, so after the readiness PR lands it is updated in place to the labeled version; the guard
    rejects any candidate that is not newer than all tags. Close or keep #360 per Owner decision after checking the updated version.
 6. Unlabeled Release PRs (initial conventional proposal) are not publishable: the guard fails until labels are applied.
    Keep the guard (and, if desired, the label check) as a required status check in repository settings; this change
    cannot enforce that and required-check settings were not verified.
+
+## Guard and PR head
+
+The guard checks out the PR head SHA of the event that started it. Re-running an existing run keeps that original
+SHA, so it never validates a head produced later by the `release-pr` job. Therefore:
+
+1. After the `release-pr` job updates the Release PR, look at the PR's **current** head SHA and find the
+   `release-version-guard` run for that exact SHA (a run created by a PR event; label events can also start a run, but
+   against the head at that moment).
+2. If that run is waiting for approval (`ACTION_REQUIRED`), approve it through the normal GitHub procedure.
+   Nothing here bypasses approval.
+3. Do not treat a re-run of a run for the previous head as validation of the updated head.
+4. If no Guard run exists for the latest head, or it failed, stop and do not merge.
+
+Whether a branch update made with `GITHUB_TOKEN` starts a Guard run for the new head was not verified in the real
+repository; GitHub documents that events caused by `GITHUB_TOKEN` generally do not start new workflow runs, so
+expect to need a human-triggered run or Owner action. This is NOT_VERIFIED.
 
 ## Partial failure recovery
 
